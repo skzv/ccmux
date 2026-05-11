@@ -11,6 +11,7 @@ import (
 
 	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/tmux"
+	"github.com/skzv/ccmux/internal/tmuxchrome"
 	"github.com/skzv/ccmux/internal/tui/styles"
 )
 
@@ -133,13 +134,23 @@ func (m sessionsModel) renderDetail(width, height int) string {
 		m.st.Key.Render("s") + "      snapshot (coming soon)",
 		"",
 		m.st.Subtitle.Render("To return after attaching"),
-		"  if you launched ccmux from a normal terminal:",
-		"     press " + m.st.Key.Render("prefix + d") + " (default " + m.st.Key.Render("Ctrl-b d") + ")",
-		"  if you ran ccmux inside the outer `ccmux` tmux (mobile via Moshi):",
-		"     press " + m.st.Key.Render("prefix + L") + " (last-session) — back to ccmux",
-		m.st.Muted.Render("  ccmux's status bar in the attached session shows the right one."),
+		"  " + m.st.Muted.Render("press, release, then press — it's a sequence, not a key combo"),
+		"  • normal terminal:  press " + m.st.Key.Render(detectedPrefix()) + " then " + m.st.Key.Render("d"),
+		"  • from outer ccmux tmux (mobile via Moshi):  press " + m.st.Key.Render(detectedPrefix()) + " then " + m.st.Key.Render("L"),
+		"  " + m.st.Muted.Render("Cmd+D / Ctrl+D do NOT work — those are terminal/shell shortcuts."),
+		"  " + m.st.Muted.Render("ccmux's status bar inside the attached session shows the right one."),
 	}
 	return m.st.Pane.Width(width - 2).Height(height - 2).Render(strings.Join(lines, "\n"))
+}
+
+// detectedPrefix returns the user's tmux prefix key as a pretty string
+// (e.g. "Ctrl-b" — or "Ctrl-a" if they remapped). Called inline by the
+// detail pane render; tmux show-options is fast enough at the cadence
+// the TUI re-renders.
+func detectedPrefix() string {
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	return tmuxchrome.DetectedPrefix(ctx)
 }
 
 // killSessionCmd runs `tmux kill-session -t <name>` and reports the result

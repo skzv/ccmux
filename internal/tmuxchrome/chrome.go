@@ -45,9 +45,18 @@ const (
 // `moshiReachable` controls the "reachable via Moshi" badge. `nested`
 // indicates we got to this attach via `tmux switch-client` from inside
 // an outer tmux (the persistent `ccmux` outer session in the mobile
-// flow), in which case `prefix + d` would detach the entire client —
-// `prefix + L` (last-session) is the correct way back to ccmux. When
-// not nested, the simple `prefix + d` does the right thing.
+// flow). The detach hint differs:
+//
+//   - Standalone (not nested): `<prefix> then d` (tmux detach-client).
+//   - Nested: `<prefix> then L` (last-session, jumps back to the outer
+//     ccmux session). `<prefix> then d` would close the whole client.
+//
+// Important wording: tmux prefix-key gestures are a SEQUENCE, not a
+// combo. The user presses the prefix, releases it, then presses the
+// second key. Cmd+D / Ctrl+D look like combos but are entirely
+// different things — Cmd+D splits the iTerm pane, Ctrl+D sends EOF and
+// exits Claude. The chrome explicitly uses "then" not "+" so this is
+// unambiguous.
 func Apply(ctx context.Context, session, projectLabel string, moshiReachable, nested bool) error {
 	if session == "" {
 		return fmt.Errorf("tmuxchrome: session name required")
@@ -63,13 +72,10 @@ func Apply(ctx context.Context, session, projectLabel string, moshiReachable, ne
 		moshiBadge = fmt.Sprintf("#[fg=%s] phone: not paired (ccmux moshi-setup) ", fgMuted)
 	}
 
-	returnHint := "prefix + d to return to ccmux"
+	prefix := DetectedPrefix(ctx)
+	returnHint := fmt.Sprintf("press %s then d to detach", prefix)
 	if nested {
-		// In nested-tmux: `switch-client` doesn't stack sessions, it
-		// just changes which session the client shows. `prefix + L`
-		// jumps to the last-shown session (the outer ccmux), while
-		// `prefix + d` would close the whole client back to Moshi.
-		returnHint = "prefix + L to return to ccmux"
+		returnHint = fmt.Sprintf("press %s then L to return to ccmux", prefix)
 	}
 
 	statusLeft := fmt.Sprintf(
@@ -104,6 +110,37 @@ func Apply(ctx context.Context, session, projectLabel string, moshiReachable, ne
 		_ = cmd.Run()
 	}
 	return nil
+}
+
+// DetectedPrefix returns the human-readable form of the user's current
+// tmux prefix-key binding (default Ctrl-b). Used by Apply and by the
+// Sessions detail pane so the hint matches the user's actual keymap
+// instead of assuming defaults. Returns "Ctrl-b" on any error.
+func DetectedPrefix(ctx context.Context) string {
+	out, err := exec.CommandContext(ctx, "tmux", "show-options", "-g", "prefix").Output()
+	if err != nil {
+		return "Ctrl-b"
+	}
+	// Output forms: `prefix C-b` or `prefix C-a` or `prefix \``.
+	parts := strings.Fields(strings.TrimSpace(string(out)))
+	if len(parts) < 2 {
+		return "Ctrl-b"
+	}
+	return PrettyKey(parts[1])
+}
+
+// PrettyKey turns tmux's internal key notation (C-b, M-a, S-F1) into
+// the human-readable form a user would type from muscle memory.
+func PrettyKey(k string) string {
+	switch {
+	case strings.HasPrefix(k, "C-"):
+		return "Ctrl-" + k[2:]
+	case strings.HasPrefix(k, "M-"):
+		return "Alt-" + k[2:]
+	case strings.HasPrefix(k, "S-"):
+		return "Shift-" + k[2:]
+	}
+	return k
 }
 
 // Reset restores tmux's per-session options to the global default. Called
