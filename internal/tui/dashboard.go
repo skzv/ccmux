@@ -154,15 +154,21 @@ func (m dashboardModel) statsPanel(width int) string {
 	return m.st.Pane.Width(width - 2).Render(strings.Join(rows, "\n"))
 }
 
-// devicesPanel renders the tailnet/network view: every ccmuxd ccmux
-// knows about (local + configured remotes + auto-discovered peers),
-// with their reported version and an `update available` flag for
-// any peer behind the local build.
+// devicesPanel renders the tailnet/network view. One row per device,
+// two columns: [icon + name] | [info]. The info column is whichever
+// single fact is most useful for that row:
 //
-// Tailnet peers that exist but don't run ccmuxd appear as
-// `NeedsInstall` rows with a "ccmux not installed/running" hint
-// pointing the user at the install command. Mobile peers (phones,
-// iPads) are excluded upstream — Moshi handles them.
+//   - Reachable ccmuxd: version, with " · update available" if it
+//     differs from this build's version.
+//   - NeedsInstall:     "ccmuxd unreachable".
+//   - Mobile:           "via Moshi app".
+//
+// Local row gets a muted "(this)" suffix on the name so the user can
+// tell which row is which when multiple machines share the dashboard.
+//
+// Width-aware: the name column scales with the panel's inner width,
+// capped at 28 chars so very wide terminals don't strand info too far
+// right. Truncates names with an ellipsis rather than overflowing.
 //
 // Empty state hides the panel entirely so the dashboard stays tidy on
 // single-machine setups.
@@ -171,47 +177,37 @@ func (m dashboardModel) devicesPanel(width int) string {
 		return ""
 	}
 	st := m.st
-	local := m.version
+
+	// Pane has a 1-col border on each side + 1-col padding = 4 chars
+	// of chrome around the body. Stay safe on tiny terminals.
+	inner := width - 4
+	if inner < 30 {
+		inner = 30
+	}
+	nameW := inner * 2 / 5
+	if nameW > 28 {
+		nameW = 28
+	}
+	if nameW < 12 {
+		nameW = 12
+	}
+	// Info column = inner - icon(2) - space(1) - nameW - space(1).
+	infoW := inner - 4 - nameW
+	if infoW < 12 {
+		infoW = 12
+	}
+
 	rows := []string{st.Emphasis.Render("Devices")}
 	for _, h := range m.hosts {
-		label := formatDeviceLabel(h.Name, h.Subtitle, st)
-		if h.Mobile {
-			rows = append(rows, fmt.Sprintf("📱 %s %s",
-				label, st.Muted.Render("connect via Moshi app")))
-			continue
-		}
-		if h.NeedsInstall {
-			rows = append(rows, fmt.Sprintf("%s %s %s",
-				st.Muted.Render("○"), label,
-				st.Muted.Render("ccmuxd unreachable")))
-			continue
-		}
-		dot := st.StateActive.Render("●")
-		if !h.OK {
-			dot = st.StateError.Render("●")
-		}
-		tag := ""
-		if h.Discovered {
-			tag = st.Muted.Render("  discovered")
-		}
-		ver := h.Version
-		if ver == "" {
-			ver = st.Muted.Render("?")
-		}
-		updateNote := ""
-		if local != "" && h.Version != "" && versionsDiffer(local, h.Version) {
-			updateNote = st.StatusWarning.Render("  update available")
-		}
-		rows = append(rows, fmt.Sprintf("%s %s %s%s%s",
-			dot, label, ver, tag, updateNote))
+		icon := iconForHost(h, st)
+		name := nameForHost(h, nameW)
+		info := infoForHost(h, m.version, st)
+		rows = append(rows, fmt.Sprintf("%s %s %s",
+			icon, padRight(name, nameW), info))
 	}
-	if local != "" {
-		rows = append(rows, "")
-		rows = append(rows, st.Muted.Render("this build: "+local))
+	if m.version != "" {
+		rows = append(rows, "", st.Muted.Render("this build: "+m.version))
 	}
-	// Once at the bottom: a single line nudging the user that
-	// uninstalled peers can be brought online with one command. Only
-	// shown when there's at least one such peer.
 	hasMissing := false
 	for _, h := range m.hosts {
 		if h.NeedsInstall {
@@ -220,36 +216,82 @@ func (m dashboardModel) devicesPanel(width int) string {
 		}
 	}
 	if hasMissing {
-		rows = append(rows, st.Muted.Render(
-			"unreachable peer? either (a) install: `git clone github.com/skzv/ccmux && make bootstrap`,"))
-		rows = append(rows, st.Muted.Render(
-			"or (b) installed but local-only — re-run `ccmux setup` on that peer and answer Yes to server mode."))
+		rows = append(rows,
+			st.Muted.Render("unreachable peer? install ccmux there with `make bootstrap`,"),
+			st.Muted.Render("or run `ccmux setup` on it to enable server mode."))
 	}
+	_ = infoW // info isn't manually truncated; lipgloss wraps gracefully
 	return st.Pane.Width(width - 2).Render(strings.Join(rows, "\n"))
 }
 
-// formatDeviceLabel renders one Devices-row label: the primary name
-// left-padded to 12 chars, optionally followed by a muted subtitle in
-// parentheses (the host's actual hostname for the local row, etc.).
-// Keeps every row aligned on the version/status column regardless of
-// whether a subtitle is present.
-func formatDeviceLabel(name, subtitle string, st styles.Styles) string {
-	primary := fmt.Sprintf("%-22s", truncatePeerName(name, 22))
-	if subtitle == "" {
-		return primary + "                       " // 23-wide spacer keeps subsequent columns aligned
+// iconForHost returns the colored status indicator for a row.
+// Mobile peers get the 📱 glyph; everyone else gets a styled circle.
+func iconForHost(h hostStatus, st styles.Styles) string {
+	switch {
+	case h.Mobile:
+		return "📱"
+	case h.NeedsInstall:
+		return st.Muted.Render("○")
+	case !h.OK:
+		return st.StateError.Render("●")
+	default:
+		return st.StateActive.Render("●")
 	}
-	sub := truncatePeerName(subtitle, 22)
-	return primary + " " + st.Muted.Render(fmt.Sprintf("%-22s", sub))
 }
 
+// nameForHost is the row's primary label. For the local row we
+// append a muted "(this)" marker so it's obvious which one is the
+// current machine. Truncation respects nameW so the column stays
+// aligned.
+func nameForHost(h hostStatus, nameW int) string {
+	if h.Local {
+		const marker = " (this)"
+		room := nameW - len(marker)
+		if room < 4 {
+			room = 4
+		}
+		return truncatePeerName(h.Name, room) + marker
+	}
+	return truncatePeerName(h.Name, nameW)
+}
+
+// infoForHost returns the right-hand column: one fact per row.
+func infoForHost(h hostStatus, localVersion string, st styles.Styles) string {
+	switch {
+	case h.Mobile:
+		return st.Muted.Render("via Moshi app")
+	case h.NeedsInstall:
+		return st.Muted.Render("ccmuxd unreachable")
+	}
+	ver := h.Version
+	if ver == "" {
+		ver = st.Muted.Render("?")
+	}
+	if localVersion != "" && h.Version != "" && versionsDiffer(localVersion, h.Version) {
+		return ver + "  " + st.StatusWarning.Render("update available")
+	}
+	return ver
+}
+
+// truncatePeerName cuts a name to fit `n` visible columns, replacing
+// the dropped tail with an ellipsis. Operates on runes so multi-byte
+// characters (CJK, emoji) survive cleanly when they fit.
 func truncatePeerName(s string, n int) string {
-	if len(s) <= n {
+	if lipgloss.Width(s) <= n {
 		return s
 	}
 	if n <= 1 {
-		return s[:n]
+		runes := []rune(s)
+		if len(runes) <= n {
+			return s
+		}
+		return string(runes[:n])
 	}
-	return s[:n-1] + "…"
+	runes := []rune(s)
+	if len(runes) <= n-1 {
+		return s
+	}
+	return string(runes[:n-1]) + "…"
 }
 
 // versionsDiffer normalizes the LDFLAGS-baked version strings (e.g.

@@ -26,11 +26,10 @@ type projectsLoadedMsg struct {
 // hostStatus is one row in the host-health pings table.
 type hostStatus struct {
 	Name      string
-	// Subtitle is an optional one-word qualifier rendered alongside
-	// Name in the Devices panel — e.g. the local row carries the
-	// system hostname here so "local" doesn't read as anonymous when
-	// the user has multiple machines on screen.
-	Subtitle  string
+	// Local marks the row representing this machine. The Devices
+	// panel renders it with a small "(this device)" tag so the user
+	// can tell at a glance which row is which.
+	Local     bool
 	Address   string
 	OK        bool
 	Sessions  int

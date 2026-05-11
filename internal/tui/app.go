@@ -622,9 +622,13 @@ func (a App) refreshSessionsCmd() tea.Cmd {
 				}
 				sessions = append(sessions, ss...)
 				h, _ := local.Health(ctx)
+				localName := shortHostname(h.Hostname)
+				if localName == "" {
+					localName = "local"
+				}
 				hs = append(hs, hostStatus{
-					Name:      "local",
-					Subtitle:  shortHostname(h.Hostname),
+					Name:      localName,
+					Local:     true,
 					Address:   local.Addr(),
 					OK:        h.OK,
 					Sessions:  h.Sessions,
@@ -636,11 +640,15 @@ func (a App) refreshSessionsCmd() tea.Cmd {
 				if e2 == nil {
 					sessions = append(sessions, direct...)
 					localHost, _ := os.Hostname()
+					name := shortHostname(localHost)
+					if name == "" {
+						name = "local"
+					}
 					hs = append(hs, hostStatus{
-						Name:     "local",
-						Subtitle: shortHostname(localHost),
-						Address:  "tmux (no daemon)",
-						OK:       false,
+						Name:    name,
+						Local:   true,
+						Address: "tmux (no daemon)",
+						OK:      false,
 					})
 				} else {
 					err = fmt.Errorf("local: %w", e2)
@@ -695,10 +703,16 @@ func (a App) refreshSessionsCmd() tea.Cmd {
 				}
 				seen[d.Address] = true
 				cli := daemon.RemoteClient(d.Address)
-				ss, e := cli.Sessions(ctx)
-				st := hostStatus{Name: d.Name, Address: d.Address, Discovered: true, Version: d.Version}
-				if e == nil {
-					st.OK = true
+				// The probe already succeeded (that's how this peer
+				// ended up in Reachable). Mark OK regardless of the
+				// follow-up Sessions call — a Sessions error means
+				// "couldn't list sessions right now," not "host is
+				// down," so we shouldn't make the dot red.
+				st := hostStatus{
+					Name: d.Name, Address: d.Address,
+					Discovered: true, Version: d.Version, OK: true,
+				}
+				if ss, e := cli.Sessions(ctx); e == nil {
 					st.Sessions = len(ss)
 					for i := range ss {
 						ss[i].Host = d.Name
