@@ -538,6 +538,15 @@ func renderSessionLine(st styles.Styles, s daemon.SessionState, inner int) strin
 		age = humanDuration(time.Since(s.LastChange))
 	}
 
+	// Build a small host tag so the user can tell at a glance which
+	// device a session lives on. Skipped for local sessions and when
+	// the row is narrow — the leading colored dot already encodes
+	// host identity for tight layouts.
+	hostTag := ""
+	if h := s.Host; h != "" && h != "local" && inner > 50 {
+		hostTag = "  " + st.Muted.Render("@"+h)
+	}
+
 	var suffix string
 	switch {
 	case s.Attached && age != "":
@@ -547,6 +556,7 @@ func renderSessionLine(st styles.Styles, s daemon.SessionState, inner int) strin
 	case age != "":
 		suffix = "  " + st.Muted.Render(age)
 	}
+	suffix += hostTag
 
 	prefix := hostDot + " " + state + " " + attachedBadge
 

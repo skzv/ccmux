@@ -644,11 +644,17 @@ func (a App) refreshSessionsCmd() tea.Cmd {
 					if name == "" {
 						name = "local"
 					}
+					// tmux is responding — sessions came back. ccmuxd
+					// is down, but the device itself is fine; mark OK
+					// so the dot stays green. The "(no daemon)"
+					// address is the only visible breadcrumb that
+					// something's off — the user can `ccmux daemon
+					// install` to fix.
 					hs = append(hs, hostStatus{
 						Name:    name,
 						Local:   true,
 						Address: "tmux (no daemon)",
-						OK:      false,
+						OK:      true,
 					})
 				} else {
 					err = fmt.Errorf("local: %w", e2)
@@ -802,35 +808,87 @@ func (a App) attachSelectedSession() tea.Cmd {
 		return nil
 	}
 
-	if sel.Host == "" || sel.Host == "local" {
+	// Local sessions resolved by the helper that handles the
+	// nested-tmux case.
+	for _, ls := range []string{"", "local"} {
+		if sel.Host == ls {
+			return a.localAttachCmd(sel.Name, sel.Project)
+		}
+	}
+	// Also resolve to local when the host's name matches THIS
+	// machine — auto-discovered local rows now use the hostname (e.g.
+	// "sputnik") instead of the literal "local", so plain string
+	// matching against "local" alone misses that case.
+	if h := a.localHostStatus(); h != nil && h.Name == sel.Host {
 		return a.localAttachCmd(sel.Name, sel.Project)
 	}
-	var h *config.Host
+
+	// Explicit cfg.Hosts entries carry full SSH/Mosh details.
 	for i := range a.cfg.Hosts {
 		if a.cfg.Hosts[i].Name == sel.Host {
-			h = &a.cfg.Hosts[i]
-			break
+			h := &a.cfg.Hosts[i]
+			target := h.Address
+			if h.User != "" {
+				target = h.User + "@" + h.Address
+			}
+			bin := "mosh"
+			if !h.Mosh {
+				bin = "ssh"
+			}
+			return tea.ExecProcess(
+				exec.Command(bin, target, "--", "tmux", "attach-session", "-d", "-t", sel.Name),
+				func(err error) tea.Msg { return refreshAfterDetachMsg{} },
+			)
 		}
 	}
-	if h == nil {
-		return func() tea.Msg {
-			return toastMsg{Text: "no host config for " + sel.Host, Kind: toastError, Until: time.Now().Add(5 * time.Second)}
+
+	// Auto-discovered tailnet peers don't appear in cfg.Hosts. Look
+	// them up in the live a.hosts slice and dial via the bare tailnet
+	// hostname (or IP, when no DNS name is available). Default to
+	// mosh + current $USER, matching the explicit-host defaults.
+	for _, hs := range a.hosts {
+		if hs.Name == sel.Host && hs.Discovered {
+			dial := dialAddrFor(hs)
+			if dial == "" {
+				return func() tea.Msg {
+					return toastMsg{Text: "no reachable address for " + sel.Host, Kind: toastError, Until: time.Now().Add(5 * time.Second)}
+				}
+			}
+			return tea.ExecProcess(
+				exec.Command("mosh", dial, "--", "tmux", "attach-session", "-d", "-t", sel.Name),
+				func(err error) tea.Msg { return refreshAfterDetachMsg{} },
+			)
 		}
 	}
-	target := h.Address
-	if h.User != "" {
-		target = h.User + "@" + h.Address
+
+	return func() tea.Msg {
+		return toastMsg{Text: "no host config for " + sel.Host, Kind: toastError, Until: time.Now().Add(5 * time.Second)}
 	}
-	bin := "mosh"
-	if !h.Mosh {
-		bin = "ssh"
+}
+
+// localHostStatus returns the hostStatus for THIS machine (if loaded
+// yet). Used by attach to recognize that a session whose Host matches
+// our hostname is actually local, not remote.
+func (a App) localHostStatus() *hostStatus {
+	for i := range a.hosts {
+		if a.hosts[i].Local {
+			return &a.hosts[i]
+		}
 	}
-	return tea.ExecProcess(
-		exec.Command(bin, target, "--", "tmux", "attach-session", "-d", "-t", sel.Name),
-		func(err error) tea.Msg {
-			return refreshAfterDetachMsg{}
-		},
-	)
+	return nil
+}
+
+// dialAddrFor extracts the bare host (no port) from a discovered
+// peer's Address. Discovered Address is "<tailnet-ip>:<port>" — mosh
+// wants just the host. Returns "" if there's nothing usable.
+func dialAddrFor(hs hostStatus) string {
+	if hs.Address == "" {
+		return ""
+	}
+	if i := strings.LastIndex(hs.Address, ":"); i > 0 {
+		return hs.Address[:i]
+	}
+	return hs.Address
 }
 
 // attachOrCreateForSelectedProject is Enter on Projects screen: attach to
