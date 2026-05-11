@@ -856,12 +856,15 @@ func (a App) attachSelectedSession() tea.Cmd {
 	// mosh + roaming can pin the host with `ccmux host add --mosh`
 	// to override.
 	//
-	// The remote command is wrapped in `bash -lc` so the user's
-	// login profile is sourced. Without this, ssh's non-interactive
-	// shell sees only /usr/bin:/bin and misses Homebrew-installed
-	// tmux at /opt/homebrew/bin — manifested as
-	// `zsh:1: command not found: tmux` even on machines where
-	// tmux clearly works in normal terminals.
+	// PATH handling: ssh runs the remote command via the user's
+	// login shell in NON-LOGIN NON-INTERACTIVE mode, so /etc/profile
+	// and ~/.zprofile/~/.zshrc don't run. Homebrew lives in
+	// /opt/homebrew/bin on Apple Silicon and /usr/local/bin on
+	// Intel — neither is in the default ssh PATH. We prepend both
+	// inline so `tmux` resolves regardless of the remote user's
+	// shell config. (An earlier `bash -lc` attempt didn't work
+	// because most users put `eval $(brew shellenv)` in their zshrc,
+	// not their zprofile.)
 	for _, hs := range a.hosts {
 		if hs.Name == sel.Host && hs.Discovered {
 			dial := hs.DialHost
@@ -873,11 +876,14 @@ func (a App) attachSelectedSession() tea.Cmd {
 					return toastMsg{Text: "no reachable address for " + sel.Host, Kind: toastError, Until: time.Now().Add(5 * time.Second)}
 				}
 			}
-			remoteCmd := fmt.Sprintf("tmux attach-session -d -t %s", shellQuote(sel.Name))
-			return tea.ExecProcess(
-				exec.Command("ssh", "-t", dial, "bash", "-lc", remoteCmd),
-				func(err error) tea.Msg { return refreshAfterDetachMsg{} },
-			)
+			remoteCmd := remoteTmuxAttach(sel.Name)
+			cmd := exec.Command("ssh", "-t", dial, remoteCmd)
+			if dbg := debugLogger(); dbg != nil {
+				dbg.Printf("attach discovered: ssh -t %s %q", dial, remoteCmd)
+			}
+			return tea.ExecProcess(cmd, func(err error) tea.Msg {
+				return refreshAfterDetachMsg{}
+			})
 		}
 	}
 
@@ -912,15 +918,27 @@ func dialAddrFor(hs hostStatus) string {
 }
 
 // shellQuote escapes `s` for safe interpolation inside a POSIX
-// single-quoted string. We feed remote tmux commands through
-// `bash -lc 'tmux attach … <name>'` so the login profile gets
-// sourced; the session name needs single-quote escaping so a
-// pathological project basename can't break out of the quotes or
-// trigger a shell expansion. ccmux's own session names are tame
-// (alphanumeric + dash + underscore from SessionNameForPath), but
-// belt-and-suspenders.
+// single-quoted string. The remote attach builds a single command
+// string (PATH=... tmux attach -t '<name>') that's passed to ssh,
+// which executes it via the remote user's shell. The session name
+// could in theory contain characters the shell would expand; quoting
+// it defensively keeps a pathological project basename from
+// breaking out. ccmux's own session names are tame (alphanumeric +
+// dash + underscore from SessionNameForPath), but belt-and-suspenders.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
+
+// remoteTmuxAttach builds the single-string command we hand to ssh
+// for attaching to a remote tmux session. ssh runs it via the user's
+// shell in NON-LOGIN NON-INTERACTIVE mode, so /etc/profile + zshrc/
+// zprofile don't fire — Homebrew's /opt/homebrew/bin and /usr/local/
+// bin therefore aren't on PATH. We prepend both inline so `tmux`
+// resolves on Apple-Silicon and Intel macOS Homebrew installs alike;
+// Linux distros have /usr/bin already, and adding /usr/local/bin is
+// harmless even there.
+func remoteTmuxAttach(session string) string {
+	return "PATH=/opt/homebrew/bin:/usr/local/bin:$PATH tmux attach-session -d -t " + shellQuote(session)
 }
 
 // attachOrCreateForSelectedProject is Enter on Projects screen: attach to
