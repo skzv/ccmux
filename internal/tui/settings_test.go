@@ -1,0 +1,244 @@
+package tui
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/skzv/ccmux/internal/config"
+	"github.com/skzv/ccmux/internal/tui/styles"
+)
+
+func TestEditableFields_ProjectsRoot(t *testing.T) {
+	fields := byLabel(editableFields(), "projects.root")
+	if fields == nil {
+		t.Fatal("projects.root field missing")
+	}
+
+	cfg := config.Defaults()
+
+	// Reject empty / blank.
+	if err := fields.set(&cfg, ""); err == nil {
+		t.Error("empty path should error")
+	}
+	if err := fields.set(&cfg, "   "); err == nil {
+		t.Error("blank path should error")
+	}
+
+	// Reject non-existent paths.
+	missing := filepath.Join(t.TempDir(), "nope")
+	if err := fields.set(&cfg, missing); err == nil {
+		t.Error("missing path should error")
+	}
+
+	// Reject a regular file.
+	tmp := t.TempDir()
+	f := filepath.Join(tmp, "file.txt")
+	if err := os.WriteFile(f, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := fields.set(&cfg, f); err == nil {
+		t.Error("regular file should error (must be a directory)")
+	}
+
+	// Accept an existing directory.
+	if err := fields.set(&cfg, tmp); err != nil {
+		t.Fatalf("valid dir rejected: %v", err)
+	}
+	if cfg.Projects.Root != tmp {
+		t.Errorf("Projects.Root = %q, want %q", cfg.Projects.Root, tmp)
+	}
+}
+
+func TestEditableFields_ScaffoldDirs(t *testing.T) {
+	fields := byLabel(editableFields(), "scaffold.dirs")
+	cfg := config.Defaults()
+	cfg.Scaffold.Dirs = nil // start blank
+
+	// Empty input clears any override.
+	if err := fields.set(&cfg, ""); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Scaffold.Dirs != nil {
+		t.Errorf("empty input should leave Dirs nil, got %v", cfg.Scaffold.Dirs)
+	}
+
+	// Valid comma-separated list.
+	if err := fields.set(&cfg, " src , tests, docs/01_Specs "); err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Scaffold.Dirs) != 3 || cfg.Scaffold.Dirs[0] != "src" {
+		t.Errorf("Dirs not parsed: %v", cfg.Scaffold.Dirs)
+	}
+
+	// Reject absolute paths — those would land scaffolded files outside
+	// the project dir.
+	if err := fields.set(&cfg, "/tmp/foo"); err == nil {
+		t.Error("absolute path should error")
+	}
+
+	// Empty entries get squeezed out.
+	if err := fields.set(&cfg, "src,,,tests,,"); err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Scaffold.Dirs) != 2 {
+		t.Errorf("empty entries should be squeezed: %v", cfg.Scaffold.Dirs)
+	}
+
+	// All-empty after squeeze → error.
+	if err := fields.set(&cfg, ",, ,,"); err == nil {
+		t.Error("all-empty input should error")
+	}
+}
+
+func TestEditableFields_SubscriptionTier(t *testing.T) {
+	fields := byLabel(editableFields(), "subscription.tier")
+	cfg := config.Defaults()
+	for _, ok := range []string{"", "api", "pro", "max5x", "max20x", "MAX20X", "  pro  "} {
+		if err := fields.set(&cfg, ok); err != nil {
+			t.Errorf("tier %q rejected: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"max", "max-5x", "free", "team"} {
+		if err := fields.set(&cfg, bad); err == nil {
+			t.Errorf("tier %q should be rejected", bad)
+		}
+	}
+}
+
+func TestEditableFields_ThemeIsReadOnly(t *testing.T) {
+	f := byLabel(editableFields(), "theme")
+	if f == nil {
+		t.Fatal("theme field missing")
+	}
+	if !f.readOnly {
+		t.Error("theme should be marked read-only until the picker lands in v0.2")
+	}
+}
+
+// TestSettings_CursorMovesBetweenFields exercises the j/k bindings.
+func TestSettings_CursorMovesBetweenFields(t *testing.T) {
+	m := newSettings(styles.Default(), DefaultKeymap(), config.Defaults(), "test")
+	max := len(editableFields()) - 1
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if m.cursor != 1 {
+		t.Fatalf("after one down, cursor = %d, want 1", m.cursor)
+	}
+	// Walk to the end; should clamp.
+	for i := 0; i < 10; i++ {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	}
+	if m.cursor != max {
+		t.Fatalf("cursor should clamp at %d, got %d", max, m.cursor)
+	}
+	// Walk back to top; should clamp.
+	for i := 0; i < 10; i++ {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	}
+	if m.cursor != 0 {
+		t.Fatalf("cursor should clamp at 0, got %d", m.cursor)
+	}
+}
+
+func TestSettings_EditEnterCommitRoundTrip(t *testing.T) {
+	// Hermetic home so config.Save writes to a tempdir.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	tmp := filepath.Join(home, "newroot")
+	if err := os.MkdirAll(tmp, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	m := newSettings(styles.Default(), DefaultKeymap(), config.Defaults(), "test")
+	// Cursor on projects.root (index 0).
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !m.editing {
+		t.Fatal("Enter on cursor should activate editing")
+	}
+	// Type a new path.
+	m.editor.SetValue(tmp)
+	m, _ = m.commit()
+	if m.editing {
+		t.Fatal("commit should close the editor")
+	}
+	if m.errMsg != "" {
+		t.Fatalf("unexpected commit error: %s", m.errMsg)
+	}
+	if m.cfg.Projects.Root != tmp {
+		t.Errorf("Projects.Root not applied: %q", m.cfg.Projects.Root)
+	}
+	// The change was persisted to disk.
+	reloaded, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.Projects.Root != tmp {
+		t.Errorf("config.Save didn't persist Projects.Root: got %q", reloaded.Projects.Root)
+	}
+}
+
+func TestSettings_EditEscCancels(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	m := newSettings(styles.Default(), DefaultKeymap(), config.Defaults(), "test")
+	original := m.cfg.Projects.Root
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.editor.SetValue("/some/bogus/path/that/will/fail/validation")
+	// Esc instead of commit — value should be discarded.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.editing {
+		t.Fatal("Esc should close the editor")
+	}
+	if m.cfg.Projects.Root != original {
+		t.Errorf("Esc should discard the edit: got %q, want %q", m.cfg.Projects.Root, original)
+	}
+}
+
+func TestSettings_CommitWithInvalidValueKeepsEditingOpen(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	m := newSettings(styles.Default(), DefaultKeymap(), config.Defaults(), "test")
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.editor.SetValue("/nonexistent/path/that/cannot/exist")
+	m, _ = m.commit()
+	if !m.editing {
+		t.Fatal("commit with invalid value should keep editor open")
+	}
+	if m.errMsg == "" {
+		t.Error("expected inline error message on bad commit")
+	}
+}
+
+func TestSettings_ReadOnlyFieldRefusesEnter(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	m := newSettings(styles.Default(), DefaultKeymap(), config.Defaults(), "test")
+	// Move cursor to the theme row (the read-only one).
+	fields := editableFields()
+	for i, f := range fields {
+		if f.label == "theme" {
+			m.cursor = i
+			break
+		}
+	}
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.editing {
+		t.Fatal("Enter on a read-only field should NOT start editing")
+	}
+	if !strings.Contains(m.errMsg, "read-only") {
+		t.Errorf("expected read-only hint, got %q", m.errMsg)
+	}
+}
+
+// byLabel is a tiny test helper that returns the named field or nil.
+func byLabel(fields []editableField, name string) *editableField {
+	for i := range fields {
+		if fields[i].label == name {
+			return &fields[i]
+		}
+	}
+	return nil
+}

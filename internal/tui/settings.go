@@ -3,9 +3,11 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/skzv/ccmux/internal/config"
@@ -16,13 +18,136 @@ import (
 // settingsModel surfaces ccmux's own config.toml with toggles and links,
 // plus a Moshi/moshi-hook status block at the top so users can see at a
 // glance whether the mobile push pipeline is set up.
+//
+// Editing model (added in v0.1.x): a cursor moves over the editable
+// fields (projects.root, scaffold.dirs, subscription.tier). Enter
+// opens an inline textinput; Enter again commits, Esc cancels.
+// Multi-line fields (initial_prompt, gitignore_body) launch $EDITOR
+// against ~/.config/ccmux/config.toml so the user gets a real editor
+// for the prose-heavy bits.
 type settingsModel struct {
-	st          styles.Styles
-	km          Keymap
-	cfg         config.Config
-	version     string
-	moshiState  moshi.Status
-	moshiCheck  time.Time
+	st         styles.Styles
+	km         Keymap
+	cfg        config.Config
+	version    string
+	moshiState moshi.Status
+	moshiCheck time.Time
+
+	cursor   int // index into editableFields()
+	editing  bool
+	editor   textinput.Model
+	errMsg   string
+	saveMsg  string // transient "saved ✓" message
+	savedAt  time.Time
+}
+
+// editableField is one row the user can move the cursor onto. The
+// get/set closures let us model both plain strings (projects.root) and
+// derived shapes (scaffold.dirs serialized as comma-separated text).
+type editableField struct {
+	label string
+
+	// Section + key in TOML, for the help-line hint.
+	hint string
+
+	// get reads the current value as a single-line string.
+	get func(c *config.Config) string
+
+	// set parses the input, validates, and applies to the config.
+	// Returns a human-readable error to display inline on failure.
+	set func(c *config.Config, raw string) error
+
+	// validateOnly is true for read-only display rows that participate
+	// in the cursor but aren't editable. Useful for showing computed
+	// state alongside the editable knobs.
+	readOnly bool
+}
+
+func editableFields() []editableField {
+	return []editableField{
+		{
+			label: "projects.root",
+			hint:  "Where ccmux looks for projects (~/Projects default).",
+			get:   func(c *config.Config) string { return c.Projects.Root },
+			set: func(c *config.Config, raw string) error {
+				raw = strings.TrimSpace(raw)
+				if raw == "" {
+					return fmt.Errorf("must be a path")
+				}
+				if strings.HasPrefix(raw, "~/") {
+					home, err := os.UserHomeDir()
+					if err != nil {
+						return err
+					}
+					raw = home + raw[1:]
+				}
+				if fi, err := os.Stat(raw); err != nil {
+					return fmt.Errorf("path doesn't exist: %s", raw)
+				} else if !fi.IsDir() {
+					return fmt.Errorf("not a directory: %s", raw)
+				}
+				c.Projects.Root = raw
+				return nil
+			},
+		},
+		{
+			label: "scaffold.dirs",
+			hint:  "Comma-separated. Empty = default (docs/01_Specs, docs/02_Architecture, docs/03_Agent_Logs).",
+			get: func(c *config.Config) string {
+				if len(c.Scaffold.Dirs) == 0 {
+					return ""
+				}
+				return strings.Join(c.Scaffold.Dirs, ", ")
+			},
+			set: func(c *config.Config, raw string) error {
+				raw = strings.TrimSpace(raw)
+				if raw == "" {
+					c.Scaffold.Dirs = nil
+					return nil
+				}
+				parts := strings.Split(raw, ",")
+				var out []string
+				for _, p := range parts {
+					p = strings.TrimSpace(p)
+					if p == "" {
+						continue
+					}
+					if strings.HasPrefix(p, "/") {
+						return fmt.Errorf("paths must be relative, got %q", p)
+					}
+					out = append(out, p)
+				}
+				if len(out) == 0 {
+					return fmt.Errorf("no valid entries (separate with commas)")
+				}
+				c.Scaffold.Dirs = out
+				return nil
+			},
+		},
+		{
+			label: "subscription.tier",
+			hint:  "Drives the dashboard quota bar. One of: api, pro, max5x, max20x.",
+			get:   func(c *config.Config) string { return c.Subscription.Tier },
+			set: func(c *config.Config, raw string) error {
+				raw = strings.TrimSpace(strings.ToLower(raw))
+				switch raw {
+				case "", "api", "pro", "max5x", "max20x":
+					c.Subscription.Tier = raw
+					return nil
+				}
+				return fmt.Errorf("must be one of: api, pro, max5x, max20x")
+			},
+		},
+		{
+			label: "theme",
+			hint:  "Theme picker UI coming in v0.2. Edit config.toml directly to switch.",
+			get:   func(c *config.Config) string { return c.Theme },
+			set: func(c *config.Config, raw string) error {
+				return fmt.Errorf("not yet editable from the TUI — coming v0.2")
+			},
+			readOnly: true,
+		},
+	}
 }
 
 func newSettings(st styles.Styles, km Keymap, cfg config.Config, version string) settingsModel {
@@ -46,27 +171,127 @@ func (m settingsModel) Update(msg tea.Msg) (settingsModel, tea.Cmd) {
 		m.moshiState = moshi.Detect(context.Background())
 		m.moshiCheck = time.Now()
 	}
+
+	// Editor mode owns the keyboard: enter to commit, esc to cancel.
+	if m.editing {
+		switch km := msg.(type) {
+		case tea.KeyMsg:
+			switch km.String() {
+			case "esc":
+				m.editing = false
+				m.errMsg = ""
+				return m, nil
+			case "enter":
+				return m.commit()
+			}
+		}
+		var cmd tea.Cmd
+		m.editor, cmd = m.editor.Update(msg)
+		return m, cmd
+	}
+
+	switch km := msg.(type) {
+	case tea.KeyMsg:
+		fields := editableFields()
+		switch km.String() {
+		case "up", "k":
+			if m.cursor > 0 {
+				m.cursor--
+			}
+			m.errMsg = ""
+		case "down", "j":
+			if m.cursor < len(fields)-1 {
+				m.cursor++
+			}
+			m.errMsg = ""
+		case "enter":
+			if m.cursor >= 0 && m.cursor < len(fields) && !fields[m.cursor].readOnly {
+				m.startEdit(fields[m.cursor])
+				return m, textinput.Blink
+			}
+			if m.cursor < len(fields) && fields[m.cursor].readOnly {
+				m.errMsg = "field is read-only: " + fields[m.cursor].hint
+			}
+		case "e":
+			// Open ~/.config/ccmux/config.toml in $EDITOR for the
+			// multi-line fields the TUI can't gracefully inline-edit.
+			return m.openEditor()
+		}
+	}
 	return m, nil
+}
+
+// startEdit prepares the inline textinput for `f` with the current value.
+func (m *settingsModel) startEdit(f editableField) {
+	ti := textinput.New()
+	ti.SetValue(f.get(&m.cfg))
+	ti.Focus()
+	ti.CharLimit = 512
+	ti.Width = 60
+	m.editor = ti
+	m.editing = true
+	m.errMsg = ""
+}
+
+// commit validates the textinput value, applies it to the config, and
+// saves to disk. Failures keep the user in edit mode with an inline
+// error message; success closes the editor and shows a transient
+// "saved ✓" flash.
+func (m settingsModel) commit() (settingsModel, tea.Cmd) {
+	fields := editableFields()
+	if m.cursor < 0 || m.cursor >= len(fields) {
+		m.editing = false
+		return m, nil
+	}
+	raw := m.editor.Value()
+	if err := fields[m.cursor].set(&m.cfg, raw); err != nil {
+		m.errMsg = err.Error()
+		return m, nil
+	}
+	if err := config.Save(m.cfg); err != nil {
+		m.errMsg = "save: " + err.Error()
+		return m, nil
+	}
+	m.editing = false
+	m.errMsg = ""
+	m.saveMsg = "saved ✓"
+	m.savedAt = time.Now()
+	return m, nil
+}
+
+// openEditor suspends the TUI, opens $EDITOR pointing at config.toml,
+// reloads on return. Used for the prose-heavy fields (initial_prompt,
+// gitignore_body) that are awkward inside a one-line textinput.
+func (m settingsModel) openEditor() (settingsModel, tea.Cmd) {
+	editor := strings.TrimSpace(m.cfg.Editor)
+	if editor == "" {
+		editor = os.Getenv("VISUAL")
+	}
+	if editor == "" {
+		editor = os.Getenv("EDITOR")
+	}
+	if editor == "" {
+		editor = "vi"
+	}
+	cfgPath, err := config.Path()
+	if err != nil {
+		m.errMsg = err.Error()
+		return m, nil
+	}
+	return m, func() tea.Msg {
+		return openEditorMsg{Editor: editor, Path: cfgPath, Source: "settings"}
+	}
+}
+
+// SetConfig replaces the displayed config with the on-disk state.
+// Called by the root model after openEditor returns so the screen
+// reflects what the user just edited.
+func (m *settingsModel) SetConfig(cfg config.Config) {
+	m.cfg = cfg
 }
 
 func (m settingsModel) View(width, height int) string {
 	cfgPath, _ := config.Path()
-	dirsLabel := strings.Join(m.cfg.Scaffold.Dirs, ", ")
-	if dirsLabel == "" {
-		dirsLabel = m.st.Muted.Render("(default: src, tests, docs/01_Specs, docs/02_Architecture, docs/03_Agent_Logs)")
-	}
-	promptLabel := m.st.Muted.Render("(default — see scaffold.go)")
-	if strings.TrimSpace(m.cfg.Scaffold.InitialPrompt) != "" {
-		preview := strings.SplitN(strings.TrimSpace(m.cfg.Scaffold.InitialPrompt), "\n", 2)[0]
-		if len(preview) > 80 {
-			preview = preview[:80] + "…"
-		}
-		promptLabel = m.st.Emphasis.Render("(overridden) ") + preview
-	}
-	tierLabel := m.cfg.Subscription.Tier
-	if tierLabel == "" {
-		tierLabel = "api"
-	}
 
 	lines := []string{
 		m.st.Emphasis.Render("Settings"),
@@ -76,21 +301,45 @@ func (m settingsModel) View(width, height int) string {
 		fmt.Sprintf("ccmux version    %s", m.version),
 		fmt.Sprintf("config file      %s", cfgPath),
 		"",
-		m.st.Subtitle.Render("Projects"),
-		fmt.Sprintf("  root           %s", m.cfg.Projects.Root),
-		"",
-		m.st.Subtitle.Render("Theme"),
-		fmt.Sprintf("  active         %s", m.cfg.Theme),
-		m.st.Muted.Render("  (theme picker coming in v0.2)"),
-		"",
-		m.st.Subtitle.Render("Scaffold (ccmux new)"),
-		"  dirs           " + dirsLabel,
-		"  prompt         " + promptLabel,
-		m.st.Muted.Render("  edit " + cfgPath + " — [scaffold] dirs, gitignore_body, initial_prompt"),
-		"",
-		m.st.Subtitle.Render("Claude subscription"),
-		fmt.Sprintf("  tier           %s", tierLabel),
-		m.st.Muted.Render("  options: api | pro | max5x | max20x — drives the dashboard quota bar"),
+		m.st.Subtitle.Render("Editable (↑/↓ to move, enter to edit, e to open config in $EDITOR)"),
+	}
+
+	fields := editableFields()
+	for i, f := range fields {
+		val := f.get(&m.cfg)
+		display := val
+		if display == "" {
+			display = m.st.Muted.Render("(default)")
+		}
+		cursor := "  "
+		if i == m.cursor {
+			cursor = m.st.Key.Render("▸ ")
+		}
+		row := fmt.Sprintf("%s%-22s %s", cursor, f.label, display)
+		if f.readOnly {
+			row += m.st.Muted.Render("  (read-only)")
+		}
+		lines = append(lines, row)
+		if i == m.cursor {
+			lines = append(lines, "  "+m.st.Muted.Render(f.hint))
+			if m.editing {
+				lines = append(lines, "  "+m.editor.View())
+				lines = append(lines, "  "+m.st.Muted.Render("enter to save, esc to cancel"))
+				if m.errMsg != "" {
+					lines = append(lines, "  "+m.st.StatusError.Render("✗ "+m.errMsg))
+				}
+			} else if m.errMsg != "" {
+				lines = append(lines, "  "+m.st.StatusError.Render("✗ "+m.errMsg))
+			}
+		}
+	}
+
+	if m.saveMsg != "" && time.Since(m.savedAt) < 3*time.Second {
+		lines = append(lines, "")
+		lines = append(lines, m.st.StatusGood.Render(m.saveMsg))
+	}
+
+	lines = append(lines,
 		"",
 		m.st.Subtitle.Render("Sleep prevention"),
 		fmt.Sprintf("  idle release   %d minutes", m.cfg.Sleep.IdleReleaseMinutes),
@@ -104,7 +353,7 @@ func (m settingsModel) View(width, height int) string {
 		"",
 		m.st.Subtitle.Render("Remote hosts"),
 		m.renderHosts(),
-	}
+	)
 	return m.st.Pane.Width(width - 2).Height(height - 2).Render(strings.Join(lines, "\n"))
 }
 
@@ -114,35 +363,35 @@ func (m settingsModel) View(width, height int) string {
 func (m settingsModel) renderMoshiBlock() string {
 	s := m.moshiState
 	title := m.st.Subtitle.Render("Moshi (mobile push)")
-	var lines []string
+	var blockLines []string
 	switch {
 	case !s.BinaryInstalled:
-		lines = []string{
+		blockLines = []string{
 			m.st.Muted.Render("  · moshi-hook not installed."),
 			"  Run " + m.st.Key.Render("ccmux moshi-setup") + " in a shell to install + pair.",
 		}
 	case !s.Paired:
-		lines = []string{
+		blockLines = []string{
 			m.st.StatusWarning.Render("  · moshi-hook installed but not paired."),
 			"  Run " + m.st.Key.Render("ccmux moshi-setup") + " and provide a token from the Moshi app.",
 		}
 	case !s.HooksInstalled:
-		lines = []string{
+		blockLines = []string{
 			m.st.StatusWarning.Render("  ⚠ paired but Claude Code hooks not wired."),
 			"  Run " + m.st.Key.Render("moshi-hook install"),
 		}
 	case !s.ServiceRunning:
-		lines = []string{
+		blockLines = []string{
 			m.st.StatusWarning.Render("  ⚠ hooks wired but daemon not running."),
 			"  Run " + m.st.Key.Render("brew services start moshi-hook"),
 		}
 	default:
-		lines = []string{
+		blockLines = []string{
 			m.st.StatusGood.Render("  ✓ installed, paired, hooks wired, service running."),
 			m.st.Muted.Render("  ccmuxd will defer to moshi-hook for push notifications."),
 		}
 	}
-	return strings.Join(append([]string{title}, lines...), "\n")
+	return strings.Join(append([]string{title}, blockLines...), "\n")
 }
 
 func (m settingsModel) renderHosts() string {

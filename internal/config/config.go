@@ -21,7 +21,18 @@ type Config struct {
 	Notes        NotesConfig        `toml:"notes"`
 	Scaffold     ScaffoldConfig     `toml:"scaffold"`
 	Subscription SubscriptionConfig `toml:"subscription"`
+	Tour         TourConfig         `toml:"tour"`
 	Hosts        []Host             `toml:"host"`
+}
+
+// TourConfig persists whether the user has seen the first-run interactive
+// tour. We only set Shown=true after the user explicitly completes or
+// skips the tour, so a partial view (window resize, accidental quit)
+// re-opens the tour next launch. ShownVersion lets us re-trigger the
+// tour after a major version that introduces new screens.
+type TourConfig struct {
+	Shown        bool   `toml:"shown"`
+	ShownVersion string `toml:"shown_version"`
 }
 
 type ProjectsConfig struct {

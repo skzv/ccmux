@@ -23,6 +23,7 @@ func helpForScreen(s Screen) []HelpItem {
 		{"1-6 / F1-F6", "switch screens"},
 		{"r", "refresh now"},
 		{"?", "this help"},
+		{"T", "re-open the first-run tour"},
 		{"esc", "dismiss toast"},
 		{"q / Ctrl-c", "quit"},
 	}

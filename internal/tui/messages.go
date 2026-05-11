@@ -87,16 +87,26 @@ type sessionKilledMsg struct {
 // Notes screen messages.
 
 // openEditorMsg asks the app to suspend the TUI and run $EDITOR on `Path`.
-// The Notes screen emits this after creating a new file; the App handles
-// the tea.ExecProcess so the TUI knows to refresh on return.
+// Emitted by the Notes screen (after creating a new file) and by the
+// Settings screen (for multi-line config values). After tea.ExecProcess
+// returns, the App routes a follow-up reload message based on `Source`
+// so the right screen refreshes its state.
 type openEditorMsg struct {
 	Editor string
 	Path   string
+	// Source identifies which screen wants the reload. "notes" by
+	// default (back-compat); "settings" triggers configReloadMsg.
+	Source string
 }
 
 // notesReloadMsg asks the Notes screen to re-list and re-render after a
 // file was created/edited externally.
 type notesReloadMsg struct{}
+
+// configReloadMsg asks the App to re-read ~/.config/ccmux/config.toml
+// and push the new shape into every screen that holds a cached copy.
+// Emitted after the Settings screen's "edit in $EDITOR" flow returns.
+type configReloadMsg struct{}
 
 // usageTickMsg fires periodically to refresh the dashboard's usage panel.
 // Slower cadence than the session tick because walking the transcript

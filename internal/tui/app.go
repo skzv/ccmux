@@ -69,6 +69,7 @@ type App struct {
 	toastLog   []toastEntry // small ring buffer for the help overlay
 
 	helpOpen     bool
+	tour         tourModel // first-run interactive tour; re-openable with T
 	lastRefresh  time.Time
 	daemonOnline bool
 }
@@ -107,8 +108,13 @@ func New(cfg config.Config, version string) App {
 		notes:     newNotes(st, km),
 		claudeM:   newClaude(st, km),
 		settings:  newSettings(st, km, cfg, version),
+		tour:      newTour(st),
 	}
 	a.dashboard.SetConfig(cfg)
+	// First-run tour: open automatically if the user hasn't completed it yet.
+	if !cfg.Tour.Shown {
+		a.tour.Open()
+	}
 	return a
 }
 
@@ -207,20 +213,61 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, a.refreshSessionsCmd()
 
 	case openEditorMsg:
-		// A screen (Notes) asked the app to suspend and run $EDITOR.
+		// A screen (Notes or Settings) asked the app to suspend and run
+		// $EDITOR. Route the follow-up reload by Source so the right
+		// screen refreshes when control returns.
+		source := msg.Source
 		c := exec.Command(msg.Editor, msg.Path)
 		return a, tea.ExecProcess(c, func(err error) tea.Msg {
 			if err != nil {
 				return toastMsg{Text: "editor: " + err.Error(), Kind: toastError, Until: time.Now().Add(5 * time.Second)}
 			}
+			if source == "settings" {
+				return configReloadMsg{}
+			}
 			return notesReloadMsg{}
 		})
+
+	case configReloadMsg:
+		// User finished editing ~/.config/ccmux/config.toml in $EDITOR.
+		// Re-read it and push the new shape into every screen that
+		// holds a cached copy. Errors surface as a toast — the previous
+		// in-memory config stays in place so the TUI doesn't go blank.
+		if cfg, err := config.Load(); err != nil {
+			a.setToast(toastError, "reload config: "+err.Error(), 5*time.Second)
+		} else {
+			a.cfg = cfg
+			a.settings.SetConfig(cfg)
+			a.dashboard.SetConfig(cfg)
+			a.setToast(toastSuccess, "config reloaded", 2*time.Second)
+		}
+		return a, nil
 
 	case refreshAfterDetachMsg:
 		// Returning from tmux attach.
 		return a, tea.Batch(a.refreshSessionsCmd(), a.refreshProjectsCmd())
 
 	case tea.KeyMsg:
+		// Tour overlay takes top priority. The tour owns the screen
+		// until the user finishes it or skips with esc/q. Re-openable
+		// later with `T`.
+		if a.tour.Active() {
+			switch msg.String() {
+			case "right", "enter", " ", "n":
+				if !a.tour.Next() {
+					// Last slide → mark complete + close.
+					a.tour.Close()
+					a.markTourShown()
+				}
+			case "left", "p":
+				a.tour.Prev()
+			case "esc", "q":
+				a.tour.Close()
+				a.markTourShown()
+			}
+			return a, nil
+		}
+
 		// Help overlay takes precedence — `?` or `esc` close it, every
 		// other key passes through normally so muscle memory still works.
 		if a.helpOpen {
@@ -242,6 +289,14 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// `?` opens the help overlay from any screen.
 		if msg.String() == "?" {
 			a.helpOpen = true
+			return a, nil
+		}
+
+		// `T` re-opens the first-run tour at step 0. Capital so it doesn't
+		// collide with vim-style `t` someone might add to a per-screen
+		// nav binding later.
+		if msg.String() == "T" {
+			a.tour.Open()
 			return a, nil
 		}
 
@@ -354,10 +409,27 @@ func (a App) View() string {
 	body = clampLines(body, bodyHeight)
 
 	frame := lipgloss.JoinVertical(lipgloss.Left, header, body, statusBar, footer)
+	// Overlay precedence: tour > help > regular frame.
+	if a.tour.Active() {
+		return a.tour.View(a.width, a.height)
+	}
 	if a.helpOpen {
 		return a.renderHelpOverlay(a.width, a.height)
 	}
 	return frame
+}
+
+// markTourShown persists Tour.Shown=true so the tour doesn't re-fire on
+// next launch. Errors are swallowed deliberately — the worst case is
+// the user sees the tour twice, which is harmless. We don't want a
+// config-write blip to interrupt the TUI's flow.
+func (a *App) markTourShown() {
+	if a.cfg.Tour.Shown && a.cfg.Tour.ShownVersion == a.version {
+		return
+	}
+	a.cfg.Tour.Shown = true
+	a.cfg.Tour.ShownVersion = a.version
+	_ = config.Save(a.cfg)
 }
 
 // clampLines returns the first `n` lines of `s` verbatim. Preserves the
