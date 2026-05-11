@@ -13,6 +13,30 @@ import (
 	"time"
 )
 
+// command builds an *exec.Cmd for a tmux invocation with a UTF-8 locale
+// forced. Without this, when ccmuxd runs under launchd/systemd no LANG or
+// LC_* vars are inherited and tmux falls back to the C locale — in which
+// case `-F` output strips tabs (and other non-printable bytes) and replaces
+// them with `_`, breaking our parser. Setting LC_ALL=C.UTF-8 keeps tmux's
+// output bytes intact regardless of the launcher's environment.
+func command(ctx context.Context, name string, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Env = withLocale(os.Environ())
+	return cmd
+}
+
+// withLocale returns env with LC_ALL=C.UTF-8 appended iff none of
+// LC_ALL / LC_CTYPE / LANG are already set. Pulled out of command() so
+// the locale-decision logic is unit-testable without spawning a process.
+func withLocale(env []string) []string {
+	for _, e := range env {
+		if strings.HasPrefix(e, "LC_ALL=") || strings.HasPrefix(e, "LC_CTYPE=") || strings.HasPrefix(e, "LANG=") {
+			return env
+		}
+	}
+	return append(env, "LC_ALL=C.UTF-8")
+}
+
 // Session is the static metadata about a tmux session.
 type Session struct {
 	Name       string    // tmux session name, e.g. "c-foo"
@@ -38,11 +62,14 @@ func Has(ctx context.Context, name string) (bool, error) {
 	return true, nil
 }
 
+// listFormat is the tmux -F format used by List. Exported as a constant
+// so tests can verify the parser stays aligned with the format string.
+const listFormat = "#{session_name}\t#{session_created}\t#{session_activity}\t#{session_path}\t#{session_attached}\t#{session_windows}"
+
 // List returns every session on the default tmux server.
 // Returns an empty slice if the tmux server is not running.
 func List(ctx context.Context) ([]Session, error) {
-	const fmtStr = "#{session_name}\t#{session_created}\t#{session_activity}\t#{session_path}\t#{session_attached}\t#{session_windows}"
-	cmd := exec.CommandContext(ctx, "tmux", "list-sessions", "-F", fmtStr)
+	cmd := command(ctx, "tmux", "list-sessions", "-F", listFormat)
 	out, err := cmd.Output()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
@@ -54,6 +81,13 @@ func List(ctx context.Context) ([]Session, error) {
 		}
 		return nil, fmt.Errorf("tmux list-sessions: %w", err)
 	}
+	return parseList(out), nil
+}
+
+// parseList turns raw `tmux list-sessions -F listFormat` output into
+// Session values. Split out so tests can exercise the parser directly
+// without needing a tmux server.
+func parseList(out []byte) []Session {
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 	sessions := make([]Session, 0, len(lines))
 	for _, line := range lines {
@@ -74,18 +108,18 @@ func List(ctx context.Context) ([]Session, error) {
 		s.LastAttach = unixSecs(parts[2])
 		sessions = append(sessions, s)
 	}
-	return sessions, nil
+	return sessions
 }
 
-// New creates a new detached session named `name`, starting `command` in directory `dir`.
-// If command is empty, tmux's default shell is used.
-func New(ctx context.Context, name, dir, command string) error {
+// New creates a new detached session named `name`, starting `cmdline` in directory `dir`.
+// If cmdline is empty, tmux's default shell is used.
+func New(ctx context.Context, name, dir, cmdline string) error {
 	args := []string{"new-session", "-d", "-s", name}
 	if dir != "" {
 		args = append(args, "-c", dir)
 	}
-	if command != "" {
-		args = append(args, command)
+	if cmdline != "" {
+		args = append(args, cmdline)
 	}
 	cmd := exec.CommandContext(ctx, "tmux", args...)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -120,7 +154,7 @@ func CapturePane(ctx context.Context, name string, lines int) (string, error) {
 	if lines > 0 {
 		args = append(args, "-S", fmt.Sprintf("-%d", lines))
 	}
-	cmd := exec.CommandContext(ctx, "tmux", args...)
+	cmd := command(ctx, "tmux", args...)
 	out, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("tmux capture-pane: %w", err)

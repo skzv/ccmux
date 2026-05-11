@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -124,7 +125,11 @@ func (c *Client) getJSON(ctx context.Context, path string, out any) error {
 }
 
 func (c *Client) post(ctx context.Context, path string, body, out any) error {
-	var rdr *bytesReader
+	// Important: pass an untyped nil io.Reader when there's no body —
+	// a typed-nil *bytesReader satisfies the interface and trips
+	// net/http's "non-nil body" path, which then nil-dereferences in
+	// Read. (Bare-POST endpoints like keep-awake/kill hit this.)
+	var rdr io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
 		if err != nil {
@@ -176,7 +181,10 @@ type bytesReader struct {
 
 func (r *bytesReader) Read(p []byte) (int, error) {
 	if r.i >= len(r.b) {
-		return 0, errors.New("EOF")
+		// Must be io.EOF (the sentinel) — Go's io.Copy treats any other
+		// error as a real failure and net/http will not retire the
+		// request body cleanly.
+		return 0, io.EOF
 	}
 	n := copy(p, r.b[r.i:])
 	r.i += n
