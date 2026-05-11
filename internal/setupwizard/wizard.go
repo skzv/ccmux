@@ -66,7 +66,6 @@ func Run(ctx context.Context, out io.Writer) error {
 		{"SSH key for phone", stepSSHKey},
 		{"ccmux config", stepConfig},
 		{"ccmuxd autostart", stepDaemonService},
-		{"Persistent outer tmux", stepTmuxOuter},
 	}
 
 	for i, s := range steps {
@@ -448,20 +447,6 @@ func stepDaemonService(_ context.Context, out io.Writer) error {
 	if final.Running {
 		fmt.Fprintln(out, "  "+stOK.Render("✓")+"  ccmuxd is running right now")
 	}
-	return nil
-}
-
-// stepTmuxOuter: explain (and optionally configure) the persistent
-// outer `ccmux` tmux session that mobile/Moshi attach to. We don't
-// modify ~/.tmux.conf — too invasive — but we offer to write the
-// recommended command into the user's tmux config or print it.
-func stepTmuxOuter(_ context.Context, out io.Writer) error {
-	fmt.Fprintln(out, "  For mobile use, configure Moshi's connection command to:")
-	fmt.Fprintln(out, "    "+stEmphasis.Render("tmux new-session -A -s ccmux ccmux"))
-	fmt.Fprintln(out)
-	fmt.Fprintln(out, "  This attaches to (or creates) a tmux session named \"ccmux\" running")
-	fmt.Fprintln(out, "  the ccmux TUI. Closing the Moshi app leaves it alive; reopening attaches")
-	fmt.Fprintln(out, "  right back to the same view.")
 	return nil
 }
 
