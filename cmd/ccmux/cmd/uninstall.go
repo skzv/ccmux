@@ -12,6 +12,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/skzv/ccmux/internal/daemonservice"
 	"github.com/skzv/ccmux/internal/tmux"
 	"github.com/skzv/ccmux/internal/tmuxchrome"
 )
@@ -104,6 +105,13 @@ func buildUninstallPlan(keepConfig, keepChrome bool) (*uninstallPlan, error) {
 	}
 	p := &uninstallPlan{keepConfig: keepConfig, resetTmux: !keepChrome}
 
+	if plist := daemonservice.PlistPathOrEmpty(); plist != "" {
+		if _, err := os.Stat(plist); err == nil {
+			p.paths = append(p.paths, plist)
+			p.steps = append(p.steps, "unload + remove "+plist+" (launchd agent)")
+		}
+	}
+
 	binDir := filepath.Join(home, ".local", "bin")
 	for _, bin := range []string{"ccmux", "ccmuxd"} {
 		full := filepath.Join(binDir, bin)
@@ -161,7 +169,13 @@ func runUninstall(plan *uninstallPlan) error {
 		}
 	}
 
-	// Stop the daemon first so it doesn't hold its socket open.
+	// Unload the launchd agent first so it doesn't relaunch the daemon
+	// we're about to kill. Idempotent — quiet no-op when not installed.
+	if _, err := daemonservice.Uninstall(); err == nil {
+		report("unloaded launchd agent (if any)", nil)
+	}
+
+	// Stop the daemon (in case it was started manually).
 	if err := exec.Command("pkill", "-TERM", "-x", "ccmuxd").Run(); err == nil {
 		report("stopped ccmuxd", nil)
 		time.Sleep(300 * time.Millisecond)

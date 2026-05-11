@@ -16,6 +16,7 @@ import (
 
 	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/daemon"
+	"github.com/skzv/ccmux/internal/daemonservice"
 	"github.com/skzv/ccmux/internal/moshi"
 	"github.com/skzv/ccmux/internal/scaffold"
 	"github.com/skzv/ccmux/internal/setupwizard"
@@ -230,7 +231,8 @@ func runDoctor() error {
 	return nil
 }
 
-// newDaemonCmd: `ccmux daemon start|stop|status` — convenience over launchctl.
+// newDaemonCmd: `ccmux daemon ...` — start/stop, persistent install/
+// uninstall, and status.
 func newDaemonCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "daemon",
@@ -239,7 +241,7 @@ func newDaemonCmd() *cobra.Command {
 	c.AddCommand(
 		&cobra.Command{
 			Use:   "start",
-			Short: "Start ccmuxd in the background",
+			Short: "Start ccmuxd in the background for this login session",
 			RunE: func(_ *cobra.Command, _ []string) error {
 				bin, err := exec.LookPath("ccmuxd")
 				if err != nil {
@@ -256,8 +258,30 @@ func newDaemonCmd() *cobra.Command {
 		},
 		&cobra.Command{
 			Use:   "status",
-			Short: "Print ccmuxd status",
+			Short: "Print ccmuxd status and launchd registration state",
 			RunE: func(_ *cobra.Command, _ []string) error {
+				svc := daemonservice.Probe()
+				switch svc.OS {
+				case "darwin":
+					fmt.Printf("launchd plist:  %s\n", svc.PlistPath)
+					if svc.PlistExists {
+						fmt.Println("plist exists:   yes")
+					} else {
+						fmt.Println("plist exists:   no — run `ccmux daemon install` to persist across reboots")
+					}
+					if svc.Loaded {
+						fmt.Println("launchd loaded: yes")
+					} else {
+						fmt.Println("launchd loaded: no")
+					}
+				default:
+					fmt.Printf("OS: %s (auto-install is macOS-only; use systemd-user on Linux — see `ccmux daemon unit`)\n", svc.OS)
+				}
+				if svc.Running {
+					fmt.Println("process alive:  yes")
+				} else {
+					fmt.Println("process alive:  no")
+				}
 				cli, err := daemon.LocalClient()
 				if err != nil {
 					return err
@@ -266,23 +290,76 @@ func newDaemonCmd() *cobra.Command {
 				defer cancel()
 				h, err := cli.Health(ctx)
 				if err != nil {
-					fmt.Println("ccmuxd: offline —", err)
-					os.Exit(1)
+					fmt.Println("\nIPC: offline —", err)
+					return nil
 				}
-				fmt.Printf("ccmuxd: online (host=%s version=%s sessions=%d sleep_mode=%s)\n",
+				fmt.Printf("\nIPC: online (host=%s version=%s sessions=%d sleep_mode=%s)\n",
 					h.Hostname, h.Version, h.Sessions, h.SleepMode)
 				return nil
 			},
 		},
 		&cobra.Command{
 			Use:   "stop",
-			Short: "Stop ccmuxd",
+			Short: "Stop ccmuxd (this login session only — use `uninstall` to disable autostart too)",
 			RunE: func(_ *cobra.Command, _ []string) error {
 				out, err := exec.Command("pkill", "-x", "ccmuxd").CombinedOutput()
 				if err != nil {
 					return fmt.Errorf("%w (%s)", err, strings.TrimSpace(string(out)))
 				}
 				fmt.Println("ccmuxd stopped")
+				return nil
+			},
+		},
+		&cobra.Command{
+			Use:   "install",
+			Short: "Install ccmuxd as a launchd agent so it starts on login + restarts on crash",
+			Long: `Writes ~/Library/LaunchAgents/dev.ccmux.daemon.plist pointing at
+$HOME/.local/bin/ccmuxd and loads it via launchctl. RunAtLoad +
+KeepAlive in the plist mean the daemon survives logout, reboot,
+and unexpected crashes. Stdout/stderr go to
+~/.local/state/ccmux/ccmuxd.{stdout,stderr}.log.
+
+Idempotent: re-running unloads the existing service and re-loads
+the fresh plist, picking up any binary-path changes.`,
+			RunE: func(_ *cobra.Command, _ []string) error {
+				s, err := daemonservice.Install()
+				if err != nil {
+					return err
+				}
+				fmt.Println("✓ launchd plist written to", s.PlistPath)
+				if s.Loaded {
+					fmt.Println("✓ ccmuxd is loaded under launchd; it will start automatically on every login.")
+				}
+				if s.Running {
+					fmt.Println("✓ ccmuxd is running now (pid TBD; check `ccmux daemon status`)")
+				}
+				return nil
+			},
+		},
+		&cobra.Command{
+			Use:   "uninstall",
+			Short: "Unload + remove the launchd plist (does not remove the binary)",
+			RunE: func(_ *cobra.Command, _ []string) error {
+				if _, err := daemonservice.Uninstall(); err != nil {
+					return err
+				}
+				fmt.Println("✓ launchd plist removed; ccmuxd will not start on next login")
+				return nil
+			},
+		},
+		&cobra.Command{
+			Use:   "unit",
+			Short: "Print the recommended systemd-user unit (Linux)",
+			RunE: func(_ *cobra.Command, _ []string) error {
+				bin, err := exec.LookPath("ccmuxd")
+				if err != nil {
+					bin = "$HOME/.local/bin/ccmuxd"
+				}
+				fmt.Println("# Save to ~/.config/systemd/user/ccmuxd.service, then:")
+				fmt.Println("#   systemctl --user daemon-reload")
+				fmt.Println("#   systemctl --user enable --now ccmuxd")
+				fmt.Println()
+				fmt.Print(daemonservice.UnitFile(bin))
 				return nil
 			},
 		},

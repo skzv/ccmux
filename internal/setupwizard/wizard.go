@@ -24,6 +24,7 @@ import (
 
 	"github.com/skzv/ccmux/internal/claudeauth"
 	"github.com/skzv/ccmux/internal/config"
+	"github.com/skzv/ccmux/internal/daemonservice"
 	"github.com/skzv/ccmux/internal/moshi"
 )
 
@@ -62,6 +63,7 @@ func Run(ctx context.Context, out io.Writer) error {
 		{"Moshi (mobile push)", stepMoshi},
 		{"SSH key for phone", stepSSHKey},
 		{"ccmux config", stepConfig},
+		{"ccmuxd autostart", stepDaemonService},
 		{"Persistent outer tmux", stepTmuxOuter},
 	}
 
@@ -336,6 +338,55 @@ func stepConfig(ctx context.Context, out io.Writer) error {
 	}
 	p, _ := config.Path()
 	fmt.Fprintf(out, "  %s  wrote %s\n", stOK.Render("✓"), p)
+	return nil
+}
+
+// stepDaemonService: install (or update) the launchd agent that keeps
+// ccmuxd running across logouts/reboots. Idempotent — re-running with
+// the plist already loaded unloads and re-loads it so any binary-path
+// changes get picked up.
+func stepDaemonService(_ context.Context, out io.Writer) error {
+	s := daemonservice.Probe()
+	if s.OS != "darwin" {
+		fmt.Fprintln(out, stMuted.Render("  Auto-install is macOS-only. On Linux, run:"))
+		fmt.Fprintln(out, stMuted.Render("    ccmux daemon unit > ~/.config/systemd/user/ccmuxd.service"))
+		fmt.Fprintln(out, stMuted.Render("    systemctl --user enable --now ccmuxd"))
+		return nil
+	}
+	if s.Loaded && s.Running {
+		fmt.Fprintf(out, "  %s  already installed and running (plist: %s)\n", stOK.Render("✓"), s.PlistPath)
+		return nil
+	}
+	if !s.BinaryInstalled {
+		fmt.Fprintf(out, "  %s  ccmuxd not at %s — run `make install` first\n", stWarn.Render("⚠"), s.BinaryPath)
+		return nil
+	}
+	var doInstall bool
+	if err := huh.NewForm(huh.NewGroup(
+		huh.NewConfirm().
+			Title("Install ccmuxd as a launchd agent?").
+			Description("Writes ~/Library/LaunchAgents/dev.ccmux.daemon.plist with RunAtLoad+KeepAlive, then launchctl loads it. ccmuxd then starts at every login and restarts on crash.").
+			Affirmative("Install").
+			Negative("Skip").
+			Value(&doInstall),
+	)).Run(); err != nil {
+		return err
+	}
+	if !doInstall {
+		fmt.Fprintln(out, stMuted.Render("  (skipped — run `ccmux daemon install` whenever you're ready)"))
+		return nil
+	}
+	final, err := daemonservice.Install()
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "  %s  plist written to %s\n", stOK.Render("✓"), final.PlistPath)
+	if final.Loaded {
+		fmt.Fprintln(out, "  "+stOK.Render("✓")+"  loaded via launchctl; ccmuxd will start on every login")
+	}
+	if final.Running {
+		fmt.Fprintln(out, "  "+stOK.Render("✓")+"  ccmuxd is running right now")
+	}
 	return nil
 }
 
