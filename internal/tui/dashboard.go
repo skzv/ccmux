@@ -191,12 +191,6 @@ func (m dashboardModel) devicesPanel(width int) string {
 	if nameW < 12 {
 		nameW = 12
 	}
-	// Info column = inner - icon(2) - space(1) - nameW - space(1).
-	infoW := inner - 4 - nameW
-	if infoW < 12 {
-		infoW = 12
-	}
-
 	rows := []string{st.Emphasis.Render("Devices")}
 	for _, h := range m.hosts {
 		icon := iconForHost(h, st)
@@ -220,7 +214,6 @@ func (m dashboardModel) devicesPanel(width int) string {
 			st.Muted.Render("unreachable peer? install ccmux there with `make bootstrap`,"),
 			st.Muted.Render("or run `ccmux setup` on it to enable server mode."))
 	}
-	_ = infoW // info isn't manually truncated; lipgloss wraps gracefully
 	return st.Pane.Width(width - 2).Render(strings.Join(rows, "\n"))
 }
 

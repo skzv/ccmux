@@ -20,7 +20,7 @@ type HelpItem struct {
 // actual implementation when there's a single source.
 func helpForScreen(s Screen) []HelpItem {
 	common := []HelpItem{
-		{"1-6 / F1-F6", "switch screens"},
+		{"1-7 / F1-F7", "switch screens"},
 		{"r", "refresh now"},
 		{"?", "this help"},
 		{"T", "re-open the first-run tour"},
@@ -66,6 +66,12 @@ func helpForScreen(s Screen) []HelpItem {
 	case ScreenSettings:
 		return append([]HelpItem{
 			{"(read-only for now)", "edit ~/.config/ccmux/config.toml manually"},
+		}, common...)
+	case ScreenNetwork:
+		return append([]HelpItem{
+			{"↑↓ / j k", "navigate device list"},
+			{"enter", "plain `ssh -t <host>` into the selected peer"},
+			{"r", "refresh tailnet scan + ccmuxd probes"},
 		}, common...)
 	}
 	return common

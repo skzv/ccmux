@@ -37,10 +37,11 @@ const (
 	ScreenNotes
 	ScreenClaude
 	ScreenSettings
+	ScreenNetwork
 )
 
 func (s Screen) String() string {
-	return []string{"Dashboard", "Sessions", "Projects", "Notes", "Claude", "Settings"}[s]
+	return []string{"Dashboard", "Sessions", "Projects", "Notes", "Claude", "Settings", "Network"}[s]
 }
 
 // App is the root Bubble Tea model.
@@ -63,6 +64,7 @@ type App struct {
 	notes     notesModel
 	claudeM   claudeModel
 	settings  settingsModel
+	network   networkModel
 
 	toast      string
 	toastKind  toastKind
@@ -109,6 +111,7 @@ func New(cfg config.Config, version string) App {
 		notes:     newNotes(st, km),
 		claudeM:   newClaude(st, km),
 		settings:  newSettings(st, km, cfg, version),
+		network:   newNetwork(st, km),
 		tour:      newTour(st),
 	}
 	a.dashboard.SetConfig(cfg)
@@ -178,6 +181,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.daemonOnline = daemonOnline(msg.Hosts)
 		a.dashboard.SetSessions(a.sessions)
 		a.dashboard.SetHosts(a.hosts)
+		a.network.SetHosts(a.hosts)
 		a.dashboard.SetVersion(a.version)
 		a.sessionsM.SetSessions(a.sessions)
 		if msg.Err != nil {
@@ -340,12 +344,22 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case keyMatches(msg, a.keys.Settings):
 			a.screen = ScreenSettings
 			return a, nil
+		case keyMatches(msg, a.keys.Network):
+			a.screen = ScreenNetwork
+			return a, nil
 		case keyMatches(msg, a.keys.Refresh):
 			return a, a.refreshSessionsCmd()
 		case keyMatches(msg, a.keys.Enter) && a.screen == ScreenSessions:
 			return a, a.attachSelectedSession()
 		case keyMatches(msg, a.keys.Enter) && a.screen == ScreenProjects:
 			return a, a.attachOrCreateForSelectedProject()
+		case keyMatches(msg, a.keys.Enter) && a.screen == ScreenNetwork:
+			if c := a.network.SSHCmd(); c != nil {
+				return a, c
+			}
+			return a, func() tea.Msg {
+				return toastMsg{Text: "nothing to ssh into for that row", Kind: toastInfo, Until: time.Now().Add(3 * time.Second)}
+			}
 		}
 	}
 
@@ -364,6 +378,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.claudeM, cmd = a.claudeM.Update(msg)
 	case ScreenSettings:
 		a.settings, cmd = a.settings.Update(msg)
+	case ScreenNetwork:
+		a.network, cmd = a.network.Update(msg)
 	}
 	return a, cmd
 }
@@ -402,6 +418,8 @@ func (a App) View() string {
 		body = a.claudeM.View(a.width, bodyHeight)
 	case ScreenSettings:
 		body = a.settings.View(a.width, bodyHeight)
+	case ScreenNetwork:
+		body = a.network.View(a.width, bodyHeight)
 	}
 	// Defensive clamp: regardless of what the screen returned, never
 	// let the body exceed its budget. Screens with content that's hard
@@ -456,7 +474,7 @@ func clampLines(s string, n int) string {
 // renderHeader is the top-of-screen tab strip. On narrow terminals the
 // tab labels collapse to just their number; the full strip never wraps.
 func (a App) renderHeader() string {
-	tabs := []Screen{ScreenDashboard, ScreenSessions, ScreenProjects, ScreenNotes, ScreenClaude, ScreenSettings}
+	tabs := []Screen{ScreenDashboard, ScreenSessions, ScreenProjects, ScreenNotes, ScreenClaude, ScreenSettings, ScreenNetwork}
 	parts := []string{a.styles.Title.Render(" ccmux ")}
 	narrow := isNarrow(a.width)
 	for i, t := range tabs {
