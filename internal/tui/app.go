@@ -177,6 +177,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Err == nil {
 			a.projects = msg.Projects
 			a.projectsM.SetProjects(a.projects)
+			// Notes screen needs the full list for its project picker.
+			a.notes.SetProjects(a.projects)
 		}
 		return a, nil
 

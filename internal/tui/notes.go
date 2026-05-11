@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"strings"
@@ -16,22 +17,45 @@ import (
 )
 
 // notesModel is the Notes tab — a per-project docs/ browser with a
-// Glamour-rendered preview pane. Project context comes from whichever
-// project was last focused on the Projects screen.
+// Glamour-rendered preview pane. Two key UX moves:
+//
+//   - Tab toggles `focus` between the file list and the preview.
+//     j/k/arrows navigate WITHIN the focused pane: file rows when the
+//     list is focused, document scroll when the preview is focused.
+//     This is the only way to actually scroll a long markdown doc;
+//     otherwise the same keys would re-select files and reset the
+//     preview to top.
+//
+//   - `p` opens a project picker so you can hop between projects without
+//     returning to the Projects tab. The list is the full set of
+//     discovered projects, kept in sync via SetProjects from the App.
 type notesModel struct {
 	st       styles.Styles
 	km       Keymap
 	project  *project.Project
+	projects []project.Project
 	entries  []notes.Entry
 	cursor   int
+	focus    notesFocus
 	preview  viewport.Model
 	rendered string
-	editor   string // $EDITOR (or fallback)
+	editor   string
 
-	// new-note picker state
+	// new-note picker
 	picking bool
-	pickIdx int
+
+	// project picker
+	pickingProject bool
+	projCursor     int
 }
+
+// notesFocus tracks which pane receives navigation keys.
+type notesFocus int
+
+const (
+	focusList notesFocus = iota
+	focusPreview
+)
 
 func newNotes(st styles.Styles, km Keymap) notesModel {
 	vp := viewport.New(80, 20)
@@ -57,8 +81,19 @@ func (m *notesModel) SetProject(p *project.Project) {
 	}
 	m.project = p
 	m.cursor = 0
+	m.focus = focusList
 	m.loadEntries()
 	m.refreshPreview()
+}
+
+// SetProjects pushes the full discovered-projects list to the screen so
+// the project picker (`p` key) can offer all of them, not just the one
+// selected on the Projects tab.
+func (m *notesModel) SetProjects(ps []project.Project) {
+	m.projects = ps
+	if m.projCursor >= len(ps) {
+		m.projCursor = 0
+	}
 }
 
 func (m *notesModel) loadEntries() {
@@ -112,7 +147,7 @@ func (m *notesModel) refreshPreview() {
 }
 
 func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
-	// The picker overlay swallows keys when active.
+	// New-note action picker.
 	if m.picking {
 		if km, ok := msg.(tea.KeyMsg); ok {
 			switch km.String() {
@@ -120,6 +155,7 @@ func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
 				m.picking = false
 				return m, nil
 			case "a":
+				m.picking = false
 				return m, m.newAgentLogCmd()
 			case "s":
 				m.picking = false
@@ -132,33 +168,96 @@ func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
 		return m, nil
 	}
 
+	// Project picker modal.
+	if m.pickingProject {
+		if km, ok := msg.(tea.KeyMsg); ok {
+			switch km.String() {
+			case "esc":
+				m.pickingProject = false
+			case "up", "k":
+				if m.projCursor > 0 {
+					m.projCursor--
+				}
+			case "down", "j":
+				if m.projCursor < len(m.projects)-1 {
+					m.projCursor++
+				}
+			case "enter":
+				if m.projCursor >= 0 && m.projCursor < len(m.projects) {
+					p := m.projects[m.projCursor]
+					m.SetProject(&p)
+				}
+				m.pickingProject = false
+			}
+		}
+		return m, nil
+	}
+
 	switch msg := msg.(type) {
 	case notesReloadMsg:
 		m.loadEntries()
 		m.refreshPreview()
 		return m, nil
 	case tea.KeyMsg:
-		switch {
-		case keyMatches(msg, m.km.Up):
-			if m.cursor > 0 {
-				m.cursor--
-				m.refreshPreview()
+		// Global Notes keys (don't depend on which pane has focus).
+		switch msg.String() {
+		case "p":
+			if len(m.projects) > 0 {
+				m.pickingProject = true
+				// Position cursor on the current project if known.
+				m.projCursor = 0
+				if m.project != nil {
+					for i, p := range m.projects {
+						if p.Path == m.project.Path {
+							m.projCursor = i
+							break
+						}
+					}
+				}
+				return m, nil
 			}
-		case keyMatches(msg, m.km.Down):
-			if m.cursor < len(m.entries)-1 {
-				m.cursor++
-				m.refreshPreview()
+		case "tab":
+			// Toggle which pane receives navigation keys. List focus
+			// → preview focus → list focus. While the preview is
+			// focused, j/k/arrows scroll the document; while the list
+			// is focused, they change the selected file.
+			if m.focus == focusList {
+				m.focus = focusPreview
+			} else {
+				m.focus = focusList
 			}
-		case keyMatches(msg, m.km.NewItem):
-			if m.project != nil {
-				m.picking = true
-			}
-		case keyMatches(msg, m.km.EditInEd):
-			if e := m.selected(); e != nil {
-				return m, openInEditor(m.editor, e.Path)
-			}
+			return m, nil
 		}
-		// Preview scrolling
+
+		if m.focus == focusList {
+			switch {
+			case keyMatches(msg, m.km.Up):
+				if m.cursor > 0 {
+					m.cursor--
+					m.refreshPreview()
+				}
+				return m, nil
+			case keyMatches(msg, m.km.Down):
+				if m.cursor < len(m.entries)-1 {
+					m.cursor++
+					m.refreshPreview()
+				}
+				return m, nil
+			case keyMatches(msg, m.km.NewItem):
+				if m.project != nil {
+					m.picking = true
+				}
+				return m, nil
+			case keyMatches(msg, m.km.EditInEd):
+				if e := m.selected(); e != nil {
+					return m, openInEditor(m.editor, e.Path)
+				}
+				return m, nil
+			}
+			return m, nil
+		}
+
+		// Preview is focused → forward to viewport for scroll.
 		var cmd tea.Cmd
 		m.preview, cmd = m.preview.Update(msg)
 		return m, cmd
@@ -179,14 +278,17 @@ func (m notesModel) View(width, height int) string {
 		body := strings.Join([]string{
 			m.st.Emphasis.Render("Notes"),
 			"",
-			m.st.Muted.Render("Pick a project on the Projects tab (press " + m.st.Key.Render("3") + ") first."),
+			m.st.Muted.Render("No project selected."),
 			"",
-			"The Notes tab is scoped to one project's docs/ tree at a time.",
+			"Press " + m.st.Key.Render("p") + " here to pick one, or " + m.st.Key.Render("3") + " to go to the Projects tab.",
 		}, "\n")
 		return m.st.Pane.Width(width - 2).Height(height - 2).Render(body)
 	}
 	if m.picking {
-		return m.renderPicker(width, height)
+		return m.renderActionPicker(width, height)
+	}
+	if m.pickingProject {
+		return m.renderProjectPicker(width, height)
 	}
 	if isNarrow(width) {
 		return m.renderListOnly(width, height)
@@ -201,8 +303,12 @@ func (m notesModel) View(width, height int) string {
 }
 
 func (m notesModel) renderList(width, height int) string {
-	header := m.st.Emphasis.Render(m.project.Name + " / docs")
-	hint := m.st.Muted.Render("n: new   e: edit   j/k: nav")
+	focusMark := ""
+	if m.focus == focusList {
+		focusMark = m.st.Emphasis.Render(" ◀")
+	}
+	header := m.st.Emphasis.Render(m.project.Name+" / docs") + focusMark
+	hint := m.st.Muted.Render("p: switch project   tab: focus preview   n: new   e: edit   j/k: nav")
 	lines := []string{header, hint, ""}
 
 	if len(m.entries) == 0 {
@@ -228,16 +334,42 @@ func (m notesModel) renderList(width, height int) string {
 }
 
 func (m notesModel) renderPreview(width, height int) string {
+	// Reserve 3 inner lines: title (1) + blank (1) + scroll hint (1).
+	// Viewport eats the rest.
 	m.preview.Width = width - 4
-	m.preview.Height = height - 4
+	m.preview.Height = height - 6
+	if m.preview.Height < 3 {
+		m.preview.Height = 3
+	}
 	if e := m.selected(); e != nil {
+		focusMark := ""
+		if m.focus == focusPreview {
+			focusMark = " " + m.st.Emphasis.Render("◀ scrolling")
+		}
 		title := m.st.Emphasis.Render(e.Display)
 		path := m.st.Muted.Render(e.Rel)
-		header := title + "   " + path
-		body := lipgloss.JoinVertical(lipgloss.Left, header, "", m.preview.View())
-		return m.st.Pane.Width(width - 2).Height(height - 2).Render(body)
+		header := title + "   " + path + focusMark
+		// Scroll-position indicator like "  35% ↓"
+		pct := int(m.preview.ScrollPercent() * 100)
+		scrollHint := m.st.Muted.Render(fmt.Sprintf(
+			"tab: focus list   j/k: scroll (currently focused: %s)   %d%%",
+			focusLabel(m.focus), pct,
+		))
+		body := lipgloss.JoinVertical(lipgloss.Left, header, "", m.preview.View(), "", scrollHint)
+		paneStyle := m.st.Pane
+		if m.focus == focusPreview {
+			paneStyle = m.st.PaneFocused
+		}
+		return paneStyle.Width(width - 2).Height(height - 2).Render(body)
 	}
 	return m.st.Pane.Width(width - 2).Height(height - 2).Render(m.st.Muted.Render("No selection."))
+}
+
+func focusLabel(f notesFocus) string {
+	if f == focusPreview {
+		return "preview"
+	}
+	return "list"
 }
 
 func (m notesModel) renderListOnly(width, height int) string {
@@ -245,7 +377,8 @@ func (m notesModel) renderListOnly(width, height int) string {
 	return m.renderList(width, height)
 }
 
-func (m notesModel) renderPicker(width, height int) string {
+// renderActionPicker is the "new note" sub-modal (a/s/d).
+func (m notesModel) renderActionPicker(width, height int) string {
 	body := strings.Join([]string{
 		m.st.Emphasis.Render("New note in " + m.project.Name),
 		"",
@@ -256,6 +389,42 @@ func (m notesModel) renderPicker(width, height int) string {
 		m.st.Muted.Render("esc: cancel"),
 	}, "\n")
 	modal := m.st.PaneFocused.Width(60).Render(body)
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, modal)
+}
+
+// renderProjectPicker is the project-switcher modal — list of every
+// discovered project, with a cursor.
+func (m notesModel) renderProjectPicker(width, height int) string {
+	lines := []string{
+		m.st.Emphasis.Render("Switch project"),
+		m.st.Subtitle.Render("Notes context follows your selection."),
+		"",
+	}
+	maxVisible := height - 8
+	if maxVisible < 5 {
+		maxVisible = 5
+	}
+	start := 0
+	if m.projCursor > maxVisible-3 {
+		start = m.projCursor - (maxVisible - 3)
+	}
+	end := start + maxVisible
+	if end > len(m.projects) {
+		end = len(m.projects)
+	}
+	for i := start; i < end; i++ {
+		p := m.projects[i]
+		row := "  " + p.Name
+		if i == m.projCursor {
+			row = m.st.ListItemSelected.Render(row)
+		}
+		lines = append(lines, row)
+	}
+	if end < len(m.projects) {
+		lines = append(lines, m.st.Muted.Render(fmt.Sprintf("  … %d more (scroll with j/k)", len(m.projects)-end)))
+	}
+	lines = append(lines, "", m.st.Muted.Render("↑↓ or j/k: navigate   enter: open   esc: cancel"))
+	modal := m.st.PaneFocused.Width(minInt(70, width-4)).Render(strings.Join(lines, "\n"))
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, modal)
 }
 
