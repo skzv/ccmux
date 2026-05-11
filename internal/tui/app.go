@@ -932,13 +932,22 @@ func shellQuote(s string) string {
 // remoteTmuxAttach builds the single-string command we hand to ssh
 // for attaching to a remote tmux session. ssh runs it via the user's
 // shell in NON-LOGIN NON-INTERACTIVE mode, so /etc/profile + zshrc/
-// zprofile don't fire — Homebrew's /opt/homebrew/bin and /usr/local/
-// bin therefore aren't on PATH. We prepend both inline so `tmux`
-// resolves on Apple-Silicon and Intel macOS Homebrew installs alike;
-// Linux distros have /usr/bin already, and adding /usr/local/bin is
-// harmless even there.
+// zprofile don't fire and Homebrew-installed tmux isn't on PATH by
+// default. The prepended paths cover the common install locations
+// on both ends of the wire:
+//
+//   /opt/homebrew/bin                    — macOS Apple Silicon Homebrew
+//   /usr/local/bin                       — macOS Intel Homebrew + Linux convention
+//   /home/linuxbrew/.linuxbrew/bin       — Linuxbrew on Linux
+//   /snap/bin                            — Snap-installed tmux on Linux
+//
+// Non-existent paths in the list are silently ignored by the shell,
+// so this is safe to include unconditionally regardless of whether
+// the dialer or the target is macOS or Linux. The trailing $PATH
+// preserves whatever else the remote shell already had set up.
 func remoteTmuxAttach(session string) string {
-	return "PATH=/opt/homebrew/bin:/usr/local/bin:$PATH tmux attach-session -d -t " + shellQuote(session)
+	return "PATH=/opt/homebrew/bin:/usr/local/bin:/home/linuxbrew/.linuxbrew/bin:/snap/bin:$PATH" +
+		" tmux attach-session -d -t " + shellQuote(session)
 }
 
 // attachOrCreateForSelectedProject is Enter on Projects screen: attach to

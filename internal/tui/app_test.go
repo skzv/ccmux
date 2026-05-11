@@ -82,20 +82,30 @@ func TestDialAddrFor_StripsPort(t *testing.T) {
 
 func TestRemoteTmuxAttach(t *testing.T) {
 	got := remoteTmuxAttach("c-foo")
-	// PATH prepend present.
 	if !strings.HasPrefix(got, "PATH=") {
 		t.Errorf("missing PATH prefix: %q", got)
 	}
-	for _, p := range []string{"/opt/homebrew/bin", "/usr/local/bin"} {
+	// Platform coverage — every common tmux location on both macOS
+	// and Linux should be present so attach works regardless of
+	// which way we're crossing the wire.
+	for _, p := range []string{
+		"/opt/homebrew/bin",              // macOS Apple Silicon Homebrew
+		"/usr/local/bin",                 // macOS Intel + Linux conventional
+		"/home/linuxbrew/.linuxbrew/bin", // Linuxbrew
+		"/snap/bin",                      // Snap on Linux
+	} {
 		if !strings.Contains(got, p) {
 			t.Errorf("PATH prepend missing %s: %q", p, got)
 		}
 	}
-	// Session name quoted exactly once at the end.
+	// $PATH passthrough at the end keeps whatever the remote shell
+	// already had set up.
+	if !strings.Contains(got, "$PATH") {
+		t.Errorf("PATH suffix should keep existing $PATH: %q", got)
+	}
 	if !strings.HasSuffix(got, "'c-foo'") {
 		t.Errorf("session name not quoted as expected: %q", got)
 	}
-	// Pathological name with a quote in it shouldn't break out.
 	tricky := remoteTmuxAttach("c'foo")
 	if !strings.HasSuffix(tricky, `'c'\''foo'`) {
 		t.Errorf("single-quote escaping failed: %q", tricky)
