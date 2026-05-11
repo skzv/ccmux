@@ -43,6 +43,14 @@ type toastMsg struct {
 	Until time.Time
 }
 
+// toastEntry is a frozen snapshot of a past toast, kept in a small ring
+// in the App so the help overlay can replay recent activity.
+type toastEntry struct {
+	At   time.Time
+	Kind toastKind
+	Text string
+}
+
 type toastKind int
 
 const (

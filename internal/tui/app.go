@@ -66,7 +66,9 @@ type App struct {
 	toast      string
 	toastKind  toastKind
 	toastUntil time.Time
+	toastLog   []toastEntry // small ring buffer for the help overlay
 
+	helpOpen     bool
 	lastRefresh  time.Time
 	daemonOnline bool
 }
@@ -219,6 +221,30 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(a.refreshSessionsCmd(), a.refreshProjectsCmd())
 
 	case tea.KeyMsg:
+		// Help overlay takes precedence — `?` or `esc` close it, every
+		// other key passes through normally so muscle memory still works.
+		if a.helpOpen {
+			switch msg.String() {
+			case "?", "esc":
+				a.helpOpen = false
+			}
+			return a, nil
+		}
+
+		// Esc dismisses the current toast (when no modal is open). The
+		// projects-screen modal handles esc itself before this code runs.
+		if msg.String() == "esc" && a.toast != "" && time.Now().Before(a.toastUntil) &&
+			!(a.screen == ScreenProjects && a.projectsM.form != nil) {
+			a.toast = ""
+			return a, nil
+		}
+
+		// `?` opens the help overlay from any screen.
+		if msg.String() == "?" {
+			a.helpOpen = true
+			return a, nil
+		}
+
 		// If projects screen has its modal open, route through it. We
 		// intentionally still allow global Quit (ctrl+c).
 		if a.screen == ScreenProjects && a.projectsM.form != nil {
@@ -327,7 +353,11 @@ func (a App) View() string {
 	// empty line of body than have the header scroll off the top.
 	body = clampLines(body, bodyHeight)
 
-	return lipgloss.JoinVertical(lipgloss.Left, header, body, statusBar, footer)
+	frame := lipgloss.JoinVertical(lipgloss.Left, header, body, statusBar, footer)
+	if a.helpOpen {
+		return a.renderHelpOverlay(a.width, a.height)
+	}
+	return frame
 }
 
 // clampLines returns the first `n` lines of `s` verbatim. Preserves the
@@ -399,7 +429,15 @@ func (a App) renderStatusBar() string {
 		refreshed = a.lastRefresh.Format("15:04:05")
 	}
 	count := fmt.Sprintf("%d sess", len(a.sessions))
-	right := a.styles.Muted.Render(fmt.Sprintf("%s • %s", count, refreshed))
+	// Surface the running binary's version on the right of the status
+	// bar so screenshots of a bug immediately reveal which build was in
+	// play. Dirty builds (`<sha>-dirty`) call themselves out so we
+	// remember we're running uncommitted code.
+	versionChip := a.styles.Muted.Render("v" + a.version)
+	if strings.Contains(a.version, "dirty") {
+		versionChip = a.styles.StatusWarning.Render(a.version)
+	}
+	right := a.styles.Muted.Render(fmt.Sprintf("%s • %s", count, refreshed)) + "  " + versionChip
 
 	// Compute available space for the right block. If the left side
 	// already overflows, we just render the left side and skip right
@@ -463,7 +501,21 @@ func (a *App) setToast(kind toastKind, text string, ttl time.Duration) {
 	if ttl <= 0 {
 		ttl = 3 * time.Second
 	}
+	if kind == toastError && ttl < 8*time.Second {
+		// Errors are easy to blink past — give them longer than info
+		// toasts by default, even when the caller asked for a short ttl.
+		ttl = 8 * time.Second
+	}
 	a.toastUntil = time.Now().Add(ttl)
+	// Append to the ring buffer (cap 10). The help overlay shows these
+	// in reverse-chronological order.
+	a.toastLog = append([]toastEntry{{At: time.Now(), Kind: kind, Text: text}}, a.toastLog...)
+	if len(a.toastLog) > 10 {
+		a.toastLog = a.toastLog[:10]
+	}
+	if dbg := debugLogger(); dbg != nil {
+		dbg.Printf("toast[%d] %s", kind, text)
+	}
 }
 
 // refreshSessionsCmd fetches sessions from local ccmuxd and every configured

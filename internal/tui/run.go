@@ -12,7 +12,17 @@ import (
 
 // Run is the main entrypoint called from cmd/ccmux. Loads config, builds
 // the App, runs Bubble Tea, returns any program-level error.
+//
+// CCMUX_DEBUG=1 enables a per-run log at
+// ~/.local/state/ccmux/ccmux.log so the user can tail bugs they
+// couldn't otherwise capture interactively.
 func Run(version string) error {
+	initDebugLog()
+	defer closeDebugLog()
+	if dbg := debugLogger(); dbg != nil {
+		dbg.Printf("ccmux %s starting", version)
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "config:", err)
