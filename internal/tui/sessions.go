@@ -133,8 +133,11 @@ func (m sessionsModel) renderDetail(width, height int) string {
 		m.st.Key.Render("s") + "      snapshot (coming soon)",
 		"",
 		m.st.Subtitle.Render("To return after attaching"),
-		"  press " + m.st.Key.Render("prefix + d") + " (default " + m.st.Key.Render("Ctrl-b d") + ")",
-		m.st.Muted.Render("  Phone (Moshi) picks up the same session seamlessly."),
+		"  if you launched ccmux from a normal terminal:",
+		"     press " + m.st.Key.Render("prefix + d") + " (default " + m.st.Key.Render("Ctrl-b d") + ")",
+		"  if you ran ccmux inside the outer `ccmux` tmux (mobile via Moshi):",
+		"     press " + m.st.Key.Render("prefix + L") + " (last-session) — back to ccmux",
+		m.st.Muted.Render("  ccmux's status bar in the attached session shows the right one."),
 	}
 	return m.st.Pane.Width(width - 2).Height(height - 2).Render(strings.Join(lines, "\n"))
 }

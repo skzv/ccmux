@@ -148,8 +148,21 @@ func (m dashboardModel) usagePanel(width int) string {
 	// Claude Code's transcripts are UTC); convert to the user's local
 	// zone before formatting so "06:02" shows as "23:02" on the West
 	// Coast, not in zulu time.
+	//
+	// Use UserPrompts (not Messages) for the headline count because
+	// that's what Anthropic's per-window quota actually counts. The
+	// Messages number lumps in every tool-result follow-up which would
+	// inflate the visible total ~10-30x.
+	headlineCount := a.UserPrompts
+	headlineLabel := "prompts"
+	if headlineCount == 0 {
+		// Fall back gracefully if the JSONL didn't expose the user-
+		// prompt shape we expect.
+		headlineCount = a.Messages
+		headlineLabel = "msgs"
+	}
 	msgChip := lipgloss.NewStyle().Foreground(st.P.Lavender).Bold(true).Render(
-		fmt.Sprintf("%d msgs", a.Messages),
+		fmt.Sprintf("%d %s", headlineCount, headlineLabel),
 	)
 	resetLine := ""
 	if reset := a.ResetAt(5 * time.Hour); !reset.IsZero() {
@@ -165,8 +178,10 @@ func (m dashboardModel) usagePanel(width int) string {
 	}
 	rows = append(rows, fmt.Sprintf("5h window  %s  %s", msgChip, resetLine))
 
-	// Quota bar if a known subscription tier is configured.
-	if bar := m.quotaBar(a.Messages, width-6); bar != "" {
+	// Quota bar if a known subscription tier is configured. Always feed
+	// the bar the user-prompt count rather than raw message count so it
+	// approximates the same number Anthropic uses to enforce the limit.
+	if bar := m.quotaBar(headlineCount, width-6); bar != "" {
 		rows = append(rows, bar)
 	}
 

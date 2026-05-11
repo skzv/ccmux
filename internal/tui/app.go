@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/skzv/ccmux/internal/claude"
+	"github.com/skzv/ccmux/internal/claudeauth"
 	"github.com/skzv/ccmux/internal/claudeusage"
 	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/daemon"
@@ -71,9 +72,27 @@ type App struct {
 }
 
 // New constructs the root model.
+//
+// Side effect: if the user's config has subscription.tier == "api" or
+// empty, and `claude auth status` reports an actual paid plan, we adopt
+// the detected tier for this process's lifetime. We do NOT write the
+// adopted value to disk — the user's explicit override (if they ever
+// set one) always wins on next launch.
 func New(cfg config.Config, version string) App {
 	st := styles.Default()
 	km := DefaultKeymap()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if authStat, err := claudeauth.Get(ctx); err == nil {
+		detected := authStat.Tier()
+		// Only adopt a detected tier when the user hasn't explicitly
+		// declared one. "api" is the default-empty marker.
+		if (cfg.Subscription.Tier == "" || cfg.Subscription.Tier == "api") && detected != "api" {
+			cfg.Subscription.Tier = detected
+		}
+	}
+
 	a := App{
 		cfg:       cfg,
 		styles:    st,
@@ -273,12 +292,12 @@ func (a App) View() string {
 	statusBar := a.renderStatusBar()
 	footer := a.renderFooter()
 
-	// Reserve 4 lines: header(1) + statusBar(1) + footer(1) + 1 line of
-	// slack. The slack costs nothing on tall terminals and prevents the
-	// header from being scrolled off when a screen's body content ends up
-	// slightly taller than its budget (rare edge case in Lipgloss height
-	// calculations that's not worth fighting line-by-line).
-	bodyHeight := a.height - 4
+	// Measure each chrome row's actual rendered height so we never
+	// budget too generously and let body content push the header off
+	// the top. lipgloss.Height counts \n's + 1 so it includes any
+	// invisible line breaks even if forceSingleLine didn't get them.
+	chromeH := lipgloss.Height(header) + lipgloss.Height(statusBar) + lipgloss.Height(footer)
+	bodyHeight := a.height - chromeH
 	if bodyHeight < 5 {
 		bodyHeight = 5
 	}
@@ -298,8 +317,33 @@ func (a App) View() string {
 	case ScreenSettings:
 		body = a.settings.View(a.width, bodyHeight)
 	}
+	// Defensive clamp: regardless of what the screen returned, never
+	// let the body exceed its budget. Screens with content that's hard
+	// to size deterministically (single-pane screens whose Lipgloss
+	// .Height is a minimum, viewport-based screens with internal padding)
+	// can sometimes overshoot by a line; we'd rather lose a trailing
+	// empty line of body than have the header scroll off the top.
+	body = clampLines(body, bodyHeight)
 
 	return lipgloss.JoinVertical(lipgloss.Left, header, body, statusBar, footer)
+}
+
+// clampLines returns the first `n` lines of `s` verbatim. Preserves the
+// internal newline format. Returns `s` unchanged if it already fits.
+func clampLines(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	count := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\n' {
+			count++
+			if count == n {
+				return s[:i]
+			}
+		}
+	}
+	return s
 }
 
 // renderHeader is the top-of-screen tab strip. On narrow terminals the
@@ -528,7 +572,10 @@ func (a App) attachSelectedSession() tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		mst := moshi.Detect(ctx)
-		_ = tmuxchrome.Apply(ctx, sel.Name, sel.Project, mst.Paired && mst.Connected)
+		_ = tmuxchrome.Apply(ctx, sel.Name, sel.Project,
+			mst.Paired && mst.Connected,
+			tmuxchrome.InTmux(), // nested?
+		)
 	}
 
 	if sel.Host == "" || sel.Host == "local" {

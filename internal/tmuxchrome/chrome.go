@@ -42,9 +42,13 @@ const (
 // `tmux set-option -t <session>` calls. Failure is non-fatal: the worst
 // case is the user gets vanilla tmux styling.
 //
-// `moshiReachable` indicates whether moshi-hook is paired and connected;
-// it controls whether the "reachable via Moshi" badge is rendered.
-func Apply(ctx context.Context, session, projectLabel string, moshiReachable bool) error {
+// `moshiReachable` controls the "reachable via Moshi" badge. `nested`
+// indicates we got to this attach via `tmux switch-client` from inside
+// an outer tmux (the persistent `ccmux` outer session in the mobile
+// flow), in which case `prefix + d` would detach the entire client —
+// `prefix + L` (last-session) is the correct way back to ccmux. When
+// not nested, the simple `prefix + d` does the right thing.
+func Apply(ctx context.Context, session, projectLabel string, moshiReachable, nested bool) error {
 	if session == "" {
 		return fmt.Errorf("tmuxchrome: session name required")
 	}
@@ -59,13 +63,22 @@ func Apply(ctx context.Context, session, projectLabel string, moshiReachable boo
 		moshiBadge = fmt.Sprintf("#[fg=%s] phone: not paired (ccmux moshi-setup) ", fgMuted)
 	}
 
+	returnHint := "prefix + d to return to ccmux"
+	if nested {
+		// In nested-tmux: `switch-client` doesn't stack sessions, it
+		// just changes which session the client shows. `prefix + L`
+		// jumps to the last-shown session (the outer ccmux), while
+		// `prefix + d` would close the whole client back to Moshi.
+		returnHint = "prefix + L to return to ccmux"
+	}
+
 	statusLeft := fmt.Sprintf(
 		"#[bg=%s,fg=%s,bold] ccmux #[bg=%s,fg=%s] %s ",
 		accent, bg, accentBG, accent, projectLabel,
 	)
 	statusRight := fmt.Sprintf(
-		"#[fg=%s]prefix + d to return to ccmux %s",
-		fgMuted, moshiBadge,
+		"#[fg=%s]%s %s",
+		fgMuted, returnHint, moshiBadge,
 	)
 
 	opts := [][]string{

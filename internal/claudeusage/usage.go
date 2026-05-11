@@ -46,7 +46,11 @@ type Aggregate struct {
 	Window      time.Duration // size of the window this aggregate covers
 	WindowStart time.Time     // earliest message timestamp considered
 	WindowEnd   time.Time     // latest message timestamp (or "now")
-	Messages    int           // total assistant messages with usage
+	Messages    int           // total assistant API responses with usage data
+	UserPrompts int           // distinct user-initiated turns (filters out
+	                          // tool-result follow-ups, which JSONL also
+	                          // records with type="user"). This is what
+	                          // Anthropic's per-window quota counts toward.
 	Total       Tokens
 	ByModel     map[string]*Tokens
 	ByProject   map[string]*Tokens
@@ -194,21 +198,22 @@ func Walk(window time.Duration) (*Aggregate, error) {
 		go func(task fileTask) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			tot, byModel, firstMsg, msgCount := scanFile(task.path, cutoff)
-			if msgCount == 0 {
+			r := scanFile(task.path, cutoff)
+			if r.assistantCount == 0 && r.userPrompts == 0 {
 				return
 			}
 			mu.Lock()
 			defer mu.Unlock()
-			agg.Total.Add(tot)
-			agg.Messages += msgCount
+			agg.Total.Add(r.total)
+			agg.Messages += r.assistantCount
+			agg.UserPrompts += r.userPrompts
 			proj := agg.ByProject[task.proj]
 			if proj == nil {
 				proj = &Tokens{}
 				agg.ByProject[task.proj] = proj
 			}
-			proj.Add(tot)
-			for model, t := range byModel {
+			proj.Add(r.total)
+			for model, t := range r.byModel {
 				mt := agg.ByModel[model]
 				if mt == nil {
 					mt = &Tokens{}
@@ -216,8 +221,8 @@ func Walk(window time.Duration) (*Aggregate, error) {
 				}
 				mt.Add(*t)
 			}
-			if agg.FirstMessageInWindow.IsZero() || firstMsg.Before(agg.FirstMessageInWindow) {
-				agg.FirstMessageInWindow = firstMsg
+			if agg.FirstMessageInWindow.IsZero() || (!r.firstMsg.IsZero() && r.firstMsg.Before(agg.FirstMessageInWindow)) {
+				agg.FirstMessageInWindow = r.firstMsg
 			}
 		}(t)
 	}
@@ -226,29 +231,56 @@ func Walk(window time.Duration) (*Aggregate, error) {
 	return agg, nil
 }
 
-// scanFile parses one JSONL and returns the totals within `cutoff..now`.
-// Built to tolerate large lines (cached system prompts can push lines
-// well above the default 64KB Scanner buffer).
-func scanFile(path string, cutoff time.Time) (total Tokens, byModel map[string]*Tokens, firstMsg time.Time, msgs int) {
-	byModel = map[string]*Tokens{}
+// scanResult bundles everything one transcript scan produces.
+type scanResult struct {
+	total           Tokens
+	byModel         map[string]*Tokens
+	firstMsg        time.Time
+	assistantCount  int // assistant messages with usage (drives token totals)
+	userPrompts     int // type:"user" messages whose content is real text,
+	                    // not tool_result blocks — Anthropic quota counter
+}
+
+// scanFile parses one JSONL and returns the per-file scan result over
+// `cutoff..now`. Two distinct things are counted:
+//
+//   - assistant messages with a `usage` block → token totals + Aggregate.Messages
+//   - type:"user" messages whose content is a fresh user prompt (string
+//     content, OR an array with at least one {type:"text"} block) →
+//     Aggregate.UserPrompts. We deliberately exclude tool_result follow-
+//     ups, attachment events, and the like, because those don't count
+//     toward Anthropic's per-window quota.
+//
+// Built to tolerate large lines (cached system prompts can push JSONL
+// lines well above the default 64KB Scanner buffer).
+func scanFile(path string, cutoff time.Time) scanResult {
+	r := scanResult{byModel: map[string]*Tokens{}}
 	f, err := os.Open(path)
 	if err != nil {
-		return
+		return r
 	}
 	defer f.Close()
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 1<<17), 1<<25) // up to 32 MB / line
 	for sc.Scan() {
 		line := sc.Bytes()
-		if !maybeHasUsage(line) {
+
+		// Two cheap byte-level pre-filters: only json-decode lines that
+		// might be assistant-usage or user-prompt records.
+		hasUsage := maybeContains(line, []byte(`"usage":`))
+		isUser := maybeContains(line, []byte(`"type":"user"`))
+		if !hasUsage && !isUser {
 			continue
 		}
+
 		var m struct {
 			Type      string `json:"type"`
 			Timestamp string `json:"timestamp"`
 			Message   struct {
-				Model string `json:"model"`
-				Usage *struct {
+				Role    string          `json:"role"`
+				Model   string          `json:"model"`
+				Content json.RawMessage `json:"content"`
+				Usage   *struct {
 					Input         int `json:"input_tokens"`
 					Output        int `json:"output_tokens"`
 					CacheCreation int `json:"cache_creation_input_tokens"`
@@ -259,49 +291,127 @@ func scanFile(path string, cutoff time.Time) (total Tokens, byModel map[string]*
 		if err := json.Unmarshal(line, &m); err != nil {
 			continue
 		}
-		if m.Message.Usage == nil {
-			continue
-		}
 		ts, err := time.Parse(time.RFC3339, m.Timestamp)
-		if err != nil {
+		if err != nil || ts.Before(cutoff) {
 			continue
 		}
-		if ts.Before(cutoff) {
-			continue
+
+		// Assistant API response with usage.
+		if m.Message.Usage != nil {
+			t := Tokens{
+				Input:         m.Message.Usage.Input,
+				Output:        m.Message.Usage.Output,
+				CacheCreation: m.Message.Usage.CacheCreation,
+				CacheRead:     m.Message.Usage.CacheRead,
+			}
+			r.total.Add(t)
+			r.assistantCount++
+			if mb := r.byModel[m.Message.Model]; mb != nil {
+				mb.Add(t)
+			} else {
+				r.byModel[m.Message.Model] = &Tokens{Input: t.Input, Output: t.Output, CacheCreation: t.CacheCreation, CacheRead: t.CacheRead}
+			}
+			if r.firstMsg.IsZero() || ts.Before(r.firstMsg) {
+				r.firstMsg = ts
+			}
 		}
-		t := Tokens{
-			Input:         m.Message.Usage.Input,
-			Output:        m.Message.Usage.Output,
-			CacheCreation: m.Message.Usage.CacheCreation,
-			CacheRead:     m.Message.Usage.CacheRead,
-		}
-		total.Add(t)
-		msgs++
-		if mb := byModel[m.Message.Model]; mb != nil {
-			mb.Add(t)
-		} else {
-			byModel[m.Message.Model] = &Tokens{Input: t.Input, Output: t.Output, CacheCreation: t.CacheCreation, CacheRead: t.CacheRead}
-		}
-		if firstMsg.IsZero() || ts.Before(firstMsg) {
-			firstMsg = ts
+
+		// User prompt (filters out tool_result follow-ups).
+		if m.Type == "user" && isFreshUserPrompt(m.Message.Content) {
+			r.userPrompts++
 		}
 	}
-	return
+	return r
 }
 
-// maybeHasUsage is a cheap byte-level pre-filter: only attempt to JSON-
-// parse lines that mention "usage". Cuts CPU when the transcript file
-// has many non-usage event records (file-history-snapshot, permission-
-// mode, tool_use, etc.).
-func maybeHasUsage(line []byte) bool {
-	for i := 0; i+7 < len(line); i++ {
-		if line[i] == '"' && line[i+1] == 'u' && line[i+2] == 's' && line[i+3] == 'a' &&
-			line[i+4] == 'g' && line[i+5] == 'e' && line[i+6] == '"' && line[i+7] == ':' {
+// isFreshUserPrompt returns true when a JSONL "user" record's content
+// represents a brand-new prompt from the human (vs. a tool_result
+// follow-up). Two valid shapes:
+//
+//   - "content": "plain text"
+//   - "content": [{"type":"text", ...}, ...]
+//
+// A pure tool_result message looks like:
+//   - "content": [{"type":"tool_result", ...}]
+//
+// Anything else we conservatively count as a prompt — better to slightly
+// over-count than to undercount and tell a user they have headroom they
+// don't.
+func isFreshUserPrompt(raw json.RawMessage) bool {
+	raw = trimSpace(raw)
+	if len(raw) == 0 {
+		return false
+	}
+	// Plain string content → real prompt.
+	if raw[0] == '"' {
+		return true
+	}
+	// Array content: walk types. If any "text" present → real prompt.
+	// If only tool_result entries → skip.
+	if raw[0] == '[' {
+		var arr []struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(raw, &arr); err != nil {
+			return true // fail safe = count
+		}
+		hasText, allToolResult := false, true
+		for _, e := range arr {
+			if e.Type == "text" {
+				hasText = true
+			}
+			if e.Type != "tool_result" {
+				allToolResult = false
+			}
+		}
+		if hasText {
+			return true
+		}
+		if allToolResult {
+			return false
+		}
+		return true
+	}
+	return true
+}
+
+func trimSpace(b []byte) []byte {
+	for len(b) > 0 && (b[0] == ' ' || b[0] == '\t' || b[0] == '\n' || b[0] == '\r') {
+		b = b[1:]
+	}
+	for len(b) > 0 {
+		c := b[len(b)-1]
+		if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
+			b = b[:len(b)-1]
+			continue
+		}
+		break
+	}
+	return b
+}
+
+// maybeContains is a cheap byte-level substring check.
+func maybeContains(line, sub []byte) bool {
+	if len(sub) == 0 || len(line) < len(sub) {
+		return false
+	}
+	for i := 0; i+len(sub) <= len(line); i++ {
+		match := true
+		for j := 0; j < len(sub); j++ {
+			if line[i+j] != sub[j] {
+				match = false
+				break
+			}
+		}
+		if match {
 			return true
 		}
 	}
 	return false
 }
+
+// (maybeHasUsage was inlined into scanFile alongside the user-prompt
+// pre-filter via the more-general maybeContains helper above.)
 
 // projectFromEncoded inverts the "/Users/skz/Projects/foo" →
 // "-Users-skz-Projects-foo" encoding Claude Code uses for its project
