@@ -13,30 +13,34 @@ import (
 )
 
 // newMoshiSetupCmd: `ccmux moshi-setup [--token X]` walks through the
-// full moshi-hook install + pair + hooks-install + service-start flow,
-// prompting interactively for the pairing token when not supplied via
-// --token.
+// full moshi-hook install + pair + hooks-install + service-start flow.
+//
+// Default UX is interactive Easy Pair: `moshi-hook host setup` prints a
+// QR code in the terminal, the user scans it with the Moshi iOS app,
+// pairing completes. No token to copy.
+//
+// --token <X> bypasses the QR code and uses the token-paste path
+// (Moshi → Settings → Integrations → pairing token), useful for
+// headless / scripted setups where you can't see a QR code in the
+// terminal.
 func newMoshiSetupCmd() *cobra.Command {
 	var token string
 	c := &cobra.Command{
 		Use:   "moshi-setup",
 		Short: "Install moshi-hook and pair it with the Moshi app",
 		Long: `moshi-setup installs Moshi's agent-hook daemon, pairs it with the Moshi
-app on your phone, wires it into Claude Code's settings.json, and starts
-it as a background service.
+app on your phone (Easy Pair, QR code in the terminal), wires it into
+Claude Code's settings.json, and starts it as a background service.
 
-You'll need a pairing token from the Moshi app first:
-  Open Moshi → Settings → Pair host → copy the token.
-
-Then run:
-  ccmux moshi-setup --token <token>
-
-Or run it without --token to be prompted.`,
+By default it runs the QR-code Easy Pair flow — no token to copy.
+For headless setups, pass --token to use the token-paste path
+(Moshi app → Settings → Integrations → pairing token).`,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			return runMoshiSetup(token)
 		},
 	}
-	c.Flags().StringVar(&token, "token", "", "pairing token from the Moshi app (prompted if empty)")
+	c.Flags().StringVar(&token, "token", "",
+		"use the headless token-paste pairing path instead of QR-code Easy Pair")
 	return c
 }
 
@@ -67,21 +71,25 @@ func runMoshiSetup(token string) error {
 	}
 
 	// Step 2: pairing.
+	//
+	// Default: Easy Pair via QR code (`moshi-hook host setup`). The
+	// command renders a QR code in the terminal and prompts in-process;
+	// we pass stdio through so the user can scan + interact.
+	//
+	// If --token is passed, fall back to the headless token-paste
+	// path (`moshi-hook pair --token <X>`).
 	if !st.Paired {
-		if token == "" {
+		if token != "" {
+			fmt.Println("→ moshi-hook pair (headless / token path)")
+			if err := moshi.Pair(ctx, token); err != nil {
+				return fmt.Errorf("pair: %w", err)
+			}
+		} else {
+			fmt.Println("→ moshi-hook host setup (Easy Pair — scan the QR code below with the Moshi app on your phone)")
 			fmt.Println()
-			fmt.Println("Open Moshi on your phone → Settings → Pair host → copy the token.")
-			fmt.Print("Pairing token: ")
-			var typed string
-			_, _ = fmt.Scanln(&typed)
-			token = strings.TrimSpace(typed)
-		}
-		if token == "" {
-			return fmt.Errorf("no token provided; skipping pair step. Re-run with --token <token> when ready")
-		}
-		fmt.Println("→ moshi-hook pair")
-		if err := moshi.Pair(ctx, token); err != nil {
-			return fmt.Errorf("pair: %w", err)
+			if err := moshi.HostSetup(ctx); err != nil {
+				return fmt.Errorf("host setup: %w", err)
+			}
 		}
 	} else {
 		fmt.Println("✓ moshi-hook already paired")

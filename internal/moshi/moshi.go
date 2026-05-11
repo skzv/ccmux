@@ -103,7 +103,10 @@ func InstallCmds() [][]string {
 	}
 }
 
-// Pair runs `moshi-hook pair --token <token>`.
+// Pair runs `moshi-hook pair --token <token>`. This is the
+// headless/scripted path. For interactive setup prefer HostSetup
+// (QR-code Easy Pair), which is what the wizard and `ccmux moshi-setup`
+// use by default.
 func Pair(ctx context.Context, token string) error {
 	if token == "" {
 		return errors.New("moshi: pairing token required")
@@ -114,6 +117,29 @@ func Pair(ctx context.Context, token string) error {
 	}
 	_, err = run(ctx, 30*time.Second, bin, "pair", "--token", token)
 	return err
+}
+
+// HostSetup runs `moshi-hook host setup` with stdio passthrough. This
+// is the "Easy Pair" flow: moshi-hook prints a QR code in the terminal
+// that the user scans with the Moshi iOS app to complete the SSH/Mosh
+// pairing. No token to copy-paste, no Settings → Integrations menu
+// dive — open the app, scan, done.
+//
+// The 5-minute timeout is generous: the user has to find their phone,
+// open the app, navigate to scan, point at the screen. Shorter
+// timeouts trip people up.
+func HostSetup(ctx context.Context) error {
+	bin, err := exec.LookPath("moshi-hook")
+	if err != nil {
+		return fmt.Errorf("moshi-hook not on PATH; brew install rjyo/moshi/moshi-hook first")
+	}
+	c, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(c, bin, "host", "setup")
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
 }
 
 // InstallHooks runs `moshi-hook install`, which writes the hook entries

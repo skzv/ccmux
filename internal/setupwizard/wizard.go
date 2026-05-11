@@ -247,26 +247,17 @@ func stepMoshi(ctx context.Context, out io.Writer) error {
 		s = moshi.Detect(ctx)
 	}
 
-	// Pair if needed.
+	// Pair if needed. Uses Moshi's Easy Pair flow: moshi-hook prints
+	// a QR code in the terminal and the user scans it with the Moshi
+	// iOS app to complete pairing. No token to copy. We pass stdio
+	// straight through so the QR renders and any moshi-hook prompts
+	// reach the user.
 	if !s.Paired {
-		var token string
-		fmt.Fprintln(out, "  Open Moshi → Settings → Pair host → copy the token.")
-		if err := huh.NewForm(huh.NewGroup(
-			huh.NewInput().
-				Title("Pairing token").
-				Description("Paste the token from the Moshi app.").
-				Value(&token).
-				EchoMode(huh.EchoModePassword),
-		)).Run(); err != nil {
-			return err
-		}
-		token = strings.TrimSpace(token)
-		if token == "" {
-			fmt.Fprintln(out, stWarn.Render("  No token provided — skipping pair."))
-			return nil
-		}
-		if err := moshi.Pair(ctx, token); err != nil {
-			return fmt.Errorf("moshi-hook pair: %w", err)
+		fmt.Fprintln(out, "  Open the Moshi app on your phone and tap "+stEmphasis.Render("Add Host → Scan QR")+".")
+		fmt.Fprintln(out, "  A QR code will appear below — point your phone at it.")
+		fmt.Fprintln(out)
+		if err := moshi.HostSetup(ctx); err != nil {
+			return fmt.Errorf("moshi-hook host setup: %w", err)
 		}
 	}
 
