@@ -51,6 +51,23 @@ func (m settingsModel) Update(msg tea.Msg) (settingsModel, tea.Cmd) {
 
 func (m settingsModel) View(width, height int) string {
 	cfgPath, _ := config.Path()
+	dirsLabel := strings.Join(m.cfg.Scaffold.Dirs, ", ")
+	if dirsLabel == "" {
+		dirsLabel = m.st.Muted.Render("(default: src, tests, docs/01_Specs, docs/02_Architecture, docs/03_Agent_Logs)")
+	}
+	promptLabel := m.st.Muted.Render("(default — see scaffold.go)")
+	if strings.TrimSpace(m.cfg.Scaffold.InitialPrompt) != "" {
+		preview := strings.SplitN(strings.TrimSpace(m.cfg.Scaffold.InitialPrompt), "\n", 2)[0]
+		if len(preview) > 80 {
+			preview = preview[:80] + "…"
+		}
+		promptLabel = m.st.Emphasis.Render("(overridden) ") + preview
+	}
+	tierLabel := m.cfg.Subscription.Tier
+	if tierLabel == "" {
+		tierLabel = "api"
+	}
+
 	lines := []string{
 		m.st.Emphasis.Render("Settings"),
 		"",
@@ -65,6 +82,15 @@ func (m settingsModel) View(width, height int) string {
 		m.st.Subtitle.Render("Theme"),
 		fmt.Sprintf("  active         %s", m.cfg.Theme),
 		m.st.Muted.Render("  (theme picker coming in v0.2)"),
+		"",
+		m.st.Subtitle.Render("Scaffold (ccmux new)"),
+		"  dirs           " + dirsLabel,
+		"  prompt         " + promptLabel,
+		m.st.Muted.Render("  edit " + cfgPath + " — [scaffold] dirs, gitignore_body, initial_prompt"),
+		"",
+		m.st.Subtitle.Render("Claude subscription"),
+		fmt.Sprintf("  tier           %s", tierLabel),
+		m.st.Muted.Render("  options: api | pro | max5x | max20x — drives the dashboard quota bar"),
 		"",
 		m.st.Subtitle.Render("Sleep prevention"),
 		fmt.Sprintf("  idle release   %d minutes", m.cfg.Sleep.IdleReleaseMinutes),

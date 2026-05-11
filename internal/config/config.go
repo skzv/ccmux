@@ -13,13 +13,15 @@ import (
 
 // Config is the root user-configurable state.
 type Config struct {
-	Projects ProjectsConfig `toml:"projects"`
-	Theme    string         `toml:"theme"` // catppuccin-mocha (default), dracula, nord, gruvbox, tokyo-night
-	Editor   string         `toml:"editor"`
-	Sleep    SleepConfig    `toml:"sleep"`
-	Daemon   DaemonConfig   `toml:"daemon"`
-	Notes    NotesConfig    `toml:"notes"`
-	Hosts    []Host         `toml:"host"`
+	Projects     ProjectsConfig     `toml:"projects"`
+	Theme        string             `toml:"theme"` // catppuccin-mocha (default), dracula, nord, gruvbox, tokyo-night
+	Editor       string             `toml:"editor"`
+	Sleep        SleepConfig        `toml:"sleep"`
+	Daemon       DaemonConfig       `toml:"daemon"`
+	Notes        NotesConfig        `toml:"notes"`
+	Scaffold     ScaffoldConfig     `toml:"scaffold"`
+	Subscription SubscriptionConfig `toml:"subscription"`
+	Hosts        []Host             `toml:"host"`
 }
 
 type ProjectsConfig struct {
@@ -62,6 +64,40 @@ type NotesConfig struct {
 	AutoLogSessions bool `toml:"auto_log_sessions"`
 }
 
+// ScaffoldConfig customizes what a "new project" creates and what Claude
+// hears as its first message. Empty fields fall back to the baked-in
+// defaults in internal/scaffold, so the user can override one piece
+// without redefining the whole thing.
+type ScaffoldConfig struct {
+	// Dirs is the relative directory tree created in every new project.
+	// Example: ["src", "tests", "docs/01_Specs", "docs/02_Architecture",
+	// "docs/03_Agent_Logs"].
+	Dirs []string `toml:"dirs"`
+
+	// GitignoreBody is written verbatim into .gitignore when scaffolding
+	// a new project (only when .gitignore doesn't already exist).
+	GitignoreBody string `toml:"gitignore_body"`
+
+	// InitialPrompt is the message ccmux sends to Claude after the
+	// session boots. Supports {{name}} and {{description}} substitutions.
+	// Multi-line OK. The default is in scaffold.DefaultInitialPrompt.
+	InitialPrompt string `toml:"initial_prompt"`
+
+	// CreateInitialCommit — run `git init && git add . && git commit`
+	// after scaffolding. Default true.
+	CreateInitialCommit bool `toml:"create_initial_commit"`
+}
+
+// SubscriptionConfig declares which Claude subscription tier the user is
+// on so the dashboard can show "X of Y messages used in the 5h window."
+// Set to "" or "api" if you're on API/pay-as-you-go rather than a
+// subscription — the dashboard then shows raw token totals + estimated
+// dollar cost without a quota bar.
+type SubscriptionConfig struct {
+	// Tier: "api" | "pro" | "max5x" | "max20x". Default "api".
+	Tier string `toml:"tier"`
+}
+
 // Host is a remote ccmuxd the local TUI knows how to connect to.
 type Host struct {
 	Name    string `toml:"name"`
@@ -92,6 +128,12 @@ func Defaults() Config {
 		Notes: NotesConfig{
 			AutoLogSessions: true,
 		},
+		Scaffold: ScaffoldConfig{
+			// All scaffold fields default to "" / nil; internal/scaffold
+			// falls back to its baked-in templates when these are empty.
+			CreateInitialCommit: true,
+		},
+		Subscription: SubscriptionConfig{Tier: "api"},
 	}
 }
 

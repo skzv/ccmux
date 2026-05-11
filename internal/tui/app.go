@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/skzv/ccmux/internal/claude"
+	"github.com/skzv/ccmux/internal/claudeusage"
 	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/moshi"
@@ -73,7 +74,7 @@ type App struct {
 func New(cfg config.Config, version string) App {
 	st := styles.Default()
 	km := DefaultKeymap()
-	return App{
+	a := App{
 		cfg:       cfg,
 		styles:    st,
 		keys:      km,
@@ -86,6 +87,8 @@ func New(cfg config.Config, version string) App {
 		claudeM:   newClaude(st, km),
 		settings:  newSettings(st, km, cfg, version),
 	}
+	a.dashboard.SetConfig(cfg)
+	return a
 }
 
 // Init is called once at startup.
@@ -93,8 +96,31 @@ func (a App) Init() tea.Cmd {
 	return tea.Batch(
 		a.refreshSessionsCmd(),
 		a.refreshProjectsCmd(),
+		a.refreshUsageCmd(),
 		tickEvery(2*time.Second),
+		usageTick(),
 	)
+}
+
+// usageTick fires every 15s — claudeusage.Walk scans the transcript
+// tree which can be several MB, so we don't want it on every 2s heart-
+// beat. The dashboard happily shows the previous value while the next
+// walk runs in the background.
+func usageTick() tea.Cmd {
+	return tea.Tick(15*time.Second, func(t time.Time) tea.Msg { return usageTickMsg{At: t} })
+}
+
+func (a App) refreshUsageCmd() tea.Cmd {
+	return func() tea.Msg {
+		// 5h matches Anthropic's subscription rolling-window. We pull
+		// the full window once and let the dashboard derive sub-totals
+		// for any tighter span it wants from the same Aggregate.
+		agg, err := claudeusage.Walk(5 * time.Hour)
+		if err != nil {
+			return usageLoadedMsg{Err: err}
+		}
+		return usageLoadedMsg{Agg: agg}
+	}
 }
 
 // Update routes messages to the active screen and handles global keys.
@@ -106,6 +132,15 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tickMsg:
 		return a, tea.Batch(a.refreshSessionsCmd(), tickEvery(2*time.Second))
+
+	case usageTickMsg:
+		return a, tea.Batch(a.refreshUsageCmd(), usageTick())
+
+	case usageLoadedMsg:
+		if msg.Err == nil && msg.Agg != nil {
+			a.dashboard.SetUsage(msg.Agg)
+		}
+		return a, nil
 
 	case sessionsLoadedMsg:
 		a.lastRefresh = msg.At

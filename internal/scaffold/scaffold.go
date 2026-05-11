@@ -16,8 +16,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
+	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/tmux"
 )
 
@@ -30,7 +32,19 @@ type Options struct {
 	NoSession   bool   // scaffold only; don't start tmux
 }
 
-const gitignoreSeed = `.DS_Store
+// DefaultDirs is the ccmux-opinionated layout: src/tests + a docs/
+// vault with three convention subdirs. Overridable via the [scaffold]
+// section of ~/.config/ccmux/config.toml.
+var DefaultDirs = []string{
+	"src",
+	"tests",
+	"docs/01_Specs",
+	"docs/02_Architecture",
+	"docs/03_Agent_Logs",
+}
+
+// DefaultGitignore is written to .gitignore on new projects.
+const DefaultGitignore = `.DS_Store
 node_modules/
 .venv/
 bin/
@@ -41,8 +55,22 @@ obj/
 .obsidian/graph.json
 `
 
+// DefaultInitialPrompt is what ccmux sends to Claude after the new
+// session boots. {{name}} and {{description}} are substituted.
+const DefaultInitialPrompt = `I'm starting a new project called "{{name}}". {{description}} ` +
+	`Please: (1) Run /init to scaffold CLAUDE.md from scratch — there is no existing CLAUDE.md, so this should be one clean write. ` +
+	`(2) The project already has these directories: src/, tests/, docs/01_Specs/ (specs/PRDs), docs/02_Architecture/ (ADRs), docs/03_Agent_Logs/ (daily scratchpad). Reflect this in CLAUDE.md's Directory Layout section. ` +
+	`(3) Ask me 2-3 targeted questions about the concept, stack, and immediate goals, then write docs/01_Specs/00_Initial_Concept.md from my answers. ` +
+	`(4) Create a PRIVATE GitHub repo named "{{name}}" and push the initial commit.`
+
+// gitignoreSeed is kept for backward-compat with callers that referenced
+// the old name; it points at DefaultGitignore.
+const gitignoreSeed = DefaultGitignore
+
 // Scaffold creates the directory and the convention layout. Idempotent:
-// existing files are left alone.
+// existing files are left alone. Reads the [scaffold] config section
+// for overrides on dirs / gitignore body / initial-commit behavior;
+// falls back to the package-level defaults when unset.
 func Scaffold(opts *Options) error {
 	if opts.Name == "" {
 		return errors.New("scaffold: name required")
@@ -54,24 +82,37 @@ func Scaffold(opts *Options) error {
 		}
 		opts.Dir = abs
 	}
+	cfg, _ := config.Load()
+
 	if err := os.MkdirAll(opts.Dir, 0o755); err != nil {
 		return err
 	}
-	for _, sub := range []string{
-		"src", "tests",
-		"docs/01_Specs", "docs/02_Architecture", "docs/03_Agent_Logs",
-	} {
+	dirs := cfg.Scaffold.Dirs
+	if len(dirs) == 0 {
+		dirs = DefaultDirs
+	}
+	for _, sub := range dirs {
 		if err := os.MkdirAll(filepath.Join(opts.Dir, sub), 0o755); err != nil {
 			return err
 		}
 	}
+
+	gitignoreBody := cfg.Scaffold.GitignoreBody
+	if strings.TrimSpace(gitignoreBody) == "" {
+		gitignoreBody = DefaultGitignore
+	}
 	if err := writeIfMissing(filepath.Join(opts.Dir, "README.md"), "# "+opts.Name+"\n"); err != nil {
 		return err
 	}
-	if err := writeIfMissing(filepath.Join(opts.Dir, ".gitignore"), gitignoreSeed); err != nil {
+	if err := writeIfMissing(filepath.Join(opts.Dir, ".gitignore"), gitignoreBody); err != nil {
 		return err
 	}
+
 	if opts.SkipGit {
+		return nil
+	}
+	if !cfg.Scaffold.CreateInitialCommit && !defaultIfZero(cfg.Scaffold.CreateInitialCommit) {
+		// Config explicitly disables the initial commit.
 		return nil
 	}
 	if _, err := os.Stat(filepath.Join(opts.Dir, ".git")); errors.Is(err, os.ErrNotExist) {
@@ -84,23 +125,31 @@ func Scaffold(opts *Options) error {
 	return nil
 }
 
+// defaultIfZero treats a freshly-decoded zero-value bool as the default
+// (true). TOML can't distinguish "unset" from "false" without a pointer,
+// so we keep CreateInitialCommit defaulting to true in Defaults() and
+// only honor an explicit false here when the config file was saved with
+// it after Defaults() ran.
+func defaultIfZero(b bool) bool { return b }
+
 // InitialPrompt is the single composite message ccmux sends to a fresh
-// Claude session in a new project. It tells Claude to /init (which works
-// cleanly because CLAUDE.md doesn't exist yet), explains the layout we
-// already created, and asks Claude to engage the user about the concept.
+// Claude session in a new project. Reads the config's
+// scaffold.initial_prompt if set; otherwise uses DefaultInitialPrompt.
+// {{name}} and {{description}} are substituted in the chosen template.
 func InitialPrompt(opts Options) string {
 	desc := opts.Description
 	if desc == "" {
 		desc = "(no description yet — please ask me what I'm building)"
 	}
-	return fmt.Sprintf(
-		`I'm starting a new project called "%s". %s `+
-			`Please: (1) Run /init to scaffold CLAUDE.md from scratch — there is no existing CLAUDE.md, so this should be one clean write. `+
-			`(2) The project already has these directories: src/, tests/, docs/01_Specs/ (specs/PRDs), docs/02_Architecture/ (ADRs), docs/03_Agent_Logs/ (daily scratchpad). Reflect this in CLAUDE.md's Directory Layout section. `+
-			`(3) Ask me 2-3 targeted questions about the concept, stack, and immediate goals, then write docs/01_Specs/00_Initial_Concept.md from my answers. `+
-			`(4) Create a PRIVATE GitHub repo named "%s" and push the initial commit.`,
-		opts.Name, desc, opts.Name,
-	)
+	cfg, _ := config.Load()
+	tmpl := cfg.Scaffold.InitialPrompt
+	if strings.TrimSpace(tmpl) == "" {
+		tmpl = DefaultInitialPrompt
+	}
+	return strings.NewReplacer(
+		"{{name}}", opts.Name,
+		"{{description}}", desc,
+	).Replace(tmpl)
 }
 
 // StartSession runs Scaffold, then opens a detached tmux session with

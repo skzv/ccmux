@@ -3,6 +3,7 @@ package tui
 import (
 	"time"
 
+	"github.com/skzv/ccmux/internal/claudeusage"
 	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/project"
 )
@@ -88,3 +89,14 @@ type openEditorMsg struct {
 // notesReloadMsg asks the Notes screen to re-list and re-render after a
 // file was created/edited externally.
 type notesReloadMsg struct{}
+
+// usageTickMsg fires periodically to refresh the dashboard's usage panel.
+// Slower cadence than the session tick because walking the transcript
+// tree is more expensive.
+type usageTickMsg struct{ At time.Time }
+
+// usageLoadedMsg carries the result of a claudeusage.Walk.
+type usageLoadedMsg struct {
+	Agg *claudeusage.Aggregate
+	Err error
+}

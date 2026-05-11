@@ -8,21 +8,40 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/skzv/ccmux/internal/claudeusage"
+	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/tui/styles"
 )
 
 // dashboardModel renders the at-a-glance landing screen.
-// On wide terminals: hero + (sessions list | stats + hints).
+// On wide terminals: hero + (sessions list | stats + usage).
 // On narrow terminals (< 80 cols): everything stacked vertically.
 type dashboardModel struct {
-	st       styles.Styles
-	km       Keymap
-	sessions []daemon.SessionState
+	st         styles.Styles
+	km         Keymap
+	sessions   []daemon.SessionState
+	cfg        config.Config
+	usage      *claudeusage.Aggregate
+	usageAt    time.Time
 }
 
 func newDashboard(st styles.Styles, km Keymap) dashboardModel {
-	return dashboardModel{st: st, km: km}
+	return dashboardModel{st: st, km: km, cfg: config.Defaults()}
+}
+
+// SetConfig propagates the user config so the usage panel can pick up
+// subscription tier and dashboard preferences.
+func (m *dashboardModel) SetConfig(cfg config.Config) {
+	m.cfg = cfg
+}
+
+// SetUsage receives a freshly-computed Aggregate. The App schedules
+// these on a slower cadence than the session refresh so we don't walk
+// the transcript tree every 2 seconds.
+func (m *dashboardModel) SetUsage(a *claudeusage.Aggregate) {
+	m.usage = a
+	m.usageAt = time.Now()
 }
 
 func (m dashboardModel) Update(msg tea.Msg) (dashboardModel, tea.Cmd) {
@@ -54,8 +73,8 @@ func (m dashboardModel) viewWide(width, height int) string {
 	sessions := m.topSessions(leftW, rowH)
 
 	stats := m.statsPanel(rightW)
-	hints := m.hintPanel(rightW)
-	right := lipgloss.JoinVertical(lipgloss.Left, stats, hints)
+	usage := m.usagePanel(rightW)
+	right := lipgloss.JoinVertical(lipgloss.Left, stats, usage)
 
 	row := lipgloss.JoinHorizontal(lipgloss.Top, sessions, " ", right)
 	return lipgloss.JoinVertical(lipgloss.Left, hero, row)
@@ -64,14 +83,16 @@ func (m dashboardModel) viewWide(width, height int) string {
 func (m dashboardModel) viewNarrow(width, height int) string {
 	hero := m.heroPanel(width)
 	stats := m.statsPanel(width)
+	usage := m.usagePanel(width)
 	heroH := lipgloss.Height(hero)
 	statsH := lipgloss.Height(stats)
-	listH := height - heroH - statsH
+	usageH := lipgloss.Height(usage)
+	listH := height - heroH - statsH - usageH
 	if listH < 5 {
 		listH = 5
 	}
 	sessions := m.topSessions(width, listH)
-	return lipgloss.JoinVertical(lipgloss.Left, hero, stats, sessions)
+	return lipgloss.JoinVertical(lipgloss.Left, hero, stats, usage, sessions)
 }
 
 func (m dashboardModel) heroPanel(width int) string {
@@ -107,19 +128,129 @@ func (m dashboardModel) statsPanel(width int) string {
 	return m.st.Pane.Width(width - 2).Render(strings.Join(rows, "\n"))
 }
 
-func (m dashboardModel) hintPanel(width int) string {
-	hint := []string{
-		m.st.Emphasis.Render("Quick keys"),
-		"",
-		m.st.Key.Render("2") + "  Sessions",
-		m.st.Key.Render("3") + "  Projects",
-		m.st.Key.Render("4") + "  Notes",
-		m.st.Key.Render("5") + "  Claude config",
-		m.st.Key.Render("n") + "  new project",
-		m.st.Key.Render("r") + "  refresh",
-		m.st.Key.Render("?") + "  full keys",
+// usagePanel renders the Claude Code usage block: messages in the 5-hour
+// subscription window, reset time, token totals, top projects, estimated
+// $cost. Falls back gracefully when no data is available yet.
+func (m dashboardModel) usagePanel(width int) string {
+	st := m.st
+	rows := []string{st.Emphasis.Render("Claude usage")}
+	if m.usage == nil {
+		rows = append(rows,
+			"",
+			st.Muted.Render("(loading transcripts…)"),
+		)
+		return st.Pane.Width(width - 2).Render(strings.Join(rows, "\n"))
 	}
-	return m.st.Pane.Width(width - 2).Render(strings.Join(hint, "\n"))
+	a := m.usage
+	rows = append(rows, "")
+
+	// Subscription window summary. ResetAt is in UTC (timestamps in
+	// Claude Code's transcripts are UTC); convert to the user's local
+	// zone before formatting so "06:02" shows as "23:02" on the West
+	// Coast, not in zulu time.
+	msgChip := lipgloss.NewStyle().Foreground(st.P.Lavender).Bold(true).Render(
+		fmt.Sprintf("%d msgs", a.Messages),
+	)
+	resetLine := ""
+	if reset := a.ResetAt(5 * time.Hour); !reset.IsZero() {
+		local := reset.Local()
+		remaining := time.Until(reset)
+		if remaining > 0 {
+			resetLine = st.Muted.Render(fmt.Sprintf("resets %s (in %s)",
+				local.Format("15:04"), humanDuration(remaining)))
+		} else {
+			resetLine = st.Muted.Render(fmt.Sprintf("resetting now (next: %s)",
+				local.Format("15:04")))
+		}
+	}
+	rows = append(rows, fmt.Sprintf("5h window  %s  %s", msgChip, resetLine))
+
+	// Quota bar if a known subscription tier is configured.
+	if bar := m.quotaBar(a.Messages, width-6); bar != "" {
+		rows = append(rows, bar)
+	}
+
+	// Token breakdown — emphasize cache_read since that's where the
+	// session-level efficiency shows up.
+	rows = append(rows, "")
+	rows = append(rows, fmt.Sprintf("tokens     %s in · %s out",
+		st.Emphasis.Render(claudeusage.HumanCount(a.Total.Input)),
+		st.Emphasis.Render(claudeusage.HumanCount(a.Total.Output)),
+	))
+	rows = append(rows, fmt.Sprintf("cache      %s create · %s read",
+		st.Muted.Render(claudeusage.HumanCount(a.Total.CacheCreation)),
+		st.StateActive.Render(claudeusage.HumanCount(a.Total.CacheRead)),
+	))
+	// API-rate cost estimate is informational only for subscription users.
+	if cost := a.EstimatedCost(); cost > 0 {
+		rows = append(rows, st.Muted.Render(
+			fmt.Sprintf("~ $%.2f at API rates (subs = $0 beyond plan)", cost),
+		))
+	}
+
+	// Top projects.
+	if tp := a.TopProjects(3); len(tp) > 0 {
+		rows = append(rows, "")
+		rows = append(rows, st.Subtitle.Render("top projects this window"))
+		for _, p := range tp {
+			rows = append(rows, fmt.Sprintf("  %s   %s",
+				p.Project,
+				st.Muted.Render(claudeusage.HumanCount(p.Tokens.Total())),
+			))
+		}
+	}
+
+	return st.Pane.Width(width - 2).Render(strings.Join(rows, "\n"))
+}
+
+// quotaBar renders a 1-line progress bar when the user has declared a
+// subscription tier in config. Empty string when tier is "api" or unset.
+func (m dashboardModel) quotaBar(messages, width int) string {
+	limit := planMessageLimit(m.cfg.Subscription.Tier)
+	if limit <= 0 {
+		return ""
+	}
+	ratio := float64(messages) / float64(limit)
+	if ratio > 1 {
+		ratio = 1
+	}
+	barW := width - 12
+	if barW < 10 {
+		barW = 10
+	}
+	filled := int(float64(barW) * ratio)
+	if filled > barW {
+		filled = barW
+	}
+	bar := strings.Repeat("█", filled) + strings.Repeat("░", barW-filled)
+
+	color := m.st.StateActive
+	switch {
+	case ratio >= 0.9:
+		color = m.st.StateError
+	case ratio >= 0.7:
+		color = m.st.StateNeedsInput
+	}
+	return fmt.Sprintf("%s  %s",
+		color.Render(bar),
+		m.st.Muted.Render(fmt.Sprintf("%d / %d", messages, limit)),
+	)
+}
+
+// planMessageLimit returns Anthropic's documented soft cap on
+// messages per 5-hour window for each subscription tier. The actual
+// limits vary by traffic and model mix; these are sane defaults that
+// can be overridden in future config.
+func planMessageLimit(tier string) int {
+	switch strings.ToLower(strings.TrimSpace(tier)) {
+	case "pro":
+		return 45
+	case "max5x", "max-5x", "max":
+		return 225
+	case "max20x", "max-20x":
+		return 900
+	}
+	return 0 // api / unset → no quota bar
 }
 
 // topSessions produces a pane exactly `height` lines tall and `width` cells
