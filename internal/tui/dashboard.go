@@ -223,7 +223,7 @@ func (m dashboardModel) devicesPanel(width int) string {
 		rows = append(rows, st.Muted.Render(
 			"unreachable peer? either (a) install: `git clone github.com/skzv/ccmux && make bootstrap`,"))
 		rows = append(rows, st.Muted.Render(
-			"or (b) it's installed but local-only — set [daemon] listen_tailnet=true on that peer, then `ccmux update`."))
+			"or (b) installed but local-only — re-run `ccmux setup` on that peer and answer Yes to server mode."))
 	}
 	return st.Pane.Width(width - 2).Render(strings.Join(rows, "\n"))
 }
@@ -234,12 +234,12 @@ func (m dashboardModel) devicesPanel(width int) string {
 // Keeps every row aligned on the version/status column regardless of
 // whether a subtitle is present.
 func formatDeviceLabel(name, subtitle string, st styles.Styles) string {
-	primary := fmt.Sprintf("%-12s", truncatePeerName(name, 12))
+	primary := fmt.Sprintf("%-22s", truncatePeerName(name, 22))
 	if subtitle == "" {
-		return primary + "             " // spacer so subsequent columns line up
+		return primary + "                       " // 23-wide spacer keeps subsequent columns aligned
 	}
-	sub := truncatePeerName(subtitle, 12)
-	return primary + " " + st.Muted.Render(fmt.Sprintf("%-12s", sub))
+	sub := truncatePeerName(subtitle, 22)
+	return primary + " " + st.Muted.Render(fmt.Sprintf("%-22s", sub))
 }
 
 func truncatePeerName(s string, n int) string {
