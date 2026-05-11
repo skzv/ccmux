@@ -91,11 +91,11 @@ ccmux                                      # dashboard already lists the Mini
 
 Every refresh, ccmux runs `tailscale status --json`, probes each online non-mobile peer for a `ccmuxd /v1/health`, and merges the responders into the host list. New device on the tailnet running ccmux? It just appears.
 
-The Devices panel on the Dashboard shows:
+The Devices panel on the Dashboard shows every device on your tailnet:
 
 - 🟢 **peers running ccmuxd** — with their reported version + an "update available" tag whenever they lag this build
 - ⚪ **peers NOT running ccmuxd** (Macs/Linux boxes you haven't installed on yet) — with a one-line "ccmux not installed" hint so you remember to bring them online with `make bootstrap`
-- 📱 **phones / iPads are deliberately skipped** — the Moshi iOS app is their picker, not the desktop Dashboard
+- 📱 **phones / iPads** — with a "connect via Moshi app" hint, since the iOS Moshi app is their picker (and they don't run ccmux directly)
 
 Attaching a remote session execs `mosh mini -- tmux attach -t <name>`. Mosh tolerates roaming and stalls, so you can close the lid, go to a coffee shop, open the laptop — your session resumes instantly. Your phone gets pushes from the Mini, same flow as Mobile above.
 

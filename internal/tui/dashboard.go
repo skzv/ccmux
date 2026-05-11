@@ -166,6 +166,13 @@ func (m dashboardModel) devicesPanel(width int) string {
 	local := m.version
 	rows := []string{st.Emphasis.Render("Devices")}
 	for _, h := range m.hosts {
+		if h.Mobile {
+			rows = append(rows, fmt.Sprintf("📱 %-12s %s",
+				truncatePeerName(h.Name, 12),
+				st.Muted.Render("connect via Moshi app"),
+			))
+			continue
+		}
 		if h.NeedsInstall {
 			rows = append(rows, fmt.Sprintf("%s %-12s %s",
 				st.Muted.Render("○"),

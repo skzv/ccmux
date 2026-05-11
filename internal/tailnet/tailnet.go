@@ -130,20 +130,25 @@ type Discovered struct {
 	Sessions int
 }
 
-// Scan is the full sweep result: peers where /v1/health responded
-// (Reachable) AND non-mobile peers that exist on the tailnet without
-// a reachable ccmuxd (NeedsInstall). Phones / iPads are skipped in
-// both lists — Moshi covers them.
+// Scan is the full sweep result, partitioned by what the dashboard
+// wants to render for each kind of peer:
+//
+//   Reachable    — ccmuxd responded; show sessions + version + update flag
+//   NeedsInstall — non-mobile peer online but no ccmuxd reply; show install hint
+//   Mobile       — phone / iPad / Android; show "via Moshi app" hint
+//
+// Self is skipped (the local Unix-socket path handles it). Offline
+// peers are dropped entirely from all three lists.
 type Scan struct {
 	Reachable    []Discovered
 	NeedsInstall []Peer
+	Mobile       []Peer
 }
 
-// ScanTailnet probes every online non-mobile peer and partitions
-// the results into "ccmuxd responded" and "didn't respond — probably
-// needs ccmux installed". Mobile peers (iOS, iPadOS, Android) are
-// dropped entirely since installing ccmux there isn't an option.
-// Self is also skipped (handled locally).
+// ScanTailnet runs one sweep and returns every actionable peer.
+// Mobile peers are NOT probed (they don't run ccmuxd anyway) but they
+// ARE surfaced so the dashboard can show that they're on the tailnet
+// and remind the user to connect via Moshi.
 //
 // `port` is the daemon.tailnet_port setting (default 7474 if 0).
 func ScanTailnet(ctx context.Context, port int) (Scan, error) {
@@ -164,13 +169,15 @@ func ScanTailnet(ctx context.Context, port int) (Scan, error) {
 	}
 	results := make(chan result, len(peers))
 	var wg sync.WaitGroup
+	var scan Scan
 	for _, p := range peers {
 		if p.Self || !p.Online || p.Addr == "" {
 			continue
 		}
 		if p.IsMobile() {
-			// Mobile devices skip everything: not probed (waste of
-			// time), not surfaced (Moshi app is the right tool).
+			// Phones / iPads — no ccmuxd to probe. Surface as-is so
+			// the dashboard can render the "via Moshi app" hint.
+			scan.Mobile = append(scan.Mobile, p)
 			continue
 		}
 		wg.Add(1)
@@ -195,7 +202,6 @@ func ScanTailnet(ctx context.Context, port int) (Scan, error) {
 		close(results)
 	}()
 
-	var scan Scan
 	for r := range results {
 		if r.ok {
 			scan.Reachable = append(scan.Reachable, r.d)

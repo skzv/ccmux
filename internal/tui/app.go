@@ -710,6 +710,24 @@ func (a App) refreshSessionsCmd() tea.Cmd {
 					OK:           p.Online,
 				})
 			}
+			for _, p := range scan.Mobile {
+				// Mobile rows don't have an ccmuxd address; key the
+				// dedupe by the tailnet IP itself so the same phone
+				// doesn't show twice across refreshes.
+				key := "mobile://" + p.Addr
+				if seen[key] {
+					continue
+				}
+				seen[key] = true
+				hs = append(hs, hostStatus{
+					Name:       shortPeerName(p.HostName),
+					Address:    p.Addr,
+					Discovered: true,
+					Mobile:     true,
+					OS:         p.OS,
+					OK:         p.Online,
+				})
+			}
 		}
 
 		sort.SliceStable(sessions, func(i, j int) bool {

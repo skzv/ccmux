@@ -44,12 +44,16 @@ type hostStatus struct {
 	// /v1/health probe — typically another Mac or Linux box on the
 	// tailnet where the user hasn't installed ccmux yet. The Devices
 	// panel renders these with a "ccmux not installed / running" hint
-	// instead of session counts. Mobile peers are never in this state
-	// (they're filtered out upstream — see tailnet.IsMobile).
+	// instead of session counts.
 	NeedsInstall bool
+	// Mobile flags a phone / iPad / Android peer on the tailnet. We
+	// surface these in the Devices panel so the user sees that the
+	// device is reachable, but with a "connect via Moshi app" hint
+	// instead of session counts (the Moshi app handles the picker).
+	Mobile bool
 	// OS is what Tailscale reports for this peer ("macOS", "Linux",
-	// …). Only populated for NeedsInstall rows so the hint can be
-	// platform-specific.
+	// "iOS", "iPadOS", "Android", …). Populated for NeedsInstall and
+	// Mobile rows so the hint can be platform-aware.
 	OS string
 }
 
