@@ -74,3 +74,17 @@ type sessionKilledMsg struct {
 	Name string
 	Err  error
 }
+
+// Notes screen messages.
+
+// openEditorMsg asks the app to suspend the TUI and run $EDITOR on `Path`.
+// The Notes screen emits this after creating a new file; the App handles
+// the tea.ExecProcess so the TUI knows to refresh on return.
+type openEditorMsg struct {
+	Editor string
+	Path   string
+}
+
+// notesReloadMsg asks the Notes screen to re-list and re-render after a
+// file was created/edited externally.
+type notesReloadMsg struct{}

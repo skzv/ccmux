@@ -187,23 +187,44 @@ func (m dashboardModel) topSessions(width, height int) string {
 }
 
 // renderSessionLine produces one line per session: host dot, state glyph,
-// name, idle time. Truncates the session name so the line fits in `inner`
-// columns (the content area inside the pane border + padding).
+// (optionally a "⊙" attached badge), name, age suffix. Attached sessions
+// get a distinct mauve-bold-underlined name + an "attached" chip in the
+// suffix so they're impossible to confuse with detached sessions even at
+// a glance.
+//
+// `inner` is the content area available (already accounting for any
+// surrounding pane border/padding).
 func renderSessionLine(st styles.Styles, s daemon.SessionState, inner int) string {
 	hostDot := st.HostColor(s.Host).Render("●")
 	state := stateGlyph(st, s.State)
+
+	attachedBadge := ""
+	nameStyle := st.Emphasis
+	if s.Attached {
+		attachedBadge = lipgloss.NewStyle().Foreground(st.P.Mauve).Bold(true).Render("⊙ ")
+		nameStyle = lipgloss.NewStyle().Foreground(st.P.Mauve).Bold(true).Underline(true)
+	}
+
 	age := ""
 	if !s.LastChange.IsZero() {
 		age = humanDuration(time.Since(s.LastChange))
 	}
 
-	// Fixed-width prefix: hostDot(1) + space + state(1) + space = ~4 cells visually
-	prefix := hostDot + " " + state + " "
-	suffix := ""
-	if age != "" {
+	var suffix string
+	switch {
+	case s.Attached && age != "":
+		suffix = "  " + lipgloss.NewStyle().Foreground(st.P.Mauve).Bold(true).Render("attached") + " " + st.Muted.Render(age)
+	case s.Attached:
+		suffix = "  " + lipgloss.NewStyle().Foreground(st.P.Mauve).Bold(true).Render("attached")
+	case age != "":
 		suffix = "  " + st.Muted.Render(age)
 	}
-	nameBudget := inner - 4 - lipgloss.Width(suffix)
+
+	prefix := hostDot + " " + state + " " + attachedBadge
+
+	// Truncate name so the rendered line fits in `inner` cells. We use
+	// lipgloss.Width on the styled fragments so ANSI doesn't fool us.
+	nameBudget := inner - lipgloss.Width(prefix) - lipgloss.Width(suffix)
 	if nameBudget < 6 {
 		nameBudget = 6
 	}
@@ -215,7 +236,7 @@ func renderSessionLine(st styles.Styles, s daemon.SessionState, inner int) strin
 		}
 		name = string(runes) + "…"
 	}
-	return prefix + st.Emphasis.Render(name) + suffix
+	return prefix + nameStyle.Render(name) + suffix
 }
 
 func stateGlyph(st styles.Styles, state string) string {

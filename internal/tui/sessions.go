@@ -109,6 +109,10 @@ func (m sessionsModel) renderDetail(width, height int) string {
 	if sel == nil {
 		return m.st.Pane.Width(width - 2).Height(height - 2).Render(m.st.Muted.Render("Nothing selected."))
 	}
+	attachedLine := fmt.Sprintf("attached %v", sel.Attached)
+	if sel.Attached {
+		attachedLine = "attached " + lipgloss.NewStyle().Foreground(m.st.P.Mauve).Bold(true).Render("⊙ YES")
+	}
 	lines := []string{
 		m.st.Emphasis.Render(sel.Name),
 		m.st.Muted.Render(fmt.Sprintf("on %s", sel.Host)),
@@ -117,16 +121,20 @@ func (m sessionsModel) renderDetail(width, height int) string {
 		fmt.Sprintf("project  %s", sel.Project),
 		fmt.Sprintf("path     %s", truncate(sel.Path, width-12)),
 		fmt.Sprintf("windows  %d", sel.Windows),
-		fmt.Sprintf("attached %v", sel.Attached),
+		attachedLine,
 		fmt.Sprintf("created  %s", relTime(sel.Created)),
 		fmt.Sprintf("changed  %s", relTime(sel.LastChange)),
 		"",
 		m.st.Subtitle.Render("Keys"),
-		m.st.Key.Render("enter") + "  attach",
+		m.st.Key.Render("enter") + "  attach (ccmux applies a styled bar to the session)",
 		m.st.Key.Render("x") + "      kill",
 		m.st.Key.Render("R") + "      rename (coming soon)",
 		m.st.Key.Render("k") + "      toggle keep-awake (coming soon)",
 		m.st.Key.Render("s") + "      snapshot (coming soon)",
+		"",
+		m.st.Subtitle.Render("To return after attaching"),
+		"  press " + m.st.Key.Render("prefix + d") + " (default " + m.st.Key.Render("Ctrl-b d") + ")",
+		m.st.Muted.Render("  Phone (Moshi) picks up the same session seamlessly."),
 	}
 	return m.st.Pane.Width(width - 2).Height(height - 2).Render(strings.Join(lines, "\n"))
 }

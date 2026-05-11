@@ -24,3 +24,8 @@ var cmdFor = func(name string, args ...string) *exec.Cmd {
 func tickEvery(d time.Duration) tea.Cmd {
 	return tea.Tick(d, func(t time.Time) tea.Msg { return tickMsg{At: t} })
 }
+
+// nowPlus returns time.Now() + n seconds. Tiny helper for toast TTLs.
+func nowPlus(seconds int) time.Time {
+	return time.Now().Add(time.Duration(seconds) * time.Second)
+}

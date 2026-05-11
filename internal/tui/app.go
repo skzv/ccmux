@@ -17,8 +17,10 @@ import (
 	"github.com/skzv/ccmux/internal/claude"
 	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/daemon"
+	"github.com/skzv/ccmux/internal/moshi"
 	"github.com/skzv/ccmux/internal/project"
 	"github.com/skzv/ccmux/internal/tmux"
+	"github.com/skzv/ccmux/internal/tmuxchrome"
 	"github.com/skzv/ccmux/internal/tui/styles"
 )
 
@@ -146,6 +148,16 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, a.refreshSessionsCmd()
 
+	case openEditorMsg:
+		// A screen (Notes) asked the app to suspend and run $EDITOR.
+		c := exec.Command(msg.Editor, msg.Path)
+		return a, tea.ExecProcess(c, func(err error) tea.Msg {
+			if err != nil {
+				return toastMsg{Text: "editor: " + err.Error(), Kind: toastError, Until: time.Now().Add(5 * time.Second)}
+			}
+			return notesReloadMsg{}
+		})
+
 	case refreshAfterDetachMsg:
 		// Returning from tmux attach.
 		return a, tea.Batch(a.refreshSessionsCmd(), a.refreshProjectsCmd())
@@ -176,6 +188,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		case keyMatches(msg, a.keys.Notes):
 			a.screen = ScreenNotes
+			// Propagate the currently-focused project from Projects.
+			if len(a.projects) > 0 && a.projectsM.cursor >= 0 && a.projectsM.cursor < len(a.projects) {
+				p := a.projects[a.projectsM.cursor]
+				a.notes.SetProject(&p)
+			}
 			return a, nil
 		case keyMatches(msg, a.keys.Claude):
 			a.screen = ScreenClaude
@@ -221,11 +238,12 @@ func (a App) View() string {
 	statusBar := a.renderStatusBar()
 	footer := a.renderFooter()
 
-	// Reserve 3 lines: header(1) + statusBar(1) + footer(1).
-	// Every screen receives the full remaining height and is responsible
-	// for sizing its own panes so the total comes out right (Pane.Height(h)
-	// includes borders).
-	bodyHeight := a.height - 3
+	// Reserve 4 lines: header(1) + statusBar(1) + footer(1) + 1 line of
+	// slack. The slack costs nothing on tall terminals and prevents the
+	// header from being scrolled off when a screen's body content ends up
+	// slightly taller than its budget (rare edge case in Lipgloss height
+	// calculations that's not worth fighting line-by-line).
+	bodyHeight := a.height - 4
 	if bodyHeight < 5 {
 		bodyHeight = 5
 	}
@@ -450,12 +468,47 @@ func (a App) refreshProjectsCmd() tea.Cmd {
 }
 
 // attachSelectedSession is Enter on Sessions screen.
+//
+// Three behaviors:
+//   1. Local session, we're NOT inside tmux → exec `tmux attach-session`,
+//      Bubble Tea is suspended until the user detaches.
+//   2. Local session, we ARE inside tmux ($TMUX set, e.g. when running
+//      from inside the outer "ccmux" tmux session on mobile) → call
+//      `tmux switch-client -t <name>` which doesn't nest sessions and
+//      lets `prefix L` jump back to ccmux.
+//   3. Remote session → exec `mosh <host> -- tmux attach -t <name>`.
+//
+// Before any of these, we apply ccmux's chrome (custom status bar) to
+// the target session so the attached view shows project name + detach
+// hint + Moshi reachability indicator.
 func (a App) attachSelectedSession() tea.Cmd {
 	sel := a.sessionsM.Selected()
 	if sel == nil {
 		return nil
 	}
+
+	// Apply chrome to local sessions only — we don't have a tmux socket
+	// on the remote host from here.
 	if sel.Host == "" || sel.Host == "local" {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		mst := moshi.Detect(ctx)
+		_ = tmuxchrome.Apply(ctx, sel.Name, sel.Project, mst.Paired && mst.Connected)
+	}
+
+	if sel.Host == "" || sel.Host == "local" {
+		if tmuxchrome.InTmux() {
+			// Already inside tmux (the persistent outer "ccmux" session
+			// when connected via Moshi). Use switch-client to avoid
+			// nesting.
+			c := exec.Command("tmux", "switch-client", "-t", sel.Name)
+			return tea.ExecProcess(c, func(err error) tea.Msg {
+				if err != nil {
+					return toastMsg{Text: "tmux switch-client: " + err.Error(), Kind: toastError, Until: time.Now().Add(5 * time.Second)}
+				}
+				return refreshAfterDetachMsg{}
+			})
+		}
 		return tea.ExecProcess(
 			exec.Command("tmux", "attach-session", "-d", "-t", sel.Name),
 			func(err error) tea.Msg {
