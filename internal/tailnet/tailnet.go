@@ -160,8 +160,15 @@ func parsePeers(raw []byte) ([]Peer, error) {
 // Discovered is one tailnet peer that responded to a ccmuxd health probe.
 type Discovered struct {
 	Name    string // pretty short name (peer's HostName)
-	Address string // "host:port" suitable for daemon.RemoteClient
-	Version string // ccmuxd version reported by /v1/health
+	Address string // "ip:port" — the daemon's HTTP listener, used by daemon.RemoteClient
+	// DialHost is the bare host (no port) to use when ssh/mosh'ing
+	// into this peer. Prefers the leftmost MagicDNS segment ("sashas-
+	// mac-mini") over the tailnet IP so existing `known_hosts`
+	// entries — typically keyed on the hostname, not the IP —
+	// continue to match. Falls back to the tailnet IP when no DNS
+	// name is available.
+	DialHost string
+	Version  string // ccmuxd version reported by /v1/health
 	Sessions int
 }
 
@@ -227,6 +234,7 @@ func ScanTailnet(ctx context.Context, port int) (Scan, error) {
 			results <- result{ok: true, d: Discovered{
 				Name:     shortName(p.DisplayName()),
 				Address:  addr,
+				DialHost: dialHostFor(p),
 				Version:  info.Version,
 				Sessions: info.Sessions,
 			}}
@@ -266,6 +274,29 @@ func probeOne(ctx context.Context, addr string) (daemon.HealthInfo, error) {
 	defer cancel()
 	cli := daemon.RemoteClient(addr)
 	return cli.Health(c)
+}
+
+// dialHostFor picks the best target string for `ssh`/`mosh <host>`.
+// Tailnet IPs work, but most users' known_hosts entries are keyed on
+// the MagicDNS short name, so dialing by name matches the existing
+// trust state. Order of preference:
+//
+//   1. Leftmost segment of DNSName when present
+//      ("sashas-mac-mini" from "sashas-mac-mini.tail-abcd.ts.net.")
+//   2. HostName when it isn't the iOS-default "localhost" placeholder
+//   3. Tailnet IP (Addr) as a last resort
+func dialHostFor(p Peer) string {
+	if dns := strings.TrimSpace(p.DNSName); dns != "" {
+		dns = strings.TrimSuffix(dns, ".")
+		if i := strings.Index(dns, "."); i > 0 {
+			return dns[:i]
+		}
+		return dns
+	}
+	if h := strings.TrimSpace(p.HostName); h != "" && !strings.EqualFold(h, "localhost") {
+		return h
+	}
+	return p.Addr
 }
 
 // shortName turns "Sasha's Mac mini" into "mac-mini" — readable, no

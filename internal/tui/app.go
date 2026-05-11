@@ -716,7 +716,8 @@ func (a App) refreshSessionsCmd() tea.Cmd {
 				// down," so we shouldn't make the dot red.
 				st := hostStatus{
 					Name: d.Name, Address: d.Address,
-					Discovered: true, Version: d.Version, OK: true,
+					Discovered: true, DialHost: d.DialHost,
+					Version: d.Version, OK: true,
 				}
 				if ss, e := cli.Sessions(ctx); e == nil {
 					st.Sessions = len(ss)
@@ -843,19 +844,30 @@ func (a App) attachSelectedSession() tea.Cmd {
 	}
 
 	// Auto-discovered tailnet peers don't appear in cfg.Hosts. Look
-	// them up in the live a.hosts slice and dial via the bare tailnet
-	// hostname (or IP, when no DNS name is available). Default to
-	// mosh + current $USER, matching the explicit-host defaults.
+	// them up in the live a.hosts slice. Prefer the discovered
+	// peer's DialHost (a MagicDNS short name) over the bare tailnet
+	// IP so existing `known_hosts` entries match — dialing by IP
+	// otherwise prompts the user to re-accept a fingerprint they've
+	// already trusted.
+	//
+	// We default to ssh (not mosh) for discovered peers because mosh
+	// requires `mosh-server` on the remote, which isn't guaranteed
+	// just because Tailscale + ccmuxd are running. Users who want
+	// mosh + roaming can pin the host with `ccmux host add --mosh`
+	// to override.
 	for _, hs := range a.hosts {
 		if hs.Name == sel.Host && hs.Discovered {
-			dial := dialAddrFor(hs)
+			dial := hs.DialHost
+			if dial == "" {
+				dial = dialAddrFor(hs)
+			}
 			if dial == "" {
 				return func() tea.Msg {
 					return toastMsg{Text: "no reachable address for " + sel.Host, Kind: toastError, Until: time.Now().Add(5 * time.Second)}
 				}
 			}
 			return tea.ExecProcess(
-				exec.Command("mosh", dial, "--", "tmux", "attach-session", "-d", "-t", sel.Name),
+				exec.Command("ssh", "-t", dial, "tmux", "attach-session", "-d", "-t", sel.Name),
 				func(err error) tea.Msg { return refreshAfterDetachMsg{} },
 			)
 		}

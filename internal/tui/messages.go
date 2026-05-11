@@ -41,6 +41,11 @@ type hostStatus struct {
 	// uses it to render a subtle "discovered" tag so the user knows
 	// they didn't have to configure it.
 	Discovered bool
+	// DialHost is the bare hostname (no port) the attach path should
+	// hand to ssh/mosh — typically a MagicDNS short name so existing
+	// known_hosts entries match. Empty on non-discovered rows; the
+	// configured-host path uses cfg.Host.Address instead.
+	DialHost string
 	// Version is the remote ccmuxd's reported version string from
 	// /v1/health. Empty for hosts we couldn't reach. The dashboard
 	// compares against the local build to flag "update available".
