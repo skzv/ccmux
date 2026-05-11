@@ -71,18 +71,19 @@ ccmux is the UI that makes this workflow legible. It's not a replacement for tmu
 - *(Optional)* Tailnet web viewer — Safari on any device renders the same notes.
 - *(Optional)* `obsidian://` URI handoff if you have Obsidian on your Mac.
 
-### Mobile workflow (iOS)
-- First-class Blink Shell setup walkthrough in `ccmux setup`
-- SSH key handoff via ANSI QR code rendered in the terminal
-- Terminal-bell-to-iOS-push works out of the box — when Claude needs you, your phone pings
-- One persistent outer tmux session means opening the app puts you straight back where you were
+### Mobile workflow (iOS / Android, via [Moshi](https://getmoshi.app/))
+- **Categorized push notifications** — Moshi's `moshi-hook` daemon plugs into Claude Code's hooks system on the host, so notifications carry rich categories (`approval_required`, `task_complete`, `session_started`) instead of an opaque terminal bell.
+- **One-command setup** — `ccmux moshi-setup` installs `moshi-hook`, runs the pairing flow, and writes the Claude Code hooks config for you.
+- **Auto-detection** — when `moshi-hook` is detected, ccmuxd suppresses its own bell-trigger so you don't get duplicate notifications.
+- **Persistent outer tmux session** — Moshi's connection command `tmux new-session -A -s ccmux ccmux` puts you straight back in the TUI every time you open the app.
+- **Fallback for non-Moshi clients** — Blink Shell, Termius, anything that turns BEL into a notification still works; ccmuxd injects `\a` on needs-input transitions in that mode.
 
 ### Setup wizard
-- `ccmux setup` checks tmux / mosh / tailscale / claude, offers `brew install` for missing pieces
+- `ccmux setup` checks tmux / mosh / tailscale / claude / moshi-hook, offers `brew install` for missing pieces
+- `ccmux moshi-setup` runs the full Moshi pairing + hooks install flow
 - Generates SSH keys if missing
 - Tests the Tailscale connection
-- Walks through Blink Shell config with copy-paste host config
-- `ccmux doctor` is the non-interactive version for scripting
+- `ccmux doctor` is the non-interactive version for scripting (now reports moshi-hook status too)
 
 ### Quality of life
 - Catppuccin Mocha by default. Theme switcher: Dracula, Nord, Gruvbox, Tokyo Night.

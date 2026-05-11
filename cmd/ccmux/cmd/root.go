@@ -43,5 +43,6 @@ func init() {
 		newDoctorCmd(),
 		newDaemonCmd(),
 		newHostCmd(),
+		newMoshiSetupCmd(),
 	)
 }

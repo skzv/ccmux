@@ -16,6 +16,7 @@ import (
 
 	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/daemon"
+	"github.com/skzv/ccmux/internal/moshi"
 	"github.com/skzv/ccmux/internal/scaffold"
 	"github.com/skzv/ccmux/internal/tmux"
 )
@@ -204,6 +205,24 @@ func runDoctor() error {
 			fmt.Printf("✓ %s\n", c.bin)
 		}
 	}
+
+	// Moshi / moshi-hook block (optional but the recommended mobile path).
+	ms := moshi.Detect(context.Background())
+	fmt.Println()
+	fmt.Println("Moshi (mobile push notifications):")
+	switch {
+	case !ms.BinaryInstalled:
+		fmt.Println("  · moshi-hook not installed — run `ccmux moshi-setup` to add it")
+	case !ms.Paired:
+		fmt.Println("  · moshi-hook installed but not paired — `ccmux moshi-setup` to pair")
+	case !ms.HooksInstalled:
+		fmt.Println("  ⚠ moshi-hook paired but Claude Code hooks not wired — run `moshi-hook install`")
+	case !ms.ServiceRunning:
+		fmt.Println("  ⚠ moshi-hook wired but not running as a service — `brew services start moshi-hook`")
+	default:
+		fmt.Println("  ✓ moshi-hook installed, paired, hooks wired, service running")
+	}
+
 	if bad > 0 {
 		os.Exit(bad)
 	}

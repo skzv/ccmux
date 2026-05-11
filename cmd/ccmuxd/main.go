@@ -28,6 +28,7 @@ import (
 	"github.com/skzv/ccmux/internal/claude"
 	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/daemon"
+	"github.com/skzv/ccmux/internal/moshi"
 	"github.com/skzv/ccmux/internal/tmux"
 )
 
@@ -130,6 +131,14 @@ type server struct {
 	mu        sync.Mutex
 	seen      map[string]*tracked
 	sleeper   *sleepManager
+
+	// moshiState is refreshed periodically (not every poll) so we don't
+	// shell out to moshi-hook every 2 seconds. When SuppressBell() is
+	// true, pollOnce skips bell injection because moshi-hook is handling
+	// notifications via Claude Code's hooks system.
+	moshiState   moshi.Status
+	moshiCheckAt time.Time
+	moshiMu      sync.Mutex
 }
 
 func (s *server) routes(mux *http.ServeMux) {
@@ -198,6 +207,8 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 	if err != nil {
 		return
 	}
+	suppressBell := s.moshiBellSuppressed(ctx)
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	live := map[string]bool{}
@@ -218,9 +229,14 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 			t.lastChange = time.Now()
 		}
 		newState := claude.Classify(pane, t.lastChange, idleNeeds)
-		// Transition into NEEDS_INPUT triggers the bell.
+		// Transition into NEEDS_INPUT triggers the bell — unless
+		// moshi-hook is installed and paired, in which case it sends
+		// proper structured push notifications via Claude Code hooks
+		// and the bell would be a duplicate.
 		if newState == claude.StateNeedsInput && t.state != claude.StateNeedsInput {
-			_ = tmux.SendKeys(ctx, ts.Name, "\a")
+			if !suppressBell {
+				_ = tmux.SendKeys(ctx, ts.Name, "\a")
+			}
 			t.promptCount++
 		}
 		t.state = newState
@@ -236,6 +252,22 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 	}
 	// Sleep manager reacts to the boolean "any session active?".
 	s.sleeper.SetActive(anyActive)
+}
+
+// moshiBellSuppressed returns true if ccmuxd should skip the BEL trigger
+// because moshi-hook is handling notifications. Cached for 60s so we
+// don't shell out to moshi-hook every 2-second poll.
+func (s *server) moshiBellSuppressed(ctx context.Context) bool {
+	s.moshiMu.Lock()
+	defer s.moshiMu.Unlock()
+	if time.Since(s.moshiCheckAt) > 60*time.Second {
+		s.moshiState = moshi.Detect(ctx)
+		s.moshiCheckAt = time.Now()
+		if s.moshiState.SuppressBell() {
+			log.Println("ccmuxd: moshi-hook detected — bell injection suppressed")
+		}
+	}
+	return s.moshiState.SuppressBell()
 }
 
 // sleepManager owns the caffeinate (macOS) / systemd-inhibit (linux)
