@@ -1,0 +1,34 @@
+# Build artifacts (anchored to repo root so cmd/ccmux and cmd/ccmuxd
+# directories are NOT ignored — only top-level binaries are)
+bin/
+dist/
+/ccmux
+/ccmuxd
+*.test
+*.out
+
+# Go
+vendor/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local state
+.env
+.env.local
+*.log
+*.db
+*.sqlite
+*.sqlite3
+
+# Obsidian (per project policy)
+.obsidian/workspace.json
+.obsidian/workspace-mobile.json
+.obsidian/graph.json

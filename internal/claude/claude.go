@@ -1,0 +1,110 @@
+// Package claude classifies the live state of a Claude Code session
+// based on the visible content of its tmux pane.
+package claude
+
+import (
+	"context"
+	"strings"
+	"time"
+
+	"github.com/skzv/ccmux/internal/tmux"
+)
+
+// State enumerates the high-level lifecycle of a Claude session.
+type State string
+
+const (
+	StateUnknown    State = "unknown"
+	StateActive     State = "active"      // recent output, Claude is doing work
+	StateIdle       State = "idle"        // pane has been quiet for a bit, no input prompt
+	StateNeedsInput State = "needs_input" // Claude's prompt is showing and the pane is quiet
+	StateError      State = "error"       // pane shows an error or shell prompt (Claude crashed)
+)
+
+// Snapshot is a derived view of one Claude session at one point in time.
+type Snapshot struct {
+	State    State
+	Pane     string    // last captured pane content
+	Captured time.Time // when we ran capture-pane
+}
+
+// Classify decides what State a session is in based on its pane content.
+// `lastChange` is when this session's pane content last changed (the caller
+// tracks this — typically the daemon's poll loop).
+func Classify(pane string, lastChange time.Time, idleNeedsInput time.Duration) State {
+	if pane == "" {
+		return StateUnknown
+	}
+	trimmed := strings.TrimRight(pane, " \n\t")
+	if trimmed == "" {
+		return StateUnknown
+	}
+	// Look at the last non-empty line for prompt detection.
+	lines := strings.Split(trimmed, "\n")
+	tail := ""
+	for i := len(lines) - 1; i >= 0; i-- {
+		if l := strings.TrimSpace(lines[i]); l != "" {
+			tail = l
+			break
+		}
+	}
+	switch {
+	case looksLikeShellPrompt(tail) && !looksLikeClaudePrompt(tail):
+		return StateError
+	case looksLikeClaudePrompt(tail):
+		if time.Since(lastChange) >= idleNeedsInput {
+			return StateNeedsInput
+		}
+		return StateActive
+	default:
+		if time.Since(lastChange) >= idleNeedsInput {
+			return StateIdle
+		}
+		return StateActive
+	}
+}
+
+// SnapshotSession captures the pane and classifies the session.
+// The caller is responsible for storing `lastChange` across calls.
+func SnapshotSession(ctx context.Context, session string, lastChange time.Time, idleNeedsInput time.Duration) (Snapshot, error) {
+	pane, err := tmux.CapturePane(ctx, session, 200)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	return Snapshot{
+		State:    Classify(pane, lastChange, idleNeedsInput),
+		Pane:     pane,
+		Captured: time.Now(),
+	}, nil
+}
+
+// looksLikeClaudePrompt is a heuristic for "Claude is currently rendering its
+// input box waiting on the user." Claude Code uses box-drawing characters and
+// a `>` cursor in its TUI; matching is intentionally loose because the exact
+// art changes across versions.
+func looksLikeClaudePrompt(line string) bool {
+	if line == "" {
+		return false
+	}
+	// The Claude Code input frame includes characters from this set.
+	hits := 0
+	for _, ch := range "╭╮╰╯│─>" {
+		if strings.ContainsRune(line, ch) {
+			hits++
+		}
+	}
+	return hits >= 2
+}
+
+// looksLikeShellPrompt heuristically matches a bare shell prompt (Claude has
+// exited or crashed and we're sitting at zsh/bash).
+func looksLikeShellPrompt(line string) bool {
+	// Common terminators of a shell prompt.
+	if strings.HasSuffix(line, "$") || strings.HasSuffix(line, "#") || strings.HasSuffix(line, "%") {
+		// Make sure it doesn't look like Claude's prompt either.
+		if !looksLikeClaudePrompt(line) {
+			return true
+		}
+	}
+	return false
+}
