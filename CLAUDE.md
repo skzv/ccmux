@@ -54,7 +54,8 @@ make lint          # gofmt + go vet + staticcheck if installed
 - `docs/01_Specs/01_Feature_Catalog.md` — every feature, scoped to a release phase
 - `docs/02_Architecture/00_System_Design.md` — components, data flow, daemon protocol
 - `docs/02_Architecture/01_Notes_System.md` — markdown-on-disk model, TUI Notes tab, optional Obsidian/web-viewer paths
-- `docs/02_Architecture/02_iOS_Mobile_Setup.md` — Blink/Termius + Mosh + Tailscale
+- `docs/02_Architecture/02_iOS_Mobile_Setup.md` — Moshi + moshi-hook (primary); Blink/Termius (fallback)
+- `docs/02_Architecture/03_Tailscale_Networking.md` — how Tailscale sits underneath the whole stack; what ccmux uses it for and what it leaves alone
 - `docs/04_Guides/` — user-facing setup guides published to the README
 
 # Owner
