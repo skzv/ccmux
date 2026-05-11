@@ -100,3 +100,18 @@ type usageLoadedMsg struct {
 	Agg *claudeusage.Aggregate
 	Err error
 }
+
+// Claude config screen messages.
+
+// claudeReloadMsg asks the Claude config screen to re-read settings.json
+// and re-list commands/skills, e.g. after the user edited settings.json
+// in $EDITOR.
+type claudeReloadMsg struct{}
+
+// claudeModelChangedMsg signals that SetModel completed. Carries the
+// backup path so the screen can surface "backup at …" in a toast.
+type claudeModelChangedMsg struct {
+	New    string
+	Backup string
+	Err    error
+}

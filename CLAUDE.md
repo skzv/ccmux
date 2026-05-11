@@ -23,7 +23,9 @@ Components:
 - **`internal/claude`** — Claude session detection. Reads `~/.claude/projects/<encoded-path>/` for transcripts, derives "needs input" state from pane content patterns.
 - **`internal/project`** — discovers projects under `~/Projects` (configurable). A "project" is any directory with `CLAUDE.md` or a `.git`.
 - **`internal/notes`** — notes operations on each project's `docs/` tree. Markdown rendering via Glamour, note creation with templated frontmatter, ripgrep-backed search. Obsidian is treated as an optional desktop integration here (just an `obsidian://` URI builder when the app is detected).
-- **`internal/claudeconfig`** — reads and writes Claude Code's own configuration (`~/.claude/settings.json`, `~/.claude/CLAUDE.md`, `~/.claude/commands/`, `~/.claude/skills/`, per-project `.claude/`). Backs up the file before every mutation. Powers the "Claude" screen in the TUI.
+- **`internal/claudeconfig`** — reads and writes Claude Code's own configuration (`~/.claude/settings.json`, `~/.claude/CLAUDE.md`, `~/.claude/commands/`, `~/.claude/skills/`). Backs up the file to `~/.claude/backups/` before every mutation. Preserves unknown JSON fields across round-trips. Powers the "Claude" screen in the TUI.
+- **`internal/claudeauth`** — reads `claude auth status` JSON for login/plan info, cached 5min. Used by App.New() to auto-detect the user's subscription tier when config.subscription.tier is empty or "api".
+- **`internal/claudeusage`** — walks `~/.claude/projects/*/*.jsonl` to aggregate per-window token usage and user-prompt counts. Drives the dashboard's usage panel + the 5-hour quota bar.
 - **`internal/config`** — `~/.config/ccmux/config.toml` for user preferences (projects dir, theme, keybindings).
 - **`internal/daemon`** — IPC client/server. TUI talks to ccmuxd over a Unix socket at `~/.local/state/ccmux/ccmuxd.sock`.
 
