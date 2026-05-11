@@ -1,4 +1,4 @@
-.PHONY: build install setup uninstall run test lint clean fmt vet daemon tui
+.PHONY: build install setup uninstall run test lint clean fmt vet daemon tui check-go
 
 BIN_DIR    := bin
 INSTALL_DIR := $(HOME)/.local/bin
@@ -12,11 +12,31 @@ UNAME_S    := $(shell uname -s)
 # this only affects direct TUI/CLI invocations.
 ifeq ($(UNAME_S),Darwin)
 CODESIGN = codesign --force --sign - $@ 2>/dev/null || true
+GO_INSTALL_HINT = brew install go
+else ifeq ($(UNAME_S),Linux)
+CODESIGN =
+GO_INSTALL_HINT = sudo apt install golang-go  # or your distro's equivalent / https://go.dev/doc/install
 else
 CODESIGN =
+GO_INSTALL_HINT = https://go.dev/doc/install
 endif
 
-build: $(BIN_DIR)/ccmux $(BIN_DIR)/ccmuxd
+# check-go: friendly "install Go first" message instead of the cryptic
+# "/bin/sh: go: command not found" make spits out by default. Invoked
+# from every build/test/run target — clean and uninstall don't need it.
+check-go:
+	@command -v go >/dev/null 2>&1 || { \
+		printf "\n\033[1;31m✗\033[0m \`go\` not found on PATH.\n\n"; \
+		echo   "ccmux is built from source — Go 1.22+ is required."; \
+		echo   "Install it with:"; \
+		echo   "  $(GO_INSTALL_HINT)"; \
+		echo   ""; \
+		echo   "Then re-run \`make setup\` (or \`make build\`)."; \
+		echo   ""; \
+		exit 1; \
+	}
+
+build: check-go $(BIN_DIR)/ccmux $(BIN_DIR)/ccmuxd
 
 $(BIN_DIR)/ccmux: $(shell find cmd/ccmux internal -type f -name '*.go' 2>/dev/null) go.mod go.sum
 	@mkdir -p $(BIN_DIR)
@@ -54,19 +74,19 @@ uninstall:
 		rm -f $(INSTALL_DIR)/ccmux $(INSTALL_DIR)/ccmuxd; \
 	fi
 
-tui run:
+tui run: check-go
 	go run ./cmd/ccmux
 
-daemon:
+daemon: check-go
 	go run ./cmd/ccmuxd
 
-test:
+test: check-go
 	go test ./...
 
-fmt:
+fmt: check-go
 	gofmt -w .
 
-vet:
+vet: check-go
 	go vet ./...
 
 lint: fmt vet
