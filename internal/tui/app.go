@@ -855,6 +855,13 @@ func (a App) attachSelectedSession() tea.Cmd {
 	// just because Tailscale + ccmuxd are running. Users who want
 	// mosh + roaming can pin the host with `ccmux host add --mosh`
 	// to override.
+	//
+	// The remote command is wrapped in `bash -lc` so the user's
+	// login profile is sourced. Without this, ssh's non-interactive
+	// shell sees only /usr/bin:/bin and misses Homebrew-installed
+	// tmux at /opt/homebrew/bin — manifested as
+	// `zsh:1: command not found: tmux` even on machines where
+	// tmux clearly works in normal terminals.
 	for _, hs := range a.hosts {
 		if hs.Name == sel.Host && hs.Discovered {
 			dial := hs.DialHost
@@ -866,8 +873,9 @@ func (a App) attachSelectedSession() tea.Cmd {
 					return toastMsg{Text: "no reachable address for " + sel.Host, Kind: toastError, Until: time.Now().Add(5 * time.Second)}
 				}
 			}
+			remoteCmd := fmt.Sprintf("tmux attach-session -d -t %s", shellQuote(sel.Name))
 			return tea.ExecProcess(
-				exec.Command("ssh", "-t", dial, "tmux", "attach-session", "-d", "-t", sel.Name),
+				exec.Command("ssh", "-t", dial, "bash", "-lc", remoteCmd),
 				func(err error) tea.Msg { return refreshAfterDetachMsg{} },
 			)
 		}
@@ -901,6 +909,18 @@ func dialAddrFor(hs hostStatus) string {
 		return hs.Address[:i]
 	}
 	return hs.Address
+}
+
+// shellQuote escapes `s` for safe interpolation inside a POSIX
+// single-quoted string. We feed remote tmux commands through
+// `bash -lc 'tmux attach … <name>'` so the login profile gets
+// sourced; the session name needs single-quote escaping so a
+// pathological project basename can't break out of the quotes or
+// trigger a shell expansion. ccmux's own session names are tame
+// (alphanumeric + dash + underscore from SessionNameForPath), but
+// belt-and-suspenders.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
 
 // attachOrCreateForSelectedProject is Enter on Projects screen: attach to
@@ -986,7 +1006,12 @@ func fallbackDirectTmux(ctx context.Context) ([]daemon.SessionState, error) {
 
 func daemonOnline(hs []hostStatus) bool {
 	for _, h := range hs {
-		if h.Name == "local" && h.OK {
+		// Check the Local flag, not the literal name "local": refresh
+		// now stamps the local row with the actual hostname so the
+		// Devices panel can show it alongside other machines. The
+		// flag was added precisely so this predicate didn't need to
+		// know the convention.
+		if h.Local && h.OK {
 			return true
 		}
 	}
