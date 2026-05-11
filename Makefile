@@ -1,4 +1,4 @@
-.PHONY: build install run test lint clean fmt vet daemon tui
+.PHONY: build install setup uninstall run test lint clean fmt vet daemon tui
 
 BIN_DIR    := bin
 INSTALL_DIR := $(HOME)/.local/bin
@@ -19,6 +19,26 @@ install: build
 	cp $(BIN_DIR)/ccmux  $(INSTALL_DIR)/ccmux
 	cp $(BIN_DIR)/ccmuxd $(INSTALL_DIR)/ccmuxd
 	@echo "Installed to $(INSTALL_DIR). Make sure it's on your PATH."
+
+# `make setup` is the one-shot for new users from a fresh clone:
+# build → install to PATH → run the interactive setup wizard.
+# Existing users can re-run it; the wizard is idempotent and skips
+# any step whose underlying state is already good.
+setup: install
+	@echo
+	@echo "Running ccmux setup wizard…"
+	@$(INSTALL_DIR)/ccmux setup
+
+# `make uninstall` is a thin wrapper around the real uninstaller.
+# Always call `ccmux uninstall` first if you can — it handles the
+# daemon, state files, and tmux chrome that this target ignores.
+uninstall:
+	@if command -v $(INSTALL_DIR)/ccmux >/dev/null 2>&1; then \
+		$(INSTALL_DIR)/ccmux uninstall --yes || true; \
+	else \
+		echo "ccmux is not on PATH — removing binaries only"; \
+		rm -f $(INSTALL_DIR)/ccmux $(INSTALL_DIR)/ccmuxd; \
+	fi
 
 tui run:
 	go run ./cmd/ccmux

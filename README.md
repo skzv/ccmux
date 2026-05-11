@@ -95,20 +95,59 @@ ccmux is the UI that makes this workflow legible. It's not a replacement for tmu
 
 ## Install
 
-```bash
-# Homebrew (recommended)
-brew install skzv/tap/ccmux
+**From source (current — Homebrew tap coming with v0.1 release):**
 
-# Or from source
-go install github.com/skzv/ccmux/cmd/ccmux@latest
-go install github.com/skzv/ccmux/cmd/ccmuxd@latest
+```bash
+git clone https://github.com/skzv/ccmux.git
+cd ccmux
+make setup
 ```
+
+That's the whole flow. `make setup` builds, installs `ccmux` + `ccmuxd` into `~/.local/bin/`, then drops you into the interactive setup wizard which checks dependencies (`tmux`, `mosh`, `tailscale`, `claude`, `ripgrep`, optionally `moshi-hook`), offers a single `brew install` for whatever's missing, verifies Tailscale + Moshi pairing, generates an SSH key if needed, and writes `~/.config/ccmux/config.toml`. The wizard is **idempotent** — re-run it any time; it skips what's already done.
+
+Requirements:
+- Go 1.22+ (build only)
+- macOS or Linux
+- `~/.local/bin` on your PATH
 
 Then:
 
 ```bash
-ccmux setup    # interactive first-run wizard
 ccmux          # launch the TUI
+ccmux setup    # re-run the wizard whenever
+ccmux doctor   # non-interactive health check
+```
+
+## Uninstall
+
+A clean undo for everything ccmux installed:
+
+```bash
+ccmux uninstall            # interactive: shows what it'll do, asks y/N
+ccmux uninstall --yes      # skip the prompt
+ccmux uninstall --dry-run  # preview only
+```
+
+What gets removed:
+- Running `ccmuxd` (SIGTERM)
+- `~/.local/bin/ccmux` and `~/.local/bin/ccmuxd`
+- `~/.local/state/ccmux/` (socket, logs, pid)
+- `~/.local/share/ccmux/` (snapshots, daemon db)
+- `~/.config/ccmux/` (unless `--keep-config`)
+- The ccmux-styled tmux status bar on every `c-*` session (unless `--keep-chrome`)
+
+What is **never** touched:
+- Your project directories under `~/Projects/`
+- Notes under `<project>/docs/`
+- `~/.claude/` (Claude Code state + moshi-hook entries)
+- Your `~/.zshrc` shims for `cc` / `mkproj` / `upgrade-proj` (remove by hand)
+
+To also remove `moshi-hook` (which is its own product):
+
+```bash
+brew services stop moshi-hook
+brew uninstall moshi-hook
+brew untap rjyo/moshi
 ```
 
 ## Quick start

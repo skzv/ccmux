@@ -44,5 +44,6 @@ func init() {
 		newDaemonCmd(),
 		newHostCmd(),
 		newMoshiSetupCmd(),
+		newUninstallCmd(),
 	)
 }
