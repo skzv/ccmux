@@ -52,6 +52,19 @@ install: build
 	@mkdir -p $(INSTALL_DIR)
 	cp $(BIN_DIR)/ccmux  $(INSTALL_DIR)/ccmux
 	cp $(BIN_DIR)/ccmuxd $(INSTALL_DIR)/ccmuxd
+ifeq ($(UNAME_S),Darwin)
+	@# On macOS the cp-into-INSTALL_DIR stamps com.apple.provenance on
+	@# the destination, which can invalidate the ad-hoc signature
+	@# we applied in the build step. Strip the xattr and re-sign so
+	@# the installed binary survives GateKeeper checks on exec. Without
+	@# this, freshly-installed `ccmux setup` got SIGKILLed when spawned
+	@# by `ccmux update` (the running process was already in memory and
+	@# fine; the child exec hit the new provenance + stale sig).
+	@xattr -d com.apple.provenance $(INSTALL_DIR)/ccmux  2>/dev/null || true
+	@xattr -d com.apple.provenance $(INSTALL_DIR)/ccmuxd 2>/dev/null || true
+	@codesign --force --sign - $(INSTALL_DIR)/ccmux  2>/dev/null || true
+	@codesign --force --sign - $(INSTALL_DIR)/ccmuxd 2>/dev/null || true
+endif
 	@echo "Installed to $(INSTALL_DIR). Make sure it's on your PATH."
 
 # `make bootstrap` is the friendliest entry point for a fresh machine:
