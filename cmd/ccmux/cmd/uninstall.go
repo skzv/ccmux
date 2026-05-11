@@ -105,10 +105,10 @@ func buildUninstallPlan(keepConfig, keepChrome bool) (*uninstallPlan, error) {
 	}
 	p := &uninstallPlan{keepConfig: keepConfig, resetTmux: !keepChrome}
 
-	if plist := daemonservice.PlistPathOrEmpty(); plist != "" {
-		if _, err := os.Stat(plist); err == nil {
-			p.paths = append(p.paths, plist)
-			p.steps = append(p.steps, "unload + remove "+plist+" (launchd agent)")
+	if svcPath := daemonservice.ServicePathOrEmpty(); svcPath != "" {
+		if _, err := os.Stat(svcPath); err == nil {
+			p.paths = append(p.paths, svcPath)
+			p.steps = append(p.steps, "disable + remove "+svcPath+" (autostart service file)")
 		}
 	}
 
@@ -169,10 +169,11 @@ func runUninstall(plan *uninstallPlan) error {
 		}
 	}
 
-	// Unload the launchd agent first so it doesn't relaunch the daemon
-	// we're about to kill. Idempotent — quiet no-op when not installed.
+	// Disable the autostart service first so it doesn't relaunch the
+	// daemon we're about to kill. Idempotent — quiet no-op when not
+	// installed.
 	if _, err := daemonservice.Uninstall(); err == nil {
-		report("unloaded launchd agent (if any)", nil)
+		report("disabled autostart service (if any)", nil)
 	}
 
 	// Stop the daemon (in case it was started manually).

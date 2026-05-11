@@ -341,31 +341,47 @@ func stepConfig(ctx context.Context, out io.Writer) error {
 	return nil
 }
 
-// stepDaemonService: install (or update) the launchd agent that keeps
-// ccmuxd running across logouts/reboots. Idempotent — re-running with
-// the plist already loaded unloads and re-loads it so any binary-path
-// changes get picked up.
+// stepDaemonService: install (or update) the OS service that keeps
+// ccmuxd running across logouts/reboots. Works on macOS (launchd) and
+// Linux (systemd-user). Idempotent — re-running re-applies the service
+// config so any binary-path changes get picked up.
 func stepDaemonService(_ context.Context, out io.Writer) error {
 	s := daemonservice.Probe()
-	if s.OS != "darwin" {
-		fmt.Fprintln(out, stMuted.Render("  Auto-install is macOS-only. On Linux, run:"))
-		fmt.Fprintln(out, stMuted.Render("    ccmux daemon unit > ~/.config/systemd/user/ccmuxd.service"))
-		fmt.Fprintln(out, stMuted.Render("    systemctl --user enable --now ccmuxd"))
+	if s.OS != "darwin" && s.OS != "linux" {
+		fmt.Fprintf(out, "  %s  auto-install not supported on %s — start ccmuxd manually with `ccmux daemon start`.\n",
+			stWarn.Render("⚠"), s.OS)
 		return nil
 	}
-	if s.Loaded && s.Running {
-		fmt.Fprintf(out, "  %s  already installed and running (plist: %s)\n", stOK.Render("✓"), s.PlistPath)
+	if s.ServiceEnabled && s.Running {
+		fmt.Fprintf(out, "  %s  already installed and running (%s)\n",
+			stOK.Render("✓"), s.ServicePath)
 		return nil
 	}
 	if !s.BinaryInstalled {
-		fmt.Fprintf(out, "  %s  ccmuxd not at %s — run `make install` first\n", stWarn.Render("⚠"), s.BinaryPath)
+		fmt.Fprintf(out, "  %s  ccmuxd not at %s — run `make install` first\n",
+			stWarn.Render("⚠"), s.BinaryPath)
 		return nil
 	}
+
+	var (
+		title, desc, doneEnabledMsg string
+	)
+	switch s.OS {
+	case "darwin":
+		title = "Install ccmuxd as a launchd agent?"
+		desc = "Writes ~/Library/LaunchAgents/dev.ccmux.daemon.plist with RunAtLoad+KeepAlive, then launchctl loads it. ccmuxd then starts at every login and restarts on crash."
+		doneEnabledMsg = "loaded via launchctl; ccmuxd will start on every login"
+	case "linux":
+		title = "Install ccmuxd as a systemd-user service?"
+		desc = "Writes ~/.config/systemd/user/ccmuxd.service with Restart=on-failure, then `systemctl --user daemon-reload && systemctl --user enable --now ccmuxd`. ccmuxd then starts at every login and restarts on crash."
+		doneEnabledMsg = "enabled under systemd-user; ccmuxd will start on every login"
+	}
+
 	var doInstall bool
 	if err := huh.NewForm(huh.NewGroup(
 		huh.NewConfirm().
-			Title("Install ccmuxd as a launchd agent?").
-			Description("Writes ~/Library/LaunchAgents/dev.ccmux.daemon.plist with RunAtLoad+KeepAlive, then launchctl loads it. ccmuxd then starts at every login and restarts on crash.").
+			Title(title).
+			Description(desc).
 			Affirmative("Install").
 			Negative("Skip").
 			Value(&doInstall),
@@ -380,9 +396,9 @@ func stepDaemonService(_ context.Context, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "  %s  plist written to %s\n", stOK.Render("✓"), final.PlistPath)
-	if final.Loaded {
-		fmt.Fprintln(out, "  "+stOK.Render("✓")+"  loaded via launchctl; ccmuxd will start on every login")
+	fmt.Fprintf(out, "  %s  service file written to %s\n", stOK.Render("✓"), final.ServicePath)
+	if final.ServiceEnabled {
+		fmt.Fprintln(out, "  "+stOK.Render("✓")+"  "+doneEnabledMsg)
 	}
 	if final.Running {
 		fmt.Fprintln(out, "  "+stOK.Render("✓")+"  ccmuxd is running right now")
