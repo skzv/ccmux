@@ -27,6 +27,10 @@ Three things, mostly:
 
 Built on `tmux` (durability), `Mosh` + `Tailscale` (mobile-friendly connectivity), and [Claude Code](https://claude.ai/code) (the workload). ccmux is the TUI that ties them together.
 
+> **TUI-first, CLI when you want it.** Everything in this README — new projects, attaching sessions, switching hosts, editing config, running the tour — works inside the TUI with discoverable keys and a `?` help overlay. No commands to memorize. The CLI subcommands (`ccmux new`, `ccmux list`, `ccmux update`, …) are there for scripts, muscle memory, and pipelines, but they're optional.
+>
+> **No `ccmux host add` needed.** ccmux scans your Tailscale network on every refresh, probes each peer for a `ccmuxd /v1/health`, and adds the responders to your dashboard automatically. Install ccmux on a new device, start its daemon (`ccmux daemon install`, `listen_tailnet = true`), and it shows up on every other device on the tailnet within seconds. The `ccmux host add` command still exists for hosts outside Tailscale or for pinning a specific port — pure convenience.
+
 ## 60-second start
 
 ```bash
@@ -40,6 +44,7 @@ Then:
 
 ```bash
 ccmux                # launch the TUI (first-run tour included)
+ccmux ~/code         # one-shot: scope this session to ~/code instead of ~/Projects
 ccmux new my-app     # scaffold a project + start its Claude session
 ccmux list           # what's running, everywhere
 ccmux update         # pull latest, rebuild, reload daemon
@@ -71,19 +76,22 @@ Installs [moshi-hook](https://getmoshi.app/) on the Mac, walks you through pairi
 
 Plain BEL fallback works in any iOS terminal client (Blink Shell, Termius) — you lose the categories, that's it.
 
-## 🛰️ Remote (always-on Mac Mini)
+## 🛰️ Remote (always-on Mac Mini, auto-discovered)
 
 ```bash
 # On the Mini:
-ccmux daemon install                          # ccmuxd survives reboot
+ccmux daemon install                       # ccmuxd survives reboot
 # edit ~/.config/ccmux/config.toml: listen_tailnet = true
 
-# On the laptop:
-ccmux host add mini mini.tail-xxxxx.ts.net
-ccmux                                          # dashboard now lists BOTH hosts
+# On the laptop — nothing to do:
+ccmux                                      # dashboard already lists the Mini
 ```
 
+Every refresh, ccmux runs `tailscale status --json`, probes each online peer for a `ccmuxd /v1/health`, and merges the responders into the host list. New device on the tailnet running ccmux? It just appears. The Devices panel on the Dashboard shows each peer's reported ccmuxd version with an "update available" tag whenever it lags this build.
+
 Attaching a remote session execs `mosh mini -- tmux attach -t <name>`. Mosh tolerates roaming and stalls, so you can close the lid, go to a coffee shop, open the laptop — your session resumes instantly. Your phone gets pushes from the Mini, same flow as Mobile above.
+
+> Manually pinning a host with `ccmux host add` still works — useful for non-Tailscale hosts, or to force a specific port. Discovered hosts and pinned hosts coexist on the dashboard without duplicates.
 
 ---
 
@@ -246,7 +254,7 @@ After editing, run `ccmux update` to reload the daemon with the new config.
 
 ### 5. Multi-machine: laptop + always-on Mac Mini (≈5 min)
 
-The intended workflow for heavy users. Sessions live on the Mini; your laptop and phone are clients.
+The intended workflow for heavy users. Sessions live on the Mini; your laptop and phone are clients. **No manual host configuration** — ccmux auto-discovers every ccmuxd on your tailnet.
 
 **On the Mini:**
 
@@ -264,9 +272,10 @@ ccmux daemon install   # registers ccmuxd under launchd so it survives reboot
 **On the laptop:**
 
 ```bash
-ccmux host add mini mini.tail-xxxxx.ts.net
-ccmux                  # dashboard now shows local sessions AND mini sessions
+ccmux                  # the Mini already appears on the dashboard, tagged "discovered"
 ```
+
+The Devices panel shows each peer's ccmuxd version. If the Mini is behind your laptop's build, it gets an "update available" tag — run `ccmux update` on the Mini (or SSH in and do it) to bring them in sync.
 
 Attach to a remote session and ccmux execs `mosh mini -- tmux attach -t <name>`.
 
