@@ -31,14 +31,16 @@ Built on `tmux` (durability), `Mosh` + `Tailscale` (mobile-friendly connectivity
 >
 > **No `ccmux host add` needed.** ccmux scans your Tailscale network on every refresh, probes each peer for a `ccmuxd /v1/health`, and adds the responders to your dashboard automatically. Install ccmux on a new device, start its daemon (`ccmux daemon install`, `listen_tailnet = true`), and it shows up on every other device on the tailnet within seconds. The `ccmux host add` command still exists for hosts outside Tailscale or for pinning a specific port — pure convenience.
 
-## 60-second start
+## 🚀 60-second start
 
 ```bash
 git clone https://github.com/skzv/ccmux.git
-cd ccmux && make setup
+cd ccmux && make bootstrap
 ```
 
-`make setup` builds, installs to `~/.local/bin/`, and runs an interactive wizard that checks `tmux` / `mosh` / `tailscale` / `claude` / `gh` and offers `brew install` for whatever's missing. Idempotent — re-run any time.
+🛠️ `make bootstrap` is the friendliest path on a fresh machine: it checks the **build chain** (Go / git / make / Homebrew on macOS) and offers to install whatever's missing, then chains into `make setup`. ✨ `make setup` then compiles ccmux, installs to `~/.local/bin/`, and runs the interactive wizard that checks `tmux` / `mosh` / `tailscale` / `claude` / `gh` and offers to brew-install whatever's missing. Both are **idempotent** — re-run any time.
+
+> 🤖 **Built with ccmux.** ccmux was developed using ccmux. Almost every commit in this repo was produced by a Claude Code session managed through the very TUI you're about to install — sessions kept alive across laptop lid-closes via the daemon, attached from iOS over Moshi when away from the desk, supervised from the dashboard. It's the kind of tool you only really validate by living inside it; that's what we did.
 
 Then:
 
@@ -50,7 +52,7 @@ ccmux list           # what's running, everywhere
 ccmux update         # pull latest, rebuild, reload daemon
 ```
 
-## What it looks like
+## 👀 What it looks like
 
 ```
 ┌────────────────────────────────────────────────────────────────┐
@@ -64,7 +66,7 @@ ccmux update         # pull latest, rebuild, reload daemon
 └────────────────────────────────────────────────────────────────┘
 ```
 
-`1`-`6` jump between screens, `Enter` attaches, `?` opens contextual help, `T` re-runs the first-run tour.
+⌨️ `1`-`6` jump between screens, `Enter` attaches, `?` opens contextual help, `T` re-runs the first-run tour.
 
 ## 📱 Mobile
 
@@ -95,49 +97,49 @@ Attaching a remote session execs `mosh mini -- tmux attach -t <name>`. Mosh tole
 
 ---
 
-## Features
+## ✨ Features
 
-### Session management
+### 🎛️ Session management
 - Live dashboard of every Claude session across every project, with state (active / idle / **needs_input**)
 - One-key attach, kill, rename, snapshot — applies a styled tmux status bar so you always know where you are
 - Per-session "keep awake" pin
 - **Three sleep-prevention modes** — Safe (AC only, default), Dangerous (battery too, opt-in with low-battery auto-release), Very Dangerous (system-wide lid-close override, sudo-gated)
 - Live preview pane: tail any session without attaching
 
-### Project bootstrapping
+### 🏗️ Project bootstrapping
 - `ccmux new <name>` — scaffolds a project, creates the `docs/` notes vault, runs `git init`, opens a Claude session with your description as the first prompt
 - `ccmux upgrade` — retrofits the same structure into an existing directory
 - Local-only by default — push to GitHub when you're ready with `gh repo create`
 
-### Claude Code config management
+### 🤖 Claude Code config management
 - Dedicated "Claude" screen for everything in `~/.claude/`
 - Model picker (Opus 4.7 / Sonnet 4.6 / Haiku 4.5 / opusplan / custom) — global or per-project
 - Browse + create slash-command aliases, manage MCP servers, hooks, permission allowlists
 - View & edit global and per-project `CLAUDE.md` from the TUI
 
-### Notes, terminal-native
+### 📝 Notes, terminal-native
 - Per-project Notes tab — tree view of `docs/` with inline markdown rendered by [Glamour](https://github.com/charmbracelet/glamour)
 - Quick-actions: new Agent Log (today's, auto-templated), new Spec, new ADR
 - Ripgrep-backed search; plain markdown on disk is the source of truth (no required cloud)
 
-### Mobile workflow (Moshi / iOS / Android)
+### 📲 Mobile workflow (Moshi / iOS / Android)
 - **Categorized push notifications** via `moshi-hook` plugging into Claude Code's hooks system
 - **One-command setup** with `ccmux moshi-setup`
 - **Auto-detection** — ccmuxd suppresses its own BEL trigger when moshi-hook is paired so you don't get duplicate notifications
 - **Persistent outer tmux session** — Moshi's `tmux new-session -A -s ccmux ccmux` puts you back in the TUI every time you open the app
 
-### Local & remote modes
+### 🌐 Local & remote modes
 - **Local** — manages tmux sessions on this machine; prevents sleep while sessions are active
 - **Server** — daemon binds an HTTP API to your Tailscale interface so other devices can list/attach
 - **Mixed** — dashboard shows local + remote sessions, color-coded by origin
 
-### Setup, doctor, update
+### 🩺 Setup, doctor, update
 - `ccmux setup` — interactive wizard, checks every dep, offers `brew install` for missing pieces
 - `ccmux doctor` — non-interactive health check (great for scripting)
 - `ccmux update` — pulls the git checkout, rebuilds, reloads ccmuxd
 - `ccmux uninstall` — clean removal, never touches your projects or `~/.claude/`
 
-### Quality of life
+### 🎨 Quality of life
 - Catppuccin Mocha by default; Dracula / Nord / Gruvbox / Tokyo Night planned
 - `?` opens contextual key help on every screen
 - Vim-style (`h/j/k/l`) and arrow keys both work
@@ -147,7 +149,7 @@ Attaching a remote session execs `mosh mini -- tmux attach -t <name>`. Mosh tole
 
 ---
 
-## Tutorials
+## 📚 Tutorials
 
 Six hands-on walkthroughs. Each is self-contained — pick whichever maps to what you're trying to do.
 
@@ -337,7 +339,7 @@ What is **never** touched:
 
 To also remove `moshi-hook`: `brew services stop moshi-hook && brew uninstall moshi-hook && brew untap rjyo/moshi`.
 
-## Architecture
+## 🏛️ Architecture
 
 ```
         LAPTOP (client + local)                MINI (local + server)
@@ -362,7 +364,7 @@ To also remove `moshi-hook`: `brew services stop moshi-hook && brew uninstall mo
 
 Full design: [`docs/02_Architecture/00_System_Design.md`](docs/02_Architecture/00_System_Design.md).
 
-## Roadmap
+## 🗺️ Roadmap
 
 Phasing in [`ROADMAP.md`](ROADMAP.md). Headline:
 

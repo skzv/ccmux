@@ -81,7 +81,7 @@ func Run(ctx context.Context, out io.Writer) error {
 	}
 
 	fmt.Fprintln(out, stTitle.Render("Done."))
-	fmt.Fprintln(out, "Next: " + stEmphasis.Render("ccmux") + " to launch the TUI, or " + stEmphasis.Render("ccmux new <name> -d \"…\"") + " to scaffold a project.")
+	fmt.Fprintln(out, "Next: " + stEmphasis.Render("ccmux") + " to launch the TUI.")
 	return nil
 }
 
