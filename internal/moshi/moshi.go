@@ -37,9 +37,6 @@ type Status struct {
 	// Paired is true if `moshi-hook status` reports successful pairing.
 	Paired bool
 
-	// Connected is true if the daemon reports a live WebSocket to Moshi.
-	Connected bool
-
 	// HooksInstalled is true if ~/.claude/settings.json contains the
 	// moshi-hook hook entries (i.e. `moshi-hook install` has been run).
 	HooksInstalled bool
@@ -70,11 +67,11 @@ func Detect(ctx context.Context) Status {
 		if out, err := run(ctx, 2*time.Second, s.BinaryPath, "status"); err == nil {
 			s.StatusRaw = out
 			lower := strings.ToLower(out)
-			// Heuristic — moshi-hook status output is human-formatted, not JSON.
-			// "paired" / "not paired", "connected" / "disconnected" are the
-			// stable signals.
+			// `moshi-hook status` is human-formatted, not JSON. It reports
+			// pairing state only — not live WebSocket connectivity — so
+			// we use ServiceRunning (from brew services) as the closest
+			// proxy for "the daemon is up and reachable from Moshi".
 			s.Paired = strings.Contains(lower, "paired") && !strings.Contains(lower, "not paired") && !strings.Contains(lower, "unpaired")
-			s.Connected = strings.Contains(lower, "connected") && !strings.Contains(lower, "not connected") && !strings.Contains(lower, "disconnected")
 		}
 	}
 

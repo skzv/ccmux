@@ -114,7 +114,6 @@ func runMoshiSetup(token string) error {
 	fmt.Println("Done. Final state:")
 	fmt.Printf("  binary       %v (%s)\n", final.BinaryInstalled, final.BinaryPath)
 	fmt.Printf("  paired       %v\n", final.Paired)
-	fmt.Printf("  connected    %v\n", final.Connected)
 	fmt.Printf("  hooks wired  %v\n", final.HooksInstalled)
 	fmt.Printf("  service up   %v\n", final.ServiceRunning)
 	fmt.Println()

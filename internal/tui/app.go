@@ -757,7 +757,14 @@ func (a App) localAttachCmd(session, projectLabel string) tea.Cmd {
 	defer cancel()
 	mst := moshi.Detect(ctx)
 	nested := tmuxchrome.InTmux()
-	_ = tmuxchrome.Apply(ctx, session, projectLabel, mst.Paired && mst.Connected, nested)
+	// Moshi badge is "reachable" when the whole pipeline is wired AND
+	// running: paired with Moshi cloud, Claude Code hooks installed,
+	// daemon up. Previously this AND'ed Connected, which was always
+	// false because moshi-hook status doesn't expose live websocket
+	// state — so the chrome read "phone: not paired" even on a fully
+	// configured host.
+	reachable := mst.Paired && mst.HooksInstalled && mst.ServiceRunning
+	_ = tmuxchrome.Apply(ctx, session, projectLabel, reachable, nested)
 
 	if nested {
 		c := exec.Command("tmux", "switch-client", "-t", session)
