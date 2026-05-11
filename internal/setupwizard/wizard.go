@@ -428,6 +428,7 @@ func stepConfig(ctx context.Context, out io.Writer) error {
 	if tier == "" {
 		tier = "api"
 	}
+	listenTailnet := cfg.Daemon.ListenTailnet
 
 	if err := huh.NewForm(huh.NewGroup(
 		huh.NewInput().
@@ -444,18 +445,37 @@ func stepConfig(ctx context.Context, out io.Writer) error {
 				huh.NewOption("max 20x (~900 prompts / 5h)", "max20x"),
 			).
 			Value(&tier),
+		huh.NewConfirm().
+			Title("Let other devices on your tailnet see this machine's sessions?").
+			Description("Turns on the tailnet HTTP listener (default port 7474) so other ccmux clients on your tailnet auto-discover this host. Recommended on always-on machines (Mac Mini, server, dev box). Decline on a laptop you take on the road if you'd rather keep sessions local-only.").
+			Affirmative("Yes (server mode)").
+			Negative("No (local only)").
+			Value(&listenTailnet),
 	)).Run(); err != nil {
 		return err
 	}
 
 	cfg.Projects.Root = strings.TrimSpace(root)
 	cfg.Subscription.Tier = strings.TrimSpace(tier)
+	cfg.Daemon.ListenTailnet = listenTailnet
 	if err := config.Save(cfg); err != nil {
 		return err
 	}
 	p, _ := config.Path()
 	fmt.Fprintf(out, "  %s  wrote %s\n", stOK.Render("✓"), p)
+	if listenTailnet {
+		fmt.Fprintf(out, "  %s  tailnet listener enabled (port %d)\n",
+			stOK.Render("✓"), tailnetPortOrDefault(cfg.Daemon.TailnetPort))
+		fmt.Fprintln(out, stMuted.Render("  ccmuxd will pick this up on next restart — `ccmux update` to apply now."))
+	}
 	return nil
+}
+
+func tailnetPortOrDefault(p int) int {
+	if p == 0 {
+		return 7474
+	}
+	return p
 }
 
 // stepDaemonService: install (or update) the OS service that keeps
