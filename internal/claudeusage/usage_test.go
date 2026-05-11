@@ -109,7 +109,7 @@ func TestMaybeContains(t *testing.T) {
 func TestProjectFromEncoded(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"-Users-skz-Projects-ccmux", "ccmux"},
-		{"-Users-skz-Projects-with-dashes", "dashes"}, // last segment only
+		{"-Users-skz-Projects-with-dashes", "dashes"}, // lossy: last segment only — that's why projectNameFromDir exists
 		{"plainname", "plainname"},
 		{"-", "-"},
 		{"", ""},
@@ -118,6 +118,79 @@ func TestProjectFromEncoded(t *testing.T) {
 		if got := projectFromEncoded(tc.in); got != tc.want {
 			t.Errorf("projectFromEncoded(%q) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+func TestProjectNameFromDir_RecoversDashedNames(t *testing.T) {
+	// Simulate Claude Code's project directory: encoded name on disk,
+	// but the JSONL inside carries the real `cwd`.
+	root := t.TempDir()
+	dir := filepath.Join(root, "-Users-skz-Projects-my-plain-blog")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	line := `{"type":"user","cwd":"/Users/skz/Projects/my-plain-blog","timestamp":"2026-05-11T00:00:00Z"}` + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "session.jsonl"), []byte(line), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := projectNameFromDir(dir); got != "my-plain-blog" {
+		t.Fatalf("projectNameFromDir = %q, want \"my-plain-blog\" (would otherwise truncate to \"blog\")", got)
+	}
+}
+
+func TestProjectNameFromDir_MissingDir(t *testing.T) {
+	if got := projectNameFromDir("/no/such/dir"); got != "" {
+		t.Fatalf("missing dir should return empty, got %q", got)
+	}
+}
+
+func TestProjectNameFromDir_NoCwdInJSONL(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "x.jsonl"), []byte("{\"type\":\"system\"}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := projectNameFromDir(dir); got != "" {
+		t.Fatalf("dir without cwd records should return empty, got %q", got)
+	}
+}
+
+// TestWalk_DashedProjectNamesSurviveRoundTrip is the regression test
+// for the dashboard's truncated "top projects" entries. Before this
+// fix, `my-plain-blog` appeared as `blog`.
+func TestWalk_DashedProjectNamesSurviveRoundTrip(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir := filepath.Join(home, ".claude", "projects", "-Users-skz-Projects-my-plain-blog")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ts := time.Now().Add(-15 * time.Minute).Format(time.RFC3339)
+	f, err := os.Create(filepath.Join(dir, "s.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Record contains cwd, so projectNameFromDir picks up the real basename.
+	writeJSONL(t, f, map[string]any{"type": "user", "cwd": "/Users/skz/Projects/my-plain-blog", "timestamp": ts, "message": map[string]any{"content": "hi"}})
+	// And the usage record so the aggregate has tokens to bucket.
+	writeJSONL(t, f, map[string]any{
+		"type": "assistant", "timestamp": ts, "cwd": "/Users/skz/Projects/my-plain-blog",
+		"message": map[string]any{
+			"role": "assistant", "model": "claude-sonnet-4-6",
+			"usage": map[string]any{"input_tokens": 100, "output_tokens": 50, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0},
+		},
+	})
+	f.Close()
+
+	agg, err := Walk(time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := agg.ByProject["my-plain-blog"]; !ok {
+		got := make([]string, 0, len(agg.ByProject))
+		for k := range agg.ByProject {
+			got = append(got, k)
+		}
+		t.Fatalf("ByProject missing \"my-plain-blog\"; got keys %v", got)
 	}
 }
 

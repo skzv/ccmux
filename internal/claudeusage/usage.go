@@ -164,6 +164,15 @@ func Walk(window time.Duration) (*Aggregate, error) {
 		path string
 		proj string
 	}
+	// Cache project-name lookups per directory. The encoded directory
+	// name (e.g. "-Users-skz-Projects-my-plain-blog") is lossy because
+	// real paths can contain `-`, so projectFromEncoded would return
+	// "blog" for "my-plain-blog". We avoid that by reading the `cwd`
+	// field out of the first JSONL we open in each dir — Claude Code
+	// records the real absolute path on every entry — and using
+	// filepath.Base(cwd). One cache entry per encoded dir keeps the
+	// cost to one peek per project, not one per transcript file.
+	projCache := map[string]string{}
 	var tasks []fileTask
 	if err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -174,9 +183,15 @@ func Walk(window time.Duration) (*Aggregate, error) {
 		}
 		rel, _ := filepath.Rel(root, path)
 		parts := strings.SplitN(filepath.ToSlash(rel), "/", 2)
-		// The project directory name is the absolute path with slashes
-		// replaced by dashes. We invert that mapping for display.
-		proj := projectFromEncoded(parts[0])
+		encoded := parts[0]
+		proj, ok := projCache[encoded]
+		if !ok {
+			proj = projectNameFromDir(filepath.Join(root, encoded))
+			if proj == "" {
+				proj = projectFromEncoded(encoded)
+			}
+			projCache[encoded] = proj
+		}
 		// Skip files whose mtime is older than the window — saves IO
 		// when the user has a huge transcript history.
 		if info, _ := d.Info(); info != nil && info.ModTime().Before(cutoff) {
@@ -415,13 +430,67 @@ func maybeContains(line, sub []byte) bool {
 
 // projectFromEncoded inverts the "/Users/skz/Projects/foo" →
 // "-Users-skz-Projects-foo" encoding Claude Code uses for its project
-// directory names. We don't try to reproduce the full path — just the
-// basename, which is what shows up in the TUI.
+// directory names. This is the lossy fallback path — projects whose
+// basename contains a dash (`my-plain-blog`, `stickerly-import-bot`)
+// will be truncated to the segment after the last dash. Prefer
+// projectNameFromDir when a JSONL is available to read.
 func projectFromEncoded(enc string) string {
 	if i := strings.LastIndex(enc, "-"); i >= 0 && i < len(enc)-1 {
 		return enc[i+1:]
 	}
 	return enc
+}
+
+// projectNameFromDir reads the first JSONL in `dir` and returns
+// filepath.Base(cwd) where `cwd` is Claude Code's record of the real
+// working directory. This recovers project names that contain dashes,
+// which projectFromEncoded mangles. Returns "" on any failure so the
+// caller can fall back gracefully.
+func projectNameFromDir(dir string) string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+			continue
+		}
+		if cwd := readCwdFromJSONL(filepath.Join(dir, e.Name())); cwd != "" {
+			return filepath.Base(cwd)
+		}
+	}
+	return ""
+}
+
+// readCwdFromJSONL scans up to the first ~32 lines of a transcript
+// looking for a "cwd":"…" field. Claude Code stamps cwd on most
+// message entries, but the very first lines are system records that
+// may not carry it — we don't want to read the whole file just for
+// one field.
+func readCwdFromJSONL(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 1<<16), 1<<24)
+	for i := 0; sc.Scan() && i < 32; i++ {
+		line := sc.Bytes()
+		if !maybeContains(line, []byte(`"cwd":`)) {
+			continue
+		}
+		var probe struct {
+			Cwd string `json:"cwd"`
+		}
+		if err := json.Unmarshal(line, &probe); err != nil {
+			continue
+		}
+		if probe.Cwd != "" {
+			return probe.Cwd
+		}
+	}
+	return ""
 }
 
 // HumanCount turns a token count into "1.2K" / "5.7M" form for the TUI.
