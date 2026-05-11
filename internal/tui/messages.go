@@ -31,6 +31,15 @@ type hostStatus struct {
 	Sessions  int
 	SleepMode string
 	Err       error
+	// Discovered is true when this row came from tailnet auto-discovery
+	// rather than the user's explicit `ccmux host add`. The dashboard
+	// uses it to render a subtle "discovered" tag so the user knows
+	// they didn't have to configure it.
+	Discovered bool
+	// Version is the remote ccmuxd's reported version string from
+	// /v1/health. Empty for hosts we couldn't reach. The dashboard
+	// compares against the local build to flag "update available".
+	Version string
 }
 
 // tickMsg is the periodic dashboard refresh trigger.

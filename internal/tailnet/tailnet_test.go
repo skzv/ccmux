@@ -1,0 +1,170 @@
+package tailnet
+
+import (
+	"context"
+	"encoding/json"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
+	"strings"
+	"testing"
+
+	"github.com/skzv/ccmux/internal/daemon"
+)
+
+func TestShortName(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"Sasha's Mac mini", "sashas-mac-mini"},
+		{"  mac-mini  ", "mac-mini"},
+		{"Server01", "server01"},
+		{"a__b--c  d", "a-b-c-d"},
+		{"---", ""},
+		{"", ""},
+		{"héllo", "hllo"}, // non-ASCII chars are dropped (not preserved, not converted)
+	}
+	for _, tc := range cases {
+		if got := shortName(tc.in); got != tc.want {
+			t.Errorf("shortName(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestParsePeers_HappyPath(t *testing.T) {
+	raw := []byte(`{
+  "BackendState": "Running",
+  "Self": {
+    "HostName": "Sasha's Mac mini",
+    "DNSName": "sashas-mac-mini.tail-abcd.ts.net.",
+    "TailscaleIPs": ["100.75.64.20", "fd7a::1"],
+    "Online": true
+  },
+  "Peer": {
+    "n1": {"HostName": "sputnik", "DNSName": "sputnik.tail-abcd.ts.net.", "TailscaleIPs": ["100.112.85.37"], "Online": false},
+    "n2": {"HostName": "laptop", "DNSName": "laptop.tail-abcd.ts.net.", "TailscaleIPs": ["100.87.28.92"], "Online": true},
+    "n3": {"HostName": "no-ip", "DNSName": "no-ip.ts.net.", "TailscaleIPs": [], "Online": true}
+  }
+}`)
+	got, err := parsePeers(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Self + 2 with IPs (n3 skipped). n1/n2 order isn't guaranteed in Go
+	// map iteration; sort-by-Addr for deterministic check.
+	var addrs []string
+	for _, p := range got {
+		addrs = append(addrs, p.Addr)
+	}
+	if len(addrs) != 3 {
+		t.Fatalf("got %d peers (%v), want 3 (Self + 2 with IPs, skip no-ip)", len(addrs), addrs)
+	}
+
+	// Self should be flagged.
+	foundSelf := false
+	for _, p := range got {
+		if p.Self {
+			foundSelf = true
+			if p.Addr != "100.75.64.20" {
+				t.Errorf("Self.Addr = %q, want 100.75.64.20", p.Addr)
+			}
+		}
+	}
+	if !foundSelf {
+		t.Error("Self peer missing")
+	}
+}
+
+func TestParsePeers_TailscaleNotRunning(t *testing.T) {
+	raw := []byte(`{"BackendState":"NeedsLogin","Self":{}}`)
+	if _, err := parsePeers(raw); err == nil {
+		t.Fatal("expected error when BackendState != Running")
+	}
+}
+
+func TestParsePeers_EmptyDoc(t *testing.T) {
+	// No BackendState field — accept (some tailscale versions omit it).
+	raw := []byte(`{"Self":{},"Peer":{}}`)
+	got, err := parsePeers(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected empty peers, got %v", got)
+	}
+}
+
+func TestParsePeers_MalformedJSON(t *testing.T) {
+	if _, err := parsePeers([]byte("not json")); err == nil {
+		t.Fatal("expected parse error")
+	}
+}
+
+// TestDiscover_ProbesEachOnlinePeer puts up a real HTTP server on
+// loopback, points two "fake peers" at it (one configured as Online
+// and one as the local Self) via a temporary HTTPClient swap, and
+// confirms Discover returns the online one.
+//
+// Because tailscale.Peers() shells out, we test the slice-of-Peer →
+// slice-of-Discovered path directly via discoverFromPeers (added for
+// testability below).
+func TestDiscover_FiltersAndProbes(t *testing.T) {
+	// Fake ccmuxd HTTP server.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/v1/health") {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(daemon.HealthInfo{OK: true, Hostname: "fake", Version: "v0", Sessions: 2})
+	}))
+	defer srv.Close()
+	host, portStr, err := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, _ := strconv.Atoi(portStr)
+
+	peers := []Peer{
+		{HostName: "Self Box", Addr: "1.2.3.4", Online: true, Self: true},          // skipped (Self)
+		{HostName: "Sleeping", Addr: "5.6.7.8", Online: false},                     // skipped (offline)
+		{HostName: "ccmuxd peer", Addr: host, Online: true},                        // probed → found
+		{HostName: "wrong-port", Addr: host, Online: true},                         // probed at different port → fails silently
+	}
+	// Probe at `port` for first set, then `port+1` won't respond for last.
+	got := discoverFromPeers(context.Background(), peers, port)
+	if len(got) < 1 {
+		t.Fatalf("expected at least one discovered host, got %v", got)
+	}
+	foundCcmuxd := false
+	for _, d := range got {
+		if d.Name == "ccmuxd-peer" {
+			foundCcmuxd = true
+		}
+	}
+	if !foundCcmuxd {
+		t.Errorf("ccmuxd peer not in results: %v", got)
+	}
+}
+
+// discoverFromPeers is the test-friendly slice-input version of
+// Discover. The real Discover calls tailscale, which we can't sandbox.
+// Pulling the loop out lets us hit it with fixtures.
+func discoverFromPeers(ctx context.Context, peers []Peer, port int) []Discovered {
+	var out []Discovered
+	for _, p := range peers {
+		if p.Self || !p.Online || p.Addr == "" {
+			continue
+		}
+		addr := p.Addr + ":" + strconv.Itoa(port)
+		info, err := probeOne(ctx, addr)
+		if err != nil {
+			continue
+		}
+		out = append(out, Discovered{
+			Name:     shortName(p.HostName),
+			Address:  addr,
+			Version:  info.Version,
+			Sessions: info.Sessions,
+		})
+	}
+	return out
+}

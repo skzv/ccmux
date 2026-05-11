@@ -21,6 +21,7 @@ import (
 	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/moshi"
 	"github.com/skzv/ccmux/internal/project"
+	"github.com/skzv/ccmux/internal/tailnet"
 	"github.com/skzv/ccmux/internal/tmux"
 	"github.com/skzv/ccmux/internal/tmuxchrome"
 	"github.com/skzv/ccmux/internal/tui/styles"
@@ -111,6 +112,7 @@ func New(cfg config.Config, version string) App {
 		tour:      newTour(st),
 	}
 	a.dashboard.SetConfig(cfg)
+	a.dashboard.SetVersion(version)
 	// First-run tour: open automatically if the user hasn't completed it yet.
 	if !cfg.Tour.Shown {
 		a.tour.Open()
@@ -175,6 +177,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.hosts = msg.Hosts
 		a.daemonOnline = daemonOnline(msg.Hosts)
 		a.dashboard.SetSessions(a.sessions)
+		a.dashboard.SetHosts(a.hosts)
+		a.dashboard.SetVersion(a.version)
 		a.sessionsM.SetSessions(a.sessions)
 		if msg.Err != nil {
 			a.setToast(toastError, "refresh: "+msg.Err.Error(), 5*time.Second)
@@ -589,10 +593,16 @@ func (a *App) setToast(kind toastKind, text string, ttl time.Duration) {
 	}
 }
 
-// refreshSessionsCmd fetches sessions from local ccmuxd and every configured
-// remote host. Falls back to direct tmux call when the local daemon is down.
+// refreshSessionsCmd fetches sessions from local ccmuxd, every
+// explicitly-configured remote host, AND every tailnet peer auto-
+// discovered via `tailscale status` + a /v1/health probe. Falls back
+// to direct tmux call when the local daemon is down.
 func (a App) refreshSessionsCmd() tea.Cmd {
 	hosts := a.cfg.Hosts
+	tailnetPort := a.cfg.Daemon.TailnetPort
+	if tailnetPort == 0 {
+		tailnetPort = 7474
+	}
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -612,7 +622,7 @@ func (a App) refreshSessionsCmd() tea.Cmd {
 				}
 				sessions = append(sessions, ss...)
 				h, _ := local.Health(ctx)
-				hs = append(hs, hostStatus{Name: "local", Address: local.Addr(), OK: h.OK, Sessions: h.Sessions, SleepMode: h.SleepMode})
+				hs = append(hs, hostStatus{Name: "local", Address: local.Addr(), OK: h.OK, Sessions: h.Sessions, SleepMode: h.SleepMode, Version: h.Version})
 			} else {
 				direct, e2 := fallbackDirectTmux(ctx)
 				if e2 == nil {
@@ -624,6 +634,9 @@ func (a App) refreshSessionsCmd() tea.Cmd {
 			}
 		}
 
+		// Configured hosts. Tracked so we don't double-add a peer that's
+		// both explicitly configured AND auto-discovered.
+		seen := map[string]bool{}
 		for _, h := range hosts {
 			addr := h.Address
 			if h.Port == 0 {
@@ -631,6 +644,7 @@ func (a App) refreshSessionsCmd() tea.Cmd {
 			} else {
 				addr += fmt.Sprintf(":%d", h.Port)
 			}
+			seen[addr] = true
 			cli := daemon.RemoteClient(addr)
 			ss, e := cli.Sessions(ctx)
 			st := hostStatus{Name: h.Name, Address: addr}
@@ -641,10 +655,42 @@ func (a App) refreshSessionsCmd() tea.Cmd {
 					ss[i].Host = h.Name
 				}
 				sessions = append(sessions, ss...)
+				if hi, hErr := cli.Health(ctx); hErr == nil {
+					st.Version = hi.Version
+				}
 			} else {
 				st.Err = e
 			}
 			hs = append(hs, st)
+		}
+
+		// Tailnet auto-discovery. Probes every online peer for a
+		// ccmuxd /v1/health and merges the responders in. Skips
+		// already-configured addresses so a user who's done both
+		// `ccmux host add` and has discovery on doesn't see duplicates.
+		// Errors here are non-fatal — discovery is convenience, not
+		// correctness.
+		if discovered, derr := tailnet.Discover(ctx, tailnetPort); derr == nil {
+			for _, d := range discovered {
+				if seen[d.Address] {
+					continue
+				}
+				seen[d.Address] = true
+				cli := daemon.RemoteClient(d.Address)
+				ss, e := cli.Sessions(ctx)
+				st := hostStatus{Name: d.Name, Address: d.Address, Discovered: true, Version: d.Version}
+				if e == nil {
+					st.OK = true
+					st.Sessions = len(ss)
+					for i := range ss {
+						ss[i].Host = d.Name
+					}
+					sessions = append(sessions, ss...)
+				} else {
+					st.Err = e
+				}
+				hs = append(hs, st)
+			}
 		}
 
 		sort.SliceStable(sessions, func(i, j int) bool {

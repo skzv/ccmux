@@ -21,6 +21,8 @@ type dashboardModel struct {
 	st         styles.Styles
 	km         Keymap
 	sessions   []daemon.SessionState
+	hosts      []hostStatus
+	version    string // this build's ccmux version, for the device-network panel
 	cfg        config.Config
 	usage      *claudeusage.Aggregate
 	usageAt    time.Time
@@ -52,6 +54,19 @@ func (m *dashboardModel) SetSessions(ss []daemon.SessionState) {
 	m.sessions = ss
 }
 
+// SetHosts receives the per-refresh list of local + configured-remote +
+// auto-discovered ccmuxd hosts so the device-network panel can render
+// versions and "update available" flags.
+func (m *dashboardModel) SetHosts(hs []hostStatus) {
+	m.hosts = hs
+}
+
+// SetVersion gives the dashboard this build's own ccmux version so the
+// device-network panel can compare against remote ccmuxds.
+func (m *dashboardModel) SetVersion(v string) {
+	m.version = v
+}
+
 func (m dashboardModel) View(width, height int) string {
 	if isNarrow(width) {
 		return m.viewNarrow(width, height)
@@ -73,8 +88,9 @@ func (m dashboardModel) viewWide(width, height int) string {
 	sessions := m.topSessions(leftW, rowH)
 
 	stats := m.statsPanel(rightW)
+	devices := m.devicesPanel(rightW)
 	usage := m.usagePanel(rightW)
-	right := lipgloss.JoinVertical(lipgloss.Left, stats, usage)
+	right := lipgloss.JoinVertical(lipgloss.Left, stats, devices, usage)
 
 	row := lipgloss.JoinHorizontal(lipgloss.Top, sessions, " ", right)
 	return lipgloss.JoinVertical(lipgloss.Left, hero, row)
@@ -83,16 +99,18 @@ func (m dashboardModel) viewWide(width, height int) string {
 func (m dashboardModel) viewNarrow(width, height int) string {
 	hero := m.heroPanel(width)
 	stats := m.statsPanel(width)
+	devices := m.devicesPanel(width)
 	usage := m.usagePanel(width)
 	heroH := lipgloss.Height(hero)
 	statsH := lipgloss.Height(stats)
+	devicesH := lipgloss.Height(devices)
 	usageH := lipgloss.Height(usage)
-	listH := height - heroH - statsH - usageH
+	listH := height - heroH - statsH - devicesH - usageH
 	if listH < 5 {
 		listH = 5
 	}
 	sessions := m.topSessions(width, listH)
-	return lipgloss.JoinVertical(lipgloss.Left, hero, stats, usage, sessions)
+	return lipgloss.JoinVertical(lipgloss.Left, hero, stats, devices, usage, sessions)
 }
 
 func (m dashboardModel) heroPanel(width int) string {
@@ -126,6 +144,61 @@ func (m dashboardModel) statsPanel(width int) string {
 		m.st.Muted.Render(time.Now().Format("Mon Jan 2 — 15:04:05")),
 	}
 	return m.st.Pane.Width(width - 2).Render(strings.Join(rows, "\n"))
+}
+
+// devicesPanel renders the tailnet/network view: every ccmuxd ccmux
+// knows about (local + configured remotes + auto-discovered peers),
+// with their reported version and an `update available` flag for
+// any peer behind the local build.
+//
+// Empty state hides the panel entirely so the dashboard stays tidy on
+// single-machine setups.
+func (m dashboardModel) devicesPanel(width int) string {
+	if len(m.hosts) == 0 {
+		return ""
+	}
+	st := m.st
+	local := m.version
+	rows := []string{st.Emphasis.Render("Devices")}
+	for _, h := range m.hosts {
+		dot := st.StateActive.Render("●")
+		if !h.OK {
+			dot = st.StateError.Render("●")
+		}
+		tag := ""
+		if h.Discovered {
+			tag = st.Muted.Render("  discovered")
+		}
+		ver := h.Version
+		if ver == "" {
+			ver = st.Muted.Render("?")
+		}
+		updateNote := ""
+		if local != "" && h.Version != "" && versionsDiffer(local, h.Version) {
+			updateNote = st.StatusWarning.Render("  update available")
+		}
+		rows = append(rows, fmt.Sprintf("%s %-12s %s%s%s", dot, truncate(h.Name, 12), ver, tag, updateNote))
+	}
+	if local != "" {
+		rows = append(rows, st.Muted.Render("this build: "+local))
+	}
+	return st.Pane.Width(width - 2).Render(strings.Join(rows, "\n"))
+}
+
+// versionsDiffer normalizes the LDFLAGS-baked version strings (e.g.
+// "1db9351", "1db9351-dirty", "v0.1.0") and reports whether they're
+// the same commit. We treat "-dirty" suffixes as equivalent to the
+// clean form so a developer's local working tree doesn't flag the
+// peer as stale.
+func versionsDiffer(local, remote string) bool {
+	return normalizeVersion(local) != normalizeVersion(remote)
+}
+
+func normalizeVersion(v string) string {
+	if i := strings.Index(v, "-dirty"); i >= 0 {
+		v = v[:i]
+	}
+	return strings.TrimSpace(v)
 }
 
 // usagePanel renders the Claude Code usage block: messages in the 5-hour
