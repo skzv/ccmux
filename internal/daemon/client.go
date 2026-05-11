@@ -96,6 +96,18 @@ func (c *Client) Kill(ctx context.Context, session string) error {
 	return c.post(ctx, "/v1/sessions/"+session+"/kill", nil, nil)
 }
 
+// Projects returns the list of projects discovered by this daemon
+// under its configured projects root. Each entry is tagged with the
+// daemon's hostname so callers merging across hosts can attribute
+// rows back to origin.
+func (c *Client) Projects(ctx context.Context) ([]ProjectInfo, error) {
+	var out []ProjectInfo
+	if err := c.getJSON(ctx, "/v1/projects", &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // NewSession asks the daemon to spawn a fresh session.
 func (c *Client) NewSession(ctx context.Context, req NewSessionRequest) (SessionState, error) {
 	var out SessionState

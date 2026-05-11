@@ -231,6 +231,43 @@ func TestRemoteClient_TargetsHTTPHost(t *testing.T) {
 	}
 }
 
+func TestClient_Projects(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/projects", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode([]ProjectInfo{
+			{Name: "alpha", Host: "mac-mini", Path: "/Users/skz/Projects/alpha"},
+			{Name: "beta", Host: "mac-mini", Path: "/Users/skz/Projects/beta", HasGit: true},
+		})
+	})
+	c := spawnFakeDaemon(t, mux)
+	got, err := c.Projects(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Name != "alpha" || got[1].Host != "mac-mini" {
+		t.Fatalf("Projects: %+v", got)
+	}
+	if !got[1].HasGit {
+		t.Errorf("HasGit not deserialized: %+v", got[1])
+	}
+}
+
+func TestProjectInfo_JSONRoundTrip(t *testing.T) {
+	in := ProjectInfo{
+		Name: "x", Host: "h", Path: "/p",
+		HasGit: true, HasCM: false, HasDocs: true,
+		Modified: time.Now().Truncate(time.Second),
+	}
+	b, _ := json.Marshal(in)
+	var out ProjectInfo
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out != in {
+		t.Fatalf("round-trip:\n got=%+v\nwant=%+v", out, in)
+	}
+}
+
 func TestClient_AddrReportsScheme(t *testing.T) {
 	c := RemoteClient("host:1234")
 	if want := "http://host:1234"; c.Addr() != want {

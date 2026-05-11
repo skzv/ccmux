@@ -202,6 +202,23 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.setToast(msg.Kind, msg.Text, time.Until(msg.Until))
 		return a, nil
 
+	case remoteSessionStartedMsg:
+		// Remote daemon already created the tmux session for us;
+		// reuse the same ssh-into-peer path the Sessions screen uses
+		// for discovered hosts (PATH prepend + login shell, etc.).
+		if msg.DialHost == "" {
+			a.setToast(toastError, "remote session created but no dial host known", 5*time.Second)
+			return a, nil
+		}
+		remoteCmd := remoteTmuxAttach(msg.SessionName)
+		c := exec.Command("ssh", "-t", msg.DialHost, remoteCmd)
+		if dbg := debugLogger(); dbg != nil {
+			dbg.Printf("remote attach: ssh -t %s %q", msg.DialHost, remoteCmd)
+		}
+		return a, tea.ExecProcess(c, func(err error) tea.Msg {
+			return refreshAfterDetachMsg{}
+		})
+
 	case projectSessionReadyMsg:
 		// New project is scaffolded and its tmux session is running with
 		// the initial prompt sent. Route through localAttachCmd so the
@@ -801,10 +818,77 @@ func (a App) refreshSessionsCmd() tea.Cmd {
 
 func (a App) refreshProjectsCmd() tea.Cmd {
 	root := a.cfg.Projects.Root
-	return func() tea.Msg {
-		ps, err := project.Discover(root)
-		return projectsLoadedMsg{Projects: ps, Err: err}
+	hosts := a.cfg.Hosts
+	tailnetPort := a.cfg.Daemon.TailnetPort
+	if tailnetPort == 0 {
+		tailnetPort = 7474
 	}
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		var all []project.Project
+		// Local projects first so the merge sort keeps them
+		// grouped naturally by Modified after combining.
+		if ps, err := project.Discover(root); err == nil {
+			for _, p := range ps {
+				p.Host = "local"
+				all = append(all, p)
+			}
+		}
+
+		// Configured remote hosts.
+		seen := map[string]bool{}
+		for _, h := range hosts {
+			addr := h.Address
+			if h.Port == 0 {
+				addr += ":7474"
+			} else {
+				addr += fmt.Sprintf(":%d", h.Port)
+			}
+			seen[addr] = true
+			all = appendRemoteProjects(ctx, all, addr, h.Name)
+		}
+
+		// Auto-discovered tailnet peers. The scan inside ScanTailnet
+		// runs its own concurrent probes, so this is cheap relative
+		// to the per-host project fetches that follow.
+		if scan, err := tailnet.ScanTailnet(ctx, tailnetPort); err == nil {
+			for _, d := range scan.Reachable {
+				if seen[d.Address] {
+					continue
+				}
+				seen[d.Address] = true
+				all = appendRemoteProjects(ctx, all, d.Address, d.Name)
+			}
+		}
+
+		sort.Slice(all, func(i, j int) bool {
+			return all[i].Modified.After(all[j].Modified)
+		})
+		return projectsLoadedMsg{Projects: all}
+	}
+}
+
+// appendRemoteProjects fetches projects from one remote ccmuxd at
+// `addr` and tags each entry with `hostLabel` (the dashboard's
+// friendly name for that host). Failures are silently swallowed —
+// project discovery is best-effort, and a single unreachable peer
+// shouldn't drop the user's local list.
+func appendRemoteProjects(ctx context.Context, into []project.Project, addr, hostLabel string) []project.Project {
+	cli := daemon.RemoteClient(addr)
+	infos, err := cli.Projects(ctx)
+	if err != nil {
+		return into
+	}
+	for _, p := range infos {
+		into = append(into, project.Project{
+			Name: p.Name, Host: hostLabel, Path: p.Path,
+			HasGit: p.HasGit, HasCM: p.HasCM, HasDocs: p.HasDocs,
+			Modified: p.Modified,
+		})
+	}
+	return into
 }
 
 // attachSelectedSession is Enter on Sessions screen.
@@ -968,13 +1052,28 @@ func remoteTmuxAttach(session string) string {
 		" tmux attach-session -d -t " + shellQuote(session)
 }
 
-// attachOrCreateForSelectedProject is Enter on Projects screen: attach to
-// the project's existing Claude session, or create one + attach.
+// attachOrCreateForSelectedProject is Enter on Projects screen.
+// Routes by Host:
+//   - local (Host == "" or "local"): existing flow — tmux.New here,
+//     localAttachCmd attaches.
+//   - remote: POST /v1/sessions to that host's ccmuxd so the tmux
+//     session is created on the remote, then ssh-attach into it
+//     using the same dial path the Sessions screen uses.
 func (a App) attachOrCreateForSelectedProject() tea.Cmd {
 	if len(a.projects) == 0 || a.projectsM.cursor < 0 || a.projectsM.cursor >= len(a.projects) {
 		return nil
 	}
 	p := a.projects[a.projectsM.cursor]
+	host := projectHost(p)
+	if host == "local" {
+		return a.attachOrCreateLocal(p)
+	}
+	return a.attachOrCreateRemote(p, host)
+}
+
+// attachOrCreateLocal is the existing same-machine path: tmux.New
+// if missing, then localAttachCmd (which routes nested-tmux too).
+func (a App) attachOrCreateLocal(p project.Project) tea.Cmd {
 	session := p.SessionName()
 	label := p.Name
 	return func() tea.Msg {
@@ -988,6 +1087,53 @@ func (a App) attachOrCreateForSelectedProject() tea.Cmd {
 		}
 		return projectSessionReadyMsg{Session: session, Project: label}
 	}
+}
+
+// attachOrCreateRemote starts (or attaches to) a Claude session on a
+// remote ccmuxd, then ssh-attaches to it from this machine. Two
+// network round-trips and the user gets dropped into a fully-running
+// remote tmux session from a single Enter press.
+func (a App) attachOrCreateRemote(p project.Project, host string) tea.Cmd {
+	hs := a.lookupHostByName(host)
+	if hs == nil {
+		return func() tea.Msg {
+			return toastMsg{Text: "no reachable daemon for host: " + host, Kind: toastError, Until: time.Now().Add(5 * time.Second)}
+		}
+	}
+	// Snapshot the dial/address before crossing the goroutine boundary.
+	hostAddr := hs.Address
+	dial := hs.DialHost
+	if dial == "" {
+		dial = dialAddrFor(*hs)
+	}
+	projectName := p.Name
+	return tea.Sequence(
+		func() tea.Msg {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			cli := daemon.RemoteClient(hostAddr)
+			ss, err := cli.NewSession(ctx, daemon.NewSessionRequest{
+				Project:  projectName,
+				Continue: true,
+			})
+			if err != nil {
+				return toastMsg{Text: "remote start: " + err.Error(), Kind: toastError, Until: time.Now().Add(6 * time.Second)}
+			}
+			return remoteSessionStartedMsg{SessionName: ss.Name, DialHost: dial}
+		},
+	)
+}
+
+// lookupHostByName returns the hostStatus row matching `name` (set
+// by refresh). Used to convert a project's Host label back into the
+// daemon address + ssh dial host pair.
+func (a App) lookupHostByName(name string) *hostStatus {
+	for i := range a.hosts {
+		if a.hosts[i].Name == name {
+			return &a.hosts[i]
+		}
+	}
+	return nil
 }
 
 // localAttachCmd builds the tea.Cmd that suspends Bubble Tea, applies

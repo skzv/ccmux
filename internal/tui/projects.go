@@ -107,7 +107,16 @@ func (m projectsModel) renderList(width, height int) string {
 		return m.st.Pane.Width(width - 2).Height(height - 2).Render(body)
 	}
 	rows := []string{header, ""}
+	currentHost := ""
 	for i, p := range m.projects {
+		host := projectHost(p)
+		if host != currentHost {
+			if i > 0 {
+				rows = append(rows, "")
+			}
+			rows = append(rows, m.st.Subtitle.Render("on "+host))
+			currentHost = host
+		}
 		marks := []string{}
 		if p.HasGit {
 			marks = append(marks, "git")
@@ -122,7 +131,7 @@ func (m projectsModel) renderList(width, height int) string {
 		if len(marks) > 0 {
 			tail = "   " + m.st.Muted.Render(strings.Join(marks, " · "))
 		}
-		line := p.Name + tail
+		line := "  " + p.Name + tail
 		if i == m.cursor {
 			line = m.st.ListItemSelected.Render(line)
 		} else {
@@ -134,23 +143,38 @@ func (m projectsModel) renderList(width, height int) string {
 }
 
 func (m projectsModel) renderDetail(width, height int) string {
-	if len(m.projects) == 0 || m.cursor < 0 {
+	if len(m.projects) == 0 || m.cursor < 0 || m.cursor >= len(m.projects) {
 		return m.st.Pane.Width(width - 2).Height(height - 2).Render(m.st.Muted.Render("No selection."))
 	}
 	p := m.projects[m.cursor]
+	host := projectHost(p)
+	enterDesc := "attach or create session locally"
+	if host != "local" {
+		enterDesc = "create session on " + host + " (via ccmuxd), then ssh-attach"
+	}
 	lines := []string{
-		m.st.Emphasis.Render(p.Name),
+		m.st.Emphasis.Render(p.Name) + "   " + m.st.Muted.Render("on "+host),
 		m.st.Muted.Render(p.Path),
 		"",
 		"session name  " + m.st.Emphasis.Render(p.SessionName()),
 		"",
 		m.st.Subtitle.Render("Keys"),
-		m.st.Key.Render("enter") + "  attach or create session",
+		m.st.Key.Render("enter") + "  " + enterDesc,
 		m.st.Key.Render("n") + "      new project (modal form)",
 		m.st.Key.Render("u") + "      upgrade cwd (current shell, not selected)",
-		m.st.Key.Render("4") + "      open Notes for this project",
+		m.st.Key.Render("4") + "      open Notes for this project (local only)",
 	}
 	return m.st.Pane.Width(width - 2).Height(height - 2).Render(strings.Join(lines, "\n"))
+}
+
+// projectHost returns the canonical host label for `p` — "local" when
+// the project lives on this machine, the remote host name otherwise.
+// Centralized so the renderer and the attach router can't drift.
+func projectHost(p project.Project) string {
+	if p.Host == "" {
+		return "local"
+	}
+	return p.Host
 }
 
 // scaffoldAndStartCmd runs scaffold + StartSession and returns a

@@ -29,6 +29,7 @@ import (
 	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/moshi"
+	"github.com/skzv/ccmux/internal/project"
 	"github.com/skzv/ccmux/internal/tmux"
 )
 
@@ -145,6 +146,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/v1/health", s.handleHealth)
 	mux.HandleFunc("/v1/sessions", s.handleSessions)
 	mux.HandleFunc("/v1/sessions/", s.handleSessionsItem)
+	mux.HandleFunc("/v1/projects", s.handleProjects)
 }
 
 func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -158,6 +160,17 @@ func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleSessions(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.listSessions(w, r)
+	case http.MethodPost:
+		s.createSession(w, r)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *server) listSessions(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
@@ -180,9 +193,89 @@ func (s *server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, out)
 }
 
+// createSession handles POST /v1/sessions: scaffold or attach to a
+// project's tmux session running Claude. Idempotent — if the named
+// tmux session already exists, returns it without creating a new one.
+// The request body is daemon.NewSessionRequest.
+func (s *server) createSession(w http.ResponseWriter, r *http.Request) {
+	var req daemon.NewSessionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "decode: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Project == "" {
+		http.Error(w, "project required", http.StatusBadRequest)
+		return
+	}
+	path := req.Path
+	if path == "" {
+		home, _ := os.UserHomeDir()
+		root := s.cfg.Projects.Root
+		if root == "" {
+			root = filepath.Join(home, "Projects")
+		}
+		path = filepath.Join(root, req.Project)
+	}
+	if _, err := os.Stat(path); err != nil {
+		http.Error(w, "project path not found: "+path, http.StatusNotFound)
+		return
+	}
+	session := tmux.SessionNameForPath(path)
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	has, herr := tmux.Has(ctx, session)
+	if herr != nil {
+		http.Error(w, "tmux has-session: "+herr.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !has {
+		claudeCmd := "claude"
+		if req.Continue {
+			claudeCmd = "claude --continue || claude || zsh"
+		} else {
+			claudeCmd = "claude --continue || claude || zsh"
+		}
+		if err := tmux.New(ctx, session, path, claudeCmd); err != nil {
+			http.Error(w, "tmux new-session: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+
+	writeJSON(w, daemon.SessionState{
+		Name: session, Host: "local", Project: req.Project, Path: path,
+		State: string(claude.StateUnknown), Created: time.Now(),
+	})
+}
+
 func (s *server) handleSessionsItem(w http.ResponseWriter, r *http.Request) {
 	// /v1/sessions/<name>[/<subaction>] — minimal stub.
 	http.Error(w, "not implemented in v0.1", http.StatusNotImplemented)
+}
+
+// handleProjects returns every project under this daemon's
+// configured projects root. Each entry is tagged with the daemon's
+// hostname so a multi-host client can attribute rows back to their
+// origin. Errors fall through to an empty list — a daemon whose
+// projects dir doesn't exist yet shouldn't crash the network view.
+func (s *server) handleProjects(w http.ResponseWriter, r *http.Request) {
+	host, _ := os.Hostname()
+	root := s.cfg.Projects.Root
+	if root == "" {
+		home, _ := os.UserHomeDir()
+		root = filepath.Join(home, "Projects")
+	}
+	ps, _ := project.Discover(root)
+	out := make([]daemon.ProjectInfo, 0, len(ps))
+	for _, p := range ps {
+		out = append(out, daemon.ProjectInfo{
+			Name: p.Name, Host: host, Path: p.Path,
+			HasGit: p.HasGit, HasCM: p.HasCM, HasDocs: p.HasDocs,
+			Modified: p.Modified,
+		})
+	}
+	writeJSON(w, out)
 }
 
 // pollLoop is the heartbeat: capture-pane on each tmux session, derive

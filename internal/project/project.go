@@ -14,8 +14,14 @@ import (
 
 // Project is one bookmark-able working directory.
 type Project struct {
-	Name     string    // basename of the directory
-	Path     string    // absolute path
+	Name string // basename of the directory
+	// Host marks which machine this project lives on. Empty / "local"
+	// for the current device; otherwise the short Tailscale name of
+	// the remote ccmuxd we fetched it from. The TUI uses this to
+	// route attach actions (local: scaffold + tmux locally; remote:
+	// POST /v1/sessions to the peer and ssh-attach).
+	Host     string
+	Path     string    // absolute path on the project's host
 	HasGit   bool      // .git exists
 	HasCM    bool      // CLAUDE.md exists
 	HasDocs  bool      // docs/ exists (the notes vault)

@@ -114,6 +114,16 @@ type projectSessionReadyMsg struct {
 	Project string
 }
 
+// remoteSessionStartedMsg fires after `ccmuxd` on a remote host
+// returns success from POST /v1/sessions. SessionName is what tmux
+// labeled the session on the remote (c-<basename>); DialHost is the
+// ssh-target string we should use to attach. The App responds by
+// suspending Bubble Tea and exec'ing into ssh.
+type remoteSessionStartedMsg struct {
+	SessionName string
+	DialHost    string
+}
+
 // sessionKilledMsg signals that a Sessions-screen `x` kill completed; the
 // app responds with an immediate refresh.
 type sessionKilledMsg struct {

@@ -4,12 +4,30 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/skzv/ccmux/internal/project"
 	"github.com/skzv/ccmux/internal/tui/styles"
 )
 
 func mustStyles(t *testing.T) styles.Styles {
 	t.Helper()
 	return styles.Default()
+}
+
+func TestProjectHost(t *testing.T) {
+	cases := []struct {
+		host, want string
+	}{
+		{"", "local"},
+		{"local", "local"},
+		{"mac-mini", "mac-mini"},
+		{"sashas-mac-mini", "sashas-mac-mini"},
+	}
+	for _, tc := range cases {
+		got := projectHost(project.Project{Host: tc.host})
+		if got != tc.want {
+			t.Errorf("projectHost({Host:%q}) = %q, want %q", tc.host, got, tc.want)
+		}
+	}
 }
 
 // TestDaemonOnline_UsesLocalFlag locks in the fix for the bug where

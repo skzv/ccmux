@@ -64,3 +64,17 @@ type NewSessionRequest struct {
 	KeepAwake  bool   `json:"keep_awake"`  // pin this session immediately
 	FirstInput string `json:"first_input"` // initial prompt to feed Claude
 }
+
+// ProjectInfo is one entry from GET /v1/projects. The host name is
+// filled in by the daemon out of HealthInfo.Hostname so a client
+// merging projects from multiple ccmuxds can tag each row with its
+// origin. The remaining fields mirror internal/project.Project.
+type ProjectInfo struct {
+	Name     string    `json:"name"`
+	Host     string    `json:"host"`
+	Path     string    `json:"path"` // absolute path on the daemon's host
+	HasGit   bool      `json:"has_git"`
+	HasCM    bool      `json:"has_cm"`
+	HasDocs  bool      `json:"has_docs"`
+	Modified time.Time `json:"modified"`
+}
