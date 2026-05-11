@@ -55,6 +55,25 @@ func installLinux() (Status, error) {
 	return Probe(), nil
 }
 
+// restartLinux uses systemctl --user restart. If the user manager
+// isn't reachable, falls back to a SIGTERM so any manually-launched
+// ccmuxd at least dies (caller can re-spawn).
+func restartLinux() (Status, error) {
+	s := Probe()
+	if !hasSystemdUser() {
+		_ = exec.Command("pkill", "-TERM", "-x", "ccmuxd").Run()
+		return Probe(), errors.New("systemd-user not available; sent SIGTERM and bailed — restart ccmuxd by hand")
+	}
+	if !s.ServiceEnabled {
+		_ = exec.Command("pkill", "-TERM", "-x", "ccmuxd").Run()
+		return Probe(), errors.New("ccmuxd not registered with systemd-user; run `ccmux daemon install` first")
+	}
+	if out, err := exec.Command("systemctl", "--user", "restart", "ccmuxd").CombinedOutput(); err != nil {
+		return s, fmt.Errorf("systemctl restart: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	return Probe(), nil
+}
+
 func uninstallLinux() (Status, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {

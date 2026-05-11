@@ -61,6 +61,27 @@ func installDarwin() (Status, error) {
 	return Probe(), nil
 }
 
+// restartDarwin uses `launchctl kickstart -k` which signals launchd to
+// stop the current daemon and start a fresh one. Returns an error if
+// the daemon isn't registered with launchd (i.e. `ccmux daemon install`
+// was never run). If the kickstart succeeds but the daemon takes a
+// moment to come back, Probe() will still report Running=false; the
+// caller should re-probe after a short delay.
+func restartDarwin() (Status, error) {
+	s := Probe()
+	if !s.ServiceEnabled {
+		// Not under launchd — try a plain pkill so a manually-started
+		// daemon can be restarted by the caller.
+		_ = exec.Command("pkill", "-TERM", "-x", "ccmuxd").Run()
+		return Probe(), fmt.Errorf("ccmuxd not registered with launchd; restart by hand or run `ccmux daemon install`")
+	}
+	target := "gui/" + uid() + "/" + Label
+	if out, err := exec.Command("launchctl", "kickstart", "-k", target).CombinedOutput(); err != nil {
+		return s, fmt.Errorf("launchctl kickstart %s: %w (%s)", target, err, strings.TrimSpace(string(out)))
+	}
+	return Probe(), nil
+}
+
 func uninstallDarwin() (Status, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {

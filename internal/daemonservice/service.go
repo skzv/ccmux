@@ -89,6 +89,22 @@ func Uninstall() (Status, error) {
 	return Probe(), nil
 }
 
+// Restart bounces the running daemon so a newly-installed binary takes
+// effect. On darwin uses `launchctl kickstart -k`; on linux uses
+// `systemctl --user restart`. Falls back to a SIGTERM + relaunch via
+// the existing service config when neither is available. Returns the
+// post-restart Probe() so the caller can confirm the daemon is back.
+func Restart() (Status, error) {
+	switch runtime.GOOS {
+	case "darwin":
+		return restartDarwin()
+	case "linux":
+		return restartLinux()
+	}
+	_ = exec.Command("pkill", "-TERM", "-x", "ccmuxd").Run()
+	return Probe(), fmt.Errorf("restart not supported on %s", runtime.GOOS)
+}
+
 // ServicePathOrEmpty exposes the resolved path (plist or unit) so the
 // main `ccmux uninstall` flow can preview/remove it without
 // duplicating path resolution. Returns "" on unsupported platforms.

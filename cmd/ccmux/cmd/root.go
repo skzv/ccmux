@@ -37,6 +37,7 @@ func init() {
 		newAttachCmd(),
 		newNewCmd(),
 		newUpgradeCmd(),
+		newUpdateCmd(),
 		newListCmd(),
 		newKillCmd(),
 		newSetupCmd(),

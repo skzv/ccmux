@@ -3,16 +3,30 @@
 BIN_DIR    := bin
 INSTALL_DIR := $(HOME)/.local/bin
 LDFLAGS    := -s -w -X main.version=$(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+UNAME_S    := $(shell uname -s)
+
+# On macOS, ad-hoc sign each binary so spctl/GateKeeper accepts it when
+# launched from a terminal. Without this the OS adds com.apple.provenance
+# to the unsigned binary and SIGKILLs it silently on exec, which manifests
+# as `ccmux` exiting with no output. Launchd-managed ccmuxd is exempt, so
+# this only affects direct TUI/CLI invocations.
+ifeq ($(UNAME_S),Darwin)
+CODESIGN = codesign --force --sign - $@ 2>/dev/null || true
+else
+CODESIGN =
+endif
 
 build: $(BIN_DIR)/ccmux $(BIN_DIR)/ccmuxd
 
 $(BIN_DIR)/ccmux: $(shell find cmd/ccmux internal -type f -name '*.go' 2>/dev/null) go.mod go.sum
 	@mkdir -p $(BIN_DIR)
 	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/ccmux ./cmd/ccmux
+	@$(CODESIGN)
 
 $(BIN_DIR)/ccmuxd: $(shell find cmd/ccmuxd internal -type f -name '*.go' 2>/dev/null) go.mod go.sum
 	@mkdir -p $(BIN_DIR)
 	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/ccmuxd ./cmd/ccmuxd
+	@$(CODESIGN)
 
 install: build
 	@mkdir -p $(INSTALL_DIR)
