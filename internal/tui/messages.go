@@ -5,6 +5,7 @@ import (
 
 	"github.com/skzv/ccmux/internal/claudeusage"
 	"github.com/skzv/ccmux/internal/daemon"
+	"github.com/skzv/ccmux/internal/notes"
 	"github.com/skzv/ccmux/internal/project"
 )
 
@@ -138,6 +139,14 @@ type notesReloadMsg struct{}
 // and push the new shape into every screen that holds a cached copy.
 // Emitted after the Settings screen's "edit in $EDITOR" flow returns.
 type configReloadMsg struct{}
+
+// notesSearchResultMsg carries the result set from a Vault.Search
+// invocation back to the Notes screen. Query echoes the user's
+// input so the rendering can re-print it as a header.
+type notesSearchResultMsg struct {
+	Query string
+	Hits  []notes.SearchHit
+}
 
 // usageTickMsg fires periodically to refresh the dashboard's usage panel.
 // Slower cadence than the session tick because walking the transcript

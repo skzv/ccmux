@@ -1,11 +1,14 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
@@ -47,6 +50,15 @@ type notesModel struct {
 	// project picker
 	pickingProject bool
 	projCursor     int
+
+	// search state. `/` opens a query box; typing populates it; Enter
+	// runs Vault.Search and the result rows take over the list. While
+	// searching, cursor indexes into searchResults rather than entries.
+	// Esc clears search and restores the normal listing.
+	searching      bool
+	searchInput    textinput.Model
+	searchResults  []notes.SearchHit
+	searchQuery    string
 }
 
 // notesFocus tracks which pane receives navigation keys.
@@ -59,11 +71,16 @@ const (
 
 func newNotes(st styles.Styles, km Keymap) notesModel {
 	vp := viewport.New(80, 20)
+	ti := textinput.New()
+	ti.Prompt = "/ "
+	ti.Placeholder = "search this project's docs/…"
+	ti.CharLimit = 200
 	return notesModel{
-		st:      st,
-		km:      km,
-		preview: vp,
-		editor:  pickEditor(),
+		st:          st,
+		km:          km,
+		preview:     vp,
+		editor:      pickEditor(),
+		searchInput: ti,
 	}
 }
 
@@ -114,13 +131,30 @@ func (m *notesModel) loadEntries() {
 }
 
 func (m *notesModel) refreshPreview() {
-	if m.project == nil || len(m.entries) == 0 || m.cursor < 0 || m.cursor >= len(m.entries) {
+	if m.project == nil {
 		m.rendered = ""
 		m.preview.SetContent("")
 		return
 	}
+	// Pick whichever cursor target is active.
+	rel := ""
+	if m.hasActiveSearch() {
+		if m.cursor < 0 || m.cursor >= len(m.searchResults) {
+			m.rendered = ""
+			m.preview.SetContent("")
+			return
+		}
+		rel = m.searchResults[m.cursor].Rel
+	} else {
+		if len(m.entries) == 0 || m.cursor < 0 || m.cursor >= len(m.entries) {
+			m.rendered = ""
+			m.preview.SetContent("")
+			return
+		}
+		rel = m.entries[m.cursor].Rel
+	}
 	vault := notes.Open(m.project.Path)
-	data, err := vault.Read(m.entries[m.cursor].Rel)
+	data, err := vault.Read(rel)
 	if err != nil {
 		m.rendered = m.st.StatusError.Render(err.Error())
 		m.preview.SetContent(m.rendered)
@@ -193,14 +227,68 @@ func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
 		return m, nil
 	}
 
+	// Active search-input mode: every key goes to the textinput
+	// except Esc (cancel) and Enter (run query).
+	if m.searching && m.searchInput.Focused() {
+		if km, ok := msg.(tea.KeyMsg); ok {
+			switch km.String() {
+			case "esc":
+				m.searching = false
+				m.searchInput.Blur()
+				m.searchInput.SetValue("")
+				m.searchResults = nil
+				m.searchQuery = ""
+				m.cursor = 0
+				m.refreshPreview()
+				return m, nil
+			case "enter":
+				query := strings.TrimSpace(m.searchInput.Value())
+				m.searchInput.Blur()
+				if query == "" {
+					m.searching = false
+					return m, nil
+				}
+				return m, m.runSearch(query)
+			}
+		}
+		var cmd tea.Cmd
+		m.searchInput, cmd = m.searchInput.Update(msg)
+		return m, cmd
+	}
+
 	switch msg := msg.(type) {
 	case notesReloadMsg:
 		m.loadEntries()
 		m.refreshPreview()
 		return m, nil
+	case notesSearchResultMsg:
+		m.searchResults = msg.Hits
+		m.searchQuery = msg.Query
+		m.cursor = 0
+		m.refreshPreview()
+		return m, nil
 	case tea.KeyMsg:
 		// Global Notes keys (don't depend on which pane has focus).
 		switch msg.String() {
+		case "/":
+			if m.project == nil {
+				return m, nil
+			}
+			m.searching = true
+			m.searchInput.SetValue("")
+			m.searchInput.Focus()
+			return m, textinput.Blink
+		case "esc":
+			// Esc when search results are active (but the input isn't
+			// focused) clears the results and restores the file list.
+			if m.hasActiveSearch() {
+				m.searchResults = nil
+				m.searchQuery = ""
+				m.searching = false
+				m.cursor = 0
+				m.refreshPreview()
+				return m, nil
+			}
 		case "p":
 			if len(m.projects) > 0 {
 				m.pickingProject = true
@@ -230,6 +318,7 @@ func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
 		}
 
 		if m.focus == focusList {
+			rowCount := m.listLen()
 			switch {
 			case keyMatches(msg, m.km.Up):
 				if m.cursor > 0 {
@@ -238,7 +327,7 @@ func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
 				}
 				return m, nil
 			case keyMatches(msg, m.km.Down):
-				if m.cursor < len(m.entries)-1 {
+				if m.cursor < rowCount-1 {
 					m.cursor++
 					m.refreshPreview()
 				}
@@ -249,8 +338,8 @@ func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
 				}
 				return m, nil
 			case keyMatches(msg, m.km.EditInEd):
-				if e := m.selected(); e != nil {
-					return m, openInEditor(m.editor, e.Path)
+				if path := m.selectedPath(); path != "" {
+					return m, openInEditor(m.editor, path)
 				}
 				return m, nil
 			}
@@ -271,6 +360,55 @@ func (m notesModel) selected() *notes.Entry {
 	}
 	e := m.entries[m.cursor]
 	return &e
+}
+
+// hasActiveSearch reports whether the search results pane is showing
+// (either because the user just submitted a query or because they
+// haven't dismissed previous results yet).
+func (m notesModel) hasActiveSearch() bool {
+	return m.searchQuery != ""
+}
+
+// listLen returns the number of rows the user can navigate over —
+// search results when a query is active, entries otherwise.
+func (m notesModel) listLen() int {
+	if m.hasActiveSearch() {
+		return len(m.searchResults)
+	}
+	return len(m.entries)
+}
+
+// selectedPath returns the absolute path of the row under the cursor,
+// honoring whether we're showing entries or search hits. Returns "" on
+// an out-of-bounds cursor.
+func (m notesModel) selectedPath() string {
+	if m.hasActiveSearch() {
+		if m.cursor < 0 || m.cursor >= len(m.searchResults) {
+			return ""
+		}
+		return m.searchResults[m.cursor].Path
+	}
+	if m.cursor < 0 || m.cursor >= len(m.entries) {
+		return ""
+	}
+	return m.entries[m.cursor].Path
+}
+
+// runSearch is the tea.Cmd that fires Vault.Search in the background
+// and posts a notesSearchResultMsg with the hits. 3-second hard cap so
+// a pathological query can't stall the TUI.
+func (m notesModel) runSearch(query string) tea.Cmd {
+	if m.project == nil {
+		return nil
+	}
+	root := m.project.Path
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		v := notes.Open(root)
+		hits, _ := v.Search(ctx, query, 100)
+		return notesSearchResultMsg{Query: query, Hits: hits}
+	}
 }
 
 func (m notesModel) View(width, height int) string {
@@ -308,10 +446,33 @@ func (m notesModel) renderList(width, height int) string {
 		focusMark = m.st.Emphasis.Render(" ◀")
 	}
 	header := m.st.Emphasis.Render(m.project.Name+" / docs") + focusMark
-	hint := m.st.Muted.Render("p: switch project   tab: focus preview   n: new   e: edit   j/k: nav")
-	lines := []string{header, hint, ""}
+	hint := m.st.Muted.Render("p: switch project   /: search   tab: focus preview   n: new   e: edit")
+	lines := []string{header, hint}
 
-	if len(m.entries) == 0 {
+	// Search box / search-results banner.
+	if m.searching && m.searchInput.Focused() {
+		lines = append(lines, "", m.searchInput.View())
+	} else if m.hasActiveSearch() {
+		lines = append(lines, "",
+			m.st.Emphasis.Render(fmt.Sprintf("search: %q", m.searchQuery)),
+			m.st.Muted.Render(fmt.Sprintf("%d hit(s) — esc clears, enter opens", len(m.searchResults))),
+		)
+	}
+	lines = append(lines, "")
+
+	if m.hasActiveSearch() {
+		if len(m.searchResults) == 0 {
+			lines = append(lines, m.st.Muted.Render("(no matches)"))
+		} else {
+			for i, h := range m.searchResults {
+				label := fmt.Sprintf("%s:%d  %s", h.Rel, h.LineNum, truncateSearchSnippet(h.Snippet, width-12))
+				if i == m.cursor {
+					label = m.st.ListItemSelected.Render(label)
+				}
+				lines = append(lines, "  "+label)
+			}
+		}
+	} else if len(m.entries) == 0 {
 		lines = append(lines, m.st.Muted.Render("(empty — press n to create a note)"))
 	} else {
 		current := notes.SectionOther + 1 // sentinel "no section printed yet"
@@ -331,6 +492,20 @@ func (m notesModel) renderList(width, height int) string {
 		}
 	}
 	return m.st.PaneFocused.Width(width - 2).Height(height - 2).Render(strings.Join(lines, "\n"))
+}
+
+// truncateSearchSnippet keeps result lines from blowing the column
+// when a match line is enormous. Uses runes so multi-byte chars
+// survive cleanly within the budget.
+func truncateSearchSnippet(s string, n int) string {
+	if n <= 1 {
+		return ""
+	}
+	runes := []rune(s)
+	if len(runes) <= n {
+		return s
+	}
+	return string(runes[:n-1]) + "…"
 }
 
 func (m notesModel) renderPreview(width, height int) string {
