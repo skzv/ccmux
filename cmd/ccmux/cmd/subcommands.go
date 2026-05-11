@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -17,7 +16,7 @@ import (
 
 	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/daemon"
-	"github.com/skzv/ccmux/internal/project"
+	"github.com/skzv/ccmux/internal/scaffold"
 	"github.com/skzv/ccmux/internal/tmux"
 )
 
@@ -58,46 +57,33 @@ func newAttachCmd() *cobra.Command {
 	}
 }
 
-// newNewCmd: `ccmux new <name>` — successor to the mkproj zsh function.
-// Scaffolds a directory + CLAUDE.md + docs/ structure, makes the initial
-// git commit, and starts a Claude session in tmux.
+// newNewCmd: `ccmux new <name> [-d description]` — successor to mkproj.
+// Scaffolds the project, starts Claude in tmux, sends a single composite
+// prompt that asks Claude to /init (cleanly — CLAUDE.md doesn't exist yet)
+// and engage the user about the concept. No second consent for "overwrite
+// CLAUDE.md."
 func newNewCmd() *cobra.Command {
-	var (
-		template string
-		noPush   bool
-	)
+	var description string
 	c := &cobra.Command{
 		Use:   "new <name>",
 		Short: "Scaffold a new project + start its Claude session",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			name := args[0]
-			if err := scaffoldProject(name, template); err != nil {
-				return err
-			}
-			abs, err := filepath.Abs(name)
+			opts := scaffold.Options{Name: args[0], Description: description}
+			session, err := scaffold.StartSession(context.Background(), opts)
 			if err != nil {
 				return err
 			}
-			session := tmux.SessionNameForPath(abs)
-			ctx := context.Background()
-			if err := tmux.New(ctx, session, abs, "claude"); err != nil {
-				return err
-			}
-			// Give Claude a moment to boot, then send /init.
-			time.Sleep(2 * time.Second)
-			_ = tmux.SendKeys(ctx, session, "/init")
-			_ = tmux.SendKeys(ctx, session, "Enter")
 			return tmux.Attach(session)
 		},
 	}
-	c.Flags().StringVar(&template, "template", "blank", "blank|python|go|nextjs|rust")
-	c.Flags().BoolVar(&noPush, "no-push", false, "don't try to create a GitHub repo")
+	c.Flags().StringVarP(&description, "description", "d", "",
+		"one-line description of what you're building (sent to Claude as the first prompt)")
 	return c
 }
 
-// newUpgradeCmd: `ccmux upgrade` — successor to upgrade-proj.
-// Injects the docs/ structure and CLAUDE.md into the current directory.
+// newUpgradeCmd: `ccmux upgrade` — inject the ccmux project structure into
+// the current directory non-destructively.
 func newUpgradeCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "upgrade",
@@ -107,7 +93,12 @@ func newUpgradeCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return scaffoldProject(cwd, "blank")
+			opts := scaffold.Options{
+				Name:    filepath.Base(cwd),
+				Dir:     cwd,
+				SkipGit: true, // existing repo: don't reinit
+			}
+			return scaffold.Scaffold(&opts)
 		},
 	}
 }
@@ -327,55 +318,5 @@ func newHostCmd() *cobra.Command {
 	return c
 }
 
-// scaffoldProject creates the standard project layout in `dir` (which may
-// or may not exist). Successor to mkproj/upgrade-proj.
-func scaffoldProject(dir, template string) error {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	mustMkdir := func(p string) error { return os.MkdirAll(filepath.Join(dir, p), 0o755) }
-	for _, d := range []string{"docs/01_Specs", "docs/02_Architecture", "docs/03_Agent_Logs", "src", "tests"} {
-		if err := mustMkdir(d); err != nil {
-			return err
-		}
-	}
-	cmPath := filepath.Join(dir, "CLAUDE.md")
-	if _, err := os.Stat(cmPath); errors.Is(err, os.ErrNotExist) {
-		body := projectClaudeMd(filepath.Base(dir))
-		if err := os.WriteFile(cmPath, []byte(body), 0o644); err != nil {
-			return err
-		}
-	}
-	readme := filepath.Join(dir, "README.md")
-	if _, err := os.Stat(readme); errors.Is(err, os.ErrNotExist) {
-		_ = os.WriteFile(readme, []byte("# "+filepath.Base(dir)+"\n"), 0o644)
-	}
-	if _, err := os.Stat(filepath.Join(dir, ".git")); errors.Is(err, os.ErrNotExist) {
-		_ = exec.Command("git", "-C", dir, "init").Run()
-	}
-	_, _ = project.Lookup(dir) // sanity check
-	return nil
-}
-
-func projectClaudeMd(name string) string {
-	return `# CLAUDE.md
-
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
-# Project: ` + name + `
-
-# Directory Layout
-| Path | Purpose |
-|---|---|
-| ` + "`src/`" + ` | Source code |
-| ` + "`tests/`" + ` | Tests |
-| ` + "`docs/01_Specs/`" + ` | Specs / PRDs |
-| ` + "`docs/02_Architecture/`" + ` | ADRs / architecture |
-| ` + "`docs/03_Agent_Logs/`" + ` | Daily Claude scratchpad |
-
-# Build & Test
-No toolchain selected yet. Update this section when a stack is chosen.
-`
-}
-
-var _ = errors.Is // keep the import even if no caller in this file refers to it
+// Scaffolding logic now lives in internal/scaffold so the TUI and the CLI
+// share one implementation.

@@ -5,12 +5,14 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"sort"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/skzv/ccmux/internal/claude"
 	"github.com/skzv/ccmux/internal/config"
@@ -36,9 +38,7 @@ func (s Screen) String() string {
 	return []string{"Dashboard", "Sessions", "Projects", "Notes", "Claude", "Settings"}[s]
 }
 
-// App is the root Bubble Tea model. It owns the active screen, the global
-// data caches (sessions, projects, hosts), and the layout chrome (status bar,
-// help footer, toast).
+// App is the root Bubble Tea model.
 type App struct {
 	cfg     config.Config
 	styles  styles.Styles
@@ -59,10 +59,10 @@ type App struct {
 	claudeM   claudeModel
 	settings  settingsModel
 
-	toast   string
+	toast      string
+	toastKind  toastKind
 	toastUntil time.Time
 
-	loading      bool
 	lastRefresh  time.Time
 	daemonOnline bool
 }
@@ -86,8 +86,7 @@ func New(cfg config.Config, version string) App {
 	}
 }
 
-// Init is called once at startup. We kick off the first refresh and the
-// periodic tick.
+// Init is called once at startup.
 func (a App) Init() tea.Cmd {
 	return tea.Batch(
 		a.refreshSessionsCmd(),
@@ -114,8 +113,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.dashboard.SetSessions(a.sessions)
 		a.sessionsM.SetSessions(a.sessions)
 		if msg.Err != nil {
-			a.toast = "refresh error: " + msg.Err.Error()
-			a.toastUntil = time.Now().Add(5 * time.Second)
+			a.setToast(toastError, "refresh: "+msg.Err.Error(), 5*time.Second)
 		}
 		return a, nil
 
@@ -126,7 +124,44 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, nil
 
+	case toastMsg:
+		a.setToast(msg.Kind, msg.Text, time.Until(msg.Until))
+		return a, nil
+
+	case projectSessionReadyMsg:
+		// New project is scaffolded and its tmux session is running with
+		// the initial prompt sent. Now attach. tea.ExecProcess suspends
+		// the TUI for the duration of tmux attach, and resumes when the
+		// user detaches.
+		c := exec.Command("tmux", "attach-session", "-d", "-t", msg.Session)
+		return a, tea.ExecProcess(c, func(err error) tea.Msg {
+			return refreshAfterDetachMsg{}
+		})
+
+	case sessionKilledMsg:
+		if msg.Err != nil {
+			a.setToast(toastError, "kill failed: "+msg.Err.Error(), 5*time.Second)
+		} else {
+			a.setToast(toastSuccess, "killed "+msg.Name, 3*time.Second)
+		}
+		return a, a.refreshSessionsCmd()
+
+	case refreshAfterDetachMsg:
+		// Returning from tmux attach.
+		return a, tea.Batch(a.refreshSessionsCmd(), a.refreshProjectsCmd())
+
 	case tea.KeyMsg:
+		// If projects screen has its modal open, route through it. We
+		// intentionally still allow global Quit (ctrl+c).
+		if a.screen == ScreenProjects && a.projectsM.form != nil {
+			if msg.String() == "ctrl+c" {
+				return a, tea.Quit
+			}
+			var cmd tea.Cmd
+			a.projectsM, cmd = a.projectsM.Update(msg)
+			return a, cmd
+		}
+
 		switch {
 		case keyMatches(msg, a.keys.Quit):
 			return a, tea.Quit
@@ -152,6 +187,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, a.refreshSessionsCmd()
 		case keyMatches(msg, a.keys.Enter) && a.screen == ScreenSessions:
 			return a, a.attachSelectedSession()
+		case keyMatches(msg, a.keys.Enter) && a.screen == ScreenProjects:
+			return a, a.attachOrCreateForSelectedProject()
 		}
 	}
 
@@ -181,12 +218,14 @@ func (a App) View() string {
 	}
 
 	header := a.renderHeader()
-	footer := a.renderFooter()
 	statusBar := a.renderStatusBar()
+	footer := a.renderFooter()
 
-	// Reserve lines for header (1), status bar (1), footer (1), and a blank
-	// separator (1). The body fills whatever's left.
-	bodyHeight := a.height - 4
+	// Reserve 3 lines: header(1) + statusBar(1) + footer(1).
+	// Every screen receives the full remaining height and is responsible
+	// for sizing its own panes so the total comes out right (Pane.Height(h)
+	// includes borders).
+	bodyHeight := a.height - 3
 	if bodyHeight < 5 {
 		bodyHeight = 5
 	}
@@ -207,68 +246,125 @@ func (a App) View() string {
 		body = a.settings.View(a.width, bodyHeight)
 	}
 
-	return lipgloss.JoinVertical(lipgloss.Left,
-		header,
-		body,
-		statusBar,
-		footer,
-	)
+	return lipgloss.JoinVertical(lipgloss.Left, header, body, statusBar, footer)
 }
 
-// renderHeader is the top-of-screen tab strip.
+// renderHeader is the top-of-screen tab strip. On narrow terminals the
+// tab labels collapse to just their number; the full strip never wraps.
 func (a App) renderHeader() string {
 	tabs := []Screen{ScreenDashboard, ScreenSessions, ScreenProjects, ScreenNotes, ScreenClaude, ScreenSettings}
-	parts := make([]string, 0, len(tabs)+1)
-	parts = append(parts, a.styles.Title.Render(" ccmux "))
+	parts := []string{a.styles.Title.Render(" ccmux ")}
+	narrow := isNarrow(a.width)
 	for i, t := range tabs {
-		label := fmt.Sprintf("[%d] %s", i+1, t.String())
-		if t == a.screen {
-			parts = append(parts, a.styles.Emphasis.Render(" "+label+" "))
+		var label string
+		if narrow {
+			// Just the number when space is tight.
+			label = fmt.Sprintf(" %d ", i+1)
+			if t == a.screen {
+				label = fmt.Sprintf("[%d %s]", i+1, t.String()[:1])
+			}
 		} else {
-			parts = append(parts, a.styles.Muted.Render(" "+label+" "))
+			label = fmt.Sprintf("[%d] %s", i+1, t.String())
+			label = " " + label + " "
+		}
+		if t == a.screen {
+			parts = append(parts, a.styles.Emphasis.Render(label))
+		} else {
+			parts = append(parts, a.styles.Muted.Render(label))
 		}
 	}
-	return lipgloss.NewStyle().Background(a.styles.P.BGAlt).Width(a.width).Render(strings.Join(parts, ""))
+	line := lipgloss.NewStyle().Background(a.styles.P.BGAlt).Render(strings.Join(parts, ""))
+	return forceSingleLine(line, a.width)
 }
 
-// renderStatusBar is the bottom-most informational strip.
+// renderStatusBar is the bottom-most informational strip. Forced to 1 line.
+// On narrow terminals the right-side details are dropped first.
 func (a App) renderStatusBar() string {
 	host, _ := os.Hostname()
-	left := a.styles.HostColor("local").Render("● " + host)
+	left := a.styles.HostColor("local").Render("● " + shortHostname(host))
 
-	daemon := a.styles.StatusError.Render("⚠ daemon offline")
+	daemonChip := a.styles.StatusError.Render("⚠ offline")
 	if a.daemonOnline {
-		daemon = a.styles.StatusGood.Render("✓ daemon online")
+		daemonChip = a.styles.StatusGood.Render("✓ daemon")
 	}
 
-	count := fmt.Sprintf("%d session(s)", len(a.sessions))
-	refreshed := "never"
+	dangerBanner := ""
+	if a.cfg.Sleep.DangerousKeepAwakeOnBattery {
+		dangerBanner = a.styles.StatusDanger.Render("⚠ BATT") + " "
+	}
+
+	leftBlock := left + "  " + dangerBanner + daemonChip
+
+	refreshed := "—"
 	if !a.lastRefresh.IsZero() {
 		refreshed = a.lastRefresh.Format("15:04:05")
 	}
+	count := fmt.Sprintf("%d sess", len(a.sessions))
+	right := a.styles.Muted.Render(fmt.Sprintf("%s • %s", count, refreshed))
 
-	right := a.styles.Muted.Render(fmt.Sprintf("%s • refreshed %s", count, refreshed))
-
-	mid := daemon
-	if a.cfg.Sleep.DangerousKeepAwakeOnBattery {
-		mid = a.styles.StatusDanger.Render("⚠ DANGEROUS BATTERY MODE") + " " + daemon
+	// Compute available space for the right block. If the left side
+	// already overflows, we just render the left side and skip right
+	// rather than letting PlaceHorizontal misbehave with negative width.
+	leftW := lipgloss.Width(leftBlock)
+	rightW := lipgloss.Width(right)
+	body := leftBlock
+	if a.width-leftW-rightW >= 2 {
+		spacer := strings.Repeat(" ", a.width-leftW-rightW)
+		body = leftBlock + spacer + right
 	}
-
-	body := left + "  " + mid + lipgloss.PlaceHorizontal(
-		a.width-lipgloss.Width(left)-lipgloss.Width(mid)-2,
-		lipgloss.Right,
-		right,
-	)
-	return a.styles.StatusBar.Width(a.width).Render(body)
+	line := a.styles.StatusBar.Render(body)
+	return forceSingleLine(line, a.width)
 }
 
-// renderFooter is the help line. Single-row.
+// renderFooter is the help line. Single-row. Toast takes precedence.
 func (a App) renderFooter() string {
-	hint := "1-6 screens • r refresh • ? help • q quit"
 	if a.toast != "" && time.Now().Before(a.toastUntil) {
-		return a.styles.Toast.Render(a.toast)
+		base := a.styles.Toast
+		switch a.toastKind {
+		case toastError:
+			base = lipgloss.NewStyle().Background(a.styles.P.Red).Foreground(a.styles.P.BG).Padding(0, 1)
+		case toastSuccess:
+			base = lipgloss.NewStyle().Background(a.styles.P.Green).Foreground(a.styles.P.BG).Padding(0, 1)
+		case toastWarning:
+			base = lipgloss.NewStyle().Background(a.styles.P.Yellow).Foreground(a.styles.P.BG).Padding(0, 1)
+		}
+		return forceSingleLine(base.Render(a.toast), a.width)
 	}
-	return a.styles.Muted.Render(hint)
+	hint := "1-6 screens • n new • x kill • r refresh • ? help • q quit"
+	return forceSingleLine(a.styles.Muted.Render(hint), a.width)
+}
+
+// forceSingleLine guarantees the rendered string is exactly one line tall
+// and at most `width` *display* cells wide. Uses ansi.Truncate so styled
+// content (ANSI escape sequences) is preserved correctly — a plain
+// rune-slice would happily chop a sequence in half and corrupt the
+// terminal state.
+func forceSingleLine(s string, width int) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	if lipgloss.Width(s) <= width {
+		return s
+	}
+	return ansi.Truncate(s, width, "…")
+}
+
+// shortHostname strips trailing ".local" / ".lan" / tailnet suffix for the
+// status bar so "sputnik.mini.skz.dev" becomes "sputnik".
+func shortHostname(h string) string {
+	if i := strings.IndexByte(h, '.'); i > 0 {
+		return h[:i]
+	}
+	return h
+}
+
+func (a *App) setToast(kind toastKind, text string, ttl time.Duration) {
+	a.toast = text
+	a.toastKind = kind
+	if ttl <= 0 {
+		ttl = 3 * time.Second
+	}
+	a.toastUntil = time.Now().Add(ttl)
 }
 
 // refreshSessionsCmd fetches sessions from local ccmuxd and every configured
@@ -285,7 +381,6 @@ func (a App) refreshSessionsCmd() tea.Cmd {
 			err      error
 		)
 
-		// Local.
 		local, lerr := daemon.LocalClient()
 		if lerr == nil {
 			ss, e := local.Sessions(ctx)
@@ -297,7 +392,6 @@ func (a App) refreshSessionsCmd() tea.Cmd {
 				h, _ := local.Health(ctx)
 				hs = append(hs, hostStatus{Name: "local", Address: local.Addr(), OK: h.OK, Sessions: h.Sessions, SleepMode: h.SleepMode})
 			} else {
-				// Daemon unreachable — fall back to direct tmux.
 				direct, e2 := fallbackDirectTmux(ctx)
 				if e2 == nil {
 					sessions = append(sessions, direct...)
@@ -308,7 +402,6 @@ func (a App) refreshSessionsCmd() tea.Cmd {
 			}
 		}
 
-		// Remotes.
 		for _, h := range hosts {
 			addr := h.Address
 			if h.Port == 0 {
@@ -333,7 +426,6 @@ func (a App) refreshSessionsCmd() tea.Cmd {
 		}
 
 		sort.SliceStable(sessions, func(i, j int) bool {
-			// Sort: needs-input first, then active, then idle, then by host then name.
 			pi := statePriority(sessions[i].State)
 			pj := statePriority(sessions[j].State)
 			if pi != pj {
@@ -357,12 +449,7 @@ func (a App) refreshProjectsCmd() tea.Cmd {
 	}
 }
 
-// attachSelectedSession is what Enter does on the Sessions screen.
-// For local sessions: suspend the TUI and exec `tmux attach`. For remote
-// sessions: exec `mosh <host> -- tmux attach -t <session>`.
-//
-// Both replace the current process; on detach we exit. Re-launching ccmux
-// puts the user back in the same screen.
+// attachSelectedSession is Enter on Sessions screen.
 func (a App) attachSelectedSession() tea.Cmd {
 	sel := a.sessionsM.Selected()
 	if sel == nil {
@@ -370,16 +457,15 @@ func (a App) attachSelectedSession() tea.Cmd {
 	}
 	if sel.Host == "" || sel.Host == "local" {
 		return tea.ExecProcess(
-			cmdFor("tmux", "attach-session", "-d", "-t", sel.Name),
+			exec.Command("tmux", "attach-session", "-d", "-t", sel.Name),
 			func(err error) tea.Msg {
 				if err != nil {
 					return toastMsg{Text: "tmux: " + err.Error(), Kind: toastError, Until: time.Now().Add(5 * time.Second)}
 				}
-				return nil
+				return refreshAfterDetachMsg{}
 			},
 		)
 	}
-	// Remote: find the host config to pick mosh user/address.
 	var h *config.Host
 	for i := range a.cfg.Hosts {
 		if a.cfg.Hosts[i].Name == sel.Host {
@@ -401,14 +487,34 @@ func (a App) attachSelectedSession() tea.Cmd {
 		bin = "ssh"
 	}
 	return tea.ExecProcess(
-		cmdFor(bin, target, "--", "tmux", "attach-session", "-d", "-t", sel.Name),
-		nil,
+		exec.Command(bin, target, "--", "tmux", "attach-session", "-d", "-t", sel.Name),
+		func(err error) tea.Msg {
+			return refreshAfterDetachMsg{}
+		},
 	)
 }
 
-// fallbackDirectTmux runs `tmux list-sessions` and converts to SessionState
-// when the daemon isn't responding. We lose daemon-only fields (state,
-// prompt count, idle); the dashboard shows them as "unknown."
+// attachOrCreateForSelectedProject is Enter on Projects screen: attach to
+// the project's existing Claude session, or create one + attach.
+func (a App) attachOrCreateForSelectedProject() tea.Cmd {
+	if len(a.projects) == 0 || a.projectsM.cursor < 0 || a.projectsM.cursor >= len(a.projects) {
+		return nil
+	}
+	p := a.projects[a.projectsM.cursor]
+	session := p.SessionName()
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		has, _ := tmux.Has(ctx, session)
+		if !has {
+			if err := tmux.New(ctx, session, p.Path, `claude --continue || claude || zsh`); err != nil {
+				return toastMsg{Text: "start session: " + err.Error(), Kind: toastError, Until: time.Now().Add(5 * time.Second)}
+			}
+		}
+		return projectSessionReadyMsg{Session: session}
+	}
+}
+
 func fallbackDirectTmux(ctx context.Context) ([]daemon.SessionState, error) {
 	tss, err := tmux.List(ctx)
 	if err != nil {
@@ -417,14 +523,10 @@ func fallbackDirectTmux(ctx context.Context) ([]daemon.SessionState, error) {
 	out := make([]daemon.SessionState, 0, len(tss))
 	for _, ts := range tss {
 		out = append(out, daemon.SessionState{
-			Name:       ts.Name,
-			Host:       "local",
-			Path:       ts.Path,
-			Attached:   ts.Attached,
-			Windows:    ts.Windows,
-			Created:    ts.Created,
-			LastChange: ts.LastAttach,
-			State:      string(claude.StateUnknown),
+			Name: ts.Name, Host: "local", Path: ts.Path,
+			Attached: ts.Attached, Windows: ts.Windows,
+			Created: ts.Created, LastChange: ts.LastAttach,
+			State: string(claude.StateUnknown),
 		})
 	}
 	return out, nil
@@ -453,3 +555,7 @@ func statePriority(s string) int {
 		return 4
 	}
 }
+
+// refreshAfterDetachMsg fires after the TUI resumes from tmux attach;
+// triggers fresh data load so the screen is current.
+type refreshAfterDetachMsg struct{}

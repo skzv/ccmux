@@ -37,9 +37,9 @@ type tickMsg struct{ At time.Time }
 
 // toastMsg displays a one-line transient notification in the status bar.
 type toastMsg struct {
-	Text   string
-	Kind   toastKind
-	Until  time.Time
+	Text  string
+	Kind  toastKind
+	Until time.Time
 }
 
 type toastKind int
@@ -50,3 +50,27 @@ const (
 	toastWarning
 	toastError
 )
+
+// New-project flow messages.
+
+// newProjectSubmitMsg is emitted by the modal form when the user confirms.
+type newProjectSubmitMsg struct {
+	Name        string
+	Description string
+}
+
+// newProjectCancelMsg is emitted by the modal form when the user hits Esc.
+type newProjectCancelMsg struct{}
+
+// projectSessionReadyMsg is emitted after scaffold + StartSession finishes;
+// triggers the actual tmux-attach via tea.ExecProcess.
+type projectSessionReadyMsg struct {
+	Session string
+}
+
+// sessionKilledMsg signals that a Sessions-screen `x` kill completed; the
+// app responds with an immediate refresh.
+type sessionKilledMsg struct {
+	Name string
+	Err  error
+}

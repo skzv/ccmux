@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -9,10 +10,12 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/skzv/ccmux/internal/daemon"
+	"github.com/skzv/ccmux/internal/tmux"
 	"github.com/skzv/ccmux/internal/tui/styles"
 )
 
 // sessionsModel is the full session list with a details pane.
+// Under narrow terminals (< 80 cols), only the list is shown.
 type sessionsModel struct {
 	st       styles.Styles
 	km       Keymap
@@ -51,14 +54,22 @@ func (m sessionsModel) Update(msg tea.Msg) (sessionsModel, tea.Cmd) {
 			if m.cursor < len(m.sessions)-1 {
 				m.cursor++
 			}
+		case keyMatches(km, m.km.Kill):
+			if sel := m.Selected(); sel != nil {
+				name := sel.Name
+				return m, killSessionCmd(name)
+			}
 		}
 	}
 	return m, nil
 }
 
 func (m sessionsModel) View(width, height int) string {
+	if isNarrow(width) {
+		return m.renderList(width, height)
+	}
 	leftW := width * 2 / 3
-	rightW := width - leftW - 2
+	rightW := width - leftW - 1
 	return lipgloss.JoinHorizontal(lipgloss.Top,
 		m.renderList(leftW, height),
 		" ",
@@ -67,11 +78,20 @@ func (m sessionsModel) View(width, height int) string {
 }
 
 func (m sessionsModel) renderList(width, height int) string {
+	header := m.st.Emphasis.Render("Sessions") + "  " + m.st.Muted.Render(
+		fmt.Sprintf("(%d total — enter: attach   x: kill   r: refresh)", len(m.sessions)),
+	)
 	if len(m.sessions) == 0 {
-		body := m.st.Muted.Render("No sessions yet.\n\nPress " + m.st.Key.Render("3") + " to open Projects and start one.")
-		return m.st.Pane.Width(width - 2).Height(height).Render(body)
+		body := lipgloss.JoinVertical(lipgloss.Left,
+			header,
+			"",
+			m.st.Muted.Render("No sessions yet."),
+			"",
+			"Press "+m.st.Key.Render("3")+" to open Projects and create one.",
+		)
+		return m.st.Pane.Width(width - 2).Height(height - 2).Render(body)
 	}
-	rows := []string{m.st.Emphasis.Render("Sessions"), ""}
+	rows := []string{header, ""}
 	for i, s := range m.sessions {
 		line := renderSessionLine(m.st, s, width-4)
 		if i == m.cursor {
@@ -81,13 +101,13 @@ func (m sessionsModel) renderList(width, height int) string {
 		}
 		rows = append(rows, line)
 	}
-	return m.st.PaneFocused.Width(width - 2).Height(height).Render(strings.Join(rows, "\n"))
+	return m.st.PaneFocused.Width(width - 2).Height(height - 2).Render(strings.Join(rows, "\n"))
 }
 
 func (m sessionsModel) renderDetail(width, height int) string {
 	sel := m.Selected()
 	if sel == nil {
-		return m.st.Pane.Width(width - 2).Height(height).Render(m.st.Muted.Render("Nothing selected."))
+		return m.st.Pane.Width(width - 2).Height(height - 2).Render(m.st.Muted.Render("Nothing selected."))
 	}
 	lines := []string{
 		m.st.Emphasis.Render(sel.Name),
@@ -104,11 +124,22 @@ func (m sessionsModel) renderDetail(width, height int) string {
 		m.st.Subtitle.Render("Keys"),
 		m.st.Key.Render("enter") + "  attach",
 		m.st.Key.Render("x") + "      kill",
-		m.st.Key.Render("R") + "      rename",
-		m.st.Key.Render("k") + "      toggle keep-awake",
-		m.st.Key.Render("s") + "      snapshot",
+		m.st.Key.Render("R") + "      rename (coming soon)",
+		m.st.Key.Render("k") + "      toggle keep-awake (coming soon)",
+		m.st.Key.Render("s") + "      snapshot (coming soon)",
 	}
-	return m.st.Pane.Width(width - 2).Height(height).Render(strings.Join(lines, "\n"))
+	return m.st.Pane.Width(width - 2).Height(height - 2).Render(strings.Join(lines, "\n"))
+}
+
+// killSessionCmd runs `tmux kill-session -t <name>` and reports the result
+// via sessionKilledMsg, which the app uses to trigger a refresh.
+func killSessionCmd(name string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		err := tmux.Kill(ctx, name)
+		return sessionKilledMsg{Name: name, Err: err}
+	}
 }
 
 func relTime(t time.Time) string {

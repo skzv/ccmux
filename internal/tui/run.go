@@ -19,7 +19,13 @@ func Run(version string) error {
 	}
 
 	app := New(cfg, version)
-	p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	// Important: do NOT enable mouse capture. Bubble Tea's mouse modes
+	// intercept native terminal selection in most clients (iTerm, Blink,
+	// Terminal.app), which breaks copy/paste — especially inside tmux+Mosh
+	// where users expect to select text with the mouse or via tmux copy
+	// mode. Keyboard navigation is enough; the TUI is intentionally
+	// pointer-free.
+	p := tea.NewProgram(app, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		return err
 	}
