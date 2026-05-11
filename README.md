@@ -74,9 +74,9 @@ ccmux update         # pull latest, rebuild, reload daemon
 ccmux moshi-setup
 ```
 
-Installs [moshi-hook](https://getmoshi.app/) on the Mac, walks you through pairing with the Moshi iOS app, and wires the Claude Code hooks that turn `needs_input` events into **categorized** push notifications on your phone (approval_required vs task_complete). Tap, you're already on the right session, attach with one key, answer, detach with `prefix L` to land back in the TUI.
+Installs [moshi-hook](https://getmoshi.app/) on the Mac, runs **Easy Pair** (a QR code appears in your terminal — scan it with the Moshi iOS app, done), and wires the Claude Code hooks that turn `needs_input` events into **categorized** push notifications (approval_required vs task_complete). Tap the notification, the Moshi app shows your live tmux session list, pick one, attach, answer, detach. No tokens to copy.
 
-Plain BEL fallback works in any iOS terminal client (Blink Shell, Termius) — you lose the categories, that's it.
+Plain BEL fallback works in any iOS terminal client (Blink Shell, Termius) — you lose the categories, that's it. For headless / scripted setups: `ccmux moshi-setup --token <token>` bypasses the QR flow.
 
 ## 🛰️ Remote (always-on Mac Mini, auto-discovered)
 
@@ -89,7 +89,13 @@ ccmux daemon install                       # ccmuxd survives reboot
 ccmux                                      # dashboard already lists the Mini
 ```
 
-Every refresh, ccmux runs `tailscale status --json`, probes each online peer for a `ccmuxd /v1/health`, and merges the responders into the host list. New device on the tailnet running ccmux? It just appears. The Devices panel on the Dashboard shows each peer's reported ccmuxd version with an "update available" tag whenever it lags this build.
+Every refresh, ccmux runs `tailscale status --json`, probes each online non-mobile peer for a `ccmuxd /v1/health`, and merges the responders into the host list. New device on the tailnet running ccmux? It just appears.
+
+The Devices panel on the Dashboard shows:
+
+- 🟢 **peers running ccmuxd** — with their reported version + an "update available" tag whenever they lag this build
+- ⚪ **peers NOT running ccmuxd** (Macs/Linux boxes you haven't installed on yet) — with a one-line "ccmux not installed" hint so you remember to bring them online with `make bootstrap`
+- 📱 **phones / iPads are deliberately skipped** — the Moshi iOS app is their picker, not the desktop Dashboard
 
 Attaching a remote session execs `mosh mini -- tmux attach -t <name>`. Mosh tolerates roaming and stalls, so you can close the lid, go to a coffee shop, open the laptop — your session resumes instantly. Your phone gets pushes from the Mini, same flow as Mobile above.
 
@@ -123,10 +129,10 @@ Attaching a remote session execs `mosh mini -- tmux attach -t <name>`. Mosh tole
 - Ripgrep-backed search; plain markdown on disk is the source of truth (no required cloud)
 
 ### 📲 Mobile workflow (Moshi / iOS / Android)
-- **Categorized push notifications** via `moshi-hook` plugging into Claude Code's hooks system
-- **One-command setup** with `ccmux moshi-setup`
+- **Easy Pair via QR code** — `ccmux moshi-setup` runs `moshi-hook host setup`; scan the QR code with the Moshi app, you're paired. No token paste.
+- **Categorized push notifications** via `moshi-hook` plugging into Claude Code's hooks system (approval_required, task_complete, …)
+- **In-app session picker** — the Moshi app lists every tmux session on the paired host; no need to memorize names
 - **Auto-detection** — ccmuxd suppresses its own BEL trigger when moshi-hook is paired so you don't get duplicate notifications
-- **Persistent outer tmux session** — Moshi's `tmux new-session -A -s ccmux ccmux` puts you back in the TUI every time you open the app
 
 ### 🌐 Local & remote modes
 - **Local** — manages tmux sessions on this machine; prevents sleep while sessions are active
@@ -201,7 +207,7 @@ Useful keys on the Sessions screen:
 - `k` — pin keep-awake (the daemon holds a `caffeinate -s` while pinned)
 - `?` — full keymap
 
-### 3. Working from your phone (≈5 min, one-time setup)
+### 3. Working from your phone (≈3 min, one-time setup)
 
 Goal: your iPhone gets push notifications when Claude needs you, you tap, you're attached.
 
@@ -209,16 +215,11 @@ Goal: your iPhone gets push notifications when Claude needs you, you tap, you're
 ccmux moshi-setup
 ```
 
-The wizard installs `moshi-hook`, walks through Moshi's pairing flow, and writes the Claude Code hook entries.
+That installs `moshi-hook`, then runs `moshi-hook host setup` — **a QR code appears in your terminal**. Open the Moshi iOS app, tap **Add Host → Scan QR**, point your phone at the terminal, done. The wizard also wires Claude Code's hook entries so notifications fire automatically.
 
-On your phone:
-1. Install [Moshi](https://getmoshi.app/) from the App Store.
-2. Tap "Add Host", paste the pairing token.
-3. Moshi opens a persistent tmux session named `ccmux` and drops you into the TUI.
+After pairing, the Moshi app lists every tmux session on the Mac. Whenever Claude pauses on the host, your phone vibrates with a categorized push (approval_required / task_complete). Tap it, pick the session in the Moshi picker, attach, answer, swipe away.
 
-Now whenever Claude pauses for input on the Mac, your phone vibrates. Tap, the TUI's already on the right session, attach with Enter, answer, detach with `prefix L` (returns you to the outer ccmux session, not the iOS app).
-
-For a non-Moshi setup, the BEL still produces a generic notification — categories disappear, everything else works.
+For a non-Moshi setup, the BEL fallback still produces a generic notification — categories disappear, everything else works.
 
 ### 4. Customize the scaffold (≈2 min)
 
