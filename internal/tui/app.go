@@ -863,7 +863,17 @@ func (a App) refreshProjectsCmd() tea.Cmd {
 			}
 		}
 
-		sort.Slice(all, func(i, j int) bool {
+		sort.SliceStable(all, func(i, j int) bool {
+			hi, hj := projectHost(all[i]), projectHost(all[j])
+			if hi != hj {
+				if hi == "local" {
+					return true
+				}
+				if hj == "local" {
+					return false
+				}
+				return hi < hj
+			}
 			return all[i].Modified.After(all[j].Modified)
 		})
 		return projectsLoadedMsg{Projects: all}
