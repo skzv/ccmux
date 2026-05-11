@@ -33,7 +33,10 @@ Built on `tmux` (durability), `Mosh` + `Tailscale` (mobile-friendly connectivity
 
 ## 🚀 60-second start
 
+ccmux looks for projects under `~/Projects` by default (configurable via `projects.root` in `~/.config/ccmux/config.toml`, or a one-shot path like `ccmux ~/code`). Cloning ccmux itself into that directory keeps things tidy and means `ccmux update` finds the checkout without extra flags:
+
 ```bash
+mkdir -p ~/Projects && cd ~/Projects
 git clone https://github.com/skzv/ccmux.git
 cd ccmux && make bootstrap
 ```
