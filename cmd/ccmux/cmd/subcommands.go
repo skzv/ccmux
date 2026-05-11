@@ -18,6 +18,7 @@ import (
 	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/moshi"
 	"github.com/skzv/ccmux/internal/scaffold"
+	"github.com/skzv/ccmux/internal/setupwizard"
 	"github.com/skzv/ccmux/internal/tmux"
 )
 
@@ -162,15 +163,15 @@ func newKillCmd() *cobra.Command {
 	}
 }
 
-// newSetupCmd: `ccmux setup` first-run wizard.
+// newSetupCmd: `ccmux setup` first-run wizard. Idempotent — re-running
+// just verifies what's already done and prompts only for missing
+// pieces.
 func newSetupCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "setup",
 		Short: "Interactive first-run setup wizard",
 		RunE: func(_ *cobra.Command, _ []string) error {
-			fmt.Println("ccmux setup wizard")
-			fmt.Println("(Huh-form-based wizard arrives in the next milestone; see docs/02_Architecture/02_iOS_Mobile_Setup.md for the manual flow it will automate.)")
-			return runDoctor()
+			return setupwizard.Run(context.Background(), os.Stdout)
 		},
 	}
 }
