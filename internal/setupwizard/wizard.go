@@ -84,18 +84,30 @@ func Run(ctx context.Context, out io.Writer) error {
 	return nil
 }
 
-// stepDeps: detect which CLI deps are installed, offer to brew install
-// missing ones in one go.
+// stepDeps: detect which CLI deps are installed and walk the user
+// through installing the missing ones.
+//
+// Required deps (tmux, mosh, tailscale, claude) get bulk-installed in
+// one brew invocation behind a single Confirm.
+//
+// Optional-but-prompted deps (rg) get an individual Confirm with a
+// `description` explaining what they buy you. The user can decline
+// without blocking the wizard. moshi-hook stays silent here — it's
+// handled later in stepMoshi where pairing happens.
 func stepDeps(ctx context.Context, out io.Writer) error {
 	checks := []depCheck{
 		{bin: "tmux", brew: "tmux"},
 		{bin: "mosh", brew: "mosh"},
 		{bin: "tailscale", brew: "tailscale"},
 		{bin: "claude", brew: ""}, // installed via Anthropic's installer
-		{bin: "rg", brew: "ripgrep", optional: true},
+		{
+			bin: "rg", brew: "ripgrep", optional: true, promptInstall: true,
+			rationale: "Used by the Notes screen for fast `/` search across docs/. Falls back to a slower Go scanner when missing, so this is recommended but never required.",
+		},
 		{bin: "moshi-hook", brew: "", optional: true}, // installed via tap in stepMoshi
 	}
 	missing := []string{}
+	var promptable []depCheck
 	for _, c := range checks {
 		if _, err := exec.LookPath(c.bin); err != nil {
 			tag := stErr.Render("✗ missing")
@@ -103,31 +115,41 @@ func stepDeps(ctx context.Context, out io.Writer) error {
 				tag = stWarn.Render("· not installed (optional)")
 			}
 			fmt.Fprintf(out, "  %s  %s\n", c.bin, tag)
-			if c.brew != "" && !c.optional {
+			switch {
+			case c.brew != "" && !c.optional:
 				missing = append(missing, c.brew)
+			case c.brew != "" && c.promptInstall:
+				promptable = append(promptable, c)
 			}
 		} else {
 			fmt.Fprintf(out, "  %s  %s\n", c.bin, stOK.Render("✓"))
 		}
 	}
 
+	if err := installRequired(ctx, out, missing); err != nil {
+		return err
+	}
+	return installPromptable(ctx, out, promptable)
+}
+
+// installRequired bulk-installs the must-have brew packages behind a
+// single Confirm. Returns nil when there are none to install.
+func installRequired(ctx context.Context, out io.Writer, missing []string) error {
 	if len(missing) == 0 {
 		return nil
 	}
 	if _, err := exec.LookPath("brew"); err != nil {
 		return fmt.Errorf("brew not on PATH; install Homebrew first, then re-run")
 	}
-
 	var install bool
-	err := huh.NewForm(huh.NewGroup(
+	if err := huh.NewForm(huh.NewGroup(
 		huh.NewConfirm().
 			Title(fmt.Sprintf("Install %d missing package(s) via Homebrew?", len(missing))).
 			Description("brew install " + strings.Join(missing, " ")).
 			Affirmative("Install").
 			Negative("Skip").
 			Value(&install),
-	)).Run()
-	if err != nil {
+	)).Run(); err != nil {
 		return err
 	}
 	if !install {
@@ -139,6 +161,44 @@ func stepDeps(ctx context.Context, out io.Writer) error {
 	cmd.Stdout = out
 	cmd.Stderr = out
 	return cmd.Run()
+}
+
+// installPromptable walks the per-dep prompts for optional packages
+// the wizard recommends but doesn't mandate. One Confirm per dep so
+// the user can mix-and-match.
+func installPromptable(ctx context.Context, out io.Writer, deps []depCheck) error {
+	if len(deps) == 0 {
+		return nil
+	}
+	if _, err := exec.LookPath("brew"); err != nil {
+		fmt.Fprintln(out, stMuted.Render("  (brew not on PATH — install manually if you want these)"))
+		return nil
+	}
+	for _, c := range deps {
+		var doInstall bool
+		title := fmt.Sprintf("Install %s? (optional)", c.brew)
+		if err := huh.NewForm(huh.NewGroup(
+			huh.NewConfirm().
+				Title(title).
+				Description(c.rationale).
+				Affirmative("Install").
+				Negative("Skip").
+				Value(&doInstall),
+		)).Run(); err != nil {
+			return err
+		}
+		if !doInstall {
+			fmt.Fprintf(out, "  %s  %s\n", c.bin, stMuted.Render("(skipped — install with `brew install "+c.brew+"` later)"))
+			continue
+		}
+		cmd := exec.CommandContext(ctx, "brew", "install", c.brew)
+		cmd.Stdout = out
+		cmd.Stderr = out
+		if err := cmd.Run(); err != nil {
+			fmt.Fprintf(out, "  %s install failed: %v\n", stErr.Render("✗"), err)
+		}
+	}
+	return nil
 }
 
 // stepGitHubAuth: gh is recommended (not required) for `ccmux new` to
@@ -545,7 +605,19 @@ func stepDaemonService(_ context.Context, out io.Writer) error {
 
 // depCheck is one row in the dependency table.
 type depCheck struct {
-	bin      string
-	brew     string
+	// bin is the executable name to LookPath.
+	bin string
+	// brew is the package name to install (empty when there's no
+	// brew formula — e.g. `claude` comes from Anthropic's installer).
+	brew string
+	// optional rows aren't included in the bulk required-deps
+	// install prompt.
 	optional bool
+	// promptInstall flips optional rows into "ask the user one-by-
+	// one whether to install". Used for soft-recommended deps like
+	// ripgrep that ccmux falls back gracefully without.
+	promptInstall bool
+	// rationale is the user-visible explanation for the per-dep
+	// Confirm description (only meaningful when promptInstall=true).
+	rationale string
 }
