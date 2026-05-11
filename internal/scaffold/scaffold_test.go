@@ -81,7 +81,9 @@ func TestScaffold_RelativeNameResolvedToAbsoluteCwd(t *testing.T) {
 	if err := Scaffold(&Options{Name: "relsub", SkipGit: true}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(cwd, "relsub", "src")); err != nil {
+	// Use the first DefaultDirs entry as the marker — robust against
+	// future tweaks to the default layout.
+	if _, err := os.Stat(filepath.Join(cwd, "relsub", DefaultDirs[0])); err != nil {
 		t.Errorf("did not scaffold under cwd: %v", err)
 	}
 }
@@ -147,6 +149,19 @@ func TestDefaultInitialPrompt_MentionsKeyPieces(t *testing.T) {
 	for _, s := range mustContain {
 		if !strings.Contains(DefaultInitialPrompt, s) {
 			t.Errorf("DefaultInitialPrompt missing %q", s)
+		}
+	}
+}
+
+// TestDefaultInitialPrompt_NoGitHubPush — the default flow keeps things
+// local; pushing to GitHub is a user-initiated step. If anyone later
+// re-adds a `gh repo create` line to the default, this test forces a
+// conversation about whether that's the right default.
+func TestDefaultInitialPrompt_NoGitHubPush(t *testing.T) {
+	forbidden := []string{"gh repo create", "GitHub repo", "push the initial commit"}
+	for _, s := range forbidden {
+		if strings.Contains(DefaultInitialPrompt, s) {
+			t.Errorf("DefaultInitialPrompt should stay local-only, but contains %q", s)
 		}
 	}
 }

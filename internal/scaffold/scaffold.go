@@ -32,12 +32,21 @@ type Options struct {
 	NoSession   bool   // scaffold only; don't start tmux
 }
 
-// DefaultDirs is the ccmux-opinionated layout: src/tests + a docs/
-// vault with three convention subdirs. Overridable via the [scaffold]
-// section of ~/.config/ccmux/config.toml.
+// DefaultDirs is the ccmux-opinionated layout. Just the docs/ vault —
+// no src/ or tests/, because those are language-specific (cmd+internal
+// for Go, src+__tests__ for Node, the package dir for Python, …) and
+// `/init` does a better job choosing the layout once Claude knows what
+// you're building. The three numbered subdirs are deliberate:
+//
+//   - 01_Specs/         PRDs and feature specs
+//   - 02_Architecture/  ADRs and system design
+//   - 03_Agent_Logs/    daily scratchpad — AI sessions append here,
+//                       and `ccmux new` auto-templates today's log
+//
+// All of this is overridable via [scaffold].dirs in
+// ~/.config/ccmux/config.toml — set it to whatever shape you actually
+// want and ccmux will create exactly that.
 var DefaultDirs = []string{
-	"src",
-	"tests",
 	"docs/01_Specs",
 	"docs/02_Architecture",
 	"docs/03_Agent_Logs",
@@ -57,11 +66,17 @@ obj/
 
 // DefaultInitialPrompt is what ccmux sends to Claude after the new
 // session boots. {{name}} and {{description}} are substituted.
+//
+// Deliberately local-only: we no longer ask Claude to create a GitHub
+// repo here. The first session should be uninterrupted thinking, not
+// network-touching side quests; the user can push later with `gh repo
+// create --private --source=. --remote=origin --push` whenever they're
+// ready. (Overridable via [scaffold].initial_prompt in config.toml.)
 const DefaultInitialPrompt = `I'm starting a new project called "{{name}}". {{description}} ` +
 	`Please: (1) Run /init to scaffold CLAUDE.md from scratch — there is no existing CLAUDE.md, so this should be one clean write. ` +
-	`(2) The project already has these directories: src/, tests/, docs/01_Specs/ (specs/PRDs), docs/02_Architecture/ (ADRs), docs/03_Agent_Logs/ (daily scratchpad). Reflect this in CLAUDE.md's Directory Layout section. ` +
-	`(3) Ask me 2-3 targeted questions about the concept, stack, and immediate goals, then write docs/01_Specs/00_Initial_Concept.md from my answers. ` +
-	`(4) Create a PRIVATE GitHub repo named "{{name}}" and push the initial commit.`
+	`(2) The project already has these documentation directories: docs/01_Specs/ (specs/PRDs), docs/02_Architecture/ (ADRs), docs/03_Agent_Logs/ (daily scratchpad). Reflect this in CLAUDE.md's Directory Layout section. ` +
+	`(3) Pick the right source-code layout for the language/stack we choose — e.g. cmd+internal for Go, src for Node/Python — and create those directories yourself. Don't assume src/+tests/. ` +
+	`(4) Ask me 2-3 targeted questions about the concept, stack, and immediate goals, then write docs/01_Specs/00_Initial_Concept.md from my answers.`
 
 // gitignoreSeed is kept for backward-compat with callers that referenced
 // the old name; it points at DefaultGitignore.
