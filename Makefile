@@ -1,4 +1,4 @@
-.PHONY: build install setup uninstall run test lint clean fmt vet daemon tui check-go
+.PHONY: build install setup uninstall run test lint clean fmt vet daemon tui check-go bootstrap
 
 BIN_DIR    := bin
 INSTALL_DIR := $(HOME)/.local/bin
@@ -54,7 +54,15 @@ install: build
 	cp $(BIN_DIR)/ccmuxd $(INSTALL_DIR)/ccmuxd
 	@echo "Installed to $(INSTALL_DIR). Make sure it's on your PATH."
 
-# `make setup` is the one-shot for new users from a fresh clone:
+# `make bootstrap` is the friendliest entry point for a fresh machine:
+# it verifies the build chain (go / git / make / brew on macOS),
+# offers to install whatever's missing, then chains into `make setup`.
+# Use this when you don't know if Go is installed. Otherwise `make
+# setup` skips the dep check and goes straight to build + wizard.
+bootstrap:
+	@./scripts/bootstrap.sh
+
+# `make setup` is the one-shot for new users with a working build chain:
 # build → install to PATH → run the interactive setup wizard.
 # Existing users can re-run it; the wizard is idempotent and skips
 # any step whose underlying state is already good.
