@@ -51,6 +51,41 @@ func (p Peer) IsMobile() bool {
 	return false
 }
 
+// DisplayName picks the most user-friendly label for this peer. The
+// raw HostName from Tailscale is sometimes the literal string
+// "localhost" — that's the default hostname iOS Tailscale registers
+// with when the user hasn't customized it. In that case we fall back
+// to the leftmost segment of the MagicDNS name (e.g. "skzs-iphone"
+// out of "skzs-iphone.tail-abcd.ts.net."), and finally to a generic
+// OS-based label as a last resort.
+func (p Peer) DisplayName() string {
+	if h := strings.TrimSpace(p.HostName); h != "" && !strings.EqualFold(h, "localhost") {
+		return h
+	}
+	if dns := strings.TrimSpace(p.DNSName); dns != "" {
+		dns = strings.TrimSuffix(dns, ".")
+		if i := strings.Index(dns, "."); i > 0 {
+			return dns[:i]
+		}
+		return dns
+	}
+	switch strings.ToLower(p.OS) {
+	case "ios":
+		return "iPhone"
+	case "ipados":
+		return "iPad"
+	case "android":
+		return "Android phone"
+	case "macos":
+		return "Mac"
+	case "linux":
+		return "Linux box"
+	case "windows":
+		return "Windows PC"
+	}
+	return "(unnamed peer)"
+}
+
 // Peers returns every peer Tailscale knows about, plus Self. Returns an
 // empty slice (not an error) when tailscale isn't installed or hasn't
 // been authed — those are normal user states, not failures.
@@ -190,7 +225,7 @@ func ScanTailnet(ctx context.Context, port int) (Scan, error) {
 				return
 			}
 			results <- result{ok: true, d: Discovered{
-				Name:     shortName(p.HostName),
+				Name:     shortName(p.DisplayName()),
 				Address:  addr,
 				Version:  info.Version,
 				Sessions: info.Sessions,

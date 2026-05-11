@@ -622,12 +622,26 @@ func (a App) refreshSessionsCmd() tea.Cmd {
 				}
 				sessions = append(sessions, ss...)
 				h, _ := local.Health(ctx)
-				hs = append(hs, hostStatus{Name: "local", Address: local.Addr(), OK: h.OK, Sessions: h.Sessions, SleepMode: h.SleepMode, Version: h.Version})
+				hs = append(hs, hostStatus{
+					Name:      "local",
+					Subtitle:  shortHostname(h.Hostname),
+					Address:   local.Addr(),
+					OK:        h.OK,
+					Sessions:  h.Sessions,
+					SleepMode: h.SleepMode,
+					Version:   h.Version,
+				})
 			} else {
 				direct, e2 := fallbackDirectTmux(ctx)
 				if e2 == nil {
 					sessions = append(sessions, direct...)
-					hs = append(hs, hostStatus{Name: "local", Address: "tmux (no daemon)", OK: false})
+					localHost, _ := os.Hostname()
+					hs = append(hs, hostStatus{
+						Name:     "local",
+						Subtitle: shortHostname(localHost),
+						Address:  "tmux (no daemon)",
+						OK:       false,
+					})
 				} else {
 					err = fmt.Errorf("local: %w", e2)
 				}
@@ -702,7 +716,7 @@ func (a App) refreshSessionsCmd() tea.Cmd {
 				}
 				seen[addr] = true
 				hs = append(hs, hostStatus{
-					Name:         shortPeerName(p.HostName),
+					Name:         shortPeerName(p.DisplayName()),
 					Address:      addr,
 					Discovered:   true,
 					NeedsInstall: true,
@@ -720,7 +734,7 @@ func (a App) refreshSessionsCmd() tea.Cmd {
 				}
 				seen[key] = true
 				hs = append(hs, hostStatus{
-					Name:       shortPeerName(p.HostName),
+					Name:       shortPeerName(p.DisplayName()),
 					Address:    p.Addr,
 					Discovered: true,
 					Mobile:     true,

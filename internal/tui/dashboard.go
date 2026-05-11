@@ -166,19 +166,16 @@ func (m dashboardModel) devicesPanel(width int) string {
 	local := m.version
 	rows := []string{st.Emphasis.Render("Devices")}
 	for _, h := range m.hosts {
+		label := formatDeviceLabel(h.Name, h.Subtitle, st)
 		if h.Mobile {
-			rows = append(rows, fmt.Sprintf("📱 %-12s %s",
-				truncatePeerName(h.Name, 12),
-				st.Muted.Render("connect via Moshi app"),
-			))
+			rows = append(rows, fmt.Sprintf("📱 %s %s",
+				label, st.Muted.Render("connect via Moshi app")))
 			continue
 		}
 		if h.NeedsInstall {
-			rows = append(rows, fmt.Sprintf("%s %-12s %s",
-				st.Muted.Render("○"),
-				truncatePeerName(h.Name, 12),
-				st.Muted.Render("ccmux not installed"),
-			))
+			rows = append(rows, fmt.Sprintf("%s %s %s",
+				st.Muted.Render("○"), label,
+				st.Muted.Render("ccmux not installed")))
 			continue
 		}
 		dot := st.StateActive.Render("●")
@@ -197,8 +194,8 @@ func (m dashboardModel) devicesPanel(width int) string {
 		if local != "" && h.Version != "" && versionsDiffer(local, h.Version) {
 			updateNote = st.StatusWarning.Render("  update available")
 		}
-		rows = append(rows, fmt.Sprintf("%s %-12s %s%s%s",
-			dot, truncatePeerName(h.Name, 12), ver, tag, updateNote))
+		rows = append(rows, fmt.Sprintf("%s %s %s%s%s",
+			dot, label, ver, tag, updateNote))
 	}
 	if local != "" {
 		rows = append(rows, "")
@@ -219,6 +216,20 @@ func (m dashboardModel) devicesPanel(width int) string {
 			"git clone https://github.com/skzv/ccmux && cd ccmux && make bootstrap"))
 	}
 	return st.Pane.Width(width - 2).Render(strings.Join(rows, "\n"))
+}
+
+// formatDeviceLabel renders one Devices-row label: the primary name
+// left-padded to 12 chars, optionally followed by a muted subtitle in
+// parentheses (the host's actual hostname for the local row, etc.).
+// Keeps every row aligned on the version/status column regardless of
+// whether a subtitle is present.
+func formatDeviceLabel(name, subtitle string, st styles.Styles) string {
+	primary := fmt.Sprintf("%-12s", truncatePeerName(name, 12))
+	if subtitle == "" {
+		return primary + "             " // spacer so subsequent columns line up
+	}
+	sub := truncatePeerName(subtitle, 12)
+	return primary + " " + st.Muted.Render(fmt.Sprintf("%-12s", sub))
 }
 
 func truncatePeerName(s string, n int) string {

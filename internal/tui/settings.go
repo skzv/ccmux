@@ -396,7 +396,7 @@ func (m settingsModel) renderMoshiBlock() string {
 
 func (m settingsModel) renderHosts() string {
 	if len(m.cfg.Hosts) == 0 {
-		return m.st.Muted.Render("  (none — add with `ccmux host add <name> <address>`)")
+		return m.st.Muted.Render("  (none pinned — tailnet peers running ccmuxd are auto-discovered.\n   Use `ccmux host add` only for non-Tailscale hosts or non-default ports.)")
 	}
 	out := []string{}
 	for _, h := range m.cfg.Hosts {
