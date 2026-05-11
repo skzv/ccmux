@@ -82,8 +82,16 @@ func (m dashboardModel) viewWide(width, height int) string {
 		rowH = 8
 	}
 
-	leftW := width * 2 / 3
-	rightW := width - leftW - 1
+	// Layout: left column carries Sessions, right column carries the
+	// stack of Session-summary + Devices + Usage. The previous 2:1
+	// split made Sessions dominant and squeezed the Devices panel,
+	// which has the most information density per row (name + version
+	// + tags + warnings). Reweighting to 1:1 (with a 1-col gutter)
+	// gives Devices room to breathe; Sessions still fits comfortably
+	// since most rows are short.
+	gutter := 1
+	leftW := (width - gutter) / 2
+	rightW := width - leftW - gutter
 
 	sessions := m.topSessions(leftW, rowH)
 
@@ -175,7 +183,7 @@ func (m dashboardModel) devicesPanel(width int) string {
 		if h.NeedsInstall {
 			rows = append(rows, fmt.Sprintf("%s %s %s",
 				st.Muted.Render("○"), label,
-				st.Muted.Render("ccmux not installed")))
+				st.Muted.Render("ccmuxd unreachable")))
 			continue
 		}
 		dot := st.StateActive.Render("●")
@@ -212,8 +220,10 @@ func (m dashboardModel) devicesPanel(width int) string {
 		}
 	}
 	if hasMissing {
-		rows = append(rows, st.Muted.Render("install on a peer: ssh <peer>; "+
-			"git clone https://github.com/skzv/ccmux && cd ccmux && make bootstrap"))
+		rows = append(rows, st.Muted.Render(
+			"unreachable peer? either (a) install: `git clone github.com/skzv/ccmux && make bootstrap`,"))
+		rows = append(rows, st.Muted.Render(
+			"or (b) it's installed but local-only — set [daemon] listen_tailnet=true on that peer, then `ccmux update`."))
 	}
 	return st.Pane.Width(width - 2).Render(strings.Join(rows, "\n"))
 }
