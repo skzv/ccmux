@@ -17,6 +17,7 @@ import (
 	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/daemonservice"
+	"github.com/skzv/ccmux/internal/ghauth"
 	"github.com/skzv/ccmux/internal/moshi"
 	"github.com/skzv/ccmux/internal/scaffold"
 	"github.com/skzv/ccmux/internal/setupwizard"
@@ -206,6 +207,25 @@ func runDoctor() error {
 		} else {
 			fmt.Printf("✓ %s\n", c.bin)
 		}
+	}
+
+	// gh CLI block — recommended but not required. ccmux new asks Claude
+	// to make a private GitHub repo as the last scaffolding step; that
+	// works much better when gh is authed.
+	fmt.Println()
+	fmt.Println("GitHub CLI (recommended for `ccmux new` repo creation):")
+	gh := ghauth.Detect(context.Background())
+	switch gh.State {
+	case ghauth.StateAuthed:
+		who := gh.User
+		if who == "" {
+			who = "(login parsed empty, but gh auth status is happy)"
+		}
+		fmt.Printf("  ✓ gh authenticated as %s\n", who)
+	case ghauth.StateNotAuthed:
+		fmt.Println("  · " + gh.Hint())
+	case ghauth.StateMissing:
+		fmt.Println("  · " + gh.Hint())
 	}
 
 	// Moshi / moshi-hook block (optional but the recommended mobile path).

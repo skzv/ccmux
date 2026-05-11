@@ -25,6 +25,7 @@ import (
 	"github.com/skzv/ccmux/internal/claudeauth"
 	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/daemonservice"
+	"github.com/skzv/ccmux/internal/ghauth"
 	"github.com/skzv/ccmux/internal/moshi"
 )
 
@@ -60,6 +61,7 @@ func Run(ctx context.Context, out io.Writer) error {
 	}{
 		{"Dependencies", stepDeps},
 		{"Tailscale", stepTailscale},
+		{"GitHub CLI", stepGitHubAuth},
 		{"Moshi (mobile push)", stepMoshi},
 		{"SSH key for phone", stepSSHKey},
 		{"ccmux config", stepConfig},
@@ -138,6 +140,49 @@ func stepDeps(ctx context.Context, out io.Writer) error {
 	cmd.Stdout = out
 	cmd.Stderr = out
 	return cmd.Run()
+}
+
+// stepGitHubAuth: gh is recommended (not required) for `ccmux new` to
+// auto-create a private GitHub repo. We never block the wizard on this
+// — just nudge.
+func stepGitHubAuth(ctx context.Context, out io.Writer) error {
+	s := ghauth.Detect(ctx)
+	switch s.State {
+	case ghauth.StateAuthed:
+		who := s.User
+		if who == "" {
+			who = "(authed)"
+		}
+		fmt.Fprintf(out, "  %s  gh authenticated as %s\n", stOK.Render("✓"), who)
+		return nil
+	case ghauth.StateMissing:
+		fmt.Fprintln(out, stWarn.Render("  gh not installed"))
+		fmt.Fprintln(out, "  "+stMuted.Render("Optional — used by `ccmux new` to create a private GitHub repo for new projects."))
+		var install bool
+		if _, err := exec.LookPath("brew"); err == nil {
+			if err := huh.NewConfirm().
+				Title("Install gh via Homebrew?").
+				Description("brew install gh — you'll still need to run `gh auth login` after.").
+				Value(&install).Run(); err == nil && install {
+				cmd := exec.CommandContext(ctx, "brew", "install", "gh")
+				cmd.Stdout, cmd.Stderr = out, out
+				if err := cmd.Run(); err != nil {
+					fmt.Fprintf(out, "  %s brew install gh: %v\n", stErr.Render("✗"), err)
+					return nil
+				}
+				fmt.Fprintln(out, "  "+stEmphasis.Render("Next: gh auth login")+"  (opens a browser).")
+				return nil
+			}
+		} else {
+			fmt.Fprintln(out, "  Install yourself: "+stEmphasis.Render("brew install gh")+", then "+stEmphasis.Render("gh auth login"))
+		}
+		return nil
+	case ghauth.StateNotAuthed:
+		fmt.Fprintln(out, stWarn.Render("  gh installed but not signed in"))
+		fmt.Fprintln(out, "  Run "+stEmphasis.Render("gh auth login")+" in another terminal (opens a browser), then re-run "+stEmphasis.Render("ccmux setup")+" to verify.")
+		return nil
+	}
+	return nil
 }
 
 // stepTailscale: verify the daemon is running and we're signed into a
