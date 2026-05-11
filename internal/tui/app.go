@@ -196,13 +196,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case projectSessionReadyMsg:
 		// New project is scaffolded and its tmux session is running with
-		// the initial prompt sent. Now attach. tea.ExecProcess suspends
-		// the TUI for the duration of tmux attach, and resumes when the
-		// user detaches.
-		c := exec.Command("tmux", "attach-session", "-d", "-t", msg.Session)
-		return a, tea.ExecProcess(c, func(err error) tea.Msg {
-			return refreshAfterDetachMsg{}
-		})
+		// the initial prompt sent. Route through localAttachCmd so the
+		// nested-tmux case (ccmux running inside the outer ccmux session
+		// on mobile) uses switch-client instead of attach-session —
+		// otherwise tmux refuses the nested attach and the user just
+		// stares at the Projects screen wondering why nothing happened.
+		return a, a.localAttachCmd(msg.Session, msg.Project)
 
 	case sessionKilledMsg:
 		if msg.Err != nil {
@@ -692,40 +691,8 @@ func (a App) attachSelectedSession() tea.Cmd {
 		return nil
 	}
 
-	// Apply chrome to local sessions only — we don't have a tmux socket
-	// on the remote host from here.
 	if sel.Host == "" || sel.Host == "local" {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		mst := moshi.Detect(ctx)
-		_ = tmuxchrome.Apply(ctx, sel.Name, sel.Project,
-			mst.Paired && mst.Connected,
-			tmuxchrome.InTmux(), // nested?
-		)
-	}
-
-	if sel.Host == "" || sel.Host == "local" {
-		if tmuxchrome.InTmux() {
-			// Already inside tmux (the persistent outer "ccmux" session
-			// when connected via Moshi). Use switch-client to avoid
-			// nesting.
-			c := exec.Command("tmux", "switch-client", "-t", sel.Name)
-			return tea.ExecProcess(c, func(err error) tea.Msg {
-				if err != nil {
-					return toastMsg{Text: "tmux switch-client: " + err.Error(), Kind: toastError, Until: time.Now().Add(5 * time.Second)}
-				}
-				return refreshAfterDetachMsg{}
-			})
-		}
-		return tea.ExecProcess(
-			exec.Command("tmux", "attach-session", "-d", "-t", sel.Name),
-			func(err error) tea.Msg {
-				if err != nil {
-					return toastMsg{Text: "tmux: " + err.Error(), Kind: toastError, Until: time.Now().Add(5 * time.Second)}
-				}
-				return refreshAfterDetachMsg{}
-			},
-		)
+		return a.localAttachCmd(sel.Name, sel.Project)
 	}
 	var h *config.Host
 	for i := range a.cfg.Hosts {
@@ -763,6 +730,7 @@ func (a App) attachOrCreateForSelectedProject() tea.Cmd {
 	}
 	p := a.projects[a.projectsM.cursor]
 	session := p.SessionName()
+	label := p.Name
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
@@ -772,8 +740,43 @@ func (a App) attachOrCreateForSelectedProject() tea.Cmd {
 				return toastMsg{Text: "start session: " + err.Error(), Kind: toastError, Until: time.Now().Add(5 * time.Second)}
 			}
 		}
-		return projectSessionReadyMsg{Session: session}
+		return projectSessionReadyMsg{Session: session, Project: label}
 	}
+}
+
+// localAttachCmd builds the tea.Cmd that suspends Bubble Tea, applies
+// ccmux's chrome to the target session, then either switch-clients
+// (when we're already inside the outer ccmux tmux session, the mobile
+// flow) or attach-sessions (when we're in a bare terminal). One
+// definition shared by the Sessions screen and the Projects screen
+// so both paths handle the nested-tmux case identically — Projects
+// previously always called attach-session, which silently failed
+// inside the outer ccmux session.
+func (a App) localAttachCmd(session, projectLabel string) tea.Cmd {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	mst := moshi.Detect(ctx)
+	nested := tmuxchrome.InTmux()
+	_ = tmuxchrome.Apply(ctx, session, projectLabel, mst.Paired && mst.Connected, nested)
+
+	if nested {
+		c := exec.Command("tmux", "switch-client", "-t", session)
+		return tea.ExecProcess(c, func(err error) tea.Msg {
+			if err != nil {
+				return toastMsg{Text: "tmux switch-client: " + err.Error(), Kind: toastError, Until: time.Now().Add(5 * time.Second)}
+			}
+			return refreshAfterDetachMsg{}
+		})
+	}
+	return tea.ExecProcess(
+		exec.Command("tmux", "attach-session", "-d", "-t", session),
+		func(err error) tea.Msg {
+			if err != nil {
+				return toastMsg{Text: "tmux: " + err.Error(), Kind: toastError, Until: time.Now().Add(5 * time.Second)}
+			}
+			return refreshAfterDetachMsg{}
+		},
+	)
 }
 
 func fallbackDirectTmux(ctx context.Context) ([]daemon.SessionState, error) {

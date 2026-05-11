@@ -72,9 +72,12 @@ type newProjectSubmitMsg struct {
 type newProjectCancelMsg struct{}
 
 // projectSessionReadyMsg is emitted after scaffold + StartSession finishes;
-// triggers the actual tmux-attach via tea.ExecProcess.
+// triggers the actual tmux-attach via tea.ExecProcess. Project is the
+// human-readable label passed to tmuxchrome.Apply so the attached
+// status bar reads "ccmux | <project>" rather than the raw session name.
 type projectSessionReadyMsg struct {
 	Session string
+	Project string
 }
 
 // sessionKilledMsg signals that a Sessions-screen `x` kill completed; the

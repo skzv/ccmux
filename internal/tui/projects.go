@@ -163,7 +163,7 @@ func scaffoldAndStartCmd(submit newProjectSubmitMsg) tea.Cmd {
 		if err != nil {
 			return toastMsg{Text: "new project: " + err.Error(), Kind: toastError, Until: time.Now().Add(6 * time.Second)}
 		}
-		return projectSessionReadyMsg{Session: session}
+		return projectSessionReadyMsg{Session: session, Project: submit.Name}
 	}
 }
 
