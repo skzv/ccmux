@@ -40,6 +40,17 @@ type hostStatus struct {
 	// /v1/health. Empty for hosts we couldn't reach. The dashboard
 	// compares against the local build to flag "update available".
 	Version string
+	// NeedsInstall flags a tailnet peer that didn't respond to the
+	// /v1/health probe — typically another Mac or Linux box on the
+	// tailnet where the user hasn't installed ccmux yet. The Devices
+	// panel renders these with a "ccmux not installed / running" hint
+	// instead of session counts. Mobile peers are never in this state
+	// (they're filtered out upstream — see tailnet.IsMobile).
+	NeedsInstall bool
+	// OS is what Tailscale reports for this peer ("macOS", "Linux",
+	// …). Only populated for NeedsInstall rows so the hint can be
+	// platform-specific.
+	OS string
 }
 
 // tickMsg is the periodic dashboard refresh trigger.

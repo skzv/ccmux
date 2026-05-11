@@ -664,20 +664,18 @@ func (a App) refreshSessionsCmd() tea.Cmd {
 			hs = append(hs, st)
 		}
 
-		// Tailnet auto-discovery. Probes every online peer for a
-		// ccmuxd /v1/health and merges the responders in. Skips
-		// already-configured addresses so a user who's done both
-		// `ccmux host add` and has discovery on doesn't see duplicates.
-		// Errors here are non-fatal — discovery is convenience, not
-		// correctness.
-		//
-		// We deliberately do NOT surface tailnet peers that lack ccmuxd
-		// (phones, iPads, etc.). The Moshi iOS app is the right picker
-		// for those — it lists every tmux session on the configured
-		// host and is built for thumb input. Showing them again on the
-		// desktop dashboard would be noise.
-		if discovered, derr := tailnet.Discover(ctx, tailnetPort); derr == nil {
-			for _, d := range discovered {
+		// Tailnet auto-discovery. ScanTailnet probes every online
+		// non-mobile peer for ccmuxd /v1/health and partitions:
+		//   - Reachable: ccmuxd answered → merge as a regular host.
+		//   - NeedsInstall: peer is up but didn't answer → surface
+		//     with a "ccmux not installed / running here" hint so
+		//     the user knows what to do.
+		// Mobile peers (iOS, iPadOS, Android) are skipped entirely
+		// because the Moshi app handles them, and installing ccmux
+		// there isn't an option.
+		// Errors are non-fatal — discovery is convenience.
+		if scan, derr := tailnet.ScanTailnet(ctx, tailnetPort); derr == nil {
+			for _, d := range scan.Reachable {
 				if seen[d.Address] {
 					continue
 				}
@@ -696,6 +694,21 @@ func (a App) refreshSessionsCmd() tea.Cmd {
 					st.Err = e
 				}
 				hs = append(hs, st)
+			}
+			for _, p := range scan.NeedsInstall {
+				addr := fmt.Sprintf("%s:%d", p.Addr, tailnetPort)
+				if seen[addr] {
+					continue
+				}
+				seen[addr] = true
+				hs = append(hs, hostStatus{
+					Name:         shortPeerName(p.HostName),
+					Address:      addr,
+					Discovered:   true,
+					NeedsInstall: true,
+					OS:           p.OS,
+					OK:           p.Online,
+				})
 			}
 		}
 
@@ -882,3 +895,34 @@ func statePriority(s string) int {
 // refreshAfterDetachMsg fires after the TUI resumes from tmux attach;
 // triggers fresh data load so the screen is current.
 type refreshAfterDetachMsg struct{}
+
+// shortPeerName squeezes Tailscale's human-friendly HostName ("Sasha's
+// Mac mini") into something legible on the Devices panel
+// ("sashas-mac-mini"). Lifted out of tailnet so the App can also use
+// it for NeedsInstall rows without re-exporting the helper.
+func shortPeerName(s string) string {
+	out := make([]rune, 0, len(s))
+	prevDash := false
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			out = append(out, r)
+			prevDash = false
+		case r >= 'A' && r <= 'Z':
+			out = append(out, r+32)
+			prevDash = false
+		case r == ' ' || r == '-' || r == '_':
+			if len(out) > 0 && !prevDash {
+				out = append(out, '-')
+				prevDash = true
+			}
+		}
+	}
+	for len(out) > 0 && out[len(out)-1] == '-' {
+		out = out[:len(out)-1]
+	}
+	if len(out) == 0 {
+		return s
+	}
+	return string(out)
+}

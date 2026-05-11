@@ -151,6 +151,11 @@ func (m dashboardModel) statsPanel(width int) string {
 // with their reported version and an `update available` flag for
 // any peer behind the local build.
 //
+// Tailnet peers that exist but don't run ccmuxd appear as
+// `NeedsInstall` rows with a "ccmux not installed/running" hint
+// pointing the user at the install command. Mobile peers (phones,
+// iPads) are excluded upstream — Moshi handles them.
+//
 // Empty state hides the panel entirely so the dashboard stays tidy on
 // single-machine setups.
 func (m dashboardModel) devicesPanel(width int) string {
@@ -161,6 +166,14 @@ func (m dashboardModel) devicesPanel(width int) string {
 	local := m.version
 	rows := []string{st.Emphasis.Render("Devices")}
 	for _, h := range m.hosts {
+		if h.NeedsInstall {
+			rows = append(rows, fmt.Sprintf("%s %-12s %s",
+				st.Muted.Render("○"),
+				truncatePeerName(h.Name, 12),
+				st.Muted.Render("ccmux not installed"),
+			))
+			continue
+		}
 		dot := st.StateActive.Render("●")
 		if !h.OK {
 			dot = st.StateError.Render("●")
@@ -177,12 +190,38 @@ func (m dashboardModel) devicesPanel(width int) string {
 		if local != "" && h.Version != "" && versionsDiffer(local, h.Version) {
 			updateNote = st.StatusWarning.Render("  update available")
 		}
-		rows = append(rows, fmt.Sprintf("%s %-12s %s%s%s", dot, truncate(h.Name, 12), ver, tag, updateNote))
+		rows = append(rows, fmt.Sprintf("%s %-12s %s%s%s",
+			dot, truncatePeerName(h.Name, 12), ver, tag, updateNote))
 	}
 	if local != "" {
+		rows = append(rows, "")
 		rows = append(rows, st.Muted.Render("this build: "+local))
 	}
+	// Once at the bottom: a single line nudging the user that
+	// uninstalled peers can be brought online with one command. Only
+	// shown when there's at least one such peer.
+	hasMissing := false
+	for _, h := range m.hosts {
+		if h.NeedsInstall {
+			hasMissing = true
+			break
+		}
+	}
+	if hasMissing {
+		rows = append(rows, st.Muted.Render("install on a peer: ssh <peer>; "+
+			"git clone https://github.com/skzv/ccmux && cd ccmux && make bootstrap"))
+	}
 	return st.Pane.Width(width - 2).Render(strings.Join(rows, "\n"))
+}
+
+func truncatePeerName(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	if n <= 1 {
+		return s[:n]
+	}
+	return s[:n-1] + "…"
 }
 
 // versionsDiffer normalizes the LDFLAGS-baked version strings (e.g.

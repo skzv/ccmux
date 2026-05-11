@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net/http"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 
@@ -27,10 +28,27 @@ type Peer struct {
 	Addr string
 	// DNSName is the full MagicDNS name (e.g. "mac-mini.tail-abcd.ts.net.").
 	DNSName string
+	// OS is what Tailscale reports for the peer ("macOS", "Linux",
+	// "iOS", "Android", "Windows", …). Used to decide whether
+	// installing ccmux on this peer is even meaningful — phones don't
+	// run Go binaries, so we point users at the Moshi app instead.
+	OS string
 	// Online is whether Tailscale considers the peer currently up.
 	Online bool
 	// Self marks this machine. Useful for skipping a self-probe.
 	Self bool
+}
+
+// IsMobile reports whether this peer is a phone / tablet that wouldn't
+// run ccmux directly. The Moshi iOS app is the right tool for those
+// devices, so the dashboard skips them rather than nag-installing
+// ccmux on hardware that can't run it.
+func (p Peer) IsMobile() bool {
+	switch strings.ToLower(p.OS) {
+	case "ios", "ipados", "android":
+		return true
+	}
+	return false
 }
 
 // Peers returns every peer Tailscale knows about, plus Self. Returns an
@@ -60,12 +78,14 @@ func parsePeers(raw []byte) ([]Peer, error) {
 		Self         struct {
 			HostName     string   `json:"HostName"`
 			DNSName      string   `json:"DNSName"`
+			OS           string   `json:"OS"`
 			TailscaleIPs []string `json:"TailscaleIPs"`
 			Online       bool     `json:"Online"`
 		} `json:"Self"`
 		Peer map[string]struct {
 			HostName     string   `json:"HostName"`
 			DNSName      string   `json:"DNSName"`
+			OS           string   `json:"OS"`
 			TailscaleIPs []string `json:"TailscaleIPs"`
 			Online       bool     `json:"Online"`
 		} `json:"Peer"`
@@ -82,6 +102,7 @@ func parsePeers(raw []byte) ([]Peer, error) {
 			HostName: doc.Self.HostName,
 			Addr:     doc.Self.TailscaleIPs[0],
 			DNSName:  doc.Self.DNSName,
+			OS:       doc.Self.OS,
 			Online:   true,
 			Self:     true,
 		})
@@ -94,6 +115,7 @@ func parsePeers(raw []byte) ([]Peer, error) {
 			HostName: p.HostName,
 			Addr:     p.TailscaleIPs[0],
 			DNSName:  p.DNSName,
+			OS:       p.OS,
 			Online:   p.Online,
 		})
 	}
@@ -108,32 +130,37 @@ type Discovered struct {
 	Sessions int
 }
 
-// Discover probes every online tailnet peer for a ccmuxd HTTP listener
-// at `port` and returns those that respond with a healthy /v1/health.
-// Skips Self (which the local Unix-socket path handles).
+// Scan is the full sweep result: peers where /v1/health responded
+// (Reachable) AND non-mobile peers that exist on the tailnet without
+// a reachable ccmuxd (NeedsInstall). Phones / iPads are skipped in
+// both lists — Moshi covers them.
+type Scan struct {
+	Reachable    []Discovered
+	NeedsInstall []Peer
+}
+
+// ScanTailnet probes every online non-mobile peer and partitions
+// the results into "ccmuxd responded" and "didn't respond — probably
+// needs ccmux installed". Mobile peers (iOS, iPadOS, Android) are
+// dropped entirely since installing ccmux there isn't an option.
+// Self is also skipped (handled locally).
 //
-// We deliberately don't surface tailnet peers that fail the probe.
-// Phones / iPads on the tailnet show up there, but the Moshi iOS app
-// is the right picker for them — it lists every tmux session on the
-// configured host with a thumb-friendly UI. Showing the same devices
-// in the desktop Devices panel would be redundant.
-//
-// `port` should match the daemon.tailnet_port setting on remote hosts.
-// Default 7474 if 0.
-func Discover(ctx context.Context, port int) ([]Discovered, error) {
+// `port` is the daemon.tailnet_port setting (default 7474 if 0).
+func ScanTailnet(ctx context.Context, port int) (Scan, error) {
 	if port == 0 {
 		port = 7474
 	}
 	peers, err := Peers(ctx)
 	if err != nil {
-		return nil, err
+		return Scan{}, err
 	}
 	if len(peers) == 0 {
-		return nil, nil
+		return Scan{}, nil
 	}
 	type result struct {
-		d   Discovered
-		err error
+		peer Peer
+		d    Discovered
+		ok   bool
 	}
 	results := make(chan result, len(peers))
 	var wg sync.WaitGroup
@@ -141,16 +168,21 @@ func Discover(ctx context.Context, port int) ([]Discovered, error) {
 		if p.Self || !p.Online || p.Addr == "" {
 			continue
 		}
+		if p.IsMobile() {
+			// Mobile devices skip everything: not probed (waste of
+			// time), not surfaced (Moshi app is the right tool).
+			continue
+		}
 		wg.Add(1)
 		go func(p Peer) {
 			defer wg.Done()
 			addr := fmt.Sprintf("%s:%d", p.Addr, port)
-			info, err := probeOne(ctx, addr)
-			if err != nil {
-				results <- result{err: err}
+			info, perr := probeOne(ctx, addr)
+			if perr != nil {
+				results <- result{peer: p, ok: false}
 				return
 			}
-			results <- result{d: Discovered{
+			results <- result{ok: true, d: Discovered{
 				Name:     shortName(p.HostName),
 				Address:  addr,
 				Version:  info.Version,
@@ -163,14 +195,27 @@ func Discover(ctx context.Context, port int) ([]Discovered, error) {
 		close(results)
 	}()
 
-	var out []Discovered
+	var scan Scan
 	for r := range results {
-		if r.err != nil {
-			continue
+		if r.ok {
+			scan.Reachable = append(scan.Reachable, r.d)
+		} else {
+			scan.NeedsInstall = append(scan.NeedsInstall, r.peer)
 		}
-		out = append(out, r.d)
 	}
-	return out, nil
+	return scan, nil
+}
+
+// Discover is the back-compat shorthand for ScanTailnet's Reachable
+// list. New callers should use ScanTailnet so they can also show the
+// non-ccmuxd peers (typically other Macs / Linux boxes on your
+// tailnet that haven't installed ccmux yet).
+func Discover(ctx context.Context, port int) ([]Discovered, error) {
+	scan, err := ScanTailnet(ctx, port)
+	if err != nil {
+		return nil, err
+	}
+	return scan.Reachable, nil
 }
 
 // probeOne is the cheap "is there a ccmuxd here" check. 1-second hard

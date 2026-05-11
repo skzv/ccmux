@@ -13,6 +13,51 @@ import (
 	"github.com/skzv/ccmux/internal/daemon"
 )
 
+func TestPeer_IsMobile(t *testing.T) {
+	cases := []struct {
+		os   string
+		want bool
+	}{
+		{"iOS", true},
+		{"ios", true},
+		{"iPadOS", true},
+		{"Android", true},
+		{"macOS", false},
+		{"Linux", false},
+		{"Windows", false},
+		{"FreeBSD", false},
+		{"", false},
+	}
+	for _, tc := range cases {
+		got := Peer{OS: tc.os}.IsMobile()
+		if got != tc.want {
+			t.Errorf("IsMobile(%q) = %v, want %v", tc.os, got, tc.want)
+		}
+	}
+}
+
+func TestParsePeers_ExtractsOS(t *testing.T) {
+	raw := []byte(`{
+  "BackendState": "Running",
+  "Self": {"HostName":"x","OS":"macOS","TailscaleIPs":["1.1.1.1"],"Online":true},
+  "Peer": {
+    "a": {"HostName":"phone","OS":"iOS","TailscaleIPs":["2.2.2.2"],"Online":true},
+    "b": {"HostName":"laptop","OS":"Linux","TailscaleIPs":["3.3.3.3"],"Online":true}
+  }
+}`)
+	peers, err := parsePeers(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	osBy := map[string]string{}
+	for _, p := range peers {
+		osBy[p.Addr] = p.OS
+	}
+	if osBy["1.1.1.1"] != "macOS" || osBy["2.2.2.2"] != "iOS" || osBy["3.3.3.3"] != "Linux" {
+		t.Fatalf("OS not parsed: %v", osBy)
+	}
+}
+
 func TestShortName(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"Sasha's Mac mini", "sashas-mac-mini"},
