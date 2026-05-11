@@ -137,6 +137,49 @@ func TestBrewServiceStartedFromJSON_TableFallback(t *testing.T) {
 	}
 }
 
+func TestDetectFix_RemoteLogin(t *testing.T) {
+	// Real-world output from `moshi-hook host setup` when Remote
+	// Login isn't enabled — verbatim sample from the user's logs.
+	output := `found tailscale: sputnik.tail46b64f.ts.net (100.112.85.37)
+host prerequisites failed:
+- Remote Login is not enabled
+
+Enable Remote Login with one of:
+  • Run: sudo moshi-hook host enable-ssh
+  • Open System Settings > General > Sharing and turn on Remote Login
+`
+	fix, ok := DetectFix(output)
+	if !ok {
+		t.Fatal("DetectFix should have recognized the Remote Login error")
+	}
+	if fix.Command != "sudo" || len(fix.Args) == 0 || fix.Args[0] != "moshi-hook" {
+		t.Errorf("Command/Args wrong: %s %v", fix.Command, fix.Args)
+	}
+	if fix.SettingsURL == "" {
+		t.Error("SettingsURL should be populated so callers can open the GUI alternative")
+	}
+}
+
+func TestDetectFix_CaseInsensitive(t *testing.T) {
+	output := "Some other text\nremote login is NOT enabled\netc."
+	if _, ok := DetectFix(output); !ok {
+		t.Error("DetectFix should be case-insensitive")
+	}
+}
+
+func TestDetectFix_UnknownError(t *testing.T) {
+	output := "some entirely different failure we haven't seen before"
+	if fix, ok := DetectFix(output); ok {
+		t.Errorf("unknown errors should return ok=false, got %+v", fix)
+	}
+}
+
+func TestDetectFix_Empty(t *testing.T) {
+	if _, ok := DetectFix(""); ok {
+		t.Error("empty output should not match any known fix")
+	}
+}
+
 func TestBrewServiceStartedFromJSON_GarbageInput(t *testing.T) {
 	if brewServiceStartedFromJSON("") {
 		t.Error("empty input should be false")

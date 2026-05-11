@@ -249,15 +249,17 @@ func stepMoshi(ctx context.Context, out io.Writer) error {
 
 	// Pair if needed. Uses Moshi's Easy Pair flow: moshi-hook prints
 	// a QR code in the terminal and the user scans it with the Moshi
-	// iOS app to complete pairing. No token to copy. We pass stdio
-	// straight through so the QR renders and any moshi-hook prompts
-	// reach the user.
+	// iOS app to complete pairing. No token to copy.
+	//
+	// Failures are NOT silent: if `moshi-hook host setup` exits with
+	// a prerequisite error (e.g. "Remote Login is not enabled"), we
+	// loop and offer to fix it. The user can run the suggested
+	// remediation in place, open the matching System Settings pane,
+	// retry, or explicitly skip Moshi for now. We never silently move
+	// past a failed pairing.
 	if !s.Paired {
-		fmt.Fprintln(out, "  Open the Moshi app on your phone and tap "+stEmphasis.Render("Add Host → Scan QR")+".")
-		fmt.Fprintln(out, "  A QR code will appear below — point your phone at it.")
-		fmt.Fprintln(out)
-		if err := moshi.HostSetup(ctx); err != nil {
-			return fmt.Errorf("moshi-hook host setup: %w", err)
+		if err := pairMoshiInteractive(ctx, out); err != nil {
+			return err
 		}
 	}
 
@@ -277,6 +279,86 @@ func stepMoshi(ctx context.Context, out io.Writer) error {
 		fmt.Fprintln(out, stOK.Render("  ✓ moshi-hook ready"))
 	}
 	return nil
+}
+
+// pairMoshiInteractive runs `moshi-hook host setup` in a retry loop.
+// On failure it inspects the output for known prerequisite issues
+// (e.g. Remote Login disabled) and offers the user a structured
+// choice: run the suggested fix in place, open the matching System
+// Settings pane, retry, or skip Moshi for this run. Returns nil when
+// pairing succeeds OR the user explicitly skips; returns an error
+// only on unrecoverable form/UI failures.
+func pairMoshiInteractive(ctx context.Context, out io.Writer) error {
+	for {
+		fmt.Fprintln(out, "  Open the Moshi app on your phone and tap "+stEmphasis.Render("Add Host → Scan QR")+".")
+		fmt.Fprintln(out, "  A QR code will appear below — point your phone at it.")
+		fmt.Fprintln(out)
+		output, err := moshi.HostSetup(ctx)
+		if err == nil {
+			return nil
+		}
+
+		fmt.Fprintln(out)
+		fmt.Fprintf(out, "  %s  moshi-hook host setup failed: %v\n", stErr.Render("✗"), err)
+
+		fix, hasFix := moshi.DetectFix(output)
+		choice, err := promptMoshiRecovery(fix, hasFix)
+		if err != nil {
+			return err
+		}
+		switch choice {
+		case "fix":
+			fmt.Fprintf(out, "\n  → %s %s\n", fix.Command, strings.Join(fix.Args, " "))
+			fmt.Fprintln(out, stMuted.Render("    (sudo will prompt for your password)"))
+			c := exec.CommandContext(ctx, fix.Command, fix.Args...)
+			c.Stdin = os.Stdin
+			c.Stdout = out
+			c.Stderr = out
+			if runErr := c.Run(); runErr != nil {
+				fmt.Fprintf(out, "  %s fix failed: %v\n", stErr.Render("✗"), runErr)
+				fmt.Fprintln(out, stMuted.Render("  Loop again — you can pick a different option."))
+			}
+			// Loop and retry HostSetup.
+		case "settings":
+			if fix.SettingsURL != "" {
+				fmt.Fprintf(out, "  Opening %s\n", fix.SettingsURL)
+				_ = exec.CommandContext(ctx, "open", fix.SettingsURL).Run()
+			}
+			fmt.Fprintln(out, stMuted.Render("  Once you've made the change, choose 'Try again' on the next prompt."))
+			// Loop and retry HostSetup.
+		case "retry":
+			// Just loop.
+		case "skip":
+			fmt.Fprintln(out, stMuted.Render("  (skipped Moshi setup — fix the prerequisite, then re-run `ccmux moshi-setup`)"))
+			return nil
+		}
+	}
+}
+
+// promptMoshiRecovery shows the recovery menu after a failed
+// `moshi-hook host setup`. When `hasFix` is true the menu leads with
+// the targeted fix; otherwise the user only gets retry / skip.
+func promptMoshiRecovery(fix moshi.HostSetupFix, hasFix bool) (string, error) {
+	var choice string
+	opts := []huh.Option[string]{}
+	title := "Moshi setup hit a snag. How would you like to proceed?"
+	if hasFix {
+		title = "Moshi setup blocked: " + fix.Problem
+		opts = append(opts, huh.NewOption(fix.Description, "fix"))
+		if fix.SettingsURL != "" {
+			opts = append(opts, huh.NewOption("Open System Settings (GUI alternative)", "settings"))
+		}
+	}
+	opts = append(opts,
+		huh.NewOption("Try again (I'll fix it manually)", "retry"),
+		huh.NewOption("Skip Moshi for now", "skip"),
+	)
+	if err := huh.NewForm(huh.NewGroup(
+		huh.NewSelect[string]().Title(title).Options(opts...).Value(&choice),
+	)).Run(); err != nil {
+		return "", err
+	}
+	return choice, nil
 }
 
 // stepSSHKey: ensure ~/.ssh/id_ed25519 exists. The phone's Moshi app

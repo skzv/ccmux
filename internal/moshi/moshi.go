@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -125,21 +126,68 @@ func Pair(ctx context.Context, token string) error {
 // pairing. No token to copy-paste, no Settings → Integrations menu
 // dive — open the app, scan, done.
 //
+// Returns the combined stdout+stderr output (also written live to the
+// user's terminal) so callers can scan it for known recoverable
+// errors and offer remediation. Empty string + error means we
+// couldn't even start the subprocess (binary missing, etc.).
+//
 // The 5-minute timeout is generous: the user has to find their phone,
 // open the app, navigate to scan, point at the screen. Shorter
 // timeouts trip people up.
-func HostSetup(ctx context.Context) error {
+func HostSetup(ctx context.Context) (string, error) {
 	bin, err := exec.LookPath("moshi-hook")
 	if err != nil {
-		return fmt.Errorf("moshi-hook not on PATH; brew install rjyo/moshi/moshi-hook first")
+		return "", fmt.Errorf("moshi-hook not on PATH; brew install rjyo/moshi/moshi-hook first")
 	}
 	c, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(c, bin, "host", "setup")
 	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	var buf strings.Builder
+	cmd.Stdout = io.MultiWriter(os.Stdout, &buf)
+	cmd.Stderr = io.MultiWriter(os.Stderr, &buf)
+	err = cmd.Run()
+	return buf.String(), err
+}
+
+// HostSetupFix is one recoverable error condition recognized in the
+// output of `moshi-hook host setup`, plus the suggested fix.
+type HostSetupFix struct {
+	// Problem is a one-line human description ("Remote Login is disabled").
+	Problem string
+	// Description is the user-facing label for the fix (shown in a
+	// prompt: "enable Remote Login (SSH) on this Mac").
+	Description string
+	// Command + Args is the exact shell-out to remediate. Typically
+	// invokes sudo internally; the caller is responsible for running
+	// with stdio passthrough so the password prompt reaches the user.
+	Command string
+	Args    []string
+	// SettingsURL, when non-empty, is an "x-apple.systempreferences:…"
+	// link the caller can offer as the GUI alternative to Command.
+	SettingsURL string
+}
+
+// DetectFix scans `moshi-hook host setup` output for known
+// prerequisite failures and returns the suggested remediation. Returns
+// (HostSetupFix{}, false) when the failure isn't one we recognize —
+// the caller should fall back to a generic "retry or skip" prompt.
+//
+// Designed to be extended: each known issue is one entry in the list.
+// Keep matches narrow so we don't suggest the wrong fix.
+func DetectFix(output string) (HostSetupFix, bool) {
+	lower := strings.ToLower(output)
+	switch {
+	case strings.Contains(lower, "remote login is not enabled"):
+		return HostSetupFix{
+			Problem:     "Remote Login (SSH) is disabled on this Mac",
+			Description: "Enable Remote Login via `sudo moshi-hook host enable-ssh`",
+			Command:     "sudo",
+			Args:        []string{"moshi-hook", "host", "enable-ssh"},
+			SettingsURL: "x-apple.systempreferences:com.apple.Sharing-Settings.extension",
+		}, true
+	}
+	return HostSetupFix{}, false
 }
 
 // InstallHooks runs `moshi-hook install`, which writes the hook entries

@@ -74,7 +74,9 @@ func runMoshiSetup(token string) error {
 	//
 	// Default: Easy Pair via QR code (`moshi-hook host setup`). The
 	// command renders a QR code in the terminal and prompts in-process;
-	// we pass stdio through so the user can scan + interact.
+	// we pass stdio through so the user can scan + interact. Known
+	// recoverable errors (e.g. Remote Login disabled) get a targeted
+	// hint pointing at the fix command — same UX as the setup wizard.
 	//
 	// If --token is passed, fall back to the headless token-paste
 	// path (`moshi-hook pair --token <X>`).
@@ -87,7 +89,17 @@ func runMoshiSetup(token string) error {
 		} else {
 			fmt.Println("→ moshi-hook host setup (Easy Pair — scan the QR code below with the Moshi app on your phone)")
 			fmt.Println()
-			if err := moshi.HostSetup(ctx); err != nil {
+			output, err := moshi.HostSetup(ctx)
+			if err != nil {
+				if fix, ok := moshi.DetectFix(output); ok {
+					fmt.Println()
+					fmt.Printf("✗ %s\n", fix.Problem)
+					fmt.Printf("  Fix: %s %s\n", fix.Command, strings.Join(fix.Args, " "))
+					if fix.SettingsURL != "" {
+						fmt.Printf("  Or:  open '%s'\n", fix.SettingsURL)
+					}
+					fmt.Println("  Then re-run `ccmux moshi-setup`.")
+				}
 				return fmt.Errorf("host setup: %w", err)
 			}
 		}
