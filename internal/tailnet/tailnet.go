@@ -112,6 +112,12 @@ type Discovered struct {
 // at `port` and returns those that respond with a healthy /v1/health.
 // Skips Self (which the local Unix-socket path handles).
 //
+// We deliberately don't surface tailnet peers that fail the probe.
+// Phones / iPads on the tailnet show up there, but the Moshi iOS app
+// is the right picker for them — it lists every tmux session on the
+// configured host with a thumb-friendly UI. Showing the same devices
+// in the desktop Devices panel would be redundant.
+//
 // `port` should match the daemon.tailnet_port setting on remote hosts.
 // Default 7474 if 0.
 func Discover(ctx context.Context, port int) ([]Discovered, error) {

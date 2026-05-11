@@ -670,6 +670,12 @@ func (a App) refreshSessionsCmd() tea.Cmd {
 		// `ccmux host add` and has discovery on doesn't see duplicates.
 		// Errors here are non-fatal — discovery is convenience, not
 		// correctness.
+		//
+		// We deliberately do NOT surface tailnet peers that lack ccmuxd
+		// (phones, iPads, etc.). The Moshi iOS app is the right picker
+		// for those — it lists every tmux session on the configured
+		// host and is built for thumb input. Showing them again on the
+		// desktop dashboard would be noise.
 		if discovered, derr := tailnet.Discover(ctx, tailnetPort); derr == nil {
 			for _, d := range discovered {
 				if seen[d.Address] {
