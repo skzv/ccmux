@@ -2,7 +2,7 @@
 
 # ccmux
 
-**One TUI to start, resume, and supervise Claude Code sessions — from your Mac, your phone, or anywhere on your tailnet.**
+**A terminal UI for [Claude Code](https://claude.ai/code) session management — run long-lived AI coding sessions on your Mac (or a Mac Mini), supervise them from anywhere on your [tailnet](https://tailscale.com/), and get push notifications on your phone when Claude needs you.**
 
 [![Go Version](https://img.shields.io/badge/go-1.22+-00ADD8.svg)](https://go.dev/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -168,6 +168,161 @@ ccmux attach my-project           # attach to existing session
 ccmux list                        # what's running
 ccmux host add mini mini.tail-xxxxx.ts.net    # add a remote ccmuxd host
 ```
+
+## Tutorials
+
+Five hand-on walkthroughs. Each is self-contained — pick whichever maps to what you're trying to do.
+
+### 1. Your first project, end-to-end (≈3 min)
+
+The core loop: scaffold → talk to Claude → take notes → commit. Run it once, you'll have the muscle memory.
+
+```bash
+ccmux new auth-redesign -d "rebuild the login flow with passkeys"
+```
+
+That single command:
+1. Creates `~/Projects/auth-redesign/` with `docs/01_Specs/`, `docs/02_Architecture/`, `docs/03_Agent_Logs/` — just the documentation vault. The source-code layout (cmd+internal? src? a Python package dir?) is chosen by Claude during `/init` based on the language you pick.
+2. Writes a starter `README.md` + `.gitignore`, runs `git init`, makes the first commit.
+3. Opens a tmux session named `c-auth-redesign`, starts Claude inside it.
+4. After Claude boots, types your description as the first prompt — Claude reads it, asks 2-3 clarifying questions, and writes `docs/01_Specs/00_Initial_Concept.md` from your answers.
+
+Everything stays local. When you're ready to push to GitHub (anytime — `gh` is optional but nice to have for this):
+
+```bash
+cd ~/Projects/auth-redesign
+gh repo create --private --source=. --remote=origin --push
+```
+
+**To check on it without joining the conversation:**
+
+```bash
+ccmux list
+# NAME              HOST   STATE        PATH
+# c-auth-redesign   local  needs_input  /Users/you/Projects/auth-redesign
+```
+
+**To attach:**
+
+```bash
+ccmux attach auth-redesign
+# (you're now inside the Claude session — Ctrl-b then d to detach)
+```
+
+The session keeps running after you detach. Your laptop's lid can close (on AC power) and it'll still be there tomorrow.
+
+### 2. Juggling multiple Claude sessions (≈2 min)
+
+You have three projects you're moving in parallel. Open the TUI:
+
+```bash
+ccmux
+```
+
+The Dashboard shows all sessions, color-coded by state:
+
+- **active** — Claude is generating output right now.
+- **idle** — Claude finished, no prompt visible. Nothing waiting on you.
+- **needs_input** — Claude is showing its input box and the pane has been quiet for ≥ 3 seconds. **This is the one to watch.**
+
+When any session transitions to `needs_input`, ccmuxd injects a terminal BEL. Any iOS terminal client that does BEL→notification (Blink, Termius) will raise a push. If you have [Moshi](https://getmoshi.app/) installed via `ccmux moshi-setup`, you get categorized notifications (approval_required vs task_complete) instead.
+
+Useful keys on the Sessions screen:
+- `Enter` — attach (re-execs into `tmux attach`)
+- `k` — kill the highlighted session
+- `r` — rename
+- `space` — pin "keep awake" (the daemon holds a `caffeinate -s` while pinned)
+- `?` — full keymap
+
+### 3. Working from your phone (≈5 min, one-time setup)
+
+Goal: your iPhone gets push notifications when Claude needs you, you tap, you're attached.
+
+```bash
+ccmux moshi-setup
+```
+
+The wizard installs `moshi-hook` via Homebrew, walks you through Moshi's pairing flow, and writes the Claude Code hook entries into `~/.claude/settings.json` so every Claude session on this host fires structured push notifications.
+
+On your phone:
+1. Install [Moshi](https://getmoshi.app/) from the App Store.
+2. Tap "Add Host", scan the pairing QR code (or paste the token).
+3. Moshi opens a persistent tmux session named `ccmux` and drops you into the TUI.
+
+Now whenever Claude pauses for input on the Mac, your phone vibrates. Tap, the TUI's already on the right session, attach with Enter, answer, detach with Ctrl-b then L (returns you to the outer ccmux session, not the iOS app). Your laptop on a desk somewhere doesn't have to be open.
+
+For a non-Moshi setup (plain Blink Shell), the BEL byte still produces a generic notification — you lose the category, that's it.
+
+### 4. Customize the scaffold (≈2 min)
+
+The defaults work, but ccmux is configurable end-to-end via `~/.config/ccmux/config.toml`. The knobs that matter:
+
+```toml
+[projects]
+# Where ccmux looks for projects. Default: ~/Projects.
+root = "/Users/you/code"
+
+[scaffold]
+# Directory layout `ccmux new` creates. Default below — just the docs/ vault,
+# because the source-code shape is language-specific and Claude's `/init`
+# handles it better. Want to enforce src/+tests/? Set them here.
+dirs = ["docs/01_Specs", "docs/02_Architecture", "docs/03_Agent_Logs"]
+
+# What `ccmux new` sends to Claude as the first message. {{name}} and
+# {{description}} are substituted. Empty falls back to the built-in default,
+# which asks Claude to run /init, scaffold CLAUDE.md, and create a GitHub repo.
+initial_prompt = """
+We're starting "{{name}}". {{description}}
+
+Please: (1) run /init to scaffold CLAUDE.md. (2) Ask 2-3 questions about
+stack and goals, then write docs/01_Specs/00_Initial_Concept.md.
+"""
+
+# Skip the auto-commit on `ccmux new`. Default true.
+create_initial_commit = true
+
+[daemon]
+poll_interval_seconds = 2         # how often ccmuxd scrapes tmux
+idle_seconds_for_needs_input = 3  # pane idle this long → needs_input
+listen_tailnet = false            # set true on your Mac Mini
+tailnet_port = 7474
+```
+
+After editing, the change is picked up on the next ccmux/ccmuxd start. Run `ccmux update` to reload the daemon with the new config.
+
+### 5. Multi-machine: laptop + always-on Mac Mini (≈5 min)
+
+The intended workflow for heavy users. Sessions live on the Mini; your laptop and phone are clients.
+
+**On the Mini:**
+
+```bash
+# Edit ~/.config/ccmux/config.toml:
+#   [daemon]
+#   listen_tailnet = true
+#   tailnet_port = 7474
+
+ccmux daemon install   # registers ccmuxd under launchd so it survives reboot
+```
+
+**On the laptop:**
+
+```bash
+ccmux host add mini mini.tail-xxxxx.ts.net
+ccmux                  # dashboard now shows local sessions AND mini sessions
+```
+
+Attach to a remote session and ccmux execs `mosh mini -- tmux attach -t <name>` — Mosh tolerates roaming and stalls, so you can close your laptop, walk to a coffee shop, open it, and your session resumes instantly.
+
+### 6. Maintenance (≈1 min)
+
+```bash
+ccmux doctor          # non-interactive health check (tmux/mosh/tailscale/claude reachable?)
+ccmux update          # git pull + rebuild + reinstall + restart daemon
+ccmux uninstall       # clean removal — never touches your projects or ~/.claude
+```
+
+`ccmux update` auto-detects your git checkout (defaults to `~/Projects/ccmux`). Flags: `--dry-run` to preview, `--skip-pull` to just rebuild, `--no-restart` to leave ccmuxd untouched.
 
 ## How it works
 
