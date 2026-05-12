@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/claudeusage"
 	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/daemon"
@@ -540,6 +541,15 @@ func renderSessionLine(st styles.Styles, s daemon.SessionState, inner int) strin
 		hostTag = "  " + st.Muted.Render("@"+h)
 	}
 
+	// Agent tag: only render when the session is NOT running the
+	// default agent (claude). Showing "claude" on every row would just
+	// be noise for users who haven't adopted Codex/Gemini. Once a row
+	// is on a non-default agent, the tag tells the user which one.
+	agentTag := ""
+	if s.Agent != "" && s.Agent != string(agent.IDClaude) && inner > 60 {
+		agentTag = "  " + st.Muted.Render("["+s.Agent+"]")
+	}
+
 	var suffix string
 	switch {
 	case s.Attached && age != "":
@@ -550,6 +560,7 @@ func renderSessionLine(st styles.Styles, s daemon.SessionState, inner int) strin
 		suffix = "  " + st.Muted.Render(age)
 	}
 	suffix += hostTag
+	suffix += agentTag
 
 	prefix := hostDot + " " + state + " " + attachedBadge
 

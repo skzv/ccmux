@@ -21,6 +21,11 @@ type SessionState struct {
 	LastChange  time.Time `json:"last_change"`  // pane content last changed
 	PromptCount int       `json:"prompt_count"` // # of times we've seen a needs-input transition
 	KeepAwake   bool      `json:"keep_awake"`   // per-session "always keep awake" pin
+	// Agent is the AI agent driving this session, sourced from the
+	// project's .ccmux/agent sidecar. One of "claude" / "codex" /
+	// "gemini". Empty for sessions whose project we couldn't resolve
+	// (which the client should treat as claude for back-compat).
+	Agent string `json:"agent,omitempty"`
 }
 
 // HealthInfo is returned by GET /v1/health. Used by clients to ping

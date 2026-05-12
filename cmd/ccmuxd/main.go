@@ -26,7 +26,6 @@ import (
 	"time"
 
 	"github.com/skzv/ccmux/internal/agent"
-	"github.com/skzv/ccmux/internal/claude"
 	"github.com/skzv/ccmux/internal/clipboard"
 	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/daemon"
@@ -142,10 +141,21 @@ func run() error {
 type tracked struct {
 	last        string    // last captured pane content (for change detection)
 	lastChange  time.Time // when content last changed
-	state       claude.State
+	state       agent.State
 	keepAwake   bool
 	promptCount int
 	created     time.Time
+	// agentID is the AI agent this session is running, sourced from
+	// <project>/.ccmux/agent on first sight. Cached so we don't stat
+	// the sidecar every poll tick. The classifier for state detection
+	// is `agent.ByID(agentID).Classify(…)` — that's what lets Codex
+	// and Gemini sessions get their own heuristics instead of
+	// borrowing Claude's box-drawing prompt detector.
+	agentID agent.ID
+	// projectPath is the working directory of the tmux session, used
+	// to resolve the agent sidecar. Captured at session-add time and
+	// not re-read on subsequent ticks.
+	projectPath string
 }
 
 type server struct {
@@ -203,13 +213,23 @@ func (s *server) listSessions(w http.ResponseWriter, r *http.Request) {
 	for _, ts := range tss {
 		t, ok := s.seen[ts.Name]
 		if !ok {
-			t = &tracked{created: ts.Created, state: claude.StateUnknown}
+			t = &tracked{created: ts.Created, state: agent.StateUnknown}
+		}
+		// Agent is read once at session-add time and cached on `tracked`;
+		// for sessions we've seen via the poll loop it's already
+		// populated. For pre-existing sessions (e.g. the daemon just
+		// started and hasn't tickled the poll loop yet), fall back to
+		// reading the sidecar on the fly. Fast — single os.ReadFile.
+		agentID := t.agentID
+		if agentID == "" {
+			agentID = project.ReadAgent(ts.Path)
 		}
 		out = append(out, daemon.SessionState{
 			Name: ts.Name, Host: "local", Path: ts.Path,
 			Attached: ts.Attached, Windows: ts.Windows,
 			Created: ts.Created, LastChange: t.lastChange,
 			State: string(t.state), KeepAwake: t.keepAwake, PromptCount: t.promptCount,
+			Agent: string(agentID),
 		})
 	}
 	writeJSON(w, out)
@@ -271,7 +291,7 @@ func (s *server) createSession(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, daemon.SessionState{
 		Name: session, Host: "local", Project: req.Project, Path: path,
-		State: string(claude.StateUnknown), Created: time.Now(),
+		State: string(agent.StateUnknown), Created: time.Now(),
 	})
 }
 
@@ -432,7 +452,13 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 		live[ts.Name] = true
 		t, ok := s.seen[ts.Name]
 		if !ok {
-			t = &tracked{created: ts.Created, lastChange: time.Now(), state: claude.StateUnknown}
+			t = &tracked{
+				created:     ts.Created,
+				lastChange:  time.Now(),
+				state:       agent.StateUnknown,
+				agentID:     project.ReadAgent(ts.Path),
+				projectPath: ts.Path,
+			}
 			s.seen[ts.Name] = t
 		}
 		pane, err := tmux.CapturePane(ctx, ts.Name, 60)
@@ -443,7 +469,13 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 			t.last = pane
 			t.lastChange = time.Now()
 		}
-		newState := claude.Classify(pane, t.lastChange, idleNeeds)
+		// Per-session agent dispatch. ByID is the unchecked path; we
+		// fed it via project.ReadAgent which always returns a valid id
+		// (defaulting to claude on missing/garbage). The Classify
+		// signature is uniform across agents — a string pane + the
+		// lastChange/idle threshold pair — so the switch is invisible
+		// from this call site's perspective.
+		newState := agent.ByID(t.agentID).Classify(pane, t.lastChange, idleNeeds)
 		// Transition into NEEDS_INPUT triggers the bell. By default we
 		// ring the bell even when moshi-hook is paired (the two
 		// channels are complementary: audible chime at the laptop,
@@ -451,14 +483,14 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 		// globally, or notifications.moshi_suppresses_bell=true to mute
 		// only when moshi is reporting (the old "no duplicates"
 		// behavior).
-		if newState == claude.StateNeedsInput && t.state != claude.StateNeedsInput {
+		if newState == agent.StateNeedsInput && t.state != agent.StateNeedsInput {
 			if s.shouldRingBell(suppressBell) {
 				_ = tmux.SendKeys(ctx, ts.Name, "\a")
 			}
 			t.promptCount++
 		}
 		t.state = newState
-		if newState == claude.StateActive {
+		if newState == agent.StateActive {
 			anyActive = true
 		}
 	}

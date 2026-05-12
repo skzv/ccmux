@@ -107,14 +107,24 @@ master between phases.
    - Tests: form cycle, submit payload, switcher writes sidecar,
      daemon honors field, daemon default-on-missing.
 
-4. **Dispatch by agent.**
-   - Daemon poll loop reads each session's project agent from the
-     sidecar (cached per session) and dispatches `Classify()`.
-   - Dashboard usage panel becomes `internal/usage` and dispatches.
-   - TUI "Claude" tab becomes "Agents" with sub-panes; selected
-     sub-pane reads the relevant config root.
-   - Tests: per-agent classifier table-driven; capture sample pane
-     content from each agent into `testdata/`.
+4. **Dispatch by agent.** (Shipped: poll loop + protocol field + dashboard badge. Deferred: usage panel + Claude-config tab refactor.)
+   - ✅ Daemon poll loop reads each session's project agent from the
+     sidecar (cached on `tracked.agentID`) and dispatches `Classify()`.
+   - ✅ `daemon.SessionState.Agent` carries the agent over the wire.
+   - ✅ Dashboard rows show a `[codex]` / `[gemini]` tag for non-default
+     agents (Claude rows stay clean for back-compat).
+   - ⏸ **Deferred — usage panel split.** `internal/claudeusage`
+     stays Claude-only for v1. Per-agent transcript walkers need
+     real fixture samples from `~/.codex/sessions/` and
+     `~/.gemini/conversations/`, which we don't have until Codex
+     and Gemini are actually installed and used. Tracked as a
+     "Phase 4 remaining" item.
+   - ⏸ **Deferred — TUI "Claude" tab refactor.** Renaming to
+     "Agents" with per-agent sub-panes is its own UI design pass.
+     Today the Claude tab continues to manage Claude's
+     `~/.claude/settings.json`. Codex/Gemini config viewers come
+     when their config-file shapes stabilize. Tracked as a
+     "Phase 4 remaining" item.
 
 5. **Doctor + setup wizard.**
    - `ccmux doctor` enumerates installed agents; fails if zero.

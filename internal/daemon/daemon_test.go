@@ -380,6 +380,36 @@ func TestNewProjectRequest_AgentOmitted_WhenEmpty(t *testing.T) {
 	}
 }
 
+// TestSessionState_AgentField_RoundTrip — Phase 4 adds Agent to the
+// SessionState wire shape so the dashboard can show per-row badges.
+// Empty must be omitted on the wire so older daemons that don't
+// populate the field don't ship empty quoted strings that a strict
+// client would have to special-case.
+func TestSessionState_AgentField_RoundTrip(t *testing.T) {
+	cases := []struct {
+		name      string
+		agent     string
+		wantInWire string // substring expected (or NOT expected via omit)
+		omit      bool
+	}{
+		{"codex serialized", "codex", `"agent":"codex"`, false},
+		{"claude serialized", "claude", `"agent":"claude"`, false},
+		{"empty omitted", "", `"agent"`, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b, _ := json.Marshal(SessionState{Name: "c-x", Agent: tc.agent})
+			has := strings.Contains(string(b), tc.wantInWire)
+			if tc.omit && has {
+				t.Errorf("empty Agent should be omitted; wire = %s", b)
+			}
+			if !tc.omit && !has {
+				t.Errorf("Agent missing from wire; got %s", b)
+			}
+		})
+	}
+}
+
 // TestClient_NewProject_ForwardsAgent — the client serializes whatever
 // the caller hands it. End-to-end pin so the protocol field actually
 // reaches the server side; the picker fix doesn't help if the client
