@@ -17,8 +17,9 @@ import (
 // claudeModel is the Claude Code config screen — model picker on top,
 // then hooks / MCP servers / permissions / commands / skills blocks.
 // Reads ~/.claude/settings.json via internal/claudeconfig and supports
-// a minimal subset of edits (model selection through a picker);
-// deeper edits open the underlying file in $EDITOR.
+// a minimal subset of edits (model + reasoning effort + always-thinking
+// toggle through pickers / a keystroke); deeper edits open the
+// underlying file in $EDITOR.
 type claudeModel struct {
 	st             styles.Styles
 	km             Keymap
@@ -27,12 +28,25 @@ type claudeModel struct {
 	skills         []claudeconfig.Skill
 	model          string
 	modelSource    string
+	effort         string
+	effortSource   string
+	alwaysThinking bool
 	paths          claudeconfig.Locations
 	lastBackup     string
-	pickerOpen     bool
+	picker         pickerKind
 	pickerCursor   int
 	editor         string
 }
+
+// pickerKind identifies which modal picker is currently open on the
+// Claude screen. pickerNone means no modal is showing.
+type pickerKind int
+
+const (
+	pickerNone pickerKind = iota
+	pickerModel
+	pickerEffort
+)
 
 func newClaude(st styles.Styles, km Keymap) claudeModel {
 	m := claudeModel{st: st, km: km, editor: pickEditor()}
@@ -50,6 +64,10 @@ func (m *claudeModel) reload() {
 	m.commands, _ = claudeconfig.ListCommands()
 	m.skills, _ = claudeconfig.ListSkills()
 	m.model, m.modelSource = claudeconfig.EffectiveModel()
+	m.effort, m.effortSource = claudeconfig.EffectiveEffortLevel()
+	if m.settings != nil {
+		m.alwaysThinking = m.settings.AlwaysThinkingEnabled
+	}
 }
 
 func (m claudeModel) Update(msg tea.Msg) (claudeModel, tea.Cmd) {
@@ -73,13 +91,43 @@ func (m claudeModel) Update(msg tea.Msg) (claudeModel, tea.Cmd) {
 			6,
 		)
 
+	case claudeEffortChangedMsg:
+		if msg.Err != nil {
+			return m, toastCmd(toastError, "effort: "+msg.Err.Error(), 5)
+		}
+		m.lastBackup = msg.Backup
+		m.reload()
+		display := msg.New
+		if display == "" {
+			display = "(no override)"
+		}
+		return m, toastCmd(toastSuccess,
+			fmt.Sprintf("reasoning effort set to %s — backup at %s", display, summarizePath(msg.Backup)),
+			6,
+		)
+
+	case claudeAlwaysThinkingChangedMsg:
+		if msg.Err != nil {
+			return m, toastCmd(toastError, "always-thinking: "+msg.Err.Error(), 5)
+		}
+		m.lastBackup = msg.Backup
+		m.reload()
+		label := "off"
+		if msg.New {
+			label = "on"
+		}
+		return m, toastCmd(toastSuccess,
+			fmt.Sprintf("always-thinking turned %s — backup at %s", label, summarizePath(msg.Backup)),
+			6,
+		)
+
 	case tea.KeyMsg:
-		if m.pickerOpen {
+		if m.picker != pickerNone {
 			return m.updatePicker(msg)
 		}
 		switch msg.String() {
 		case "m":
-			m.pickerOpen = true
+			m.picker = pickerModel
 			m.pickerCursor = 0
 			cur := strings.ToLower(strings.TrimSpace(m.settings.Model))
 			for i, opt := range claudeconfig.KnownModels() {
@@ -87,6 +135,22 @@ func (m claudeModel) Update(msg tea.Msg) (claudeModel, tea.Cmd) {
 					m.pickerCursor = i
 					break
 				}
+			}
+		case "e":
+			m.picker = pickerEffort
+			m.pickerCursor = 0
+			cur := strings.ToLower(strings.TrimSpace(m.settings.EffortLevel))
+			for i, opt := range claudeconfig.KnownEffortLevels() {
+				if opt.Value == cur {
+					m.pickerCursor = i
+					break
+				}
+			}
+		case "a":
+			toggled := !m.alwaysThinking
+			return m, func() tea.Msg {
+				backup, err := claudeconfig.SetAlwaysThinking(toggled)
+				return claudeAlwaysThinkingChangedMsg{New: toggled, Backup: backup, Err: err}
 			}
 		case "c":
 			return m, openClaudeFileCmd(m.editor, m.paths.GlobalCLAUDEMd, true)
@@ -98,31 +162,48 @@ func (m claudeModel) Update(msg tea.Msg) (claudeModel, tea.Cmd) {
 }
 
 func (m claudeModel) updatePicker(msg tea.KeyMsg) (claudeModel, tea.Cmd) {
-	opts := claudeconfig.KnownModels()
+	var optsLen int
+	switch m.picker {
+	case pickerModel:
+		optsLen = len(claudeconfig.KnownModels())
+	case pickerEffort:
+		optsLen = len(claudeconfig.KnownEffortLevels())
+	}
 	switch msg.String() {
 	case "esc":
-		m.pickerOpen = false
+		m.picker = pickerNone
 	case "up", "k":
 		if m.pickerCursor > 0 {
 			m.pickerCursor--
 		}
 	case "down", "j":
-		if m.pickerCursor < len(opts)-1 {
+		if m.pickerCursor < optsLen-1 {
 			m.pickerCursor++
 		}
 	case "enter":
-		chosen := opts[m.pickerCursor].Alias
-		m.pickerOpen = false
-		return m, func() tea.Msg {
-			backup, err := claudeconfig.SetModel(chosen)
-			return claudeModelChangedMsg{New: chosen, Backup: backup, Err: err}
+		cursor := m.pickerCursor
+		which := m.picker
+		m.picker = pickerNone
+		switch which {
+		case pickerModel:
+			chosen := claudeconfig.KnownModels()[cursor].Alias
+			return m, func() tea.Msg {
+				backup, err := claudeconfig.SetModel(chosen)
+				return claudeModelChangedMsg{New: chosen, Backup: backup, Err: err}
+			}
+		case pickerEffort:
+			chosen := claudeconfig.KnownEffortLevels()[cursor].Value
+			return m, func() tea.Msg {
+				backup, err := claudeconfig.SetEffortLevel(chosen)
+				return claudeEffortChangedMsg{New: chosen, Backup: backup, Err: err}
+			}
 		}
 	}
 	return m, nil
 }
 
 func (m claudeModel) View(width, height int) string {
-	if m.pickerOpen {
+	if m.picker != pickerNone {
 		return m.viewPicker(width, height)
 	}
 	return m.viewMain(width, height)
@@ -136,6 +217,8 @@ func (m claudeModel) viewMain(width, height int) string {
 		"",
 		m.renderModelBlock(),
 		"",
+		m.renderEffortBlock(),
+		"",
 		m.renderHooksBlock(),
 		"",
 		m.renderMCPBlock(),
@@ -147,7 +230,8 @@ func (m claudeModel) viewMain(width, height int) string {
 		m.renderSkillsBlock(),
 		"",
 		st.Subtitle.Render("Keys"),
-		"  " + st.Key.Render("m") + "  pick default model       " + st.Key.Render("c") + "  edit global CLAUDE.md",
+		"  " + st.Key.Render("m") + "  pick default model       " + st.Key.Render("e") + "  pick reasoning effort",
+		"  " + st.Key.Render("a") + "  toggle always-thinking    " + st.Key.Render("c") + "  edit global CLAUDE.md",
 		"  " + st.Key.Render("j") + "  edit settings.json       " + st.Key.Render("4") + "  open project notes",
 	}
 	if m.lastBackup != "" {
@@ -165,6 +249,22 @@ func (m claudeModel) renderModelBlock() string {
 		st.Subtitle.Render("Default model"),
 		"  " + st.Emphasis.Render(m.model) + "  " + st.Muted.Render(hint),
 		st.Muted.Render("  press " + st.Key.Render("m") + " to change"),
+	}, "\n")
+}
+
+func (m claudeModel) renderEffortBlock() string {
+	st := m.st
+	hint := "(set in " + m.effortSource + ")"
+	thinkLabel := "off"
+	if m.alwaysThinking {
+		thinkLabel = "on"
+	}
+	return strings.Join([]string{
+		st.Subtitle.Render("Reasoning effort"),
+		"  " + st.Emphasis.Render(m.effort) + "  " + st.Muted.Render(hint),
+		"  always-thinking: " + st.Emphasis.Render(thinkLabel),
+		st.Muted.Render("  " + st.Key.Render("e") + " pick effort  · " + st.Key.Render("a") + " toggle always-thinking"),
+		st.Muted.Render("  (CLI override: `claude --effort <low|medium|high|xhigh|max>` per session)"),
 	}, "\n")
 }
 
@@ -296,13 +396,26 @@ func (m claudeModel) renderSkillsBlock() string {
 
 func (m claudeModel) viewPicker(width, height int) string {
 	st := m.st
-	opts := claudeconfig.KnownModels()
+	var title string
+	var rows []pickerRow
+	switch m.picker {
+	case pickerModel:
+		title = "Pick default model"
+		for _, o := range claudeconfig.KnownModels() {
+			rows = append(rows, pickerRow{Label: o.Label, Desc: o.Desc})
+		}
+	case pickerEffort:
+		title = "Pick reasoning effort"
+		for _, o := range claudeconfig.KnownEffortLevels() {
+			rows = append(rows, pickerRow{Label: o.Label, Desc: o.Desc})
+		}
+	}
 	lines := []string{
-		st.Emphasis.Render("Pick default model"),
+		st.Emphasis.Render(title),
 		st.Subtitle.Render("Writes to " + m.paths.Settings + " (backed up first)."),
 		"",
 	}
-	for i, o := range opts {
+	for i, o := range rows {
 		row := fmt.Sprintf("  %-40s %s", o.Label, st.Muted.Render(o.Desc))
 		if i == m.pickerCursor {
 			row = st.ListItemSelected.Render(row)
@@ -314,6 +427,14 @@ func (m claudeModel) viewPicker(width, height int) string {
 	)
 	modal := st.PaneFocused.Width(minInt(96, width-4)).Render(strings.Join(lines, "\n"))
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, modal)
+}
+
+// pickerRow is the renderer-side shape a picker option takes: just a
+// label and description, decoupled from whether it came from a model
+// or effort option.
+type pickerRow struct {
+	Label string
+	Desc  string
 }
 
 // openClaudeFileCmd creates the target file if requested, then exec's

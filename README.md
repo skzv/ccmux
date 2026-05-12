@@ -134,6 +134,7 @@ Attaching to an auto-discovered peer execs `ssh -t <host> -- tmux attach -t <nam
 ### 🤖 Claude Code config management
 - Dedicated "Claude" screen for everything in `~/.claude/`
 - Model picker (Opus 4.7 / Sonnet 4.6 / Haiku 4.5 / opusplan / custom) — global or per-project
+- **Reasoning-effort picker** (`low` / `medium` / `high` / `xhigh` / `max`) and an `alwaysThinkingEnabled` toggle — writes `effortLevel` to `~/.claude/settings.json` so every new Claude Code session inherits your default. Per-session override still available via `claude --effort <level>` at the CLI.
 - Browse + create slash-command aliases, manage MCP servers, hooks, permission allowlists
 - View & edit global and per-project `CLAUDE.md` from the TUI
 
