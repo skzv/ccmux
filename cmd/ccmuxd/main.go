@@ -20,7 +20,6 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"runtime"
 	"sync"
 	"syscall"
 	"time"
@@ -30,6 +29,7 @@ import (
 	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/moshi"
 	"github.com/skzv/ccmux/internal/project"
+	"github.com/skzv/ccmux/internal/sleeplock"
 	"github.com/skzv/ccmux/internal/tmux"
 )
 
@@ -56,6 +56,11 @@ func run() error {
 		startedAt: time.Now(),
 	}
 	srv.startSleepManager()
+	// Make sure any system-wide override (very_dangerous mode) is
+	// reverted on every clean exit path. SIGKILL won't run defers; for
+	// that case the launchd/systemd job re-runs the daemon, which calls
+	// Stop() on startup (Stop is idempotent and clears any stale state).
+	defer srv.sleeper.Stop()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -131,7 +136,7 @@ type server struct {
 	startedAt time.Time
 	mu        sync.Mutex
 	seen      map[string]*tracked
-	sleeper   *sleepManager
+	sleeper   *sleeplock.Manager
 
 	// moshiState is refreshed periodically (not every poll) so we don't
 	// shell out to moshi-hook every 2 seconds. When SuppressBell() is
@@ -155,7 +160,7 @@ func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	n := len(s.seen)
 	s.mu.Unlock()
 	writeJSON(w, daemon.HealthInfo{
-		OK: true, Hostname: host, Version: version, Sessions: n, SleepMode: s.sleeper.Mode(),
+		OK: true, Hostname: host, Version: version, Sessions: n, SleepMode: string(s.sleeper.Effective()),
 	})
 }
 
@@ -363,66 +368,23 @@ func (s *server) moshiBellSuppressed(ctx context.Context) bool {
 	return s.moshiState.SuppressBell()
 }
 
-// sleepManager owns the caffeinate (macOS) / systemd-inhibit (linux)
-// subprocess that prevents the host from sleeping while a session is active.
-// v0.1 implements Mode 1 (safe) only; Mode 2/3 land in the next ticket.
-type sleepManager struct {
-	mu       sync.Mutex
-	holder   *exec.Cmd
-	mode     string
-	enabled  bool
-}
-
+// startSleepManager constructs the sleeplock.Manager from config. The
+// backward-compat shim: if Mode is empty AND the legacy
+// DangerousKeepAwakeOnBattery flag is true, we treat that as
+// Mode="dangerous". The legacy flag is otherwise honored only as the
+// "off" interpretation for safe.
 func (s *server) startSleepManager() {
-	s.sleeper = &sleepManager{mode: "off", enabled: true}
-}
-
-// SetActive turns the lock on/off based on session activity.
-func (m *sleepManager) SetActive(active bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if !m.enabled {
-		return
+	modeStr := s.cfg.Sleep.Mode
+	if modeStr == "" && s.cfg.Sleep.DangerousKeepAwakeOnBattery {
+		modeStr = "dangerous"
 	}
-	if active && m.holder == nil {
-		m.holder = sleepBlocker()
-		if m.holder != nil {
-			if err := m.holder.Start(); err == nil {
-				m.mode = "safe"
-				log.Printf("ccmuxd: sleep prevention engaged (%s)", m.holder.Path)
-				return
-			}
-			m.holder = nil
-		}
-		m.mode = "off"
+	cutoff := s.cfg.Sleep.LowBatteryCutoff
+	if cutoff <= 0 {
+		cutoff = 20
 	}
-	if !active && m.holder != nil {
-		_ = m.holder.Process.Kill()
-		_, _ = m.holder.Process.Wait()
-		m.holder = nil
-		m.mode = "off"
-		log.Println("ccmuxd: sleep prevention released")
-	}
-}
-
-func (m *sleepManager) Mode() string {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.mode
-}
-
-// sleepBlocker returns the right subprocess for this OS.
-func sleepBlocker() *exec.Cmd {
-	switch runtime.GOOS {
-	case "darwin":
-		return exec.Command("caffeinate", "-s")
-	case "linux":
-		return exec.Command("systemd-inhibit", "--what=sleep:idle",
-			"--who=ccmuxd", "--why=Claude session active",
-			"sleep", "infinity")
-	default:
-		return nil
-	}
+	s.sleeper = sleeplock.NewManager(sleeplock.ParseMode(modeStr), cutoff)
+	log.Printf("ccmuxd: sleep manager initialized (mode=%s, low_battery_cutoff=%d%%)",
+		s.sleeper.Requested(), cutoff)
 }
 
 // tailscaleAddr returns "<tailscale_ip>:<port>" if Tailscale is running, else error.

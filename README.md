@@ -69,7 +69,7 @@ ccmux update         # pull latest, rebuild, reload daemon
 └────────────────────────────────────────────────────────────────┘
 ```
 
-⌨️ `1`-`6` jump between screens, `Enter` attaches, `?` opens contextual help, `T` re-runs the first-run tour.
+⌨️ `1`-`7` jump between screens (Dashboard, Sessions, Projects, Notes, Claude, Settings, Network), `Enter` attaches, `?` opens contextual help, `T` re-runs the first-run tour.
 
 ## 📱 Mobile
 
@@ -100,7 +100,7 @@ The Devices panel on the Dashboard shows every device on your tailnet:
 - ⚪ **peers NOT running ccmuxd** (Macs/Linux boxes you haven't installed on yet) — with a one-line "ccmux not installed" hint so you remember to bring them online with `make bootstrap`
 - 📱 **phones / iPads** — with a "connect via Moshi app" hint, since the iOS Moshi app is their picker (and they don't run ccmux directly)
 
-Attaching a remote session execs `mosh mini -- tmux attach -t <name>`. Mosh tolerates roaming and stalls, so you can close the lid, go to a coffee shop, open the laptop — your session resumes instantly. Your phone gets pushes from the Mini, same flow as Mobile above.
+Attaching to an auto-discovered peer execs `ssh -t <host> -- tmux attach -t <name>` (with a cross-platform PATH prepend so Homebrew/Snap/Linuxbrew tmux is found). If you've pinned a host with `ccmux host add --mosh <name> …`, ccmux uses `mosh` instead — which tolerates roaming and stalls (close the lid, walk somewhere, open it back up, session is still attached). Your phone gets pushes from the Mini either way.
 
 > Manually pinning a host with `ccmux host add` still works — useful for non-Tailscale hosts, or to force a specific port. Discovered hosts and pinned hosts coexist on the dashboard without duplicates.
 
@@ -110,10 +110,9 @@ Attaching a remote session execs `mosh mini -- tmux attach -t <name>`. Mosh tole
 
 ### 🎛️ Session management
 - Live dashboard of every Claude session across every project, with state (active / idle / **needs_input**)
-- One-key attach, kill, rename, snapshot — applies a styled tmux status bar so you always know where you are
-- Per-session "keep awake" pin
-- **Three sleep-prevention modes** — Safe (AC only, default), Dangerous (battery too, opt-in with low-battery auto-release), Very Dangerous (system-wide lid-close override, sudo-gated)
-- Live preview pane: tail any session without attaching
+- One-key attach, kill, rename — applies a styled tmux status bar so you always know where you are
+- Per-session "keep awake" pin — the daemon holds a sleep-prevention lock while any pinned or active session is alive, and releases it when they all go idle
+- **Three sleep-prevention modes** — `safe` (AC only — the macOS default; auto on Linux), `dangerous` (works on battery too, opt-in, auto-releases below a configurable low-battery threshold), `very_dangerous` (system-wide override that survives lid-close; sudo-gated and reverted on daemon exit)
 
 ### 🏗️ Project bootstrapping
 - `ccmux new <name>` — scaffolds a project, creates the `docs/` notes vault, runs `git init`, opens a Claude session with your description as the first prompt
@@ -252,7 +251,25 @@ poll_interval_seconds = 2
 idle_seconds_for_needs_input = 3
 listen_tailnet = false               # set true on your server-mode host
 tailnet_port = 7474
+
+[sleep]
+mode = "safe"                        # "safe" | "dangerous" | "very_dangerous"
+idle_release_minutes = 10
+low_battery_cutoff = 20              # dangerous mode auto-downgrades below this
 ```
+
+> Sleep-mode notes:
+> - `safe` — `caffeinate -s` on macOS (Apple's policy keeps it AC-only; safe to leave on). `systemd-inhibit --what=sleep:idle` on Linux.
+> - `dangerous` — `caffeinate -d -i -m -s` on macOS, so the lock works on battery too. The daemon polls battery once a minute and downgrades to `safe` when below `low_battery_cutoff` (so a forgotten laptop doesn't run flat).
+> - `very_dangerous` — adds `sudo -n pmset -a disablesleep 1` (macOS) / `sudo -n systemctl mask sleep.target …` (Linux) so lid-close no longer puts the system to sleep. Requires passwordless sudo for the specific command (add a line to `/etc/sudoers.d/ccmux` — example below); silently degrades to `dangerous` if sudo asks for a password. Always reverted when ccmuxd exits cleanly.
+>
+> Example sudoers entry (run `sudo visudo -f /etc/sudoers.d/ccmux`):
+> ```
+> # macOS
+> %admin ALL=(ALL) NOPASSWD: /usr/bin/pmset -a disablesleep *
+> # Linux
+> %sudo ALL=(ALL) NOPASSWD: /bin/systemctl mask *, /bin/systemctl unmask *
+> ```
 
 `projects.root`, `scaffold.dirs`, and `subscription.tier` are also editable inline from the Settings screen — `↑/↓` to move, `Enter` to edit, `e` to open `$EDITOR` for the prose-heavy fields.
 
@@ -283,7 +300,7 @@ ccmux                  # the Mini already appears on the dashboard, tagged "disc
 
 The Devices panel shows each peer's ccmuxd version. If the Mini is behind your laptop's build, it gets an "update available" tag — run `ccmux update` on the Mini (or SSH in and do it) to bring them in sync.
 
-Attach to a remote session and ccmux execs `mosh mini -- tmux attach -t <name>`.
+Attach to a discovered remote session and ccmux execs `ssh -t mini -- tmux attach -t <name>` (use `ccmux host add --mosh mini …` if you'd rather use Mosh for that pinned host).
 
 ### 6. Maintenance (≈1 min)
 

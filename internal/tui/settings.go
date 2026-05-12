@@ -342,9 +342,9 @@ func (m settingsModel) View(width, height int) string {
 	lines = append(lines,
 		"",
 		m.st.Subtitle.Render("Sleep prevention"),
+		fmt.Sprintf("  mode           %s", sleepModeDisplay(m.cfg.Sleep)),
 		fmt.Sprintf("  idle release   %d minutes", m.cfg.Sleep.IdleReleaseMinutes),
-		fmt.Sprintf("  dangerous batt %v", m.cfg.Sleep.DangerousKeepAwakeOnBattery),
-		fmt.Sprintf("  low-batt cutoff %d%%", m.cfg.Sleep.LowBatteryCutoff),
+		fmt.Sprintf("  low-batt cutoff %d%% (dangerous auto-downgrades below this)", m.cfg.Sleep.LowBatteryCutoff),
 		"",
 		m.st.Subtitle.Render("Daemon"),
 		fmt.Sprintf("  poll interval  %ds", m.cfg.Daemon.PollIntervalSeconds),
@@ -403,4 +403,18 @@ func (m settingsModel) renderHosts() string {
 		out = append(out, fmt.Sprintf("  %s  %s@%s  mosh=%v", m.st.HostColor(h.Name).Render("●"), h.User, h.Address, h.Mosh))
 	}
 	return strings.Join(out, "\n")
+}
+
+// sleepModeDisplay resolves the effective mode for the settings panel:
+// honors the explicit `mode` if set, otherwise falls back to the legacy
+// `dangerous_keep_awake_on_battery` flag so old configs still display
+// what they actually do.
+func sleepModeDisplay(s config.SleepConfig) string {
+	if s.Mode != "" {
+		return s.Mode
+	}
+	if s.DangerousKeepAwakeOnBattery {
+		return "dangerous (legacy flag)"
+	}
+	return "safe"
 }

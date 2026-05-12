@@ -40,16 +40,31 @@ type ProjectsConfig struct {
 }
 
 type SleepConfig struct {
+	// Mode picks the sleep-prevention aggressiveness:
+	//   - "safe" (default) — caffeinate -s on macOS (AC-only by Apple's
+	//     own policy; lid-close still puts the laptop to sleep) /
+	//     systemd-inhibit on Linux. Safe for batteries.
+	//   - "dangerous" — caffeinate -d -i -m -s on macOS so it also
+	//     prevents idle sleep on battery. A battery monitor downgrades
+	//     to "safe" when the charge crosses LowBatteryCutoff so a
+	//     forgotten-on-battery laptop doesn't run itself flat.
+	//   - "very_dangerous" — dangerous + `sudo pmset -a disablesleep 1`
+	//     (macOS) / mask sleep.target (Linux) so lid-close no longer
+	//     puts the system to sleep. Requires passwordless sudo for
+	//     pmset/systemctl; reverts on daemon exit.
+	Mode string `toml:"mode"`
+
 	// IdleReleaseMinutes — release the keep-awake lock when all sessions
 	// have been idle for this long. Default 10.
 	IdleReleaseMinutes int `toml:"idle_release_minutes"`
 
-	// DangerousKeepAwakeOnBattery — Mode 2. Use caffeinate -d -i -m -u to
-	// keep the system awake on battery too. Default false.
+	// DangerousKeepAwakeOnBattery — back-compat flag. If true and Mode
+	// is empty, Mode resolves to "dangerous". Prefer setting Mode
+	// directly.
 	DangerousKeepAwakeOnBattery bool `toml:"dangerous_keep_awake_on_battery"`
 
-	// LowBatteryCutoff — in Mode 2, auto-release the lock when on battery
-	// and below this percentage. Default 20.
+	// LowBatteryCutoff — in dangerous mode, auto-downgrade to safe when
+	// on battery below this percentage. Default 20.
 	LowBatteryCutoff int `toml:"low_battery_cutoff"`
 }
 
@@ -126,6 +141,7 @@ func Defaults() Config {
 		Theme:    "catppuccin-mocha",
 		Editor:   firstNonEmpty(os.Getenv("VISUAL"), os.Getenv("EDITOR"), "nvim"),
 		Sleep: SleepConfig{
+			Mode:                        "safe",
 			IdleReleaseMinutes:          10,
 			DangerousKeepAwakeOnBattery: false,
 			LowBatteryCutoff:            20,
