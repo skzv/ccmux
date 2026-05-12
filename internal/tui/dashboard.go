@@ -124,7 +124,7 @@ func (m dashboardModel) viewNarrow(width, height int) string {
 
 func (m dashboardModel) heroPanel(width int) string {
 	title := m.st.Title.Render("Hello.")
-	sub := m.st.Subtitle.Render("Welcome to ccmux. One TUI for every Claude session, every project, every device.")
+	sub := m.st.Subtitle.Render("Welcome to ccmux. One TUI for every agent session — Claude, Codex, Gemini — every project, every device.")
 	body := lipgloss.JoinVertical(lipgloss.Left, title, sub)
 	return m.st.Pane.Width(width - 2).Render(body)
 }
