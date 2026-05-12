@@ -26,7 +26,7 @@ type projectsLoadedMsg struct {
 
 // hostStatus is one row in the host-health pings table.
 type hostStatus struct {
-	Name      string
+	Name string
 	// Local marks the row representing this machine. The Devices
 	// panel renders it with a small "(this device)" tag so the user
 	// can tell at a glance which row is which.
@@ -201,6 +201,24 @@ type claudeReloadMsg struct{}
 // backup path so the screen can surface "backup at …" in a toast.
 type claudeModelChangedMsg struct {
 	New    string
+	Backup string
+	Err    error
+}
+
+// claudeEffortChangedMsg signals that SetEffortLevel completed. Same
+// shape as the model variant — New is the chosen level ("xhigh" / "" /
+// etc.), Backup is the settings.json snapshot path.
+type claudeEffortChangedMsg struct {
+	New    string
+	Backup string
+	Err    error
+}
+
+// claudeAlwaysThinkingChangedMsg signals that SetAlwaysThinking completed.
+// New carries the resulting on/off state so the toast can read "turned on"
+// vs "turned off" without re-reading settings.json.
+type claudeAlwaysThinkingChangedMsg struct {
+	New    bool
 	Backup string
 	Err    error
 }

@@ -65,11 +65,13 @@ type Locations struct {
 // across a round-trip — important because Claude Code adds settings
 // often and we don't want our writes to drop unknown keys.
 type Settings struct {
-	Model    string                 `json:"model,omitempty"`
-	Theme    string                 `json:"theme,omitempty"`
-	Hooks    map[string][]HookGroup `json:"hooks,omitempty"`
-	MCPServers map[string]MCPServer `json:"mcpServers,omitempty"`
-	Permissions Permissions         `json:"permissions,omitempty"`
+	Model                 string                 `json:"model,omitempty"`
+	EffortLevel           string                 `json:"effortLevel,omitempty"`
+	AlwaysThinkingEnabled bool                   `json:"alwaysThinkingEnabled,omitempty"`
+	Theme                 string                 `json:"theme,omitempty"`
+	Hooks                 map[string][]HookGroup `json:"hooks,omitempty"`
+	MCPServers            map[string]MCPServer   `json:"mcpServers,omitempty"`
+	Permissions           Permissions            `json:"permissions,omitempty"`
 
 	// Extra holds every key not modelled above so writes don't drop
 	// them. populated by readWithExtras and merged back on write.
@@ -85,7 +87,7 @@ type HookGroup struct {
 
 // Hook is one runnable hook record.
 type Hook struct {
-	Type    string `json:"type"`            // "command"
+	Type    string `json:"type"` // "command"
 	Command string `json:"command"`
 	Timeout int    `json:"timeout,omitempty"`
 	Async   bool   `json:"async,omitempty"`
@@ -95,11 +97,11 @@ type Hook struct {
 // recognizes — we store as RawMessage so additions/changes don't break
 // us. Knowable fields can be parsed by callers as needed.
 type MCPServer struct {
-	Type    string            `json:"type,omitempty"` // "stdio", "http", "sse"
-	Command string            `json:"command,omitempty"`
-	Args    []string          `json:"args,omitempty"`
-	Env     map[string]string `json:"env,omitempty"`
-	URL     string            `json:"url,omitempty"`
+	Type    string                     `json:"type,omitempty"` // "stdio", "http", "sse"
+	Command string                     `json:"command,omitempty"`
+	Args    []string                   `json:"args,omitempty"`
+	Env     map[string]string          `json:"env,omitempty"`
+	URL     string                     `json:"url,omitempty"`
 	Extra   map[string]json.RawMessage `json:"-"`
 }
 
@@ -140,6 +142,10 @@ func readSettingsAt(path string) (*Settings, error) {
 		switch key {
 		case "model":
 			_ = json.Unmarshal(val, &s.Model)
+		case "effortLevel":
+			_ = json.Unmarshal(val, &s.EffortLevel)
+		case "alwaysThinkingEnabled":
+			_ = json.Unmarshal(val, &s.AlwaysThinkingEnabled)
 		case "theme":
 			_ = json.Unmarshal(val, &s.Theme)
 		case "hooks":
@@ -177,6 +183,12 @@ func WriteSettings(s *Settings) (backup string, err error) {
 	}
 	if s.Model != "" {
 		out["model"] = s.Model
+	}
+	if s.EffortLevel != "" {
+		out["effortLevel"] = s.EffortLevel
+	}
+	if s.AlwaysThinkingEnabled {
+		out["alwaysThinkingEnabled"] = true
 	}
 	if s.Theme != "" {
 		out["theme"] = s.Theme
@@ -242,9 +254,9 @@ func SetModel(model string) (string, error) {
 
 // EffectiveModel returns what model Claude Code will actually use,
 // applying the documented precedence:
-//   1. ANTHROPIC_MODEL env var
-//   2. settings.json `model`
-//   3. "(built-in default)"
+//  1. ANTHROPIC_MODEL env var
+//  2. settings.json `model`
+//  3. "(built-in default)"
 func EffectiveModel() (value, source string) {
 	if v := strings.TrimSpace(os.Getenv("ANTHROPIC_MODEL")); v != "" {
 		return v, "$ANTHROPIC_MODEL"
@@ -275,11 +287,69 @@ type ModelOption struct {
 	Desc  string
 }
 
+// SetEffortLevel updates only the effortLevel field, preserving everything
+// else. Returns the backup path. `level` may be "low", "medium", "high",
+// "xhigh", or "" to clear the override. "max" is intentionally not offered
+// here — per Claude Code's docs it's a CLI-only override (`claude --effort
+// max`), not a persisted settings.json value.
+func SetEffortLevel(level string) (string, error) {
+	s, err := ReadSettings()
+	if err != nil {
+		return "", err
+	}
+	s.EffortLevel = strings.TrimSpace(level)
+	return WriteSettings(s)
+}
+
+// SetAlwaysThinking toggles the alwaysThinkingEnabled boolean. When false,
+// the key is omitted from settings.json entirely so we don't litter the
+// file with explicit `false`s the user didn't ask for.
+func SetAlwaysThinking(enabled bool) (string, error) {
+	s, err := ReadSettings()
+	if err != nil {
+		return "", err
+	}
+	s.AlwaysThinkingEnabled = enabled
+	return WriteSettings(s)
+}
+
+// EffectiveEffortLevel returns the persisted reasoning-effort default and
+// where it came from. There's no documented env-var override, so the
+// precedence is just settings.json → Claude Code default. The CLI's
+// `--effort` flag is a per-invocation override and not visible here.
+func EffectiveEffortLevel() (value, source string) {
+	s, err := ReadSettings()
+	if err == nil && s.EffortLevel != "" {
+		return s.EffortLevel, "settings.json"
+	}
+	return "(default)", "Claude Code default"
+}
+
+// KnownEffortLevels are the rows the effort picker offers. The order
+// is intentionally high-to-low so "max persistent reasoning" is the
+// first option a user lands on when they open the picker.
+func KnownEffortLevels() []EffortOption {
+	return []EffortOption{
+		{Value: "xhigh", Label: "xhigh", Desc: "Max persistent reasoning budget"},
+		{Value: "high", Label: "high", Desc: "Deeper reasoning; slower responses"},
+		{Value: "medium", Label: "medium", Desc: "Balanced (Claude Code default)"},
+		{Value: "low", Label: "low", Desc: "Fast; minimal reasoning"},
+		{Value: "", Label: "Inherit / no override", Desc: "Use whatever Claude Code defaults to"},
+	}
+}
+
+// EffortOption is one row in the effort picker.
+type EffortOption struct {
+	Value string // value written to settings.json (empty clears)
+	Label string
+	Desc  string
+}
+
 // Command is one ~/.claude/commands/*.md entry.
 type Command struct {
-	Name        string    // basename without .md
-	Path        string    // absolute path
-	Description string    // first non-empty line under the H1, when present
+	Name        string // basename without .md
+	Path        string // absolute path
+	Description string // first non-empty line under the H1, when present
 	Modified    time.Time
 }
 

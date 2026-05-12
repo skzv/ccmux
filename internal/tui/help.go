@@ -60,6 +60,8 @@ func helpForScreen(s Screen) []HelpItem {
 	case ScreenClaude:
 		return append([]HelpItem{
 			{"m", "pick default model (modal)"},
+			{"e", "pick reasoning effort (modal)"},
+			{"a", "toggle alwaysThinkingEnabled on/off"},
 			{"c", "edit global ~/.claude/CLAUDE.md in $EDITOR"},
 			{"j", "edit ~/.claude/settings.json directly"},
 		}, common...)

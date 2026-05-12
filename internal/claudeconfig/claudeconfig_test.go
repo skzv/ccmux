@@ -320,3 +320,122 @@ func TestKnownModels_IncludesEachAlias(t *testing.T) {
 		}
 	}
 }
+
+func TestSetEffortLevel_RoundTrip(t *testing.T) {
+	withFakeClaudeDir(t)
+	if _, err := SetEffortLevel("xhigh"); err != nil {
+		t.Fatal(err)
+	}
+	s, err := ReadSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.EffortLevel != "xhigh" {
+		t.Errorf("effortLevel = %q, want xhigh", s.EffortLevel)
+	}
+}
+
+func TestSetEffortLevel_PreservesUnrelatedFields(t *testing.T) {
+	dir := withFakeClaudeDir(t)
+	body := `{"theme":"dark","customKey":"keepMe","model":"opus"}`
+	if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SetEffortLevel("high"); err != nil {
+		t.Fatal(err)
+	}
+	s, err := ReadSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.EffortLevel != "high" || s.Model != "opus" || s.Theme != "dark" {
+		t.Errorf("got effort=%q model=%q theme=%q", s.EffortLevel, s.Model, s.Theme)
+	}
+	if _, ok := s.Extra["customKey"]; !ok {
+		t.Error("customKey dropped by SetEffortLevel")
+	}
+}
+
+func TestSetEffortLevel_ClearOverride(t *testing.T) {
+	withFakeClaudeDir(t)
+	if _, err := SetEffortLevel("xhigh"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SetEffortLevel(""); err != nil {
+		t.Fatal(err)
+	}
+	// "" should drop the key entirely (omitempty), so the raw file
+	// shouldn't even mention effortLevel.
+	p, _ := Paths()
+	raw, err := os.ReadFile(p.Settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var roundTrip map[string]any
+	if err := json.Unmarshal(raw, &roundTrip); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := roundTrip["effortLevel"]; ok {
+		t.Errorf("effortLevel should have been omitted after clear, file has: %v", roundTrip)
+	}
+}
+
+func TestSetAlwaysThinking_RoundTrip(t *testing.T) {
+	withFakeClaudeDir(t)
+	if _, err := SetAlwaysThinking(true); err != nil {
+		t.Fatal(err)
+	}
+	s, err := ReadSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.AlwaysThinkingEnabled {
+		t.Error("alwaysThinkingEnabled = false, want true")
+	}
+
+	// Toggling off should drop the key (omitempty), not write `false`.
+	if _, err := SetAlwaysThinking(false); err != nil {
+		t.Fatal(err)
+	}
+	p, _ := Paths()
+	raw, err := os.ReadFile(p.Settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var roundTrip map[string]any
+	if err := json.Unmarshal(raw, &roundTrip); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := roundTrip["alwaysThinkingEnabled"]; ok {
+		t.Errorf("alwaysThinkingEnabled should have been omitted when false, file: %v", roundTrip)
+	}
+}
+
+func TestEffectiveEffortLevel_Precedence(t *testing.T) {
+	withFakeClaudeDir(t)
+	// Nothing set → built-in default.
+	if v, src := EffectiveEffortLevel(); v != "(default)" || src != "Claude Code default" {
+		t.Errorf("default: got %q from %q", v, src)
+	}
+	// settings.json only.
+	if _, err := SetEffortLevel("high"); err != nil {
+		t.Fatal(err)
+	}
+	if v, src := EffectiveEffortLevel(); v != "high" || src != "settings.json" {
+		t.Errorf("settings: got %q from %q", v, src)
+	}
+}
+
+func TestKnownEffortLevels_IncludesEachLevel(t *testing.T) {
+	want := map[string]bool{"low": false, "medium": false, "high": false, "xhigh": false}
+	for _, e := range KnownEffortLevels() {
+		if _, ok := want[e.Value]; ok {
+			want[e.Value] = true
+		}
+	}
+	for v, seen := range want {
+		if !seen {
+			t.Errorf("KnownEffortLevels missing value %q", v)
+		}
+	}
+}
