@@ -1,0 +1,289 @@
+package agent
+
+import (
+	"context"
+	"strings"
+	"testing"
+	"time"
+)
+
+// TestAll_CanonicalOrder pins the canonical agent ordering. Order is
+// load-bearing: pickers default to the first installed entry, so a
+// reshuffle that put Codex first would silently change every new
+// user's default agent.
+func TestAll_CanonicalOrder(t *testing.T) {
+	got := All()
+	if len(got) != 3 {
+		t.Fatalf("All() len = %d, want 3", len(got))
+	}
+	wantIDs := []ID{IDClaude, IDCodex, IDGemini}
+	for i, a := range got {
+		if a.ID() != wantIDs[i] {
+			t.Errorf("All()[%d].ID() = %q, want %q", i, a.ID(), wantIDs[i])
+		}
+	}
+}
+
+// TestParseID covers every shape the sidecar / config / CLI flag might
+// hand us. The "" → false case matters because the daemon defaults
+// missing values to claude only when ParseID reports !ok.
+func TestParseID(t *testing.T) {
+	cases := []struct {
+		in     string
+		want   ID
+		wantOK bool
+	}{
+		{"claude", IDClaude, true},
+		{"CLAUDE", IDClaude, true},
+		{"  Claude  ", IDClaude, true},
+		{"codex", IDCodex, true},
+		{"gemini", IDGemini, true},
+		{"", "", false},
+		{"   ", "", false},
+		{"gpt", "", false},
+		{"claude-3", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.in, func(t *testing.T) {
+			got, ok := ParseID(tc.in)
+			if got != tc.want || ok != tc.wantOK {
+				t.Errorf("ParseID(%q) = (%q, %v), want (%q, %v)",
+					tc.in, got, ok, tc.want, tc.wantOK)
+			}
+		})
+	}
+}
+
+// TestByID_KnownAndEmptyFallback — known IDs return the matching
+// concrete; the empty string falls back to claude (the back-compat
+// shim for projects scaffolded before the sidecar existed).
+func TestByID_KnownAndEmptyFallback(t *testing.T) {
+	cases := []struct {
+		in   ID
+		want ID
+	}{
+		{IDClaude, IDClaude},
+		{IDCodex, IDCodex},
+		{IDGemini, IDGemini},
+		{"", IDClaude}, // back-compat
+	}
+	for _, tc := range cases {
+		if got := ByID(tc.in).ID(); got != tc.want {
+			t.Errorf("ByID(%q).ID() = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestByID_PanicsOnUnknown — ByID is the unchecked path; callers that
+// take user input must go through ParseID. This test pins that
+// distinction so a future "let's just be permissive in ByID" refactor
+// trips here.
+func TestByID_PanicsOnUnknown(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic on unknown ID")
+		}
+	}()
+	_ = ByID("imaginary-llm-9000")
+}
+
+// TestDefault — locked at claude. If this ever changes, the migration
+// guide for every existing ccmux user has to mention it.
+func TestDefault(t *testing.T) {
+	if got := Default().ID(); got != IDClaude {
+		t.Errorf("Default().ID() = %q, want claude — changing this is a user-visible default flip", got)
+	}
+}
+
+// TestAgent_Identity_Stable covers each Agent's identity quartet
+// (ID, DisplayName, Binary, …) so a typo in any one of them fails the
+// test instead of shipping silently to users.
+func TestAgent_Identity_Stable(t *testing.T) {
+	cases := []struct {
+		a        Agent
+		id       ID
+		binary   string
+		display  string
+		cfgBase  string // last path segment of ConfigRoot
+		transRel string // path relative to ConfigRoot for transcripts
+	}{
+		{Claude{}, IDClaude, "claude", "Claude Code", ".claude", "projects"},
+		{Codex{}, IDCodex, "codex", "Codex", ".codex", "sessions"},
+		{Gemini{}, IDGemini, "gemini", "Gemini CLI", ".gemini", "conversations"},
+	}
+	for _, tc := range cases {
+		t.Run(string(tc.id), func(t *testing.T) {
+			if tc.a.ID() != tc.id {
+				t.Errorf("ID() = %q, want %q", tc.a.ID(), tc.id)
+			}
+			if tc.a.Binary() != tc.binary {
+				t.Errorf("Binary() = %q, want %q", tc.a.Binary(), tc.binary)
+			}
+			if tc.a.DisplayName() != tc.display {
+				t.Errorf("DisplayName() = %q, want %q", tc.a.DisplayName(), tc.display)
+			}
+			home := "/home/test"
+			cfg := tc.a.ConfigRoot(home)
+			if !strings.HasSuffix(cfg, "/"+tc.cfgBase) {
+				t.Errorf("ConfigRoot(%q) = %q, want suffix /%s", home, cfg, tc.cfgBase)
+			}
+			trans := tc.a.TranscriptsRoot(home)
+			if !strings.HasSuffix(trans, "/"+tc.cfgBase+"/"+tc.transRel) {
+				t.Errorf("TranscriptsRoot(%q) = %q, want suffix /%s/%s",
+					home, trans, tc.cfgBase, tc.transRel)
+			}
+		})
+	}
+}
+
+// TestAgent_LaunchCmd_NewVsContinue — `continueFlag=true` must wire in
+// the `--continue` flag for every agent so resuming a project actually
+// resumes the agent's prior conversation. Off-by-one here would mean
+// every "attach existing" lands the user in a brand-new chat.
+func TestAgent_LaunchCmd_NewVsContinue(t *testing.T) {
+	for _, a := range All() {
+		t.Run(string(a.ID()), func(t *testing.T) {
+			fresh := a.LaunchCmd(false)
+			cont := a.LaunchCmd(true)
+			if !strings.HasPrefix(fresh, a.Binary()) {
+				t.Errorf("fresh LaunchCmd = %q, expected to start with binary %q",
+					fresh, a.Binary())
+			}
+			if !strings.Contains(cont, "--continue") {
+				t.Errorf("continue LaunchCmd = %q, expected --continue", cont)
+			}
+			// Fallback to zsh keeps the pane alive if the agent is
+			// broken — every agent should provide it.
+			if !strings.Contains(cont, "zsh") {
+				t.Errorf("continue LaunchCmd = %q, expected zsh fallback", cont)
+			}
+		})
+	}
+}
+
+// TestAgent_InitialPrompt_SubstitutesNameAndDesc — every agent's
+// prompt template must echo the user's name + description back; a
+// regression here would mean Claude/Codex/Gemini all start their
+// first session asking generic questions instead of the user's
+// project-specific one.
+func TestAgent_InitialPrompt_SubstitutesNameAndDesc(t *testing.T) {
+	for _, a := range All() {
+		t.Run(string(a.ID()), func(t *testing.T) {
+			got := a.InitialPrompt("auth-redesign", "rebuild login with passkeys")
+			if !strings.Contains(got, "auth-redesign") {
+				t.Errorf("%s prompt missing project name: %q", a.ID(), got)
+			}
+			if !strings.Contains(got, "rebuild login with passkeys") {
+				t.Errorf("%s prompt missing description: %q", a.ID(), got)
+			}
+		})
+	}
+}
+
+// TestAgent_InitialPrompt_EmptyDescGetsFallback — when the user
+// scaffolds without -d, every agent's prompt must still produce
+// something useful instead of dangling sentence fragments.
+func TestAgent_InitialPrompt_EmptyDescGetsFallback(t *testing.T) {
+	for _, a := range All() {
+		t.Run(string(a.ID()), func(t *testing.T) {
+			got := a.InitialPrompt("p", "")
+			if !strings.Contains(got, "no description yet") {
+				t.Errorf("%s prompt missing empty-desc fallback hint: %q", a.ID(), got)
+			}
+		})
+	}
+}
+
+// TestClaude_Classify_DelegatesToInternalClaude — Claude's classifier
+// is just a thin wrapper around internal/claude. Same pane input must
+// produce the same State string on both sides; a divergence would mean
+// the daemon's behavior changes depending on which call site classifies.
+func TestClaude_Classify_DelegatesToInternalClaude(t *testing.T) {
+	// Empty pane: both implementations should report unknown.
+	if got := (Claude{}).Classify("", time.Now(), 3*time.Second); got != StateUnknown {
+		t.Errorf("empty pane: Claude.Classify = %q, want unknown", got)
+	}
+	// Pane content with Claude's box-drawing prompt should be
+	// recognized as needs_input when the pane has been idle long
+	// enough. Use the actual characters internal/claude looks for so
+	// the test is unambiguous.
+	pane := "some Claude output here\n\n╭─────────╮\n│ > write a function │\n╰─────────╯"
+	stale := time.Now().Add(-10 * time.Second)
+	if got := (Claude{}).Classify(pane, stale, 3*time.Second); got != StateNeedsInput {
+		t.Errorf("idle Claude prompt: got %q, want needs_input", got)
+	}
+}
+
+// TestCodex_Classify_IdleHeuristic — until we have testdata-pinned
+// Codex pane samples, the classifier is a quiet-pane heuristic. Pin
+// the three branches (unknown / active / needs_input) so a future
+// tightening doesn't silently flip the contract.
+func TestCodex_Classify_IdleHeuristic(t *testing.T) {
+	if got := (Codex{}).Classify("", time.Now(), 3*time.Second); got != StateUnknown {
+		t.Errorf("empty pane: Codex.Classify = %q, want unknown", got)
+	}
+	if got := (Codex{}).Classify("recent output", time.Now(), 3*time.Second); got != StateActive {
+		t.Errorf("fresh output: Codex.Classify = %q, want active", got)
+	}
+	stale := time.Now().Add(-10 * time.Second)
+	if got := (Codex{}).Classify("old output", stale, 3*time.Second); got != StateNeedsInput {
+		t.Errorf("stale output: Codex.Classify = %q, want needs_input", got)
+	}
+}
+
+// TestGemini_Classify_IdleHeuristic mirrors the Codex test. Same
+// stub semantics today.
+func TestGemini_Classify_IdleHeuristic(t *testing.T) {
+	if got := (Gemini{}).Classify("", time.Now(), 3*time.Second); got != StateUnknown {
+		t.Errorf("empty pane: Gemini.Classify = %q, want unknown", got)
+	}
+	if got := (Gemini{}).Classify("recent output", time.Now(), 3*time.Second); got != StateActive {
+		t.Errorf("fresh output: Gemini.Classify = %q, want active", got)
+	}
+	stale := time.Now().Add(-10 * time.Second)
+	if got := (Gemini{}).Classify("old output", stale, 3*time.Second); got != StateNeedsInput {
+		t.Errorf("stale output: Gemini.Classify = %q, want needs_input", got)
+	}
+}
+
+// TestAllInstalled_RespectsHook injects a fake binary detector so the
+// test doesn't depend on whatever's actually on the dev machine's
+// PATH. Verifies AllInstalled returns the right subset and preserves
+// canonical order.
+func TestAllInstalled_RespectsHook(t *testing.T) {
+	orig := installLookupHook
+	defer func() { installLookupHook = orig }()
+
+	// Scenario A: only claude installed.
+	installLookupHook = func(_ context.Context, bin string) bool {
+		return bin == "claude"
+	}
+	got := AllInstalled(context.Background())
+	if len(got) != 1 || got[0].ID() != IDClaude {
+		t.Fatalf("only-claude scenario: got %v", agentIDs(got))
+	}
+
+	// Scenario B: claude + gemini, no codex.
+	installLookupHook = func(_ context.Context, bin string) bool {
+		return bin == "claude" || bin == "gemini"
+	}
+	got = AllInstalled(context.Background())
+	if len(got) != 2 || got[0].ID() != IDClaude || got[1].ID() != IDGemini {
+		t.Errorf("claude+gemini scenario: got %v (order/contents wrong)", agentIDs(got))
+	}
+
+	// Scenario C: nothing installed → empty slice (not nil).
+	installLookupHook = func(_ context.Context, _ string) bool { return false }
+	got = AllInstalled(context.Background())
+	if len(got) != 0 {
+		t.Errorf("none-installed scenario: got %v, want empty", agentIDs(got))
+	}
+}
+
+func agentIDs(as []Agent) []ID {
+	out := make([]ID, len(as))
+	for i, a := range as {
+		out[i] = a.ID()
+	}
+	return out
+}
