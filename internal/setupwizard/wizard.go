@@ -23,6 +23,7 @@ import (
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/claudeauth"
 	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/daemonservice"
@@ -117,7 +118,6 @@ func stepDeps(ctx context.Context, out io.Writer) error {
 		{bin: "tmux", brew: "tmux"},
 		{bin: "mosh", brew: "mosh"},
 		{bin: "tailscale", brew: "tailscale"},
-		{bin: "claude", brew: ""}, // installed via Anthropic's installer
 		{
 			bin: "rg", brew: "ripgrep", optional: true, promptInstall: true,
 			rationale: "Used by the Notes screen for fast `/` search across docs/. Falls back to a slower Go scanner when missing, so this is recommended but never required.",
@@ -144,10 +144,51 @@ func stepDeps(ctx context.Context, out io.Writer) error {
 		}
 	}
 
+	// AI agents block — ccmux needs at least one. Detect each via
+	// exec.LookPath against agent.Binary(), report status. Install
+	// for the agent CLIs themselves is npm-based and we don't try
+	// to run npm from here (npm install -g often needs sudo and the
+	// user's npm config); we just point at the right command.
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, stEmphasis.Render("  AI agents (need at least one)"))
+	anyAgent := false
+	for _, a := range agent.All() {
+		if _, err := exec.LookPath(a.Binary()); err != nil {
+			fmt.Fprintf(out, "  %-7s %s   %s\n",
+				a.Binary(),
+				stWarn.Render("· not installed"),
+				stMuted.Render("install: "+npmInstallFor(a.ID())))
+		} else {
+			fmt.Fprintf(out, "  %-7s %s   %s\n",
+				a.Binary(),
+				stOK.Render("✓"),
+				stMuted.Render("("+a.DisplayName()+")"))
+			anyAgent = true
+		}
+	}
+	if !anyAgent {
+		fmt.Fprintln(out, stWarn.Render("  ⚠ no agent installed — install one of the above before using ccmux."))
+	}
+
 	if err := installRequired(ctx, out, missing); err != nil {
 		return err
 	}
 	return installPromptable(ctx, out, promptable)
+}
+
+// npmInstallFor mirrors agentInstallHint in cmd/ccmux/cmd/subcommands.go.
+// Kept separate so the wizard's wording can evolve independently of
+// doctor's; both centralize on the same npm-based install path today.
+func npmInstallFor(id agent.ID) string {
+	switch id {
+	case agent.IDClaude:
+		return "npm i -g @anthropic-ai/claude-code"
+	case agent.IDCodex:
+		return "npm i -g @openai/codex"
+	case agent.IDGemini:
+		return "npm i -g @google/gemini-cli"
+	}
+	return ""
 }
 
 // installRequired bulk-installs the must-have brew packages behind a

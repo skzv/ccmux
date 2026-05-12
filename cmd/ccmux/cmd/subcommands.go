@@ -15,6 +15,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/clipboard"
 	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/daemon"
@@ -254,7 +255,6 @@ func runDoctor() error {
 		{"tmux", hintFor("brew install tmux", "apt/dnf/pacman install tmux")},
 		{"mosh", hintFor("brew install mosh", "apt/dnf/pacman install mosh")},
 		{"tailscale", "https://tailscale.com/download"},
-		{"claude", "https://docs.claude.com/claude-code"},
 		{"rg", hintFor("brew install ripgrep (optional, accelerates notes search)", "apt install ripgrep (optional)")},
 	}
 	bad := 0
@@ -265,6 +265,28 @@ func runDoctor() error {
 		} else {
 			fmt.Printf("✓ %s\n", c.bin)
 		}
+	}
+
+	// AI agents block. At least one must be installed for ccmux to
+	// be useful — without an agent there's nothing to put in the tmux
+	// pane the dashboard supervises. We don't require all three; a
+	// Claude-only user has every feature, and a Codex-only user has
+	// the same with a different agent.
+	fmt.Println()
+	fmt.Println("AI agents (need at least one):")
+	installedCount := 0
+	for _, a := range agent.All() {
+		if _, err := exec.LookPath(a.Binary()); err != nil {
+			fmt.Printf("  · %s (binary `%s` not on PATH) — %s\n",
+				a.DisplayName(), a.Binary(), agentInstallHint(a.ID()))
+		} else {
+			fmt.Printf("  ✓ %s (%s)\n", a.DisplayName(), a.Binary())
+			installedCount++
+		}
+	}
+	if installedCount == 0 {
+		bad++
+		fmt.Println("  ⚠ no agents installed — install at least one above to use ccmux.")
 	}
 
 	// PATH check for ccmux itself. macOS-default PATH doesn't include
@@ -330,6 +352,22 @@ func runDoctor() error {
 		os.Exit(bad)
 	}
 	return nil
+}
+
+// agentInstallHint returns the recommended install command for an
+// agent the user doesn't have yet. All three CLIs ship via npm today,
+// which keeps the matrix simple — if any of them switch to a native
+// installer (claude is contemplating one), update here.
+func agentInstallHint(id agent.ID) string {
+	switch id {
+	case agent.IDClaude:
+		return "https://docs.claude.com/claude-code or `npm i -g @anthropic-ai/claude-code`"
+	case agent.IDCodex:
+		return "`npm i -g @openai/codex` (or see codex docs)"
+	case agent.IDGemini:
+		return "`npm i -g @google/gemini-cli` (or see gemini-cli docs)"
+	}
+	return ""
 }
 
 // checkClipboardForDoctor prints the three lines of clipboard status
