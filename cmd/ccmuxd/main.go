@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/skzv/ccmux/internal/claude"
+	"github.com/skzv/ccmux/internal/clipboard"
 	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/moshi"
@@ -63,6 +64,18 @@ func run() error {
 	// that case the launchd/systemd job re-runs the daemon, which calls
 	// Stop() on startup (Stop is idempotent and clears any stale state).
 	defer srv.sleeper.Stop()
+
+	// Best-effort: tell tmux to forward selections as OSC 52 so
+	// cross-device clipboard works through SSH. Fails silently when
+	// the tmux server isn't up yet — it'll be retried on first
+	// SetActive() poll. Honestly this is fine to do unconditionally:
+	// `set -s set-clipboard on` is idempotent and harmless on
+	// terminals that ignore OSC 52.
+	{
+		cctx, ccancel := context.WithTimeout(context.Background(), 2*time.Second)
+		_ = clipboard.EnableTmuxClipboard(cctx)
+		ccancel()
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -15,6 +15,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/skzv/ccmux/internal/clipboard"
 	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/daemonservice"
@@ -283,10 +284,42 @@ func runDoctor() error {
 		fmt.Println("  ✓ moshi-hook installed, paired, hooks wired, service running")
 	}
 
+	// Clipboard block — whether OSC 52 will round-trip between this
+	// terminal and tmux. The common breaker is Terminal.app (no OSC 52
+	// support) or iTerm2 with the "Applications may access clipboard"
+	// box unchecked.
+	fmt.Println()
+	fmt.Println("Clipboard (cross-device copy/paste via OSC 52):")
+	checkClipboardForDoctor()
+
 	if bad > 0 {
 		os.Exit(bad)
 	}
 	return nil
+}
+
+// checkClipboardForDoctor prints the three lines of clipboard status
+// (terminal compat, tmux set-clipboard, and a probe hint). Split out
+// of runDoctor so it can be reused by the setup wizard.
+func checkClipboardForDoctor() {
+	ts := clipboard.DetectTerminal()
+	switch {
+	case ts.Supported && ts.NeedsToggle != "":
+		fmt.Printf("  ✓ %s supports OSC 52 — make sure: %s\n", ts.Name, ts.NeedsToggle)
+	case ts.Supported:
+		fmt.Printf("  ✓ %s supports OSC 52\n", ts.Name)
+	default:
+		fmt.Printf("  ⚠ %s — %s\n", ts.Name, ts.Advice)
+	}
+	state, err := clipboard.TmuxClipboardState(context.Background())
+	switch {
+	case err != nil:
+		fmt.Println("  · tmux not running yet; ccmuxd will enable set-clipboard on first session")
+	case state == "on" || state == "external":
+		fmt.Printf("  ✓ tmux set-clipboard=%s\n", state)
+	default:
+		fmt.Printf("  ⚠ tmux set-clipboard=%s — selections won't escape tmux; run `tmux set -s set-clipboard on`\n", state)
+	}
 }
 
 // newDaemonCmd: `ccmux daemon ...` — start/stop, persistent install/

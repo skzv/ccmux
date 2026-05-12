@@ -153,7 +153,8 @@ Attaching to an auto-discovered peer execs `ssh -t <host> -- tmux attach -t <nam
 - `?` opens contextual key help on every screen
 - Vim-style (`h/j/k/l`) and arrow keys both work
 - Auto-switches to a narrow-terminal layout under 80 cols (phone mode)
-- Mouse support on by default
+- Mouse support on by default (hold **Option (⌥)** while dragging to make a text selection inside tmux — that bypasses mouse reporting in iTerm2 and Terminal.app)
+- **Cross-device clipboard via OSC 52** — selecting text inside a remote tmux pane lands on your *local* clipboard. Works in iTerm2 (toggle: Preferences → General → Selection → "Applications in terminal may access clipboard"), Ghostty, WezTerm, Alacritty, kitty. Terminal.app does NOT support OSC 52 writes — install iTerm2 or Ghostty if you want this. `ccmux doctor` tells you exactly which side is missing.
 - **No telemetry. Ever.**
 
 ---
