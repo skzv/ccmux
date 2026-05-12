@@ -2,7 +2,9 @@ package cmd
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -176,5 +178,149 @@ func TestRunStep_RunsAndReportsExit(t *testing.T) {
 	// `false` exits 1 — runStep should surface that.
 	if err := runStep(t.TempDir(), false, "false"); err == nil {
 		t.Fatal("runStep(false): expected error, got nil")
+	}
+}
+
+// realGitRepo bootstraps an actual git repo (not a fake .git/ dir) so
+// the ensureOnBranch tests can run real `git symbolic-ref` against it.
+// Returns the absolute path. Commits one file on `main` so HEAD is
+// resolvable.
+func realGitRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	mustGit(t, dir, "init", "-b", "main")
+	mustGit(t, dir, "config", "user.email", "test@example.com")
+	mustGit(t, dir, "config", "user.name", "Test")
+	if err := os.WriteFile(filepath.Join(dir, "README"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustGit(t, dir, "add", ".")
+	mustGit(t, dir, "commit", "-m", "init")
+	return dir
+}
+
+func mustGit(t *testing.T, repo string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+	}
+	return string(out)
+}
+
+// TestEnsureOnBranch_AlreadyOnBranch — a fresh repo HEAD points at
+// `main` and ensureOnBranch should be a no-op (no error, no checkout).
+func TestEnsureOnBranch_AlreadyOnBranch(t *testing.T) {
+	repo := realGitRepo(t)
+	if err := ensureOnBranch(repo, false); err != nil {
+		t.Fatalf("on-branch repo errored: %v", err)
+	}
+	// Branch should still be main after the call.
+	out := mustGit(t, repo, "symbolic-ref", "--short", "HEAD")
+	if got := strings.TrimSpace(out); got != "main" {
+		t.Errorf("HEAD = %q, want main", got)
+	}
+}
+
+// TestEnsureOnBranch_DetachedHEAD reproduces the user-friend bug:
+// `git pull --ff-only` on a detached HEAD prints "You are not
+// currently on a branch" and fails. We need to switch back first.
+// We simulate detached HEAD via `git checkout <sha>` and assert
+// ensureOnBranch puts us back on main automatically — the same
+// outcome as the user typing `git checkout main` themselves.
+func TestEnsureOnBranch_DetachedHEAD(t *testing.T) {
+	repo := realGitRepo(t)
+	// Configure refs/remotes/origin/HEAD so resolveDefaultBranch can
+	// find a default branch without hitting the network.
+	// Set up a fake origin/main first, then point origin/HEAD at it
+	// symbolically. update-ref only works on a real branch name; the
+	// HEAD symref needs git symbolic-ref.
+	mustGit(t, repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+	mustGit(t, repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+
+	// Detach HEAD by checking out the commit directly.
+	sha := strings.TrimSpace(mustGit(t, repo, "rev-parse", "HEAD"))
+	mustGit(t, repo, "checkout", sha)
+
+	// Sanity: we should be detached now.
+	if out, err := exec.Command("git", "-C", repo, "symbolic-ref", "-q", "HEAD").Output(); err == nil && strings.TrimSpace(string(out)) != "" {
+		t.Fatalf("expected detached HEAD, but got branch %q", strings.TrimSpace(string(out)))
+	}
+
+	if err := ensureOnBranch(repo, false); err != nil {
+		t.Fatalf("ensureOnBranch on detached HEAD: %v", err)
+	}
+	// After the fix, HEAD should be back on main.
+	out := strings.TrimSpace(mustGit(t, repo, "symbolic-ref", "--short", "HEAD"))
+	if out != "main" {
+		t.Errorf("post-recovery HEAD = %q, want main", out)
+	}
+}
+
+// TestEnsureOnBranch_DetachedNoOriginHEAD — when origin/HEAD isn't set
+// the function can't auto-resolve a branch and must return a clear
+// error so the user knows what to do. Better than git's confusing
+// multi-line "Please specify which branch to merge with" output.
+func TestEnsureOnBranch_DetachedNoOriginHEAD(t *testing.T) {
+	repo := realGitRepo(t)
+	sha := strings.TrimSpace(mustGit(t, repo, "rev-parse", "HEAD"))
+	mustGit(t, repo, "checkout", sha)
+
+	// No origin/HEAD ref. No origin remote at all, in fact — so
+	// `git remote show origin` will also fail. Both fallbacks miss.
+	err := ensureOnBranch(repo, false)
+	if err == nil {
+		t.Fatal("expected error when no default branch resolvable, got nil")
+	}
+	if !strings.Contains(err.Error(), "detached HEAD") {
+		t.Errorf("error should mention detached HEAD: %v", err)
+	}
+}
+
+// TestEnsureOnBranch_DryRun — even in dry-run we still detect the
+// detached HEAD state and report the intended `git checkout`; we must
+// NOT actually mutate the repo.
+func TestEnsureOnBranch_DryRun(t *testing.T) {
+	repo := realGitRepo(t)
+	// Set up a fake origin/main first, then point origin/HEAD at it
+	// symbolically. update-ref only works on a real branch name; the
+	// HEAD symref needs git symbolic-ref.
+	mustGit(t, repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+	mustGit(t, repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+	sha := strings.TrimSpace(mustGit(t, repo, "rev-parse", "HEAD"))
+	mustGit(t, repo, "checkout", sha)
+
+	if err := ensureOnBranch(repo, true); err != nil {
+		t.Fatalf("dry-run errored: %v", err)
+	}
+	// Should still be detached — dry-run must not execute the checkout.
+	out, err := exec.Command("git", "-C", repo, "symbolic-ref", "-q", "HEAD").Output()
+	if err == nil && strings.TrimSpace(string(out)) != "" {
+		t.Errorf("dry-run executed the checkout; HEAD now %q", strings.TrimSpace(string(out)))
+	}
+}
+
+// TestResolveDefaultBranch_ReadsOriginHEAD — happy path: when the
+// repo has refs/remotes/origin/HEAD pointing at origin/main, the
+// helper returns "main".
+func TestResolveDefaultBranch_ReadsOriginHEAD(t *testing.T) {
+	repo := realGitRepo(t)
+	// Set up a fake origin/main first, then point origin/HEAD at it
+	// symbolically. update-ref only works on a real branch name; the
+	// HEAD symref needs git symbolic-ref.
+	mustGit(t, repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+	mustGit(t, repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+	if got := resolveDefaultBranch(repo); got != "main" {
+		t.Errorf("resolveDefaultBranch = %q, want main", got)
+	}
+}
+
+// TestResolveDefaultBranch_EmptyOnFailure — no origin/HEAD, no
+// reachable origin remote, returns "".
+func TestResolveDefaultBranch_EmptyOnFailure(t *testing.T) {
+	repo := realGitRepo(t)
+	if got := resolveDefaultBranch(repo); got != "" {
+		t.Errorf("resolveDefaultBranch on bare repo = %q, want empty", got)
 	}
 }

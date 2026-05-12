@@ -20,6 +20,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -29,6 +30,7 @@ import (
 	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/moshi"
 	"github.com/skzv/ccmux/internal/project"
+	"github.com/skzv/ccmux/internal/scaffold"
 	"github.com/skzv/ccmux/internal/sleeplock"
 	"github.com/skzv/ccmux/internal/tmux"
 )
@@ -259,12 +261,27 @@ func (s *server) handleSessionsItem(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "not implemented in v0.1", http.StatusNotImplemented)
 }
 
-// handleProjects returns every project under this daemon's
-// configured projects root. Each entry is tagged with the daemon's
-// hostname so a multi-host client can attribute rows back to their
-// origin. Errors fall through to an empty list — a daemon whose
-// projects dir doesn't exist yet shouldn't crash the network view.
+// handleProjects routes /v1/projects:
+//
+//	GET — list discovered projects under the daemon's Projects.Root
+//	POST — scaffold a new project on this host and start a session inside
+//	       it (body: daemon.NewProjectRequest)
+//
+// POST exists so the laptop's Projects screen can ask `mac-mini` to
+// create a project natively, instead of trying to ssh + git init +
+// tmux new over the wire.
 func (s *server) handleProjects(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet, "":
+		s.listProjects(w, r)
+	case http.MethodPost:
+		s.createProject(w, r)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *server) listProjects(w http.ResponseWriter, _ *http.Request) {
 	host, _ := os.Hostname()
 	root := s.cfg.Projects.Root
 	if root == "" {
@@ -281,6 +298,56 @@ func (s *server) handleProjects(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, out)
+}
+
+// createProject scaffolds + starts a session for a new project. The
+// directory is placed under the daemon's Projects.Root and the session
+// is named via tmux.SessionNameForPath so the client can ssh-attach
+// directly.
+func (s *server) createProject(w http.ResponseWriter, r *http.Request) {
+	var req daemon.NewProjectRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "decode: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		http.Error(w, "name required", http.StatusBadRequest)
+		return
+	}
+	// Reject anything that would escape the Projects.Root: no slashes,
+	// no `..`, no leading dots. The daemon is the security boundary
+	// here — a malicious tailnet peer could otherwise scaffold into
+	// arbitrary paths.
+	if strings.ContainsAny(name, "/\\") || strings.HasPrefix(name, ".") {
+		http.Error(w, "name must be a single non-hidden path segment", http.StatusBadRequest)
+		return
+	}
+	root := s.cfg.Projects.Root
+	if root == "" {
+		home, _ := os.UserHomeDir()
+		root = filepath.Join(home, "Projects")
+	}
+	dir := filepath.Join(root, name)
+
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+
+	session, err := scaffold.StartSession(ctx, scaffold.Options{
+		Name:        name,
+		Description: req.Description,
+		Dir:         dir,
+	})
+	if err != nil {
+		http.Error(w, "start: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	host, _ := os.Hostname()
+	writeJSON(w, daemon.NewProjectResponse{
+		Session: session,
+		Path:    dir,
+		Host:    host,
+	})
 }
 
 // pollLoop is the heartbeat: capture-pane on each tmux session, derive
@@ -327,12 +394,15 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 			t.lastChange = time.Now()
 		}
 		newState := claude.Classify(pane, t.lastChange, idleNeeds)
-		// Transition into NEEDS_INPUT triggers the bell — unless
-		// moshi-hook is installed and paired, in which case it sends
-		// proper structured push notifications via Claude Code hooks
-		// and the bell would be a duplicate.
+		// Transition into NEEDS_INPUT triggers the bell. By default we
+		// ring the bell even when moshi-hook is paired (the two
+		// channels are complementary: audible chime at the laptop,
+		// push on your phone). Set notifications.bell=false to mute
+		// globally, or notifications.moshi_suppresses_bell=true to mute
+		// only when moshi is reporting (the old "no duplicates"
+		// behavior).
 		if newState == claude.StateNeedsInput && t.state != claude.StateNeedsInput {
-			if !suppressBell {
+			if s.shouldRingBell(suppressBell) {
 				_ = tmux.SendKeys(ctx, ts.Name, "\a")
 			}
 			t.promptCount++
@@ -352,20 +422,37 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 	s.sleeper.SetActive(anyActive)
 }
 
-// moshiBellSuppressed returns true if ccmuxd should skip the BEL trigger
-// because moshi-hook is handling notifications. Cached for 60s so we
-// don't shell out to moshi-hook every 2-second poll.
+// moshiBellSuppressed reports whether moshi-hook is paired and
+// reporting. Cached for 60s. Despite the name, it no longer
+// short-circuits the bell on its own — see shouldRingBell for the
+// config-aware decision.
 func (s *server) moshiBellSuppressed(ctx context.Context) bool {
 	s.moshiMu.Lock()
 	defer s.moshiMu.Unlock()
 	if time.Since(s.moshiCheckAt) > 60*time.Second {
 		s.moshiState = moshi.Detect(ctx)
 		s.moshiCheckAt = time.Now()
-		if s.moshiState.SuppressBell() {
-			log.Println("ccmuxd: moshi-hook detected — bell injection suppressed")
-		}
 	}
 	return s.moshiState.SuppressBell()
+}
+
+// shouldRingBell folds the user's two notification toggles into a
+// single bool. Truth table:
+//
+//	bell=false                                 → never ring
+//	bell=true, moshi_suppresses_bell=false     → always ring (default)
+//	bell=true, moshi_suppresses_bell=true,
+//	                       moshi paired       → don't ring (push handles it)
+//	bell=true, moshi_suppresses_bell=true,
+//	                       moshi NOT paired   → ring (no other channel)
+func (s *server) shouldRingBell(moshiPaired bool) bool {
+	if !s.cfg.Notifications.Bell {
+		return false
+	}
+	if s.cfg.Notifications.MoshiSuppressesBell && moshiPaired {
+		return false
+	}
+	return true
 }
 
 // startSleepManager constructs the sleeplock.Manager from config. The

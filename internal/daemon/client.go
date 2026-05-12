@@ -117,6 +117,18 @@ func (c *Client) NewSession(ctx context.Context, req NewSessionRequest) (Session
 	return out, nil
 }
 
+// NewProject asks the daemon to scaffold a brand-new project on its
+// host (under that daemon's configured Projects.Root) and start a
+// Claude session inside it. Used by the Projects screen's "create on
+// <host>" flow.
+func (c *Client) NewProject(ctx context.Context, req NewProjectRequest) (NewProjectResponse, error) {
+	var out NewProjectResponse
+	if err := c.post(ctx, "/v1/projects", req, &out); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
 // Addr returns a human description of this client's target.
 func (c *Client) Addr() string { return c.scheme + "://" + c.addr }
 

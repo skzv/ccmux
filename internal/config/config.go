@@ -19,6 +19,7 @@ type Config struct {
 	Sleep        SleepConfig        `toml:"sleep"`
 	Daemon       DaemonConfig       `toml:"daemon"`
 	Notes        NotesConfig        `toml:"notes"`
+	Notifications NotificationsConfig `toml:"notifications"`
 	Scaffold     ScaffoldConfig     `toml:"scaffold"`
 	Subscription SubscriptionConfig `toml:"subscription"`
 	Tour         TourConfig         `toml:"tour"`
@@ -90,6 +91,26 @@ type NotesConfig struct {
 	AutoLogSessions bool `toml:"auto_log_sessions"`
 }
 
+// NotificationsConfig controls how the daemon signals needs_input
+// transitions. The audible BEL is the universal fallback — every iOS
+// terminal client supports it — but power users with moshi-hook
+// installed get richer pushes via that channel.
+//
+// Default: bell is ON even when moshi is paired. The two channels are
+// complementary (audible cue at your laptop + push on your phone), not
+// duplicates. Set MoshiSuppressesBell=true to mute the laptop bell
+// when moshi-hook is reporting.
+type NotificationsConfig struct {
+	// Bell — ring the terminal BEL on needs_input transitions.
+	// Default true. Set to false to mute regardless of moshi.
+	Bell bool `toml:"bell"`
+
+	// MoshiSuppressesBell — when true AND moshi-hook is detected as
+	// paired, ccmuxd skips the BEL so you don't get the audible chime
+	// and a phone push at the same instant. Default false.
+	MoshiSuppressesBell bool `toml:"moshi_suppresses_bell"`
+}
+
 // ScaffoldConfig customizes what a "new project" creates and what Claude
 // hears as its first message. Empty fields fall back to the baked-in
 // defaults in internal/scaffold, so the user can override one piece
@@ -154,6 +175,10 @@ func Defaults() Config {
 		},
 		Notes: NotesConfig{
 			AutoLogSessions: true,
+		},
+		Notifications: NotificationsConfig{
+			Bell:                true,
+			MoshiSuppressesBell: false,
 		},
 		Scaffold: ScaffoldConfig{
 			// All scaffold fields default to "" / nil; internal/scaffold

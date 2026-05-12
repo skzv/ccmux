@@ -116,7 +116,8 @@ Attaching to an auto-discovered peer execs `ssh -t <host> -- tmux attach -t <nam
 
 ### 🏗️ Project bootstrapping
 - `ccmux new <name>` — scaffolds a project, creates the `docs/` notes vault, runs `git init`, opens a Claude session with your description as the first prompt
-- `ccmux upgrade` — retrofits the same structure into an existing directory
+- `ccmux upgrade` — retrofits the same structure into an existing directory; prints what changed, idempotent on re-runs
+- **Create on any device.** In the Projects tab, press `n` and pick which device should host the new project (local or any reachable peer running `ccmuxd`). The remote daemon scaffolds + starts the session natively, and ccmux ssh-attaches you in. No SSH config, no manual `git init`.
 - Local-only by default — push to GitHub when you're ready with `gh repo create`
 
 ### 🤖 Claude Code config management
@@ -256,7 +257,13 @@ tailnet_port = 7474
 mode = "safe"                        # "safe" | "dangerous" | "very_dangerous"
 idle_release_minutes = 10
 low_battery_cutoff = 20              # dangerous mode auto-downgrades below this
+
+[notifications]
+bell = true                          # ring local terminal BEL on needs_input
+moshi_suppresses_bell = false        # mute laptop bell when moshi-hook is also reporting
 ```
+
+> Notifications: the bell rings even when moshi-hook is paired by default — the audible chime at your desk and the push on your phone are complementary, not duplicates. Set `moshi_suppresses_bell = true` if you'd rather mute the bell whenever moshi-hook is reporting.
 
 > Sleep-mode notes:
 > - `safe` — `caffeinate -s` on macOS (Apple's policy keeps it AC-only; safe to leave on). `systemd-inhibit --what=sleep:idle` on Linux.

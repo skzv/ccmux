@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -49,6 +50,9 @@ Use --dry-run to preview the commands without executing them.`,
 			fmt.Printf("ccmux update: using checkout %s\n", repo)
 
 			if !skipPull {
+				if err := ensureOnBranch(repo, dryRun); err != nil {
+					return err
+				}
 				if err := runStep(repo, dryRun, "git", "pull", "--ff-only"); err != nil {
 					return err
 				}
@@ -185,6 +189,57 @@ func findGitRoot(start string) string {
 // runStep runs a single subcommand in `cwd`, streaming its output to
 // the user's terminal so they see git/make progress live. Returns the
 // command's error so the caller bails on the first failed step.
+// ensureOnBranch handles the "fatal: not currently on a branch" failure
+// mode of `git pull --ff-only`. Detached HEAD happens when the user (or
+// a previous `make install` that ran `git checkout <sha>`) left the
+// repo at a literal commit instead of a branch ref. We can't pull in
+// that state, so:
+//
+//  1. Detect detached HEAD via `git symbolic-ref -q HEAD`.
+//  2. If detached, fast-forward back to the configured remote's default
+//     branch (origin/HEAD → main / master / …) via `git checkout`.
+//  3. If we can't determine a default branch, print a clear instruction
+//     instead of letting git produce its confusing multi-line message.
+func ensureOnBranch(repo string, dryRun bool) error {
+	out, err := exec.Command("git", "-C", repo, "symbolic-ref", "-q", "HEAD").Output()
+	if err == nil && strings.TrimSpace(string(out)) != "" {
+		return nil // already on a branch
+	}
+	defaultBranch := resolveDefaultBranch(repo)
+	if defaultBranch == "" {
+		return fmt.Errorf("repo %s is on a detached HEAD and no remote default branch could be detected; run `git checkout main` (or your default branch) and retry", repo)
+	}
+	fmt.Printf("note: %s is on a detached HEAD; switching to %s before pulling\n", repo, defaultBranch)
+	return runStep(repo, dryRun, "git", "checkout", defaultBranch)
+}
+
+// resolveDefaultBranch asks the origin remote what its HEAD is.
+// Returns "" if anything fails — caller falls back to an error.
+//
+// Tries `git symbolic-ref refs/remotes/origin/HEAD` first (fast, local),
+// then `git remote show origin` (network round-trip but always works).
+func resolveDefaultBranch(repo string) string {
+	if out, err := exec.Command("git", "-C", repo, "symbolic-ref", "-q", "refs/remotes/origin/HEAD").Output(); err == nil {
+		ref := strings.TrimSpace(string(out)) // e.g. "refs/remotes/origin/main"
+		if idx := strings.LastIndex(ref, "/"); idx >= 0 {
+			if name := ref[idx+1:]; name != "" {
+				return name
+			}
+		}
+	}
+	// Fallback: pull from `git remote show origin`. Slower (it hits the
+	// remote) but reliable. The line we're after is "HEAD branch: main".
+	if out, err := exec.Command("git", "-C", repo, "remote", "show", "origin").Output(); err == nil {
+		for _, line := range strings.Split(string(out), "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "HEAD branch:") {
+				return strings.TrimSpace(strings.TrimPrefix(line, "HEAD branch:"))
+			}
+		}
+	}
+	return ""
+}
+
 func runStep(cwd string, dryRun bool, name string, args ...string) error {
 	display := name
 	for _, a := range args {

@@ -97,9 +97,25 @@ const (
 // New-project flow messages.
 
 // newProjectSubmitMsg is emitted by the modal form when the user confirms.
+// Host/DialHost/Address are zero/empty for the local case; for a remote
+// pick, the form fills them from the App's hostStatus slice and the
+// dispatcher routes via daemon.Client.NewProject().
 type newProjectSubmitMsg struct {
 	Name        string
 	Description string
+
+	// Host is the display name of the target device ("local",
+	// "mac-mini", …). Empty / "local" means scaffold on this machine.
+	Host string
+
+	// Address is the http "host:port" of the remote ccmuxd (used to
+	// build a daemon.RemoteClient). Empty for local.
+	Address string
+
+	// DialHost is the bare hostname for the ssh-attach step after the
+	// remote scaffolds. Typically the MagicDNS short name so
+	// known_hosts matches. Empty for local.
+	DialHost string
 }
 
 // newProjectCancelMsg is emitted by the modal form when the user hits Esc.

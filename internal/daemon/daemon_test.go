@@ -274,3 +274,75 @@ func TestClient_AddrReportsScheme(t *testing.T) {
 		t.Errorf("Addr = %q, want %q", c.Addr(), want)
 	}
 }
+
+// TestClient_NewProject_RoundTrip covers the Projects screen's "create
+// on <host>" path: client serializes a NewProjectRequest, server
+// echoes a NewProjectResponse, client decodes it. The server-side
+// scaffold work lives in ccmuxd; this test pins the protocol so a
+// rename can't silently break cross-device project creation.
+func TestClient_NewProject_RoundTrip(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/projects", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "want POST, got "+r.Method, http.StatusMethodNotAllowed)
+			return
+		}
+		if r.Header.Get("Content-Type") != "application/json" {
+			http.Error(w, "missing CT", http.StatusBadRequest)
+			return
+		}
+		var req NewProjectRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(NewProjectResponse{
+			Session: "c-" + req.Name,
+			Path:    "/Users/skz/Projects/" + req.Name,
+			Host:    "mac-mini",
+		})
+	})
+	c := spawnFakeDaemon(t, mux)
+
+	got, err := c.NewProject(context.Background(), NewProjectRequest{
+		Name:        "alpha",
+		Description: "build the alpha",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Session != "c-alpha" || got.Host != "mac-mini" || got.Path != "/Users/skz/Projects/alpha" {
+		t.Errorf("NewProject = %+v, want session=c-alpha host=mac-mini", got)
+	}
+}
+
+// TestClient_NewProject_ServerError ensures a 5xx from the daemon
+// surfaces as an error (not a zero-value response masquerading as
+// success). The TUI's toast key off err != nil to show "new project on
+// <host>: …", so silent success on 500 would be a real footgun.
+func TestClient_NewProject_ServerError(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/projects", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "disk full", http.StatusInternalServerError)
+	})
+	c := spawnFakeDaemon(t, mux)
+
+	_, err := c.NewProject(context.Background(), NewProjectRequest{Name: "x"})
+	if err == nil {
+		t.Fatal("expected error on 500, got nil")
+	}
+}
+
+// TestNewProjectResponse_JSONRoundTrip pins the wire shape of the
+// response so json tag renames trip a test instead of a runtime bug.
+func TestNewProjectResponse_JSONRoundTrip(t *testing.T) {
+	in := NewProjectResponse{Session: "c-foo", Path: "/p", Host: "h"}
+	b, _ := json.Marshal(in)
+	var out NewProjectResponse
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out != in {
+		t.Errorf("round-trip: got %+v want %+v", out, in)
+	}
+}

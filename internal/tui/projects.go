@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/project"
 	"github.com/skzv/ccmux/internal/scaffold"
 	"github.com/skzv/ccmux/internal/tui/styles"
@@ -24,6 +25,11 @@ type projectsModel struct {
 	projects []project.Project
 	cursor   int
 	form     *newProjectFormModel
+
+	// hosts is the live reachable-peer list, fed in from App on every
+	// sessionsLoadedMsg. Snapshot into the form at "n"-press time so
+	// the picker shows what the user was looking at.
+	hosts []hostStatus
 }
 
 func newProjects(st styles.Styles, km Keymap) projectsModel {
@@ -35,6 +41,12 @@ func (m *projectsModel) SetProjects(p []project.Project) {
 	if m.cursor >= len(p) {
 		m.cursor = max0(len(p) - 1)
 	}
+}
+
+// SetHosts is called from App so the "n" form can populate its device
+// picker with reachable peers at form-open time.
+func (m *projectsModel) SetHosts(h []hostStatus) {
+	m.hosts = h
 }
 
 func (m projectsModel) Update(msg tea.Msg) (projectsModel, tea.Cmd) {
@@ -57,7 +69,7 @@ func (m projectsModel) Update(msg tea.Msg) (projectsModel, tea.Cmd) {
 	if km, ok := msg.(tea.KeyMsg); ok {
 		switch {
 		case keyMatches(km, m.km.NewItem):
-			f := newNewProjectForm(m.st)
+			f := newNewProjectForm(m.st, m.hosts)
 			m.form = &f
 			return m, tea.Batch(textInputBlink())
 		case km.String() == "u":
@@ -180,8 +192,39 @@ func projectHost(p project.Project) string {
 // scaffoldAndStartCmd runs scaffold + StartSession and returns a
 // projectSessionReadyMsg with the session name so app.go can dispatch the
 // tmux-attach via tea.ExecProcess.
+//
+// For a remote host pick, ccmux POSTs /v1/projects to that host's
+// ccmuxd (so the scaffold + tmux + initial-prompt all run natively on
+// the remote, no SSH-through-git-init kludge) and then fires
+// remoteSessionStartedMsg so the app exec's into ssh-attach.
 func scaffoldAndStartCmd(submit newProjectSubmitMsg) tea.Cmd {
 	return func() tea.Msg {
+		// Remote case: hand off to the remote daemon.
+		if submit.Host != "" && submit.Host != "local" && submit.Address != "" {
+			cli := daemon.RemoteClient(submit.Address)
+			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+			defer cancel()
+			res, err := cli.NewProject(ctx, daemon.NewProjectRequest{
+				Name:        submit.Name,
+				Description: submit.Description,
+			})
+			if err != nil {
+				return toastMsg{
+					Text:  "new project on " + submit.Host + ": " + err.Error(),
+					Kind:  toastError,
+					Until: time.Now().Add(8 * time.Second),
+				}
+			}
+			dial := submit.DialHost
+			if dial == "" {
+				dial = submit.Host
+			}
+			return remoteSessionStartedMsg{
+				SessionName: res.Session,
+				DialHost:    dial,
+			}
+		}
+		// Local case (unchanged).
 		opts := scaffold.Options{Name: submit.Name, Description: submit.Description}
 		session, err := scaffold.StartSession(context.Background(), opts)
 		if err != nil {

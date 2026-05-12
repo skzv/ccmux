@@ -182,6 +182,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.dashboard.SetSessions(a.sessions)
 		a.dashboard.SetHosts(a.hosts)
 		a.network.SetHosts(a.hosts)
+		a.projectsM.SetHosts(a.hosts)
 		a.dashboard.SetVersion(a.version)
 		a.sessionsM.SetSessions(a.sessions)
 		if msg.Err != nil {

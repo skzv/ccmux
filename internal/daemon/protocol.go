@@ -65,6 +65,30 @@ type NewSessionRequest struct {
 	FirstInput string `json:"first_input"` // initial prompt to feed Claude
 }
 
+// NewProjectRequest is the body of POST /v1/projects. Asks the daemon
+// to scaffold a brand-new project under its configured Projects.Root
+// and start a Claude session inside it.
+//
+// Used by the Projects screen's "n" flow when the user picks a remote
+// host: the local TUI calls this over the tailnet, the remote daemon
+// does the scaffold + tmux dance natively (no SSH round-trips for
+// `git init` etc), and the TUI then attaches over ssh.
+type NewProjectRequest struct {
+	Name        string `json:"name"`
+	Description string `json:"description"` // becomes the first prompt to Claude
+}
+
+// NewProjectResponse is what POST /v1/projects returns once the daemon
+// finished scaffolding + starting the session. Session is the tmux
+// session name to attach to; Path is the absolute directory on the
+// daemon's host; Host is the daemon's hostname (so the client can show
+// "created on <host>" feedback).
+type NewProjectResponse struct {
+	Session string `json:"session"`
+	Path    string `json:"path"`
+	Host    string `json:"host"`
+}
+
 // ProjectInfo is one entry from GET /v1/projects. The host name is
 // filled in by the daemon out of HealthInfo.Hostname so a client
 // merging projects from multiple ccmuxds can tag each row with its
