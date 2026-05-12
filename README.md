@@ -200,7 +200,7 @@ To check on the session without joining the conversation: `ccmux list`. To attac
 
 The session keeps running after you detach. Your laptop's lid can close (on AC power) and it'll still be there tomorrow.
 
-### 2. Juggling multiple Claude sessions (≈2 min)
+### 2. Juggling multiple agent sessions (≈2 min)
 
 You have three projects moving in parallel. Open the TUI:
 
