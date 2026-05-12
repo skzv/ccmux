@@ -82,33 +82,88 @@ const DefaultInitialPrompt = `I'm starting a new project called "{{name}}". {{de
 // the old name; it points at DefaultGitignore.
 const gitignoreSeed = DefaultGitignore
 
+// Result describes what Scaffold actually did. Callers (the CLI's
+// `ccmux upgrade` printout, the TUI's "u" toast) use it to tell the
+// user whether the project was already up to date vs. what got added
+// — without that, an idempotent re-run is indistinguishable from a
+// no-op bug, which is exactly the friction reported in the field.
+type Result struct {
+	Dir          string
+	CreatedDirs  []string // paths relative to Dir
+	SkippedDirs  []string // existed already
+	CreatedFiles []string // README.md, .gitignore
+	SkippedFiles []string // existed already
+	GitInit      bool     // we ran `git init` (and the initial commit)
+}
+
+// Changed reports whether Scaffold made any on-disk modification.
+func (r *Result) Changed() bool {
+	return len(r.CreatedDirs)+len(r.CreatedFiles) > 0 || r.GitInit
+}
+
+// Summary returns a single-line human-readable description of what
+// changed, suitable for a CLI line or a TUI toast.
+func (r *Result) Summary() string {
+	if r == nil || !r.Changed() {
+		return "already up to date"
+	}
+	parts := []string{}
+	if n := len(r.CreatedDirs); n > 0 {
+		parts = append(parts, fmt.Sprintf("%d dir", n))
+		if n != 1 {
+			parts[len(parts)-1] += "s"
+		}
+	}
+	if len(r.CreatedFiles) > 0 {
+		parts = append(parts, strings.Join(r.CreatedFiles, ", "))
+	}
+	if r.GitInit {
+		parts = append(parts, "git init")
+	}
+	return "added " + strings.Join(parts, ", ")
+}
+
 // Scaffold creates the directory and the convention layout. Idempotent:
 // existing files are left alone. Reads the [scaffold] config section
 // for overrides on dirs / gitignore body / initial-commit behavior;
-// falls back to the package-level defaults when unset.
-func Scaffold(opts *Options) error {
+// falls back to the package-level defaults when unset. The returned
+// Result describes exactly what was touched so callers can render
+// meaningful output instead of staying silent.
+func Scaffold(opts *Options) (*Result, error) {
+	res := &Result{}
 	if opts.Name == "" {
-		return errors.New("scaffold: name required")
+		return res, errors.New("scaffold: name required")
 	}
 	if opts.Dir == "" {
 		abs, err := filepath.Abs(opts.Name)
 		if err != nil {
-			return err
+			return res, err
 		}
 		opts.Dir = abs
 	}
+	res.Dir = opts.Dir
 	cfg, _ := config.Load()
 
 	if err := os.MkdirAll(opts.Dir, 0o755); err != nil {
-		return err
+		return res, err
 	}
 	dirs := cfg.Scaffold.Dirs
 	if len(dirs) == 0 {
 		dirs = DefaultDirs
 	}
 	for _, sub := range dirs {
-		if err := os.MkdirAll(filepath.Join(opts.Dir, sub), 0o755); err != nil {
-			return err
+		p := filepath.Join(opts.Dir, sub)
+		existed := false
+		if fi, err := os.Stat(p); err == nil && fi.IsDir() {
+			existed = true
+		}
+		if err := os.MkdirAll(p, 0o755); err != nil {
+			return res, err
+		}
+		if existed {
+			res.SkippedDirs = append(res.SkippedDirs, sub)
+		} else {
+			res.CreatedDirs = append(res.CreatedDirs, sub)
 		}
 	}
 
@@ -116,28 +171,37 @@ func Scaffold(opts *Options) error {
 	if strings.TrimSpace(gitignoreBody) == "" {
 		gitignoreBody = DefaultGitignore
 	}
-	if err := writeIfMissing(filepath.Join(opts.Dir, "README.md"), "# "+opts.Name+"\n"); err != nil {
-		return err
+	if created, err := writeIfMissing(filepath.Join(opts.Dir, "README.md"), "# "+opts.Name+"\n"); err != nil {
+		return res, err
+	} else if created {
+		res.CreatedFiles = append(res.CreatedFiles, "README.md")
+	} else {
+		res.SkippedFiles = append(res.SkippedFiles, "README.md")
 	}
-	if err := writeIfMissing(filepath.Join(opts.Dir, ".gitignore"), gitignoreBody); err != nil {
-		return err
+	if created, err := writeIfMissing(filepath.Join(opts.Dir, ".gitignore"), gitignoreBody); err != nil {
+		return res, err
+	} else if created {
+		res.CreatedFiles = append(res.CreatedFiles, ".gitignore")
+	} else {
+		res.SkippedFiles = append(res.SkippedFiles, ".gitignore")
 	}
 
 	if opts.SkipGit {
-		return nil
+		return res, nil
 	}
 	if !cfg.Scaffold.CreateInitialCommit && !defaultIfZero(cfg.Scaffold.CreateInitialCommit) {
 		// Config explicitly disables the initial commit.
-		return nil
+		return res, nil
 	}
 	if _, err := os.Stat(filepath.Join(opts.Dir, ".git")); errors.Is(err, os.ErrNotExist) {
 		if err := exec.Command("git", "-C", opts.Dir, "init").Run(); err != nil {
-			return fmt.Errorf("git init: %w", err)
+			return res, fmt.Errorf("git init: %w", err)
 		}
 		_ = exec.Command("git", "-C", opts.Dir, "add", ".").Run()
 		_ = exec.Command("git", "-C", opts.Dir, "commit", "-m", "initial commit: scaffolded structure").Run()
+		res.GitInit = true
 	}
-	return nil
+	return res, nil
 }
 
 // defaultIfZero treats a freshly-decoded zero-value bool as the default
@@ -172,7 +236,7 @@ func InitialPrompt(opts Options) string {
 // the tmux session name. The caller is responsible for attaching (either
 // via tmux.Attach which exec's, or via tea.ExecProcess from the TUI).
 func StartSession(ctx context.Context, opts Options) (string, error) {
-	if err := Scaffold(&opts); err != nil {
+	if _, err := Scaffold(&opts); err != nil {
 		return "", err
 	}
 	session := tmux.SessionNameForPath(opts.Dir)
@@ -194,9 +258,12 @@ func StartSession(ctx context.Context, opts Options) (string, error) {
 	return session, nil
 }
 
-func writeIfMissing(path, content string) error {
+// writeIfMissing writes `content` to `path` only when the file does not
+// already exist. Returns created=true iff a new file was written so the
+// caller can attribute it to CreatedFiles vs SkippedFiles.
+func writeIfMissing(path, content string) (created bool, err error) {
 	if _, err := os.Stat(path); err == nil {
-		return nil
+		return false, nil
 	}
-	return os.WriteFile(path, []byte(content), 0o644)
+	return true, os.WriteFile(path, []byte(content), 0o644)
 }

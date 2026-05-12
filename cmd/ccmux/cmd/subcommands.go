@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -87,7 +88,9 @@ func newNewCmd() *cobra.Command {
 }
 
 // newUpgradeCmd: `ccmux upgrade` — inject the ccmux project structure into
-// the current directory non-destructively.
+// the current directory non-destructively. Prints a per-action summary
+// so the user can see what (if anything) changed; previously this was
+// silent and looked like a no-op on already-scaffolded projects.
 func newUpgradeCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "upgrade",
@@ -102,8 +105,43 @@ func newUpgradeCmd() *cobra.Command {
 				Dir:     cwd,
 				SkipGit: true, // existing repo: don't reinit
 			}
-			return scaffold.Scaffold(&opts)
+			res, err := scaffold.Scaffold(&opts)
+			if err != nil {
+				return err
+			}
+			printScaffoldReport(os.Stdout, res)
+			return nil
 		},
+	}
+}
+
+// printScaffoldReport writes a short per-action upgrade report so the
+// user can tell idempotent no-op runs apart from real work. Kept inline
+// (not in the scaffold package) because formatting is a CLI concern.
+func printScaffoldReport(w io.Writer, res *scaffold.Result) {
+	if res == nil {
+		return
+	}
+	fmt.Fprintf(w, "Upgrading %s:\n", res.Dir)
+	for _, d := range res.CreatedDirs {
+		fmt.Fprintf(w, "  + %s/\n", d)
+	}
+	for _, d := range res.SkippedDirs {
+		fmt.Fprintf(w, "  · %s/ (exists)\n", d)
+	}
+	for _, f := range res.CreatedFiles {
+		fmt.Fprintf(w, "  + %s\n", f)
+	}
+	for _, f := range res.SkippedFiles {
+		fmt.Fprintf(w, "  · %s (exists)\n", f)
+	}
+	if res.GitInit {
+		fmt.Fprintln(w, "  + git init")
+	}
+	if res.Changed() {
+		fmt.Fprintln(w, res.Summary())
+	} else {
+		fmt.Fprintln(w, "Already up to date.")
 	}
 }
 

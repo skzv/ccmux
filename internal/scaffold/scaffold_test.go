@@ -17,7 +17,7 @@ func hermeticHome(t *testing.T) string {
 
 func TestScaffold_NameRequired(t *testing.T) {
 	hermeticHome(t)
-	if err := Scaffold(&Options{}); err == nil {
+	if _, err := Scaffold(&Options{}); err == nil {
 		t.Fatal("expected error for empty Name, got nil")
 	}
 }
@@ -25,7 +25,7 @@ func TestScaffold_NameRequired(t *testing.T) {
 func TestScaffold_CreatesDefaultLayout(t *testing.T) {
 	hermeticHome(t)
 	target := filepath.Join(t.TempDir(), "myproj")
-	err := Scaffold(&Options{Name: "myproj", Dir: target, SkipGit: true})
+	_, err := Scaffold(&Options{Name: "myproj", Dir: target, SkipGit: true})
 	if err != nil {
 		t.Fatalf("Scaffold: %v", err)
 	}
@@ -56,7 +56,7 @@ func TestScaffold_Idempotent(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "p")
 
 	// Run once.
-	if err := Scaffold(&Options{Name: "p", Dir: target, SkipGit: true}); err != nil {
+	if _, err := Scaffold(&Options{Name: "p", Dir: target, SkipGit: true}); err != nil {
 		t.Fatal(err)
 	}
 	// Modify README — re-running should NOT overwrite it.
@@ -64,7 +64,7 @@ func TestScaffold_Idempotent(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(target, "README.md"), []byte(customREADME), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := Scaffold(&Options{Name: "p", Dir: target, SkipGit: true}); err != nil {
+	if _, err := Scaffold(&Options{Name: "p", Dir: target, SkipGit: true}); err != nil {
 		t.Fatal(err)
 	}
 	body, _ := os.ReadFile(filepath.Join(target, "README.md"))
@@ -78,7 +78,7 @@ func TestScaffold_RelativeNameResolvedToAbsoluteCwd(t *testing.T) {
 	// Use a temp cwd so the resolved abs path lands somewhere we own.
 	cwd := t.TempDir()
 	t.Chdir(cwd)
-	if err := Scaffold(&Options{Name: "relsub", SkipGit: true}); err != nil {
+	if _, err := Scaffold(&Options{Name: "relsub", SkipGit: true}); err != nil {
 		t.Fatal(err)
 	}
 	// Use the first DefaultDirs entry as the marker — robust against
@@ -116,16 +116,24 @@ func TestWriteIfMissing(t *testing.T) {
 	path := filepath.Join(dir, "f.txt")
 
 	// First write creates the file.
-	if err := writeIfMissing(path, "first"); err != nil {
+	created, err := writeIfMissing(path, "first")
+	if err != nil {
 		t.Fatal(err)
+	}
+	if !created {
+		t.Error("first write should report created=true")
 	}
 	body, _ := os.ReadFile(path)
 	if string(body) != "first" {
 		t.Errorf("first write missed: %q", body)
 	}
 	// Second write is a no-op.
-	if err := writeIfMissing(path, "second"); err != nil {
+	created, err = writeIfMissing(path, "second")
+	if err != nil {
 		t.Fatal(err)
+	}
+	if created {
+		t.Error("second call should report created=false")
 	}
 	body, _ = os.ReadFile(path)
 	if string(body) != "first" {
@@ -163,5 +171,165 @@ func TestDefaultInitialPrompt_NoGitHubPush(t *testing.T) {
 		if strings.Contains(DefaultInitialPrompt, s) {
 			t.Errorf("DefaultInitialPrompt should stay local-only, but contains %q", s)
 		}
+	}
+}
+
+// TestScaffold_UpgradeEmptyDir verifies that running scaffold against a
+// completely empty existing directory (the "upgrade an existing project"
+// path) reports every default dir + both files as freshly created. This
+// is the case where `ccmux upgrade` should obviously do work — if this
+// regresses to silence, the friend-reported "doesn't do anything" bug is
+// back.
+func TestScaffold_UpgradeEmptyDir(t *testing.T) {
+	hermeticHome(t)
+	target := t.TempDir() // already exists, but empty
+	res, err := Scaffold(&Options{Name: filepath.Base(target), Dir: target, SkipGit: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Changed() {
+		t.Fatalf("upgrade on empty dir should report changes; got %+v", res)
+	}
+	if len(res.CreatedDirs) != len(DefaultDirs) {
+		t.Errorf("expected %d CreatedDirs, got %d: %v", len(DefaultDirs), len(res.CreatedDirs), res.CreatedDirs)
+	}
+	if len(res.SkippedDirs) != 0 {
+		t.Errorf("expected 0 SkippedDirs, got %v", res.SkippedDirs)
+	}
+	wantFiles := map[string]bool{"README.md": false, ".gitignore": false}
+	for _, f := range res.CreatedFiles {
+		wantFiles[f] = true
+	}
+	for f, seen := range wantFiles {
+		if !seen {
+			t.Errorf("expected %s in CreatedFiles, got %v", f, res.CreatedFiles)
+		}
+	}
+	if res.GitInit {
+		t.Errorf("SkipGit=true should leave GitInit=false")
+	}
+}
+
+// TestScaffold_UpgradeFullyScaffolded is the case that originally
+// looked broken: every dir + file already exists, so a re-run is a
+// pure no-op. The result should report no changes and Summary() should
+// be the "already up to date" sentinel — that's what lets the CLI and
+// TUI tell the user "nothing to do" instead of staying silent.
+func TestScaffold_UpgradeFullyScaffolded(t *testing.T) {
+	hermeticHome(t)
+	target := filepath.Join(t.TempDir(), "p")
+
+	// First run scaffolds everything.
+	if _, err := Scaffold(&Options{Name: "p", Dir: target, SkipGit: true}); err != nil {
+		t.Fatal(err)
+	}
+	// Second run on the same dir must be a clean no-op.
+	res, err := Scaffold(&Options{Name: "p", Dir: target, SkipGit: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Changed() {
+		t.Fatalf("idempotent re-run should not Change(); got %+v", res)
+	}
+	if len(res.CreatedDirs) != 0 || len(res.CreatedFiles) != 0 {
+		t.Errorf("idempotent re-run created things: dirs=%v files=%v", res.CreatedDirs, res.CreatedFiles)
+	}
+	if len(res.SkippedDirs) != len(DefaultDirs) {
+		t.Errorf("expected all %d dirs Skipped, got %v", len(DefaultDirs), res.SkippedDirs)
+	}
+	if got, want := res.Summary(), "already up to date"; got != want {
+		t.Errorf("Summary on no-op = %q, want %q", got, want)
+	}
+}
+
+// TestScaffold_UpgradePartial is the realistic upgrade-an-old-project
+// case: dirs are missing but a README the user wrote themselves is
+// already in place. We expect dirs to be Created, README to be Skipped
+// (preserving the user's content), .gitignore to be Created.
+func TestScaffold_UpgradePartial(t *testing.T) {
+	hermeticHome(t)
+	target := t.TempDir()
+	// Pre-existing README — must survive untouched.
+	existingREADME := "# my pre-existing project\n"
+	if err := os.WriteFile(filepath.Join(target, "README.md"), []byte(existingREADME), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res, err := Scaffold(&Options{Name: filepath.Base(target), Dir: target, SkipGit: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Changed() {
+		t.Fatal("partial upgrade should Change()")
+	}
+	// README must be in SkippedFiles, NOT CreatedFiles.
+	for _, f := range res.CreatedFiles {
+		if f == "README.md" {
+			t.Errorf("Scaffold overwrote pre-existing README")
+		}
+	}
+	foundSkipped := false
+	for _, f := range res.SkippedFiles {
+		if f == "README.md" {
+			foundSkipped = true
+		}
+	}
+	if !foundSkipped {
+		t.Errorf("README.md not in SkippedFiles: %v", res.SkippedFiles)
+	}
+	body, _ := os.ReadFile(filepath.Join(target, "README.md"))
+	if string(body) != existingREADME {
+		t.Errorf("pre-existing README clobbered: got %q want %q", body, existingREADME)
+	}
+}
+
+// TestResult_Summary exercises the human-readable Summary() string the
+// CLI and TUI both depend on for upgrade reporting.
+func TestResult_Summary(t *testing.T) {
+	cases := []struct {
+		name string
+		in   Result
+		want string
+	}{
+		{"empty no-op", Result{}, "already up to date"},
+		{"one dir created", Result{CreatedDirs: []string{"docs/01_Specs"}}, "added 1 dir"},
+		{"two dirs created", Result{CreatedDirs: []string{"a", "b"}}, "added 2 dirs"},
+		{"only files", Result{CreatedFiles: []string{"README.md", ".gitignore"}}, "added README.md, .gitignore"},
+		{"dirs + files + git", Result{
+			CreatedDirs:  []string{"a"},
+			CreatedFiles: []string{"README.md"},
+			GitInit:      true,
+		}, "added 1 dir, README.md, git init"},
+		{"git only", Result{GitInit: true}, "added git init"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.in.Summary()
+			if got != tc.want {
+				t.Errorf("Summary = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestResult_Changed pins the predicate the toast and CLI use to decide
+// "no-op" vs "did work". GitInit alone counts as a change.
+func TestResult_Changed(t *testing.T) {
+	cases := []struct {
+		name string
+		in   Result
+		want bool
+	}{
+		{"empty", Result{}, false},
+		{"only skipped", Result{SkippedDirs: []string{"a"}, SkippedFiles: []string{"README.md"}}, false},
+		{"created dir", Result{CreatedDirs: []string{"a"}}, true},
+		{"created file", Result{CreatedFiles: []string{"README.md"}}, true},
+		{"git init alone", Result{GitInit: true}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.in.Changed(); got != tc.want {
+				t.Errorf("Changed = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

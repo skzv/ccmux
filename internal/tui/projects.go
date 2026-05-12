@@ -192,7 +192,9 @@ func scaffoldAndStartCmd(submit newProjectSubmitMsg) tea.Cmd {
 }
 
 // upgradeCwdCmd injects the ccmux structure into the cwd (no .git changes,
-// no Claude session started).
+// no Claude session started). The toast surfaces what actually changed
+// — without that, "upgrade" on an already-scaffolded project looked
+// identical to a no-op bug.
 func upgradeCwdCmd() tea.Cmd {
 	return func() tea.Msg {
 		cwd, err := os.Getwd()
@@ -200,10 +202,14 @@ func upgradeCwdCmd() tea.Cmd {
 			return toastMsg{Text: "upgrade: " + err.Error(), Kind: toastError, Until: time.Now().Add(5 * time.Second)}
 		}
 		opts := scaffold.Options{Name: filepath.Base(cwd), Dir: cwd, SkipGit: true}
-		if err := scaffold.Scaffold(&opts); err != nil {
+		res, err := scaffold.Scaffold(&opts)
+		if err != nil {
 			return toastMsg{Text: "upgrade: " + err.Error(), Kind: toastError, Until: time.Now().Add(5 * time.Second)}
 		}
-		return toastMsg{Text: "upgraded " + cwd, Kind: toastSuccess, Until: time.Now().Add(4 * time.Second)}
+		if !res.Changed() {
+			return toastMsg{Text: cwd + ": already up to date", Kind: toastInfo, Until: time.Now().Add(4 * time.Second)}
+		}
+		return toastMsg{Text: "upgraded " + cwd + " — " + res.Summary(), Kind: toastSuccess, Until: time.Now().Add(5 * time.Second)}
 	}
 }
 
