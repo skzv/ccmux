@@ -336,7 +336,7 @@ make setup
 
 Requirements:
 - Go 1.22+ (build only)
-- macOS or Linux
+- macOS, Linux, or Windows via WSL2 (see [Windows guide](docs/04_Guides/Windows.md) — native Windows tracks as an open TODO)
 - `~/.local/bin` on your PATH
 
 ```bash

@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/charmbracelet/huh"
@@ -54,6 +55,19 @@ func Run(ctx context.Context, out io.Writer) error {
 	fmt.Fprintln(out, stTitle.Render("ccmux setup wizard"))
 	fmt.Fprintln(out, stMuted.Render("Walk through deps, Tailscale, Moshi, SSH key, and config. Idempotent — safe to re-run."))
 	fmt.Fprintln(out)
+
+	// Native Windows: ccmux's dependency model (brew / tmux / mosh /
+	// caffeinate) doesn't apply. Print the WSL2 path and bail before
+	// the wizard tries to brew-install anything.
+	if runtime.GOOS == "windows" {
+		fmt.Fprintln(out, stWarn.Render("Native Windows is not currently supported."))
+		fmt.Fprintln(out, "  ccmux today runs inside WSL2 on Windows.")
+		fmt.Fprintln(out, "  1. "+stEmphasis.Render("wsl --install"))
+		fmt.Fprintln(out, "  2. Inside Ubuntu: "+stEmphasis.Render("sudo apt install tmux mosh git ripgrep"))
+		fmt.Fprintln(out, "  3. Then re-run "+stEmphasis.Render("ccmux setup")+" inside WSL.")
+		fmt.Fprintln(out, stMuted.Render("See docs/04_Guides/Windows.md for the current state of native support."))
+		return nil
+	}
 
 	steps := []struct {
 		name string

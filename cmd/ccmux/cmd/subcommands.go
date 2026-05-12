@@ -8,8 +8,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
-	"syscall"
 	"text/tabwriter"
 	"time"
 
@@ -229,14 +229,33 @@ func newDoctorCmd() *cobra.Command {
 }
 
 func runDoctor() error {
+	// Windows runs ccmux inside WSL2 today (native tmux doesn't exist;
+	// see docs/04_Guides/Windows.md). When the user runs `ccmux doctor`
+	// on bare Windows, point them at WSL before we try shell-tool
+	// checks that will all fail anyway.
+	if runtime.GOOS == "windows" {
+		fmt.Println("⚠ Native Windows is not currently supported. Recommended path:")
+		fmt.Println("  1. Install WSL2:                   wsl --install")
+		fmt.Println("  2. Inside Ubuntu (or your distro): sudo apt install tmux mosh git ripgrep")
+		fmt.Println("  3. Then run `ccmux setup` inside WSL — it'll behave like Linux.")
+		fmt.Println()
+		fmt.Println("Tracking native Windows in docs/04_Guides/Windows.md.")
+		return nil
+	}
+	hintFor := func(macos, linux string) string {
+		if runtime.GOOS == "linux" {
+			return linux
+		}
+		return macos
+	}
 	checks := []struct {
 		bin, hint string
 	}{
-		{"tmux", "brew install tmux"},
-		{"mosh", "brew install mosh"},
+		{"tmux", hintFor("brew install tmux", "apt/dnf/pacman install tmux")},
+		{"mosh", hintFor("brew install mosh", "apt/dnf/pacman install mosh")},
 		{"tailscale", "https://tailscale.com/download"},
 		{"claude", "https://docs.claude.com/claude-code"},
-		{"rg", "brew install ripgrep (optional, accelerates notes search)"},
+		{"rg", hintFor("brew install ripgrep (optional, accelerates notes search)", "apt install ripgrep (optional)")},
 	}
 	bad := 0
 	for _, c := range checks {
@@ -339,7 +358,7 @@ func newDaemonCmd() *cobra.Command {
 					return fmt.Errorf("ccmuxd not on PATH: %w (run `make install`?)", err)
 				}
 				dCmd := exec.Command(bin)
-				dCmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+				detachProcess(dCmd) // OS-specific: setsid on unix, DETACHED_PROCESS on windows
 				if err := dCmd.Start(); err != nil {
 					return err
 				}
