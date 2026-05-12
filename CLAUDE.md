@@ -61,4 +61,4 @@ make lint          # gofmt + go vet + staticcheck if installed
 - `docs/04_Guides/` — user-facing setup guides published to the README
 
 # Owner
-Alexander "Sasha" Kuznetsov — alexander.kuznetsov96@gmail.com
+Alexander "Sasha" Kuznetsov — me@skz.dev
