@@ -5,7 +5,7 @@
 **One TUI for every Claude Code session — on your Mac, on your phone, anywhere.**
 
 [![Go Version](https://img.shields.io/badge/go-1.22+-00ADD8.svg)](https://go.dev/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License: FSL-1.1-MIT](https://img.shields.io/badge/license-FSL--1.1--MIT-blue.svg)](LICENSE)
 [![Status: alpha](https://img.shields.io/badge/status-alpha-orange.svg)](#status)
 [![Made with Charm](https://img.shields.io/badge/made_with-Charm-FF66CC.svg)](https://charm.sh/)
 
@@ -412,7 +412,11 @@ Issues and PRs welcome. See `CONTRIBUTING.md` (TBD). The short version:
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+[FSL-1.1-MIT](LICENSE) — Functional Source License with MIT future grant.
+
+In plain English: you can use, modify, and redistribute ccmux freely for any purpose **except** offering it (or a substantially-similar feature set) as a competing commercial product or managed service. Two years after each release, that version automatically relicenses to plain MIT.
+
+If you want to commercialize a derivative work sooner, get in touch.
 
 ## Acknowledgements
 
