@@ -61,6 +61,31 @@ func Apply(ctx context.Context, session, projectLabel string, moshiReachable, ne
 	if session == "" {
 		return fmt.Errorf("tmuxchrome: session name required")
 	}
+	prefix := DetectedPrefix(ctx)
+	for _, kv := range Options(session, projectLabel, moshiReachable, nested, prefix) {
+		args := append([]string{"set-option", "-t", session, "-q", kv[0]}, kv[1])
+		cmd := exec.CommandContext(ctx, "tmux", args...)
+		// We intentionally ignore individual errors; a partial chrome is
+		// fine, vanilla is fine too. Only a fully broken tmux call needs
+		// to surface.
+		_ = cmd.Run()
+	}
+	return nil
+}
+
+// Options returns the tmux set-option key/value pairs Apply will emit
+// for the given session. Pure function — no exec, no env, no tmux
+// server. Split out so:
+//
+//  1. Callers that just want the option strings (e.g. for a
+//     `--print-chrome` debug flag, or rendering a preview pane) can
+//     get them without spawning anything.
+//  2. Tests can pin the exact set of keys and their interpolations
+//     without standing up a real tmux server.
+//
+// `prefix` is the human-readable prefix-key string (e.g. "Ctrl-b").
+// Pass DetectedPrefix(ctx) from Apply; tests can pass any string.
+func Options(session, projectLabel string, moshiReachable, nested bool, prefix string) [][]string {
 	if projectLabel == "" {
 		projectLabel = session
 	}
@@ -72,7 +97,6 @@ func Apply(ctx context.Context, session, projectLabel string, moshiReachable, ne
 		moshiBadge = fmt.Sprintf("#[fg=%s] phone: not paired (ccmux moshi-setup) ", fgMuted)
 	}
 
-	prefix := DetectedPrefix(ctx)
 	returnHint := fmt.Sprintf("press %s then d to detach", prefix)
 	if nested {
 		returnHint = fmt.Sprintf("press %s then L to return to ccmux", prefix)
@@ -87,7 +111,7 @@ func Apply(ctx context.Context, session, projectLabel string, moshiReachable, ne
 		fgMuted, returnHint, moshiBadge,
 	)
 
-	opts := [][]string{
+	return [][]string{
 		{"status", "on"},
 		{"status-position", "bottom"},
 		{"status-interval", "5"},
@@ -100,16 +124,6 @@ func Apply(ctx context.Context, session, projectLabel string, moshiReachable, ne
 		{"window-status-current-style", fmt.Sprintf("bg=%s,fg=%s,bold", accentBG, accent)},
 		{"window-status-style", fmt.Sprintf("fg=%s", fgMuted)},
 	}
-
-	for _, kv := range opts {
-		args := append([]string{"set-option", "-t", session, "-q", kv[0]}, kv[1])
-		cmd := exec.CommandContext(ctx, "tmux", args...)
-		// We intentionally ignore individual errors; a partial chrome is
-		// fine, vanilla is fine too. Only a fully broken tmux call needs
-		// to surface.
-		_ = cmd.Run()
-	}
-	return nil
 }
 
 // DetectedPrefix returns the human-readable form of the user's current

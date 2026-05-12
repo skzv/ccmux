@@ -34,6 +34,7 @@ import (
 	"github.com/skzv/ccmux/internal/scaffold"
 	"github.com/skzv/ccmux/internal/sleeplock"
 	"github.com/skzv/ccmux/internal/tmux"
+	"github.com/skzv/ccmux/internal/tmuxchrome"
 )
 
 var version = "dev"
@@ -262,11 +263,33 @@ func (s *server) createSession(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Apply chrome on every reachable-via-remote session, whether we
+	// just created it or it's a known one being re-attached. Idempotent
+	// — re-running set-option just overwrites the same string.
+	s.applyChrome(ctx, session, req.Project)
 
 	writeJSON(w, daemon.SessionState{
 		Name: session, Host: "local", Project: req.Project, Path: path,
 		State: string(claude.StateUnknown), Created: time.Now(),
 	})
+}
+
+// applyChrome wraps tmuxchrome.Apply with the daemon-side defaults:
+//
+//   - moshiReachable is sourced from the cached moshiState so the badge
+//     reflects whether THIS host's phone pipeline is wired.
+//   - nested=false because the daemon never runs from inside a tmux
+//     session (it's a background launchd/systemd job).
+//
+// Errors are deliberately swallowed: a partial or missing chrome is
+// strictly cosmetic, and the user's friend reporting "the remote
+// session had no ccmux chrome" should never become "the remote session
+// failed to start because chrome failed".
+func (s *server) applyChrome(ctx context.Context, session, projectLabel string) {
+	s.moshiMu.Lock()
+	moshiReachable := s.moshiState.Paired && s.moshiState.HooksInstalled && s.moshiState.ServiceRunning
+	s.moshiMu.Unlock()
+	_ = tmuxchrome.Apply(ctx, session, projectLabel, moshiReachable, false)
 }
 
 func (s *server) handleSessionsItem(w http.ResponseWriter, r *http.Request) {
@@ -355,6 +378,12 @@ func (s *server) createProject(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "start: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// Apply ccmux chrome on the session before the client ssh-attaches.
+	// Without this the remote tmux looks like plain stock tmux instead
+	// of a ccmux-managed session — no project label in the status bar,
+	// no detach hint, no moshi badge.
+	s.applyChrome(ctx, session, name)
+
 	host, _ := os.Hostname()
 	writeJSON(w, daemon.NewProjectResponse{
 		Session: session,
