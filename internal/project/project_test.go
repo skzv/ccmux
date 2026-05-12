@@ -4,8 +4,11 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/skzv/ccmux/internal/agent"
 )
 
 // mkdir is a tiny test helper that creates a directory and t.Fatals on
@@ -205,5 +208,184 @@ func TestInspect_PrefersCLAUDEmdMtime(t *testing.T) {
 	}
 	if !p.Modified.Equal(cmNew) {
 		t.Errorf("Modified = %v, want CLAUDE.md mtime %v", p.Modified, cmNew)
+	}
+}
+
+// projectScaffold builds a minimal directory that passes inspect()'s
+// "must have .git or CLAUDE.md" gate so we can exercise Agent
+// detection without pulling in the full scaffold package.
+func projectScaffold(t *testing.T, root, name string) string {
+	t.Helper()
+	dir := filepath.Join(root, name)
+	mkdir(t, filepath.Join(dir, ".git"))
+	return dir
+}
+
+// TestReadAgent_MissingFile is the back-compat path: every project
+// scaffolded before .ccmux/agent existed must resolve to claude. If
+// this regresses, every existing user's project silently becomes
+// "unknown agent" overnight.
+func TestReadAgent_MissingFile(t *testing.T) {
+	dir := projectScaffold(t, t.TempDir(), "p")
+	if got := ReadAgent(dir); got != agent.IDClaude {
+		t.Errorf("missing sidecar: got %q, want claude (back-compat)", got)
+	}
+}
+
+// TestReadAgent_AllKnownIDs round-trips every shipped agent through
+// disk so a future agent ID rename trips at least one test instead of
+// silently breaking sidecars in the wild.
+func TestReadAgent_AllKnownIDs(t *testing.T) {
+	for _, id := range []agent.ID{agent.IDClaude, agent.IDCodex, agent.IDGemini} {
+		t.Run(string(id), func(t *testing.T) {
+			dir := projectScaffold(t, t.TempDir(), "p")
+			if err := SetAgent(dir, id); err != nil {
+				t.Fatal(err)
+			}
+			if got := ReadAgent(dir); got != id {
+				t.Errorf("ReadAgent after SetAgent(%q) = %q", id, got)
+			}
+		})
+	}
+}
+
+// TestReadAgent_InvalidContentFallsBackToClaude — a user hand-editing
+// the sidecar to a typo'd value (e.g. "claude-3-sonnet") must not
+// crash the daemon. Falling back to claude is the safe degradation
+// path.
+func TestReadAgent_InvalidContentFallsBackToClaude(t *testing.T) {
+	dir := projectScaffold(t, t.TempDir(), "p")
+	mkdir(t, filepath.Join(dir, ".ccmux"))
+	writeFile(t, filepath.Join(dir, ".ccmux", "agent"), "claude-3-sonnet\n")
+	if got := ReadAgent(dir); got != agent.IDClaude {
+		t.Errorf("invalid content: got %q, want claude", got)
+	}
+}
+
+// TestReadAgent_TrimsWhitespace — editors that strip trailing newlines
+// or add them shouldn't break detection. We always pass through
+// agent.ParseID which is whitespace-tolerant; this test pins that
+// behavior at the sidecar boundary too.
+func TestReadAgent_TrimsWhitespace(t *testing.T) {
+	cases := []string{"codex", "codex\n", "  codex  ", "CODEX\n\n"}
+	for _, body := range cases {
+		t.Run(body, func(t *testing.T) {
+			dir := projectScaffold(t, t.TempDir(), "p")
+			mkdir(t, filepath.Join(dir, ".ccmux"))
+			writeFile(t, filepath.Join(dir, ".ccmux", "agent"), body)
+			if got := ReadAgent(dir); got != agent.IDCodex {
+				t.Errorf("body=%q: got %q, want codex", body, got)
+			}
+		})
+	}
+}
+
+// TestSetAgent_CreatesSidecarDir — `.ccmux/` shouldn't have to exist
+// up front. SetAgent is what most callers (scaffold, picker) reach
+// for, so the mkdir has to be implicit.
+func TestSetAgent_CreatesSidecarDir(t *testing.T) {
+	dir := projectScaffold(t, t.TempDir(), "p")
+	// No .ccmux yet.
+	if _, err := os.Stat(filepath.Join(dir, ".ccmux")); err == nil {
+		t.Fatal("test precondition violated: .ccmux already exists")
+	}
+	if err := SetAgent(dir, agent.IDGemini); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(filepath.Join(dir, ".ccmux", "agent"))
+	if err != nil {
+		t.Fatalf("sidecar not written: %v", err)
+	}
+	if got := strings.TrimSpace(string(body)); got != "gemini" {
+		t.Errorf("body = %q, want gemini", got)
+	}
+	// Trailing newline kept — POSIX text-file convention. A diff
+	// against a git-tracked file should be one-line, not a no-newline-
+	// at-EOF warning.
+	if !strings.HasSuffix(string(body), "\n") {
+		t.Errorf("expected trailing newline in sidecar: %q", body)
+	}
+}
+
+// TestSetAgent_Idempotent — re-writing the same agent must not corrupt
+// the file or leave behind a half-written version. The simplest pin
+// is "body unchanged across two writes."
+func TestSetAgent_Idempotent(t *testing.T) {
+	dir := projectScaffold(t, t.TempDir(), "p")
+	if err := SetAgent(dir, agent.IDCodex); err != nil {
+		t.Fatal(err)
+	}
+	body1, _ := os.ReadFile(filepath.Join(dir, ".ccmux", "agent"))
+	if err := SetAgent(dir, agent.IDCodex); err != nil {
+		t.Fatal(err)
+	}
+	body2, _ := os.ReadFile(filepath.Join(dir, ".ccmux", "agent"))
+	if string(body1) != string(body2) {
+		t.Errorf("repeated SetAgent changed sidecar:\n first:%q\n second:%q",
+			body1, body2)
+	}
+}
+
+// TestSetAgent_RejectsUnknown — a typo'd caller (e.g. forwarding a
+// CLI flag literally) must surface as an error, not write garbage to
+// disk that ReadAgent will then silently coerce to claude.
+func TestSetAgent_RejectsUnknown(t *testing.T) {
+	dir := projectScaffold(t, t.TempDir(), "p")
+	if err := SetAgent(dir, agent.ID("imaginary")); err == nil {
+		t.Error("expected error for unknown id, got nil")
+	}
+	// And no file should have been created.
+	if _, err := os.Stat(filepath.Join(dir, ".ccmux", "agent")); err == nil {
+		t.Error("SetAgent persisted unknown id to disk")
+	}
+}
+
+// TestSetAgent_Switching is the user-facing "I want this project to
+// run Codex now" path. After switching, ReadAgent must reflect the
+// new value (not a stale cached one).
+func TestSetAgent_Switching(t *testing.T) {
+	dir := projectScaffold(t, t.TempDir(), "p")
+	if err := SetAgent(dir, agent.IDClaude); err != nil {
+		t.Fatal(err)
+	}
+	if got := ReadAgent(dir); got != agent.IDClaude {
+		t.Fatalf("post-set claude: got %q", got)
+	}
+	if err := SetAgent(dir, agent.IDCodex); err != nil {
+		t.Fatal(err)
+	}
+	if got := ReadAgent(dir); got != agent.IDCodex {
+		t.Errorf("post-switch: got %q, want codex", got)
+	}
+}
+
+// TestInspect_PopulatesAgentField — the integration moment: discover
+// surfaces the sidecar's agent as Project.Agent. Without this the
+// downstream dispatch (Phase 4) has no input to work from.
+func TestInspect_PopulatesAgentField(t *testing.T) {
+	dir := projectScaffold(t, t.TempDir(), "p")
+	if err := SetAgent(dir, agent.IDGemini); err != nil {
+		t.Fatal(err)
+	}
+	p, ok := inspect(dir)
+	if !ok {
+		t.Fatal("expected inspect to recognize project")
+	}
+	if p.Agent != agent.IDGemini {
+		t.Errorf("Project.Agent = %q, want gemini", p.Agent)
+	}
+}
+
+// TestInspect_MissingSidecarDefaultsToClaude pins the back-compat
+// path through Discover too. Every legacy project that lacks
+// .ccmux/agent must surface as Agent=claude on the dashboard.
+func TestInspect_MissingSidecarDefaultsToClaude(t *testing.T) {
+	dir := projectScaffold(t, t.TempDir(), "p")
+	p, ok := inspect(dir)
+	if !ok {
+		t.Fatal("expected inspect to recognize project")
+	}
+	if p.Agent != agent.IDClaude {
+		t.Errorf("Project.Agent (no sidecar) = %q, want claude", p.Agent)
 	}
 }

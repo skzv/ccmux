@@ -10,7 +10,15 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/skzv/ccmux/internal/agent"
 )
+
+// agentSidecarRelPath is where each project's chosen agent is stored.
+// Lives under <project>/.ccmux/ rather than at the project root so we
+// can add more per-project state files later (per-project secrets,
+// last-attached timestamps, etc.) without crowding the repo.
+const agentSidecarRelPath = ".ccmux/agent"
 
 // Project is one bookmark-able working directory.
 type Project struct {
@@ -26,6 +34,12 @@ type Project struct {
 	HasCM    bool      // CLAUDE.md exists
 	HasDocs  bool      // docs/ exists (the notes vault)
 	Modified time.Time // most-recent mtime among CLAUDE.md / README.md / docs/
+
+	// Agent is the AI agent this project runs (claude, codex, gemini).
+	// Sourced from <project>/.ccmux/agent on Discover; missing file or
+	// unrecognized content defaults to agent.IDClaude (the back-compat
+	// path for every project scaffolded before the sidecar existed).
+	Agent agent.ID
 }
 
 // SessionName returns the ccmux tmux session name for this project,
@@ -100,7 +114,51 @@ func inspect(path string) (Project, bool) {
 	if !p.HasGit && !p.HasCM {
 		return Project{}, false
 	}
+	p.Agent = ReadAgent(path)
 	return p, true
+}
+
+// ReadAgent returns the agent ID recorded in `projectPath/.ccmux/agent`.
+// Missing file, read error, or unrecognized content all resolve to
+// agent.IDClaude — the explicit back-compat default for everything
+// scaffolded before the sidecar.
+//
+// Exported so the daemon's per-session classifier dispatch can read
+// the sidecar without going through the full project discovery path.
+func ReadAgent(projectPath string) agent.ID {
+	body, err := os.ReadFile(filepath.Join(projectPath, agentSidecarRelPath))
+	if err != nil {
+		return agent.IDClaude
+	}
+	if id, ok := agent.ParseID(string(body)); ok {
+		return id
+	}
+	return agent.IDClaude
+}
+
+// SetAgent writes the project's agent choice to its sidecar. Creates
+// `.ccmux/` if missing. Validates `id` via agent.ParseID so a typo'd
+// caller doesn't persist garbage that ReadAgent would then drop.
+//
+// Used by:
+//
+//   - internal/scaffold on new-project to record the user's pick.
+//   - The TUI Projects screen's "a" key to switch an existing
+//     project's agent.
+//   - The daemon's POST /v1/projects path when the client specifies
+//     an agent in NewProjectRequest.
+func SetAgent(projectPath string, id agent.ID) error {
+	if _, ok := agent.ParseID(string(id)); !ok {
+		return fmt.Errorf("project: unknown agent id %q", id)
+	}
+	dir := filepath.Join(projectPath, ".ccmux")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("project: create %s: %w", dir, err)
+	}
+	path := filepath.Join(projectPath, agentSidecarRelPath)
+	// Trailing newline keeps git-add diffs clean — POSIX text files
+	// should end in \n.
+	return os.WriteFile(path, []byte(string(id)+"\n"), 0o644)
 }
 
 func expandHome(p string) (string, error) {

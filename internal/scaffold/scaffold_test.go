@@ -5,6 +5,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/skzv/ccmux/internal/agent"
+	"github.com/skzv/ccmux/internal/project"
 )
 
 // hermeticHome redirects $HOME so config.Load() reads no real settings.
@@ -331,5 +334,102 @@ func TestResult_Changed(t *testing.T) {
 				t.Errorf("Changed = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestScaffold_WritesAgentSidecar — Scaffold must persist the chosen
+// agent so the daemon's poll loop, attach path, and dashboard can all
+// read it back. The sidecar contract is `<dir>/.ccmux/agent` carrying
+// the agent ID, validated via project.ReadAgent.
+func TestScaffold_WritesAgentSidecar(t *testing.T) {
+	cases := []struct {
+		name string
+		in   agent.ID
+		want agent.ID
+	}{
+		{"claude explicit", agent.IDClaude, agent.IDClaude},
+		{"codex", agent.IDCodex, agent.IDCodex},
+		{"gemini", agent.IDGemini, agent.IDGemini},
+		// Back-compat: callers that haven't migrated still pass "" —
+		// Scaffold defaults to claude.
+		{"empty defaults to claude", "", agent.IDClaude},
+		// Invalid input must not write garbage — Scaffold should
+		// fall back to claude (the safe default) instead of
+		// erroring or persisting "imaginary".
+		{"unknown defaults to claude", agent.ID("imaginary"), agent.IDClaude},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			hermeticHome(t)
+			target := filepath.Join(t.TempDir(), "p")
+			if _, err := Scaffold(&Options{
+				Name:    "p",
+				Dir:     target,
+				SkipGit: true,
+				Agent:   tc.in,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if got := project.ReadAgent(target); got != tc.want {
+				t.Errorf("sidecar = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestScaffold_PreservesExistingAgentOnUpgrade — `ccmux upgrade` runs
+// Scaffold(Options{SkipGit: true, Agent: ""}). A user who previously
+// chose Codex for a project must NOT have their choice silently
+// flipped to Claude by an upgrade-style re-run. The contract is:
+// empty Agent + existing sidecar = leave the sidecar alone.
+func TestScaffold_PreservesExistingAgentOnUpgrade(t *testing.T) {
+	hermeticHome(t)
+	target := filepath.Join(t.TempDir(), "p")
+
+	// First pass: scaffold with Codex.
+	if _, err := Scaffold(&Options{
+		Name: "p", Dir: target, SkipGit: true, Agent: agent.IDCodex,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := project.ReadAgent(target); got != agent.IDCodex {
+		t.Fatalf("setup: got %q after first scaffold, want codex", got)
+	}
+
+	// Second pass: simulate `ccmux upgrade` (no Agent specified).
+	if _, err := Scaffold(&Options{
+		Name: "p", Dir: target, SkipGit: true, // Agent left zero
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := project.ReadAgent(target); got != agent.IDCodex {
+		t.Errorf("upgrade clobbered agent: got %q, want codex preserved", got)
+	}
+}
+
+// TestScaffold_OverwritesAgentWhenExplicit — the inverse of the
+// preserve case. When the caller DOES specify an Agent (e.g. user
+// picked a new one in the new-project form, or daemon got it from
+// the POST body), Scaffold must persist that choice over any
+// pre-existing sidecar. Without this, switching the agent from the
+// "new project" form would silently fail for upgrade-style re-creates.
+func TestScaffold_OverwritesAgentWhenExplicit(t *testing.T) {
+	hermeticHome(t)
+	target := filepath.Join(t.TempDir(), "p")
+
+	// Seed with Claude.
+	if _, err := Scaffold(&Options{
+		Name: "p", Dir: target, SkipGit: true, Agent: agent.IDClaude,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Now scaffold again, this time choosing Gemini.
+	if _, err := Scaffold(&Options{
+		Name: "p", Dir: target, SkipGit: true, Agent: agent.IDGemini,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := project.ReadAgent(target); got != agent.IDGemini {
+		t.Errorf("explicit overwrite failed: got %q, want gemini", got)
 	}
 }

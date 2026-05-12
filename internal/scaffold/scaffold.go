@@ -19,7 +19,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/config"
+	"github.com/skzv/ccmux/internal/project"
 	"github.com/skzv/ccmux/internal/tmux"
 )
 
@@ -30,6 +32,12 @@ type Options struct {
 	Dir         string // target directory (absolute). If empty, ./<Name> resolved to absolute.
 	SkipGit     bool   // upgrade-an-existing-project case: don't touch .git
 	NoSession   bool   // scaffold only; don't start tmux
+
+	// Agent is the AI agent this project will run (claude / codex /
+	// gemini). Empty means caller didn't care — Scaffold defaults to
+	// agent.IDClaude so back-compat with pre-multi-agent callers
+	// (every existing call site) is preserved without changing them.
+	Agent agent.ID
 }
 
 // DefaultDirs is the ccmux-opinionated layout. Just the docs/ vault —
@@ -184,6 +192,66 @@ func Scaffold(opts *Options) (*Result, error) {
 		res.CreatedFiles = append(res.CreatedFiles, ".gitignore")
 	} else {
 		res.SkippedFiles = append(res.SkippedFiles, ".gitignore")
+	}
+
+	// Write the per-project agent sidecar so the dashboard, daemon
+	// poll loop, and "attach" path all know which agent to launch.
+	//
+	// Three behaviors interlock here:
+	//
+	//  1. Caller specified a valid Agent → write it, overwriting any
+	//     existing sidecar. This is the "user picked Codex in the new-
+	//     project form" or "scaffold StartSession got an explicit
+	//     choice from the daemon's POST /v1/projects" path.
+	//
+	//  2. Caller specified an invalid Agent (typo) → fall back to
+	//     claude. Better than persisting garbage and confusing the
+	//     dispatcher.
+	//
+	//  3. Caller didn't specify an Agent (empty) AND a sidecar already
+	//     exists → leave the existing choice alone. This is the
+	//     critical upgrade-path behavior: `ccmux upgrade` runs Scaffold
+	//     with Options{Agent: ""}, and a user who had previously
+	//     chosen Codex must not be silently flipped back to Claude.
+	//
+	//  4. Caller didn't specify an Agent AND no sidecar yet → write
+	//     claude. This is the legacy callers (every existing call site
+	//     before Phase 3) plus brand-new projects that didn't go
+	//     through the new-project form's picker.
+	chosen, explicit := agent.ParseID(string(opts.Agent))
+	if !explicit && string(opts.Agent) != "" {
+		// Typo → coerce to default, but treat as explicit so we
+		// overwrite. Callers that pass garbage deserve correction,
+		// not silent preservation.
+		chosen = agent.IDClaude
+		explicit = true
+	}
+	sidecarPath := filepath.Join(opts.Dir, ".ccmux", "agent")
+	sidecarExisted := false
+	if _, err := os.Stat(sidecarPath); err == nil {
+		sidecarExisted = true
+	}
+	switch {
+	case explicit:
+		if err := project.SetAgent(opts.Dir, chosen); err != nil {
+			return res, err
+		}
+		if sidecarExisted {
+			res.SkippedFiles = append(res.SkippedFiles, ".ccmux/agent")
+		} else {
+			res.CreatedFiles = append(res.CreatedFiles, ".ccmux/agent")
+		}
+	case !sidecarExisted:
+		// No caller preference, no existing sidecar → seed with claude.
+		if err := project.SetAgent(opts.Dir, agent.IDClaude); err != nil {
+			return res, err
+		}
+		res.CreatedFiles = append(res.CreatedFiles, ".ccmux/agent")
+	default:
+		// No caller preference, existing sidecar → preserve user's
+		// previous choice. Don't even mention it in the report —
+		// it's a non-event.
+		res.SkippedFiles = append(res.SkippedFiles, ".ccmux/agent")
 	}
 
 	if opts.SkipGit {
