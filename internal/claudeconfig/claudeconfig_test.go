@@ -427,7 +427,7 @@ func TestEffectiveEffortLevel_Precedence(t *testing.T) {
 }
 
 func TestKnownEffortLevels_IncludesEachLevel(t *testing.T) {
-	want := map[string]bool{"low": false, "medium": false, "high": false, "xhigh": false}
+	want := map[string]bool{"low": false, "medium": false, "high": false, "xhigh": false, "max": false}
 	for _, e := range KnownEffortLevels() {
 		if _, ok := want[e.Value]; ok {
 			want[e.Value] = true

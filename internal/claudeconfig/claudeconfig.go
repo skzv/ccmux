@@ -289,9 +289,11 @@ type ModelOption struct {
 
 // SetEffortLevel updates only the effortLevel field, preserving everything
 // else. Returns the backup path. `level` may be "low", "medium", "high",
-// "xhigh", or "" to clear the override. "max" is intentionally not offered
-// here — per Claude Code's docs it's a CLI-only override (`claude --effort
-// max`), not a persisted settings.json value.
+// "xhigh", "max", or "" to clear the override. Claude Code's docs describe
+// "max" as primarily a CLI-flag value (`claude --effort max`); whether it
+// persists when written to settings.json depends on the installed Claude
+// Code version, so we write whatever the caller asks for and let Claude
+// Code decide.
 func SetEffortLevel(level string) (string, error) {
 	s, err := ReadSettings()
 	if err != nil {
@@ -326,11 +328,12 @@ func EffectiveEffortLevel() (value, source string) {
 }
 
 // KnownEffortLevels are the rows the effort picker offers. The order
-// is intentionally high-to-low so "max persistent reasoning" is the
-// first option a user lands on when they open the picker.
+// is intentionally high-to-low so "max effort" is the first option a
+// user lands on when they open the picker.
 func KnownEffortLevels() []EffortOption {
 	return []EffortOption{
-		{Value: "xhigh", Label: "xhigh", Desc: "Max persistent reasoning budget"},
+		{Value: "max", Label: "max", Desc: "Maximum effort (verify persistence with your Claude Code version)"},
+		{Value: "xhigh", Label: "xhigh", Desc: "Very high reasoning budget"},
 		{Value: "high", Label: "high", Desc: "Deeper reasoning; slower responses"},
 		{Value: "medium", Label: "medium", Desc: "Balanced (Claude Code default)"},
 		{Value: "low", Label: "low", Desc: "Fast; minimal reasoning"},
