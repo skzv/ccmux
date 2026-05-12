@@ -67,7 +67,7 @@ type NewSessionRequest struct {
 
 // NewProjectRequest is the body of POST /v1/projects. Asks the daemon
 // to scaffold a brand-new project under its configured Projects.Root
-// and start a Claude session inside it.
+// and start an agent session inside it.
 //
 // Used by the Projects screen's "n" flow when the user picks a remote
 // host: the local TUI calls this over the tailnet, the remote daemon
@@ -75,7 +75,12 @@ type NewSessionRequest struct {
 // `git init` etc), and the TUI then attaches over ssh.
 type NewProjectRequest struct {
 	Name        string `json:"name"`
-	Description string `json:"description"` // becomes the first prompt to Claude
+	Description string `json:"description"` // becomes the first prompt to the agent
+	// Agent picks which AI agent the remote daemon launches inside
+	// the new session. One of "claude" / "codex" / "gemini"; empty
+	// (omitted by older clients) defaults to claude on the daemon
+	// side for back-compat.
+	Agent string `json:"agent,omitempty"`
 }
 
 // NewProjectResponse is what POST /v1/projects returns once the daemon

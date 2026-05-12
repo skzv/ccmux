@@ -3,6 +3,7 @@ package tui
 import (
 	"time"
 
+	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/claudeusage"
 	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/notes"
@@ -116,6 +117,21 @@ type newProjectSubmitMsg struct {
 	// remote scaffolds. Typically the MagicDNS short name so
 	// known_hosts matches. Empty for local.
 	DialHost string
+
+	// Agent is the AI agent the user picked in the form's agent row
+	// (claude / codex / gemini). Empty defaults to claude downstream.
+	// Carried through daemon.NewProjectRequest so remote scaffolds
+	// honor the choice.
+	Agent agent.ID
+}
+
+// projectAgentSwitchedMsg fires after a successful "a" press on the
+// Projects screen — the in-memory project list needs a refresh so the
+// detail pane reflects the new agent without waiting for the next
+// poll tick. Index is the projectsModel cursor at the time of switch.
+type projectAgentSwitchedMsg struct {
+	Path  string
+	Agent agent.ID
 }
 
 // newProjectCancelMsg is emitted by the modal form when the user hits Esc.

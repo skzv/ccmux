@@ -25,6 +25,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/claude"
 	"github.com/skzv/ccmux/internal/clipboard"
 	"github.com/skzv/ccmux/internal/config"
@@ -369,10 +370,17 @@ func (s *server) createProject(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
 
+	// ParseID is the safe path — it returns ok=false on empty + unknown
+	// strings, which we treat the same: empty Agent in the request
+	// body just defers to the scaffold layer's claude-default. A
+	// future client that ships a typo'd value still gets corrected at
+	// scaffold time rather than being persisted as garbage.
+	chosenAgent, _ := agent.ParseID(req.Agent)
 	session, err := scaffold.StartSession(ctx, scaffold.Options{
 		Name:        name,
 		Description: req.Description,
 		Dir:         dir,
+		Agent:       chosenAgent,
 	})
 	if err != nil {
 		http.Error(w, "start: "+err.Error(), http.StatusInternalServerError)

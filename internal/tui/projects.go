@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/project"
 	"github.com/skzv/ccmux/internal/scaffold"
@@ -75,6 +76,24 @@ func (m projectsModel) Update(msg tea.Msg) (projectsModel, tea.Cmd) {
 		case km.String() == "u":
 			// Upgrade current working directory (non-destructive).
 			return m, upgradeCwdCmd()
+		case km.String() == "a":
+			// Switch the selected project's agent. Cycles through
+			// agent.All() in canonical order. Local-host projects
+			// only; remote-project switching would require a daemon
+			// endpoint we don't ship today (tracked under Phase 4).
+			if m.cursor >= 0 && m.cursor < len(m.projects) {
+				p := m.projects[m.cursor]
+				if projectHost(p) == "local" {
+					return m, switchAgentCmd(p)
+				}
+				return m, func() tea.Msg {
+					return toastMsg{
+						Text:  "agent switch for remote projects not yet supported",
+						Kind:  toastWarning,
+						Until: time.Now().Add(4 * time.Second),
+					}
+				}
+			}
 		case keyMatches(km, m.km.Up):
 			if m.cursor > 0 {
 				m.cursor--
@@ -85,7 +104,60 @@ func (m projectsModel) Update(msg tea.Msg) (projectsModel, tea.Cmd) {
 			}
 		}
 	}
+
+	// React to a successful agent switch by updating the in-memory
+	// project list so the detail pane reflects the change before the
+	// next poll tick lands.
+	if sw, ok := msg.(projectAgentSwitchedMsg); ok {
+		for i, p := range m.projects {
+			if p.Path == sw.Path {
+				m.projects[i].Agent = sw.Agent
+				break
+			}
+		}
+	}
 	return m, nil
+}
+
+// nextAgent returns the next agent in canonical order after `cur`.
+// Used by the projects detail-pane switcher: pressing `a` cycles
+// claude → codex → gemini → claude.
+func nextAgent(cur agent.ID) agent.ID {
+	all := agent.All()
+	for i, a := range all {
+		if a.ID() == cur {
+			return all[(i+1)%len(all)].ID()
+		}
+	}
+	return all[0].ID()
+}
+
+// switchAgentCmd is the projects-detail-pane "a" action. Writes the
+// sidecar, emits a toast, and signals the in-memory list to update.
+// Local-only — remote agent switching would need a daemon endpoint
+// (POST /v1/projects/<name>/agent) that we haven't built yet.
+func switchAgentCmd(p project.Project) tea.Cmd {
+	return func() tea.Msg {
+		next := nextAgent(p.Agent)
+		if err := project.SetAgent(p.Path, next); err != nil {
+			return toastMsg{
+				Text:  "agent switch: " + err.Error(),
+				Kind:  toastError,
+				Until: time.Now().Add(5 * time.Second),
+			}
+		}
+		return tea.Batch(
+			func() tea.Msg { return projectAgentSwitchedMsg{Path: p.Path, Agent: next} },
+			func() tea.Msg {
+				return toastMsg{
+					Text: p.Name + ": agent → " + string(next) +
+						" (next session uses this agent)",
+					Kind:  toastSuccess,
+					Until: time.Now().Add(5 * time.Second),
+				}
+			},
+		)()
+	}
 }
 
 func (m projectsModel) View(width, height int) string {
@@ -164,16 +236,21 @@ func (m projectsModel) renderDetail(width, height int) string {
 	if host != "local" {
 		enterDesc = "create session on " + host + " (via ccmuxd), then ssh-attach"
 	}
+	// Resolve the agent's display name through the registry so a future
+	// rename of ID strings doesn't break the detail pane.
+	agentDisplay := agent.ByID(p.Agent).DisplayName()
 	lines := []string{
 		m.st.Emphasis.Render(p.Name) + "   " + m.st.Muted.Render("on "+host),
 		m.st.Muted.Render(p.Path),
 		"",
 		"session name  " + m.st.Emphasis.Render(p.SessionName()),
+		"agent         " + m.st.Emphasis.Render(agentDisplay),
 		"",
 		m.st.Subtitle.Render("Keys"),
 		m.st.Key.Render("enter") + "  " + enterDesc,
 		m.st.Key.Render("n") + "      new project (modal form)",
 		m.st.Key.Render("u") + "      upgrade cwd (current shell, not selected)",
+		m.st.Key.Render("a") + "      switch agent for this project (cycles claude→codex→gemini; local only)",
 		m.st.Key.Render("4") + "      open Notes for this project (local only)",
 	}
 	return m.st.Pane.Width(width - 2).Height(height - 2).Render(strings.Join(lines, "\n"))
@@ -207,6 +284,7 @@ func scaffoldAndStartCmd(submit newProjectSubmitMsg) tea.Cmd {
 			res, err := cli.NewProject(ctx, daemon.NewProjectRequest{
 				Name:        submit.Name,
 				Description: submit.Description,
+				Agent:       string(submit.Agent),
 			})
 			if err != nil {
 				return toastMsg{
@@ -224,8 +302,14 @@ func scaffoldAndStartCmd(submit newProjectSubmitMsg) tea.Cmd {
 				DialHost:    dial,
 			}
 		}
-		// Local case (unchanged).
-		opts := scaffold.Options{Name: submit.Name, Description: submit.Description}
+		// Local case: pass the picker's chosen agent through to
+		// scaffold so the sidecar gets written and the launch command
+		// matches the agent.
+		opts := scaffold.Options{
+			Name:        submit.Name,
+			Description: submit.Description,
+			Agent:       submit.Agent,
+		}
 		session, err := scaffold.StartSession(context.Background(), opts)
 		if err != nil {
 			return toastMsg{Text: "new project: " + err.Error(), Kind: toastError, Until: time.Now().Add(6 * time.Second)}

@@ -346,3 +346,64 @@ func TestNewProjectResponse_JSONRoundTrip(t *testing.T) {
 		t.Errorf("round-trip: got %+v want %+v", out, in)
 	}
 }
+
+// TestNewProjectRequest_AgentField_RoundTrip pins the Phase-3 wire
+// addition. Without this an older daemon talking to a newer client
+// would silently drop the field, and every new project on that remote
+// would default to claude regardless of the picker.
+func TestNewProjectRequest_AgentField_RoundTrip(t *testing.T) {
+	for _, id := range []string{"claude", "codex", "gemini", ""} {
+		in := NewProjectRequest{Name: "p", Description: "d", Agent: id}
+		b, _ := json.Marshal(in)
+		var out NewProjectRequest
+		if err := json.Unmarshal(b, &out); err != nil {
+			t.Fatal(err)
+		}
+		if out.Agent != id {
+			t.Errorf("Agent round-trip: in=%q out=%q", id, out.Agent)
+		}
+	}
+}
+
+// TestNewProjectRequest_AgentOmitted_WhenEmpty — `Agent,omitempty`
+// keeps old clients from sending an empty string that a strict server
+// might reject. This is what gives us back-compat across mixed-version
+// daemons on the same tailnet.
+func TestNewProjectRequest_AgentOmitted_WhenEmpty(t *testing.T) {
+	b, _ := json.Marshal(NewProjectRequest{Name: "p"})
+	if strings.Contains(string(b), `"agent"`) {
+		t.Errorf("empty Agent should be omitted from wire:\n%s", b)
+	}
+	b, _ = json.Marshal(NewProjectRequest{Name: "p", Agent: "codex"})
+	if !strings.Contains(string(b), `"agent":"codex"`) {
+		t.Errorf("non-empty Agent missing from wire:\n%s", b)
+	}
+}
+
+// TestClient_NewProject_ForwardsAgent — the client serializes whatever
+// the caller hands it. End-to-end pin so the protocol field actually
+// reaches the server side; the picker fix doesn't help if the client
+// drops Agent on its way over the wire.
+func TestClient_NewProject_ForwardsAgent(t *testing.T) {
+	gotBody := make(chan NewProjectRequest, 1)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/projects", func(w http.ResponseWriter, r *http.Request) {
+		var req NewProjectRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		gotBody <- req
+		_ = json.NewEncoder(w).Encode(NewProjectResponse{Session: "c-x", Path: "/p", Host: "h"})
+	})
+	c := spawnFakeDaemon(t, mux)
+	if _, err := c.NewProject(context.Background(), NewProjectRequest{
+		Name: "x", Description: "y", Agent: "codex",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got := <-gotBody
+	if got.Agent != "codex" {
+		t.Errorf("server received Agent=%q, want codex", got.Agent)
+	}
+}
