@@ -267,6 +267,21 @@ func runDoctor() error {
 		}
 	}
 
+	// PATH check for ccmux itself. macOS-default PATH doesn't include
+	// ~/.local/bin, so a fresh `make install` works but `ccmux` doesn't
+	// resolve until the user adds it. This was a real onboarding bug.
+	fmt.Println()
+	fmt.Println("ccmux on PATH:")
+	if _, err := exec.LookPath("ccmux"); err != nil {
+		bad++
+		home, _ := os.UserHomeDir()
+		want := filepath.Join(home, ".local", "bin")
+		fmt.Printf("  ✗ %s not on $PATH — run `ccmux setup` (it'll add a managed block to your shell rc) or add manually:\n", want)
+		fmt.Println(`    echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc`)
+	} else {
+		fmt.Println("  ✓ ccmux resolves on $PATH")
+	}
+
 	// gh CLI block — recommended but not required. ccmux new asks Claude
 	// to make a private GitHub repo as the last scaffolding step; that
 	// works much better when gh is authed.

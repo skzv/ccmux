@@ -94,7 +94,11 @@ func Run(ctx context.Context, out io.Writer) error {
 	}
 
 	fmt.Fprintln(out, stTitle.Render("Done."))
-	fmt.Fprintln(out, "Next: " + stEmphasis.Render("ccmux") + " to launch the TUI.")
+	// Last-mile: make sure `ccmux` actually resolves on the user's PATH
+	// before printing "Next: ccmux". Otherwise a friend on a fresh Mac
+	// ends with "zsh: command not found: ccmux" after a clean install,
+	// which is the bug report that prompted this code.
+	_ = ensureCcmuxOnPath(out)
 	return nil
 }
 
