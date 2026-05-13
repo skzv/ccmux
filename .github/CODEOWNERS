@@ -1,0 +1,11 @@
+# CODEOWNERS — GitHub uses this to auto-request review on PRs that
+# touch matching paths. Today it's a single line: every file in the
+# repo gets @skzv as a default reviewer. Until there are external
+# contributors, the file serves mainly as belt-and-suspenders for
+# branch protection — pairs with the "require review from Code
+# Owners" rule so a PR can't merge without me approving it.
+#
+# When the project grows reviewers, replace this with per-directory
+# ownership (e.g. `/internal/tui @some-frontend-person`).
+
+* @skzv
