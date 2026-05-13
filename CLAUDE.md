@@ -50,6 +50,17 @@ make lint          # gofmt + go vet + staticcheck if installed
 - Unit tests for `internal/tmux` and `internal/project` use table-driven tests against fake `tmux` outputs.
 - TUI screens get golden-file tests via `teatest` (Charm's snapshot tester).
 - Integration tests are tagged `//go:build integration` and run against a real tmux server in CI.
+- **Always run `go test ./...` before every commit.** A clean suite is a precondition for `git commit` in this repo, not a follow-up. If any test fails, fix it (or mark + explain the skip) before the commit. Cross-compile sanity (`GOOS=windows`, `GOOS=linux`) is part of "tests pass" for changes that touch OS-specific code.
+
+# Feature surface policy
+- **Every feature must be reachable from both the TUI and the CLI.** Pick a key/screen in the TUI *and* a `ccmux <subcommand>` (or flag on an existing one) — never one without the other. Reasoning: the TUI is the daily driver, the CLI is for muscle memory + scripting; shipping a feature in only one creates a discoverability cliff and breaks the "TUI-first, CLI when you want it" promise on the front page.
+- Concretely, a PR that adds a new behaviour should land:
+  - The implementation in `internal/...`.
+  - A TUI affordance: keybinding, screen, form row, or detail-pane action wired through `internal/tui`.
+  - A CLI affordance: a Cobra subcommand in `cmd/ccmux/cmd/` (new file, or a flag added to an existing one).
+  - Tests that exercise the implementation directly *and* at least one of the two surfaces.
+  - Updates to the README + the website's docs/MDX where the feature is user-visible.
+- Acceptable exceptions: telemetry/internals that have no user-facing semantics (e.g. the bell-suppress predicate); pure refactors; private daemon endpoints that ship alongside a TUI/CLI consumer in the same PR.
 
 # Docs Map
 - `docs/01_Specs/00_Vision.md` — the why and the user story
