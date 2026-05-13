@@ -117,6 +117,18 @@ func (c *Client) NewSession(ctx context.Context, req NewSessionRequest) (Session
 	return out, nil
 }
 
+// NewBareSession asks the daemon for a shell-only tmux session, no
+// scaffold, no agent, no project association. Used by the Sessions
+// tab's "new session" form for ad-hoc shells on the local host or
+// any tailnet peer.
+func (c *Client) NewBareSession(ctx context.Context, req NewBareSessionRequest) (NewBareSessionResponse, error) {
+	var out NewBareSessionResponse
+	if err := c.post(ctx, "/v1/sessions/bare", req, &out); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
 // NewProject asks the daemon to scaffold a brand-new project on its
 // host (under that daemon's configured Projects.Root) and start a
 // Claude session inside it. Used by the Projects screen's "create on

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -22,6 +23,18 @@ type sessionsModel struct {
 	km       Keymap
 	sessions []daemon.SessionState
 	cursor   int
+
+	// `n` opens a modal form for spawning a bare (project-less)
+	// session on any device. nil when the modal isn't showing.
+	form *newSessionFormModel
+
+	// Cached so the form's device picker has the same set as the
+	// Projects screen. Pushed by App on every sessionsLoadedMsg.
+	hosts []hostStatus
+
+	// Resolved sessions.default_dir for the form's placeholder.
+	// Pushed by App on config load / reload.
+	defaultDir string
 }
 
 func newSessions(st styles.Styles, km Keymap) sessionsModel {
@@ -44,9 +57,46 @@ func (m sessionsModel) Selected() *daemon.SessionState {
 	return &s
 }
 
+// SetHosts is called by App on every sessionsLoadedMsg so the
+// new-session form's device picker reflects what's reachable right
+// now. Same shape as projectsModel.SetHosts.
+func (m *sessionsModel) SetHosts(h []hostStatus) {
+	m.hosts = h
+}
+
+// SetDefaultDir is called by App on startup + configReloadMsg. The
+// form's workdir placeholder reflects whatever sessions.default_dir
+// is configured.
+func (m *sessionsModel) SetDefaultDir(d string) {
+	m.defaultDir = d
+}
+
 func (m sessionsModel) Update(msg tea.Msg) (sessionsModel, tea.Cmd) {
+	// Modal mode: route everything through the form except its own
+	// finalizer messages, which the App handles.
+	if m.form != nil {
+		switch msg := msg.(type) {
+		case newBareSessionCancelMsg:
+			m.form = nil
+			return m, nil
+		case newBareSessionSubmitMsg:
+			m.form = nil
+			// App handles the dispatch (local vs remote, attach).
+			// We forward the message untouched.
+			return m, func() tea.Msg { return msg }
+		}
+		f, cmd := m.form.Update(msg)
+		m.form = &f
+		return m, cmd
+	}
+
 	if km, ok := msg.(tea.KeyMsg); ok {
 		switch {
+		case keyMatches(km, m.km.NewItem):
+			// Open the bare-session form.
+			f := newNewSessionForm(m.st, m.hosts, m.defaultDir)
+			m.form = &f
+			return m, textinput.Blink
 		case keyMatches(km, m.km.Up):
 			if m.cursor > 0 {
 				m.cursor--
@@ -66,6 +116,12 @@ func (m sessionsModel) Update(msg tea.Msg) (sessionsModel, tea.Cmd) {
 }
 
 func (m sessionsModel) View(width, height int) string {
+	// Modal form overlay — mirrors how projectsModel renders its
+	// new-project modal: dimmed list behind, centered form on top.
+	if m.form != nil {
+		formW := minInt(80, width-4)
+		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, m.form.View(formW))
+	}
 	if isNarrow(width) {
 		return m.renderList(width, height)
 	}

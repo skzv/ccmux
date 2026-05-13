@@ -287,6 +287,77 @@ func TestClient_AddrReportsScheme(t *testing.T) {
 	}
 }
 
+// TestNewBareSessionRequest_JSONRoundTrip pins the wire shape. The
+// Sessions tab's "new session" feature posts this to the daemon;
+// once we've shipped, a json tag rename here is a breaking change.
+func TestNewBareSessionRequest_JSONRoundTrip(t *testing.T) {
+	cases := []NewBareSessionRequest{
+		{Name: "c-shell-1", Path: "/Users/skz"},
+		{Name: "", Path: "/tmp/x"},
+		{},
+	}
+	for _, in := range cases {
+		b, _ := json.Marshal(in)
+		var out NewBareSessionRequest
+		if err := json.Unmarshal(b, &out); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if out != in {
+			t.Errorf("round-trip mismatch: got %+v want %+v\nwire: %s", out, in, b)
+		}
+	}
+}
+
+// TestNewBareSessionRequest_OmitsEmpty — `omitempty` keeps unused
+// fields off the wire so an older daemon doesn't have to handle
+// strings it didn't expect.
+func TestNewBareSessionRequest_OmitsEmpty(t *testing.T) {
+	empty, _ := json.Marshal(NewBareSessionRequest{})
+	if string(empty) != "{}" {
+		t.Errorf("empty request should marshal to {}, got %s", empty)
+	}
+	pop, _ := json.Marshal(NewBareSessionRequest{Name: "x", Path: "/tmp"})
+	if !strings.Contains(string(pop), `"name":"x"`) || !strings.Contains(string(pop), `"path":"/tmp"`) {
+		t.Errorf("non-empty request missing fields: %s", pop)
+	}
+}
+
+// TestClient_NewBareSession_RoundTrip — fake-daemon end-to-end. The
+// client serializes a request, the server echoes via a known shape,
+// the client decodes the response. Pins the path is /v1/sessions/bare
+// (not /v1/sessions/ which would route to handleSessionsItem).
+func TestClient_NewBareSession_RoundTrip(t *testing.T) {
+	mux := http.NewServeMux()
+	gotPath := ""
+	mux.HandleFunc("/v1/sessions/bare", func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		if r.Method != http.MethodPost {
+			http.Error(w, "want POST", http.StatusMethodNotAllowed)
+			return
+		}
+		var req NewBareSessionRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		_ = json.NewEncoder(w).Encode(NewBareSessionResponse{
+			Session: "c-shell-42",
+			Path:    req.Path,
+			Host:    "test-host",
+		})
+	})
+	c := spawnFakeDaemon(t, mux)
+	got, err := c.NewBareSession(context.Background(), NewBareSessionRequest{
+		Name: "", Path: "/tmp/x",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/v1/sessions/bare" {
+		t.Errorf("server saw path %q, want /v1/sessions/bare", gotPath)
+	}
+	if got.Session != "c-shell-42" || got.Path != "/tmp/x" || got.Host != "test-host" {
+		t.Errorf("response: %+v", got)
+	}
+}
+
 // TestClient_NewProject_RoundTrip covers the Projects screen's "create
 // on <host>" path: client serializes a NewProjectRequest, server
 // echoes a NewProjectResponse, client decodes it. The server-side

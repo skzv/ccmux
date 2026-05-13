@@ -70,6 +70,39 @@ type NewSessionRequest struct {
 	FirstInput string `json:"first_input"` // initial prompt to feed Claude
 }
 
+// NewBareSessionRequest is the body of POST /v1/sessions/bare. A
+// "bare" session is one not tied to a project — no scaffold, no
+// agent, just a tmux session running the user's shell at Path.
+// The Sessions tab's "new session" form posts this to either the
+// local daemon (for a local-host session) or to a tailnet peer's
+// daemon (cross-device shell on the Mac mini, say).
+//
+// Why a separate endpoint from NewSessionRequest: extending the
+// existing one would mean an "if Project == ” && !Bare" branch
+// everywhere; cleaner to have a small dedicated handler that
+// only does the bare case.
+type NewBareSessionRequest struct {
+	// Name is the bare-tmux session name. Empty → server picks
+	// something like `c-shell-<runid>`. The server is the source
+	// of truth for naming so concurrent clients on the same daemon
+	// don't collide.
+	Name string `json:"name,omitempty"`
+	// Path is the working directory the shell opens in. Empty →
+	// resolves to $HOME on the daemon host. We deliberately don't
+	// resolve client-side; the home directory of the *remote*
+	// machine is what matters when "any device" is the point.
+	Path string `json:"path,omitempty"`
+}
+
+// NewBareSessionResponse is what POST /v1/sessions/bare returns.
+// Mirrors NewProjectResponse for symmetry: the client uses Session
+// to ssh-attach.
+type NewBareSessionResponse struct {
+	Session string `json:"session"`
+	Path    string `json:"path"`
+	Host    string `json:"host"`
+}
+
 // NewProjectRequest is the body of POST /v1/projects. Asks the daemon
 // to scaffold a brand-new project under its configured Projects.Root
 // and start an agent session inside it.

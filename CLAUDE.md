@@ -51,6 +51,7 @@ make lint          # gofmt + go vet + staticcheck if installed
 - TUI screens get golden-file tests via `teatest` (Charm's snapshot tester).
 - Integration tests are tagged `//go:build integration` and run against a real tmux server in CI.
 - **Always run `go test ./...` before every commit.** A clean suite is a precondition for `git commit` in this repo, not a follow-up. If any test fails, fix it (or mark + explain the skip) before the commit. Cross-compile sanity (`GOOS=windows`, `GOOS=linux`) is part of "tests pass" for changes that touch OS-specific code.
+- **Every new feature ships with tests.** No PR should add user-visible behavior without at least one test that fails before the change and passes after. The bar is "exercised in code" — unit tests for pure helpers, fake-driven tests for protocol changes, table-driven keymap tests for new TUI bindings, live-driven integration tests for things that need a real tmux/daemon. A feature without a test is unfinished work, not a candidate for review.
 - **TODOs (research + plan in [`docs/01_Specs/03_Testing_And_CI.md`](docs/01_Specs/03_Testing_And_CI.md)):**
   - **CI integration.** GitHub Actions workflow with test + cross-compile + integration matrix. Today CI is whatever the contributor runs locally — a green PR is a contributor promise, not a machine guarantee.
   - **Stress testing.** A `cmd/ccmux-stress/` harness exercising the daemon under realistic load (20+ sessions, multi-host fan-out, notification storms, 24h long-haul) with pprof + FD-leak detection.

@@ -157,6 +157,33 @@ type remoteSessionStartedMsg struct {
 	DialHost    string
 }
 
+// New-bare-session flow (Sessions tab `n` key). Mirrors the new-
+// project flow but doesn't carry a project name, description, or
+// agent — it's just "shell in this dir on this device".
+
+// newBareSessionSubmitMsg is emitted by the Sessions tab's form
+// when the user confirms. Host/Address/DialHost are zero for the
+// local case; for a remote pick, the form fills them from the
+// App's hostStatus slice.
+type newBareSessionSubmitMsg struct {
+	Name string // tmux session name; empty → server picks
+	Path string // working directory; empty → daemon's default_dir → $HOME
+
+	Host     string // "local" or peer display name
+	Address  string // ccmuxd http "host:port" for remote daemon
+	DialHost string // ssh target for the attach step
+}
+
+// newBareSessionCancelMsg is emitted by the form on Esc.
+type newBareSessionCancelMsg struct{}
+
+// bareSessionReadyMsg is the local-flow completion message. Carries
+// the new tmux session name so the App can route attach via
+// localAttachCmd.
+type bareSessionReadyMsg struct {
+	Session string
+}
+
 // sessionKilledMsg signals that a Sessions-screen `x` kill completed; the
 // app responds with an immediate refresh.
 type sessionKilledMsg struct {
