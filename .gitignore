@@ -35,3 +35,6 @@ Thumbs.db
 
 # Maintainer scratchpad — never published.
 MAINTAINER_NOTES.md
+
+# ccmux-stress reports (auto-generated, machine-specific).
+docs/03_Agent_Logs/stress-*.md

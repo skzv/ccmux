@@ -7,6 +7,7 @@ import (
 	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/tui/styles"
+	"github.com/skzv/ccmux/internal/usage"
 )
 
 // TestRenderSessionLine_AgentTag_Default — local Claude sessions are
@@ -80,5 +81,75 @@ func TestRenderSessionLine_AgentTag_EmptyMeansClaude(t *testing.T) {
 	}, 120)
 	if strings.Contains(got, "[") {
 		t.Errorf("empty Agent should render without a tag:\n%s", got)
+	}
+}
+
+// TestRenderAgentUsageRow_NoData — when the cross-agent walker
+// hasn't found transcripts (which is the case for Codex/Gemini
+// today, stub walkers), the dashboard row must show the install
+// hint inline. A silent empty row would let a new Codex/Gemini
+// user assume the panel is broken instead of seeing the next step.
+func TestRenderAgentUsageRow_NoData(t *testing.T) {
+	st := styles.Default()
+	got := renderAgentUsageRow(st, "Codex", usage.AgentSummary{HasData: false},
+		"`npm i -g @openai/codex`")
+	for _, want := range []string{
+		"Codex",
+		"no transcripts yet",
+		"npm i -g @openai/codex",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("no-data row missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+// TestRenderAgentUsageRow_WithData — when the walker reports real
+// usage (HasData=true), the row shows prompts + input/output tokens
+// + an optional cost estimate, NOT the install hint.
+func TestRenderAgentUsageRow_WithData(t *testing.T) {
+	st := styles.Default()
+	s := usage.AgentSummary{
+		HasData:       true,
+		Prompts:       42,
+		InputTokens:   1500,
+		OutputTokens:  3700,
+		EstimatedCost: 0.123,
+	}
+	got := renderAgentUsageRow(st, "Codex", s, "`npm i -g @openai/codex`")
+	for _, want := range []string{
+		"Codex",
+		"42 prompts",
+		"in",
+		"out",
+		"$0.12",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("with-data row missing %q in:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "no transcripts yet") {
+		t.Errorf("with-data row leaked the no-data hint:\n%s", got)
+	}
+	if strings.Contains(got, "npm i -g") {
+		t.Errorf("with-data row leaked the install hint:\n%s", got)
+	}
+}
+
+// TestRenderAgentUsageRow_ZeroCostOmittedWhenWithData — when the
+// estimator gives 0 (e.g. cache-only Claude usage that resolves to
+// $0 at API rates), the row should not show "~$0.00" because that
+// looks like an error. Skip the cost suffix entirely.
+func TestRenderAgentUsageRow_ZeroCostOmittedWhenWithData(t *testing.T) {
+	st := styles.Default()
+	got := renderAgentUsageRow(st, "Gemini", usage.AgentSummary{
+		HasData:       true,
+		Prompts:       1,
+		InputTokens:   100,
+		OutputTokens:  200,
+		EstimatedCost: 0,
+	}, "`npm i -g @google/gemini-cli`")
+	if strings.Contains(got, "$0.00") {
+		t.Errorf("zero cost should be omitted, got:\n%s", got)
 	}
 }

@@ -115,6 +115,46 @@ jobs:
       - name: windows/arm64
         run: GOOS=windows GOARCH=arm64 go build ./...
 
+  fuzz:
+    # PR-time fuzz pass per docs/01_Specs/03_Testing_And_CI.md.
+    # Each FuzzXxx target gets 30s of fuzzing. Failing seeds (if any)
+    # get archived under testdata/fuzz/<FuzzName>/ via Go's native
+    # convention — those become regression seeds on the next plain
+    # `go test` and trip the test job above. A nightly long-budget
+    # pass (1h/target) is planned as a Mac mini cron, not here, since
+    # GHA-hosted runners cap at 6h per job.
+    name: fuzz (30s/target)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Run all fuzz targets for 30s each
+        shell: bash
+        run: |
+          # Each (package, target) pair, kept explicit so a new fuzz
+          # target gets added here by hand rather than silently
+          # bypassed via globbing.
+          set -e
+          pairs=(
+            "./internal/agent FuzzParseID"
+            "./internal/project FuzzReadAgent"
+            "./internal/clipboard FuzzOSC52RoundTrip"
+            "./internal/sleeplock FuzzParsePmsetBatt"
+            "./internal/claude FuzzClassify"
+            "./internal/tmux FuzzSessionNameForPath"
+            "./internal/tui FuzzRenderSessionLine_DegenerateInputs"
+          )
+          for pair in "${pairs[@]}"; do
+            pkg="${pair% *}"
+            target="${pair#* }"
+            echo "::group::$pkg :: $target (30s)"
+            go test "$pkg" -run "^$" -fuzz="^${target}$" -fuzztime=30s
+            echo "::endgroup::"
+          done
+
   integration:
     name: integration (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

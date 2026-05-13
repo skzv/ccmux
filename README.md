@@ -10,6 +10,8 @@
 [![Status: alpha](https://img.shields.io/badge/status-alpha-orange.svg)](#status)
 [![Made with Charm](https://img.shields.io/badge/made_with-Charm-FF66CC.svg)](https://charm.sh/)
 
+<img src="docs/screenshots/dashboard.png" alt="ccmux dashboard — session list, Devices panel showing sashas-mac-mini and iphone-14-pro-max, Claude usage panel with 5h quota bar" width="900" />
+
 <!-- DEMO_GIF -->
 
 </div>
@@ -60,17 +62,13 @@ ccmux update         # pull latest, rebuild, reload daemon
 
 ## 👀 What it looks like
 
-```
-┌────────────────────────────────────────────────────────────────┐
-│  ccmux                          local ✓     mini ✓     5h: 47% │
-├────────────────────────────────────────────────────────────────┤
-│  NAME              STATE          PATH                          │
-│  c-auth-redesign   ● needs_input  ~/Projects/auth-redesign     │
-│  c-checkout-bug    ● active       ~/Projects/checkout-bug      │
-│  c-ml-experiments  ○ idle         mini:~/Projects/ml-exp       │
-│  c-blog            ○ idle         ~/Projects/my-plain-blog     │
-└────────────────────────────────────────────────────────────────┘
-```
+**Dashboard** — live sessions, host devices on your tailnet, and Claude's 5-hour quota in one pane.
+
+![ccmux dashboard](docs/screenshots/dashboard.png)
+
+**Notes** — per-project `docs/` tree on the left, Glamour-rendered markdown on the right. Ripgrep-backed `/` search.
+
+![ccmux notes screen](docs/screenshots/notes.png)
 
 ⌨️ `1`-`7` jump between screens (Dashboard, Sessions, Projects, Notes, Claude, Settings, Network), `Enter` attaches, `?` opens contextual help, `T` re-runs the first-run tour.
 
