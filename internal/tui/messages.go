@@ -8,6 +8,7 @@ import (
 	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/notes"
 	"github.com/skzv/ccmux/internal/project"
+	"github.com/skzv/ccmux/internal/usage"
 )
 
 // sessionsLoadedMsg is delivered when a fresh dashboard refresh completes.
@@ -200,10 +201,17 @@ type notesSearchResultMsg struct {
 // tree is more expensive.
 type usageTickMsg struct{ At time.Time }
 
-// usageLoadedMsg carries the result of a claudeusage.Walk.
+// usageLoadedMsg carries the result of a per-agent usage refresh.
+// `Agg` is the rich Claude aggregate that drives the dashboard's
+// main usage panel (cache breakdown, 5h quota bar, top projects).
+// `Codex` and `Gemini` are the cross-agent summaries; today they're
+// always zero-valued (stub walkers) until those agents grow real
+// transcript parsers.
 type usageLoadedMsg struct {
-	Agg *claudeusage.Aggregate
-	Err error
+	Agg    *claudeusage.Aggregate
+	Codex  usage.AgentSummary
+	Gemini usage.AgentSummary
+	Err    error
 }
 
 // Claude config screen messages.
