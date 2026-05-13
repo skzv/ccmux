@@ -44,10 +44,16 @@ type hostStatus struct {
 	// they didn't have to configure it.
 	Discovered bool
 	// DialHost is the bare hostname (no port) the attach path should
-	// hand to ssh/mosh — typically a MagicDNS short name so existing
-	// known_hosts entries match. Empty on non-discovered rows; the
-	// configured-host path uses cfg.Host.Address instead.
+	// hand to ssh/mosh — typically a MagicDNS short name for discovered
+	// peers or the configured address for explicit hosts.
 	DialHost string
+	// User is the ssh/mosh login user for this host. Empty means the
+	// client's own username. Populated for explicit cfg.Hosts entries
+	// that have a `user` field set; always empty for discovered peers.
+	User string
+	// Mosh signals that the user prefers mosh over ssh for this host.
+	// Only set for explicit cfg.Hosts entries with `mosh = true`.
+	Mosh bool
 	// Version is the remote ccmuxd's reported version string from
 	// /v1/health. Empty for hosts we couldn't reach. The dashboard
 	// compares against the local build to flag "update available".
@@ -155,6 +161,8 @@ type projectSessionReadyMsg struct {
 type remoteSessionStartedMsg struct {
 	SessionName string
 	DialHost    string
+	User        string // login user; empty → client's own username
+	Mosh        bool   // prefer mosh over ssh
 }
 
 // New-bare-session flow (Sessions tab `n` key). Mirrors the new-
@@ -171,7 +179,9 @@ type newBareSessionSubmitMsg struct {
 
 	Host     string // "local" or peer display name
 	Address  string // ccmuxd http "host:port" for remote daemon
-	DialHost string // ssh target for the attach step
+	DialHost string // bare hostname/IP for ssh/mosh attach
+	User     string // login user; empty → client's own username
+	Mosh     bool   // prefer mosh over ssh for this host
 }
 
 // newBareSessionCancelMsg is emitted by the form on Esc.

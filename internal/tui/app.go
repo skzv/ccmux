@@ -263,19 +263,35 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.setToast(toastError, "remote session created but no dial host known", 5*time.Second)
 			return a, nil
 		}
-		remoteCmd := remoteTmuxAttach(msg.SessionName)
-		c := exec.Command("ssh", "-t", msg.DialHost, remoteCmd)
-		if dbg := debugLogger(); dbg != nil {
-			dbg.Printf("remote attach: ssh -t %s %q", msg.DialHost, remoteCmd)
+		target := msg.DialHost
+		if msg.User != "" {
+			target = msg.User + "@" + msg.DialHost
+		}
+		var c *exec.Cmd
+		if msg.Mosh {
+			remoteCmd := remoteTmuxAttach(msg.SessionName)
+			c = exec.Command("mosh", target, "--", "bash", "-c", remoteCmd)
+			if dbg := debugLogger(); dbg != nil {
+				dbg.Printf("remote attach: mosh %s -- bash -c %q", target, remoteCmd)
+			}
+		} else {
+			remoteCmd := remoteTmuxAttach(msg.SessionName)
+			c = exec.Command("ssh", "-t", target, remoteCmd)
+			if dbg := debugLogger(); dbg != nil {
+				dbg.Printf("remote attach: ssh -t %s %q", target, remoteCmd)
+			}
 		}
 		return a, tea.ExecProcess(c, func(err error) tea.Msg {
 			return refreshAfterDetachMsg{}
 		})
 
 	case newBareSessionSubmitMsg:
-		// Sessions tab's new-session form submitted. Route to the
-		// right host: local → tmux.New + localAttachCmd; remote →
-		// POST /v1/sessions/bare → ssh-attach via remoteSessionStarted.
+		// Close the form immediately — the form's own sessionsModel.Update
+		// never runs this message (the type-switch in App.Update intercepts
+		// it first), so we must nil it here.
+		a.sessionsM.form = nil
+		// Route to the right host: local → tmux.New + localAttachCmd;
+		// remote → POST /v1/sessions/bare → ssh-attach via remoteSessionStarted.
 		return a, spawnBareSessionCmd(msg)
 
 	case bareSessionReadyMsg:
@@ -815,7 +831,13 @@ func (a App) refreshSessionsCmd() tea.Cmd {
 			seen[addr] = true
 			cli := daemon.RemoteClient(addr)
 			ss, e := cli.Sessions(ctx)
-			st := hostStatus{Name: h.Name, Address: addr}
+			st := hostStatus{
+				Name:     h.Name,
+				Address:  addr,
+				DialHost: h.Address, // bare address without port, for ssh/mosh
+				User:     h.User,
+				Mosh:     h.Mosh,
+			}
 			if e == nil {
 				st.OK = true
 				st.Sessions = len(ss)

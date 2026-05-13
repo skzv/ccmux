@@ -44,6 +44,7 @@ func main() {
 		newSessionsCmd(),
 		newNotificationsCmd(),
 		newLonghaulCmd(),
+		newBareSessionsCmd(),
 	)
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "ccmux-stress:", err)
