@@ -19,8 +19,11 @@ import (
 //     newest character bright white, trail fading green to black.
 //
 // Phase 1 auto-advances into phase 2 once the script is exhausted.
-// Esc dismisses the overlay from either phase; any other keystroke
-// during phase 1 skips ahead to the rain.
+// Esc or q dismisses the overlay from either phase; any other
+// keystroke during phase 1 skips ahead to the rain. q is the
+// terminal-app convention for "quit," accepted alongside esc so
+// users don't have to hunt for the escape key on laptop layouts
+// that hide it behind a function-row modifier.
 //
 // The model is intentionally small and deterministic-given-seed so
 // the rain stays stable across re-renders inside a single session
@@ -126,7 +129,8 @@ func matrixTick() tea.Cmd {
 func (m matrixModel) Update(msg tea.Msg) (matrixModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		if msg.String() == "esc" {
+		switch msg.String() {
+		case "esc", "q":
 			m.Close()
 			return m, nil
 		}
@@ -281,7 +285,7 @@ func (m matrixModel) viewNeo(width, height int) string {
 		}
 	}
 	body := strings.Join(lines, "\n\n")
-	hint := matrixGreenFaint.Render("(esc to exit · any key to continue)")
+	hint := matrixGreenFaint.Render("(esc/q to exit · any key to continue)")
 	pane := lipgloss.JoinVertical(lipgloss.Left, body, "", hint)
 	return lipgloss.Place(width, height,
 		lipgloss.Center, lipgloss.Center,
