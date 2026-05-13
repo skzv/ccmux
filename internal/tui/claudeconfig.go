@@ -31,6 +31,8 @@ type claudeModel struct {
 	effort         string
 	effortSource   string
 	alwaysThinking bool
+	yolo           bool
+	yoloSource     string
 	paths          claudeconfig.Locations
 	lastBackup     string
 	picker         pickerKind
@@ -65,6 +67,7 @@ func (m *claudeModel) reload() {
 	m.skills, _ = claudeconfig.ListSkills()
 	m.model, m.modelSource = claudeconfig.EffectiveModel()
 	m.effort, m.effortSource = claudeconfig.EffectiveEffortLevel()
+	m.yolo, m.yoloSource = claudeconfig.EffectiveYoloMode()
 	if m.settings != nil {
 		m.alwaysThinking = m.settings.AlwaysThinkingEnabled
 	}
@@ -121,6 +124,21 @@ func (m claudeModel) Update(msg tea.Msg) (claudeModel, tea.Cmd) {
 			6,
 		)
 
+	case claudeYoloChangedMsg:
+		if msg.Err != nil {
+			return m, toastCmd(toastError, "yolo: "+msg.Err.Error(), 5)
+		}
+		m.lastBackup = msg.Backup
+		m.reload()
+		label := "off"
+		if msg.New {
+			label = "on"
+		}
+		return m, toastCmd(toastSuccess,
+			fmt.Sprintf("yolo mode turned %s — backup at %s", label, summarizePath(msg.Backup)),
+			6,
+		)
+
 	case tea.KeyMsg:
 		if m.picker != pickerNone {
 			return m.updatePicker(msg)
@@ -151,6 +169,12 @@ func (m claudeModel) Update(msg tea.Msg) (claudeModel, tea.Cmd) {
 			return m, func() tea.Msg {
 				backup, err := claudeconfig.SetAlwaysThinking(toggled)
 				return claudeAlwaysThinkingChangedMsg{New: toggled, Backup: backup, Err: err}
+			}
+		case "y":
+			toggled := !m.yolo
+			return m, func() tea.Msg {
+				backup, err := claudeconfig.SetYoloMode(toggled)
+				return claudeYoloChangedMsg{New: toggled, Backup: backup, Err: err}
 			}
 		case "c":
 			return m, openClaudeFileCmd(m.editor, m.paths.GlobalCLAUDEMd, true)
@@ -219,6 +243,8 @@ func (m claudeModel) viewMain(width, height int) string {
 		"",
 		m.renderEffortBlock(),
 		"",
+		m.renderSafetyBlock(),
+		"",
 		m.renderHooksBlock(),
 		"",
 		m.renderMCPBlock(),
@@ -231,8 +257,9 @@ func (m claudeModel) viewMain(width, height int) string {
 		"",
 		st.Subtitle.Render("Keys"),
 		"  " + st.Key.Render("m") + "  pick default model       " + st.Key.Render("e") + "  pick reasoning effort",
-		"  " + st.Key.Render("a") + "  toggle always-thinking    " + st.Key.Render("c") + "  edit global CLAUDE.md",
-		"  " + st.Key.Render("j") + "  edit settings.json       " + st.Key.Render("4") + "  open project notes",
+		"  " + st.Key.Render("a") + "  toggle always-thinking    " + st.Key.Render("y") + "  toggle yolo mode",
+		"  " + st.Key.Render("c") + "  edit global CLAUDE.md     " + st.Key.Render("j") + "  edit settings.json",
+		"  " + st.Key.Render("4") + "  open project notes",
 	}
 	if m.lastBackup != "" {
 		lines = append(lines, "",
@@ -265,6 +292,24 @@ func (m claudeModel) renderEffortBlock() string {
 		"  always-thinking: " + st.Emphasis.Render(thinkLabel),
 		st.Muted.Render("  " + st.Key.Render("e") + " pick effort  · " + st.Key.Render("a") + " toggle always-thinking"),
 		st.Muted.Render("  (CLI override: `claude --effort <low|medium|high|xhigh|max>` per session)"),
+	}, "\n")
+}
+
+// renderSafetyBlock surfaces the YOLO toggle. Pulled into its own block
+// rather than tacked onto the effort one so users can't miss the
+// safety-relevant state at a glance.
+func (m claudeModel) renderSafetyBlock() string {
+	st := m.st
+	yoloLabel := "off"
+	if m.yolo {
+		yoloLabel = "on"
+	}
+	hint := "(set in " + m.yoloSource + ")"
+	return strings.Join([]string{
+		st.Subtitle.Render("Safety"),
+		"  yolo mode: " + st.Emphasis.Render(yoloLabel) + "  " + st.Muted.Render(hint),
+		st.Muted.Render("  " + st.Key.Render("y") + " toggle  · writes permissions.defaultMode = \"bypassPermissions\""),
+		st.Muted.Render("  (CLI override: `claude --dangerously-skip-permissions` per session)"),
 	}, "\n")
 }
 

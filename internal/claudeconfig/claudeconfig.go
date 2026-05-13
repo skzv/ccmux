@@ -106,11 +106,20 @@ type MCPServer struct {
 }
 
 // Permissions is the allow/deny pair Claude Code uses to skip
-// confirmation on listed tool patterns.
+// confirmation on listed tool patterns. `defaultMode` controls how
+// Claude treats tools that match neither list: "default" (prompt) is
+// the safe default, "bypassPermissions" is the persistent "YOLO mode"
+// equivalent of the CLI's `--dangerously-skip-permissions` flag.
 type Permissions struct {
-	Allow []string `json:"allow,omitempty"`
-	Deny  []string `json:"deny,omitempty"`
+	Allow       []string `json:"allow,omitempty"`
+	Deny        []string `json:"deny,omitempty"`
+	DefaultMode string   `json:"defaultMode,omitempty"`
 }
+
+// YoloModeValue is what we write into Permissions.DefaultMode to enable
+// the persistent "yes to everything" mode. Centralized so the TUI,
+// CLI, and tests all agree on the literal.
+const YoloModeValue = "bypassPermissions"
 
 // ReadSettings returns the typed Settings, with all unknown keys
 // preserved in Extra. Missing file returns a zero Settings with no
@@ -199,7 +208,7 @@ func WriteSettings(s *Settings) (backup string, err error) {
 	if len(s.MCPServers) > 0 {
 		out["mcpServers"] = s.MCPServers
 	}
-	if len(s.Permissions.Allow) > 0 || len(s.Permissions.Deny) > 0 {
+	if len(s.Permissions.Allow) > 0 || len(s.Permissions.Deny) > 0 || s.Permissions.DefaultMode != "" {
 		out["permissions"] = s.Permissions
 	}
 	data, err := json.MarshalIndent(out, "", "  ")
@@ -346,6 +355,48 @@ type EffortOption struct {
 	Value string // value written to settings.json (empty clears)
 	Label string
 	Desc  string
+}
+
+// SetYoloMode flips the persistent "skip permission prompts" toggle by
+// writing permissions.defaultMode = "bypassPermissions" (when enabled)
+// or clearing it (when disabled). Other fields in Permissions are left
+// alone. Returns the backup path.
+//
+// Why a setting rather than a per-invocation flag: the CLI's
+// `--dangerously-skip-permissions` only covers that one launch; users
+// who want it on every time end up redefining their shell alias.
+// Persisting through settings.json means ccmux's "yolo" toggle survives
+// reattach and matches Claude Code's documented permanent option.
+func SetYoloMode(enabled bool) (string, error) {
+	s, err := ReadSettings()
+	if err != nil {
+		return "", err
+	}
+	if enabled {
+		s.Permissions.DefaultMode = YoloModeValue
+	} else if s.Permissions.DefaultMode == YoloModeValue {
+		// Only clear the field if it was actually our value; preserve
+		// any other defaultMode (e.g. "acceptEdits") the user set by
+		// hand.
+		s.Permissions.DefaultMode = ""
+	}
+	return WriteSettings(s)
+}
+
+// EffectiveYoloMode returns whether YOLO mode is currently persisted in
+// settings.json. Source string mirrors the other Effective* helpers and
+// is shown in the TUI's status line so users can see where the value
+// came from. Note that the CLI's `--dangerously-skip-permissions` flag
+// is a per-invocation override and not visible here.
+func EffectiveYoloMode() (enabled bool, source string) {
+	s, err := ReadSettings()
+	if err != nil {
+		return false, "Claude Code default"
+	}
+	if s.Permissions.DefaultMode == YoloModeValue {
+		return true, "settings.json"
+	}
+	return false, "Claude Code default"
 }
 
 // Command is one ~/.claude/commands/*.md entry.
