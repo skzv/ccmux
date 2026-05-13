@@ -40,7 +40,11 @@ docs/03_Agent_Logs/stress-<date>.md.`,
 }
 
 func main() {
-	rootCmd.AddCommand(newSessionsCmd())
+	rootCmd.AddCommand(
+		newSessionsCmd(),
+		newNotificationsCmd(),
+		newLonghaulCmd(),
+	)
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "ccmux-stress:", err)
 		os.Exit(1)

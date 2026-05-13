@@ -85,14 +85,19 @@ func runSessions(ctx context.Context, count int, duration, probe time.Duration) 
 		if err := os.MkdirAll(work, 0o755); err != nil {
 			return err
 		}
-		// `sleep infinity` keeps the session alive without burning CPU;
-		// the daemon will see it as "idle" once pollOnce captures
-		// the empty pane.
+		// Run a shell so the pane has a real input target. The
+		// daemon's classifier will see it as "unknown" (no Claude
+		// prompt yet) — fine, the sessions subcommand isn't testing
+		// state transitions, just poll-loop throughput across N
+		// sessions. (Earlier versions used `sleep infinity` here
+		// but tmux send-keys can't deliver to a sleep process,
+		// which broke the notifications subcommand built later;
+		// keeping shells everywhere for consistency.)
 		spawnCmd := exec.CommandContext(ctx,
 			"tmux", "new-session", "-d",
 			"-s", name,
 			"-c", work,
-			"sleep", "infinity",
+			"sh",
 		)
 		if out, err := spawnCmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("spawn %s: %w (%s)", name, err, out)
