@@ -24,6 +24,7 @@ func helpForScreen(s Screen) []HelpItem {
 		{"r", "refresh now"},
 		{"?", "this help"},
 		{"T", "re-open the first-run tour"},
+		{"M", "matrix 🐇"},
 		{"esc", "dismiss toast"},
 		{"q / Ctrl-c", "quit"},
 	}

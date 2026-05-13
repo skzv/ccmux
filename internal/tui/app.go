@@ -79,6 +79,29 @@ type App struct {
 	tour         tourModel // first-run interactive tour; re-openable with T
 	lastRefresh  time.Time
 	daemonOnline bool
+
+	// Easter egg: pressing M (shift-M) opens the Matrix overlay.
+	// Consistent with T which reopens the tour.
+	matrix matrixModel
+}
+
+// modalCapturingText returns true when the App is in a state where
+// keystrokes are going into a text field, so the matrix easter egg
+// must NOT capture them. Reported case: typing a session name like
+// "matrix-experiment" in the new-session form fired the overlay.
+// Listed states: the new-project / new-session form modals, the
+// notes search bar, the tour, the help overlay.
+func (a App) modalCapturingText() bool {
+	if a.tour.Active() || a.helpOpen {
+		return true
+	}
+	if a.projectsM.form != nil || a.sessionsM.form != nil {
+		return true
+	}
+	if a.notes.searching {
+		return true
+	}
+	return false
 }
 
 // New constructs the root model.
@@ -117,6 +140,7 @@ func New(cfg config.Config, version string) App {
 		settings:  newSettings(st, km, cfg, version),
 		network:   newNetwork(st, km),
 		tour:      newTour(st),
+		matrix:    newMatrix(),
 	}
 	a.dashboard.SetConfig(cfg)
 	a.dashboard.SetVersion(version)
@@ -168,7 +192,19 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		a.width, a.height = msg.Width, msg.Height
+		a.matrix.SetSize(msg.Width, msg.Height)
 		return a, nil
+
+	case matrixTickMsg:
+		// Drive the easter-egg animation. When the matrix has been
+		// dismissed since the last frame, swallow the message without
+		// scheduling another tick.
+		if !a.matrix.Active() {
+			return a, nil
+		}
+		var cmd tea.Cmd
+		a.matrix, cmd = a.matrix.Update(msg)
+		return a, cmd
 
 	case tickMsg:
 		return a, tea.Batch(a.refreshSessionsCmd(), tickEvery(2*time.Second))
@@ -303,6 +339,24 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(a.refreshSessionsCmd(), a.refreshProjectsCmd())
 
 	case tea.KeyMsg:
+		// Matrix easter egg takes priority — when active, the overlay
+		// owns the screen until Esc dismisses it. Routed before the
+		// tour so triggering the rain while the tour is on doesn't
+		// produce a confused split state.
+		if a.matrix.Active() {
+			var cmd tea.Cmd
+			a.matrix, cmd = a.matrix.Update(msg)
+			return a, cmd
+		}
+		// M (shift-M) opens the Matrix overlay from any navigation surface,
+		// mirroring T which reopens the tour. Suppressed when a text-input
+		// modal has focus so a session named "My-project" doesn't hijack.
+		if msg.String() == "M" && !a.modalCapturingText() {
+			a.matrix.Open()
+			a.matrix.SetSize(a.width, a.height)
+			return a, matrixTick()
+		}
+
 		// Tour overlay takes top priority. The tour owns the screen
 		// until the user finishes it or skips with esc/q. Re-openable
 		// later with `T`.
@@ -450,6 +504,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (a App) View() string {
 	if a.width == 0 {
 		return "loading…"
+	}
+	// Matrix easter egg takes the full screen when active — placed
+	// before the chrome render so we don't waste work building the
+	// header/footer just to throw them away.
+	if a.matrix.Active() {
+		return a.matrix.View(a.width, a.height)
 	}
 
 	header := a.renderHeader()
@@ -964,6 +1024,14 @@ func (a App) attachSelectedSession() tea.Cmd {
 	sel := a.sessionsM.Selected()
 	if sel == nil {
 		return nil
+	}
+	if dbg := debugLogger(); dbg != nil {
+		names := make([]string, len(a.sessions))
+		for i, s := range a.sessions {
+			names[i] = s.Name
+		}
+		dbg.Printf("attachSelectedSession: cursor=%d name=%q all=%v",
+			a.sessionsM.cursor, sel.Name, names)
 	}
 
 	// Local sessions resolved by the helper that handles the

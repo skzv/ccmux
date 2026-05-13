@@ -42,7 +42,24 @@ func newSessions(st styles.Styles, km Keymap) sessionsModel {
 }
 
 func (m *sessionsModel) SetSessions(ss []daemon.SessionState) {
+	// Preserve cursor by session name across refreshes. Auto-polling
+	// fires every 2s; without this the cursor index silently shifts to
+	// a different session whenever the list order changes (e.g. a
+	// session becomes attached, gets renamed, or a new one is created
+	// that sorts ahead of the current selection).
+	var selectedName string
+	if m.cursor >= 0 && m.cursor < len(m.sessions) {
+		selectedName = m.sessions[m.cursor].Name
+	}
 	m.sessions = ss
+	if selectedName != "" {
+		for i, s := range ss {
+			if s.Name == selectedName {
+				m.cursor = i
+				return
+			}
+		}
+	}
 	if m.cursor >= len(ss) {
 		m.cursor = max0(len(ss) - 1)
 	}
