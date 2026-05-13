@@ -246,3 +246,11 @@ type claudeAlwaysThinkingChangedMsg struct {
 	Backup string
 	Err    error
 }
+
+// claudeYoloChangedMsg signals that SetYoloMode completed. Same shape
+// as the always-thinking variant — New is the resulting on/off state.
+type claudeYoloChangedMsg struct {
+	New    bool
+	Backup string
+	Err    error
+}

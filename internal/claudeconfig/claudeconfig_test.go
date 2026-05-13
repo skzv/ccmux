@@ -439,3 +439,125 @@ func TestKnownEffortLevels_IncludesEachLevel(t *testing.T) {
 		}
 	}
 }
+
+// TestSetEffortLevel_TrimsWhitespace ensures a copy-pasted value with
+// stray spaces ("  high\n") is normalized before being written.
+// Whitespace-prefixed values were a real source of "I picked high but
+// settings.json says ' high'" confusion before SetEffortLevel learned
+// to TrimSpace.
+func TestSetEffortLevel_TrimsWhitespace(t *testing.T) {
+	withFakeClaudeDir(t)
+	if _, err := SetEffortLevel("  high\n"); err != nil {
+		t.Fatal(err)
+	}
+	s, err := ReadSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.EffortLevel != "high" {
+		t.Errorf("effortLevel = %q, want exactly \"high\" (no surrounding whitespace)", s.EffortLevel)
+	}
+}
+
+func TestSetYoloMode_RoundTrip(t *testing.T) {
+	withFakeClaudeDir(t)
+	if _, err := SetYoloMode(true); err != nil {
+		t.Fatal(err)
+	}
+	s, err := ReadSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Permissions.DefaultMode != YoloModeValue {
+		t.Errorf("defaultMode = %q, want %q", s.Permissions.DefaultMode, YoloModeValue)
+	}
+	if enabled, src := EffectiveYoloMode(); !enabled || src != "settings.json" {
+		t.Errorf("EffectiveYoloMode = (%v, %q)", enabled, src)
+	}
+}
+
+// TestSetYoloMode_DisablePreservesOtherDefaultMode covers the
+// hand-edited-config case: a user with `permissions.defaultMode =
+// "acceptEdits"` flipping YOLO off through ccmux must NOT lose their
+// acceptEdits setting.
+func TestSetYoloMode_DisablePreservesOtherDefaultMode(t *testing.T) {
+	dir := withFakeClaudeDir(t)
+	body := `{"permissions":{"defaultMode":"acceptEdits"}}`
+	if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SetYoloMode(false); err != nil {
+		t.Fatal(err)
+	}
+	s, err := ReadSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Permissions.DefaultMode != "acceptEdits" {
+		t.Errorf("user's acceptEdits defaultMode was clobbered: %q", s.Permissions.DefaultMode)
+	}
+}
+
+func TestSetYoloMode_DisableClearsOurSentinel(t *testing.T) {
+	withFakeClaudeDir(t)
+	if _, err := SetYoloMode(true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SetYoloMode(false); err != nil {
+		t.Fatal(err)
+	}
+	p, _ := Paths()
+	raw, err := os.ReadFile(p.Settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var roundTrip map[string]any
+	if err := json.Unmarshal(raw, &roundTrip); err != nil {
+		t.Fatal(err)
+	}
+	if perms, ok := roundTrip["permissions"]; ok {
+		// permissions key may still exist (allow/deny preserved) but
+		// defaultMode must be gone.
+		p := perms.(map[string]any)
+		if _, has := p["defaultMode"]; has {
+			t.Errorf("defaultMode should be cleared, file has: %v", p)
+		}
+	}
+}
+
+func TestSetYoloMode_PreservesAllowDeny(t *testing.T) {
+	dir := withFakeClaudeDir(t)
+	body := `{"permissions":{"allow":["Read"],"deny":["Bash(rm -rf:*)"]}}`
+	if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SetYoloMode(true); err != nil {
+		t.Fatal(err)
+	}
+	s, err := ReadSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Permissions.Allow) != 1 || s.Permissions.Allow[0] != "Read" {
+		t.Errorf("Allow patterns lost: %v", s.Permissions.Allow)
+	}
+	if len(s.Permissions.Deny) != 1 || s.Permissions.Deny[0] != "Bash(rm -rf:*)" {
+		t.Errorf("Deny patterns lost: %v", s.Permissions.Deny)
+	}
+	if s.Permissions.DefaultMode != YoloModeValue {
+		t.Errorf("defaultMode = %q, want %q", s.Permissions.DefaultMode, YoloModeValue)
+	}
+}
+
+func TestEffectiveYoloMode_Precedence(t *testing.T) {
+	withFakeClaudeDir(t)
+	if enabled, src := EffectiveYoloMode(); enabled || src != "Claude Code default" {
+		t.Errorf("default: got (%v, %q)", enabled, src)
+	}
+	if _, err := SetYoloMode(true); err != nil {
+		t.Fatal(err)
+	}
+	if enabled, src := EffectiveYoloMode(); !enabled || src != "settings.json" {
+		t.Errorf("settings: got (%v, %q)", enabled, src)
+	}
+}

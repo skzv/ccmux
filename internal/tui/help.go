@@ -62,6 +62,7 @@ func helpForScreen(s Screen) []HelpItem {
 			{"m", "pick default model (modal)"},
 			{"e", "pick reasoning effort (modal)"},
 			{"a", "toggle alwaysThinkingEnabled on/off"},
+			{"y", "toggle yolo mode (permissions.defaultMode = bypassPermissions)"},
 			{"c", "edit global ~/.claude/CLAUDE.md in $EDITOR"},
 			{"j", "edit ~/.claude/settings.json directly"},
 		}, common...)
