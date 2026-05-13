@@ -366,6 +366,20 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, cmd
 		}
 
+		// Same modal-routing for the Sessions tab's new-bare-session
+		// form. Without this, the global Enter handler below intercepts
+		// the form's submit key and attaches to whatever session the
+		// cursor was on — observed as "Enter in the new-session form
+		// attaches to c-ccmux instead of creating a new session".
+		if a.screen == ScreenSessions && a.sessionsM.form != nil {
+			if msg.String() == "ctrl+c" {
+				return a, tea.Quit
+			}
+			var cmd tea.Cmd
+			a.sessionsM, cmd = a.sessionsM.Update(msg)
+			return a, cmd
+		}
+
 		switch {
 		case keyMatches(msg, a.keys.Quit):
 			return a, tea.Quit
