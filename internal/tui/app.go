@@ -25,6 +25,7 @@ import (
 	"github.com/skzv/ccmux/internal/tmux"
 	"github.com/skzv/ccmux/internal/tmuxchrome"
 	"github.com/skzv/ccmux/internal/tui/styles"
+	"github.com/skzv/ccmux/internal/usage"
 )
 
 // Screen identifies which top-level screen is currently focused.
@@ -145,13 +146,17 @@ func usageTick() tea.Cmd {
 func (a App) refreshUsageCmd() tea.Cmd {
 	return func() tea.Msg {
 		// 5h matches Anthropic's subscription rolling-window. We pull
-		// the full window once and let the dashboard derive sub-totals
-		// for any tighter span it wants from the same Aggregate.
-		agg, err := claudeusage.Walk(5 * time.Hour)
-		if err != nil {
-			return usageLoadedMsg{Err: err}
-		}
-		return usageLoadedMsg{Agg: agg}
+		// the full window once for Claude (the rich panel uses every
+		// field) and the same for Codex/Gemini (their summaries are
+		// today always zero — stub walkers, see internal/usage).
+		const window = 5 * time.Hour
+		agg, claudeErr := claudeusage.Walk(window)
+		codex, _ := usage.WalkCodex(window)
+		gemini, _ := usage.WalkGemini(window)
+		// Only surface a top-level Err on Claude failure — Codex/Gemini
+		// walkers stub out today, and once real, a transient parse
+		// error for one of them shouldn't blank the whole panel.
+		return usageLoadedMsg{Agg: agg, Codex: codex, Gemini: gemini, Err: claudeErr}
 	}
 }
 
@@ -172,6 +177,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Err == nil && msg.Agg != nil {
 			a.dashboard.SetUsage(msg.Agg)
 		}
+		// Codex and Gemini summaries are pushed unconditionally —
+		// today they're always empty (stub walkers) but the dashboard
+		// uses HasData to decide between "real numbers" and "install
+		// hint" rendering.
+		a.dashboard.SetCodexUsage(msg.Codex)
+		a.dashboard.SetGeminiUsage(msg.Gemini)
 		return a, nil
 
 	case sessionsLoadedMsg:

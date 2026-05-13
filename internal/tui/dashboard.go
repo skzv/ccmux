@@ -13,6 +13,7 @@ import (
 	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/tui/styles"
+	"github.com/skzv/ccmux/internal/usage"
 )
 
 // dashboardModel renders the at-a-glance landing screen.
@@ -27,6 +28,13 @@ type dashboardModel struct {
 	cfg      config.Config
 	usage    *claudeusage.Aggregate
 	usageAt  time.Time
+
+	// Cross-agent token-usage summaries pushed by App on every
+	// usageLoadedMsg. Codex/Gemini are zero-valued today (stub
+	// walkers; see internal/usage); the renderer keys off HasData
+	// to decide between "real numbers" and "install hint".
+	codexUsage  usage.AgentSummary
+	geminiUsage usage.AgentSummary
 }
 
 func newDashboard(st styles.Styles, km Keymap) dashboardModel {
@@ -46,6 +54,12 @@ func (m *dashboardModel) SetUsage(a *claudeusage.Aggregate) {
 	m.usage = a
 	m.usageAt = time.Now()
 }
+
+// SetCodexUsage / SetGeminiUsage receive cross-agent summaries from
+// the App's usage refresh. Today both walkers stub out; the renderer
+// shows an install-hint placeholder when HasData=false.
+func (m *dashboardModel) SetCodexUsage(s usage.AgentSummary)  { m.codexUsage = s }
+func (m *dashboardModel) SetGeminiUsage(s usage.AgentSummary) { m.geminiUsage = s }
 
 func (m dashboardModel) Update(msg tea.Msg) (dashboardModel, tea.Cmd) {
 	return m, nil
@@ -391,7 +405,46 @@ func (m dashboardModel) usagePanel(width int) string {
 		}
 	}
 
+	// Per-agent rows for Codex and Gemini. Each renders as a single
+	// line — either "(no transcripts yet, install via …)" when the
+	// walker is still a stub or returned no data, or "tokens · cost"
+	// when there's real usage to show. The Claude block above is
+	// already the rich panel; these two are deliberately compact so
+	// the vertical budget on a narrow terminal stays usable.
+	rows = append(rows, "")
+	rows = append(rows, renderAgentUsageRow(st, "Codex", m.codexUsage,
+		"`npm i -g @openai/codex`"))
+	rows = append(rows, renderAgentUsageRow(st, "Gemini", m.geminiUsage,
+		"`npm i -g @google/gemini-cli`"))
+
 	return st.Pane.Width(width - 2).Render(strings.Join(rows, "\n"))
+}
+
+// renderAgentUsageRow formats one Codex / Gemini line beneath the
+// rich Claude panel. The shape:
+//
+//	Codex   no transcripts yet  (`npm i -g @openai/codex`)
+//
+// or when there's data:
+//
+//	Codex   123 prompts · 4.5K in · 12.1K out · ~$0.08
+//
+// Centralized so adding a fourth agent later is a one-line caller
+// change rather than two-place markup duplication.
+func renderAgentUsageRow(st styles.Styles, label string, s usage.AgentSummary, installHint string) string {
+	prefix := st.Emphasis.Render(label) + "   "
+	if !s.HasData {
+		return prefix + st.Muted.Render("no transcripts yet  ("+installHint+")")
+	}
+	core := fmt.Sprintf("%d prompts · %s in · %s out",
+		s.Prompts,
+		claudeusage.HumanCount(s.InputTokens),
+		claudeusage.HumanCount(s.OutputTokens),
+	)
+	if s.EstimatedCost > 0 {
+		core += fmt.Sprintf(" · ~$%.2f", s.EstimatedCost)
+	}
+	return prefix + core
 }
 
 // quotaBar renders a 1-line progress bar when the user has declared a
