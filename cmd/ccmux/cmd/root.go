@@ -52,6 +52,7 @@ func init() {
 	rootCmd.AddCommand(
 		newAttachCmd(),
 		newNewCmd(),
+		newShellCmd(),
 		newUpgradeCmd(),
 		newUpdateCmd(),
 		newListCmd(),

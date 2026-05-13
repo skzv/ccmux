@@ -196,6 +196,11 @@ type server struct {
 func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/v1/health", s.handleHealth)
 	mux.HandleFunc("/v1/sessions", s.handleSessions)
+	// /v1/sessions/bare lives BEFORE /v1/sessions/ so the more
+	// specific route matches first. ServeMux's longest-prefix match
+	// would handle this either way, but the explicit ordering makes
+	// the relationship obvious to a reader.
+	mux.HandleFunc("/v1/sessions/bare", s.createBareSession)
 	mux.HandleFunc("/v1/sessions/", s.handleSessionsItem)
 	mux.HandleFunc("/v1/projects", s.handleProjects)
 }
@@ -312,6 +317,111 @@ func (s *server) createSession(w http.ResponseWriter, r *http.Request) {
 		Name: session, Host: "local", Project: req.Project, Path: path,
 		State: string(agent.StateUnknown), Created: time.Now(),
 	})
+}
+
+// createBareSession handles POST /v1/sessions/bare — a shell-only
+// session not tied to any project, no agent, no scaffold. Used by
+// the Sessions tab's "new session" form for ad-hoc work on any
+// device.
+//
+// Path defaults to the daemon's configured sessions.default_dir,
+// falling back to $HOME on the daemon's machine. We never resolve
+// to the client's home — the whole point is "shell on the remote
+// machine in that machine's home".
+//
+// Idempotent: if `Name` already exists as a tmux session, return it
+// without re-creating. Catches the case where the form's auto-
+// generated name happens to collide with a leftover.
+func (s *server) createBareSession(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req daemon.NewBareSessionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "decode: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	path := resolveBarePath(req.Path, s.cfg.Sessions.DefaultDir)
+	if _, err := os.Stat(path); err != nil {
+		http.Error(w, "path not found on this host: "+path, http.StatusNotFound)
+		return
+	}
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		name = fmt.Sprintf("c-shell-%d", time.Now().UnixMilli())
+	}
+	// Reject obviously-bad names — the same rule createProject uses,
+	// for the same reason (we'll pass it to tmux as -s).
+	if strings.ContainsAny(name, "/\\:") {
+		http.Error(w, "name must not contain /, \\, or :", http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	has, herr := tmux.Has(ctx, name)
+	if herr != nil {
+		http.Error(w, "tmux has-session: "+herr.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !has {
+		// Prefer $SHELL on the daemon's host; fall back to /bin/sh so
+		// minimal containers / fresh installs still work.
+		shell := os.Getenv("SHELL")
+		if shell == "" {
+			shell = "/bin/sh"
+		}
+		if err := tmux.New(ctx, name, path, shell); err != nil {
+			http.Error(w, "tmux new-session: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	// Chrome the new session so when the client ssh-attaches it
+	// lands in a ccmux-styled bar. The "project label" for bare
+	// sessions is the basename of the working dir — gives the user
+	// something readable in the status bar.
+	s.applyChrome(ctx, name, filepath.Base(path))
+
+	host, _ := os.Hostname()
+	writeJSON(w, daemon.NewBareSessionResponse{
+		Session: name,
+		Path:    path,
+		Host:    host,
+	})
+}
+
+// resolveBarePath picks the working directory for a bare session.
+// Order: explicit req.Path → daemon's configured DefaultDir → $HOME.
+// Exported as a helper so the unit tests can pin the priority.
+func resolveBarePath(reqPath, configDefault string) string {
+	for _, candidate := range []string{reqPath, configDefault} {
+		if c := strings.TrimSpace(candidate); c != "" {
+			return expandTilde(c)
+		}
+	}
+	home, _ := os.UserHomeDir()
+	return home
+}
+
+// expandTilde rewrites a leading "~/" to the daemon's $HOME. Bare-
+// path strings come straight from config.toml and the wire; users
+// expect "~/foo" to mean the daemon's home, not the client's. Other
+// shell expansions ($VAR, *, …) are deliberately NOT handled —
+// that's a recipe for surprises in a daemon process.
+func expandTilde(p string) string {
+	if p == "~" {
+		if home, err := os.UserHomeDir(); err == nil {
+			return home
+		}
+	}
+	if strings.HasPrefix(p, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, p[2:])
+		}
+	}
+	return p
 }
 
 // applyChrome wraps tmuxchrome.Apply with the daemon-side defaults:

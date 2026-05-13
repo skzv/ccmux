@@ -21,9 +21,24 @@ type Config struct {
 	Notes         NotesConfig         `toml:"notes"`
 	Notifications NotificationsConfig `toml:"notifications"`
 	Scaffold      ScaffoldConfig      `toml:"scaffold"`
+	Sessions      SessionsConfig      `toml:"sessions"`
 	Subscription  SubscriptionConfig  `toml:"subscription"`
 	Tour          TourConfig          `toml:"tour"`
 	Hosts         []Host              `toml:"host"`
+}
+
+// SessionsConfig holds preferences for the Sessions screen's "new
+// bare session" flow. A bare session is one started from the
+// Sessions tab — not tied to any project — that just opens a shell
+// in DefaultDir. Useful for ad-hoc work on any device (e.g. a
+// quick shell on the Mac mini without first scaffolding a
+// "project").
+type SessionsConfig struct {
+	// DefaultDir is the working directory new bare sessions open
+	// in. Empty resolves to $HOME on the daemon host. The TUI's
+	// new-session form pre-fills this value; the user can override
+	// per-session.
+	DefaultDir string `toml:"default_dir"`
 }
 
 // TourConfig persists whether the user has seen the first-run interactive
@@ -184,6 +199,13 @@ func Defaults() Config {
 			// All scaffold fields default to "" / nil; internal/scaffold
 			// falls back to its baked-in templates when these are empty.
 			CreateInitialCommit: true,
+		},
+		Sessions: SessionsConfig{
+			// Empty = resolve to $HOME on the daemon host at session-
+			// creation time. We don't bake the resolved $HOME in here
+			// because the daemon may live on a different machine
+			// (cross-device "new bare session") with a different home.
+			DefaultDir: "",
 		},
 		Subscription: SubscriptionConfig{Tier: "api"},
 	}

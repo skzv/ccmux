@@ -194,6 +194,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.dashboard.SetHosts(a.hosts)
 		a.network.SetHosts(a.hosts)
 		a.projectsM.SetHosts(a.hosts)
+		a.sessionsM.SetHosts(a.hosts)
+		a.sessionsM.SetDefaultDir(a.cfg.Sessions.DefaultDir)
 		a.dashboard.SetVersion(a.version)
 		a.sessionsM.SetSessions(a.sessions)
 		if msg.Err != nil {
@@ -230,6 +232,20 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.ExecProcess(c, func(err error) tea.Msg {
 			return refreshAfterDetachMsg{}
 		})
+
+	case newBareSessionSubmitMsg:
+		// Sessions tab's new-session form submitted. Route to the
+		// right host: local → tmux.New + localAttachCmd; remote →
+		// POST /v1/sessions/bare → ssh-attach via remoteSessionStarted.
+		return a, spawnBareSessionCmd(msg)
+
+	case bareSessionReadyMsg:
+		// Local-bare-session creation finished. Attach via the same
+		// path the new-project flow uses, so the nested-tmux case
+		// (running ccmux inside the outer ccmux on mobile) handles
+		// switch-client correctly. projectLabel is the session name
+		// here — bare sessions don't have a richer label.
+		return a, a.localAttachCmd(msg.Session, msg.Session)
 
 	case projectSessionReadyMsg:
 		// New project is scaffolded and its tmux session is running with
