@@ -36,13 +36,16 @@ const (
 	ScreenSessions
 	ScreenProjects
 	ScreenNotes
-	ScreenClaude
+	ScreenAgents
 	ScreenSettings
 	ScreenNetwork
 )
 
 func (s Screen) String() string {
-	return []string{"Dashboard", "Sessions", "Projects", "Notes", "Claude", "Settings", "Network"}[s]
+	// "Agents" was "Claude" before Codex / Gemini joined. The label
+	// drives the top tab bar AND the contextual help footer, so a
+	// rename here is the canonical place to keep them in sync.
+	return []string{"Dashboard", "Sessions", "Projects", "Notes", "Agents", "Settings", "Network"}[s]
 }
 
 // App is the root Bubble Tea model.
@@ -63,7 +66,7 @@ type App struct {
 	sessionsM sessionsModel
 	projectsM projectsModel
 	notes     notesModel
-	claudeM   claudeModel
+	agentsM   agentsModel
 	settings  settingsModel
 	network   networkModel
 
@@ -110,7 +113,7 @@ func New(cfg config.Config, version string) App {
 		sessionsM: newSessions(st, km),
 		projectsM: newProjects(st, km),
 		notes:     newNotes(st, km),
-		claudeM:   newClaude(st, km),
+		agentsM:   newAgents(st, km),
 		settings:  newSettings(st, km, cfg, version),
 		network:   newNetwork(st, km),
 		tour:      newTour(st),
@@ -368,7 +371,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return a, nil
 		case keyMatches(msg, a.keys.Claude):
-			a.screen = ScreenClaude
+			a.screen = ScreenAgents
 			return a, nil
 		case keyMatches(msg, a.keys.Settings):
 			a.screen = ScreenSettings
@@ -403,8 +406,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.projectsM, cmd = a.projectsM.Update(msg)
 	case ScreenNotes:
 		a.notes, cmd = a.notes.Update(msg)
-	case ScreenClaude:
-		a.claudeM, cmd = a.claudeM.Update(msg)
+	case ScreenAgents:
+		a.agentsM, cmd = a.agentsM.Update(msg)
 	case ScreenSettings:
 		a.settings, cmd = a.settings.Update(msg)
 	case ScreenNetwork:
@@ -443,8 +446,8 @@ func (a App) View() string {
 		body = a.projectsM.View(a.width, bodyHeight)
 	case ScreenNotes:
 		body = a.notes.View(a.width, bodyHeight)
-	case ScreenClaude:
-		body = a.claudeM.View(a.width, bodyHeight)
+	case ScreenAgents:
+		body = a.agentsM.View(a.width, bodyHeight)
 	case ScreenSettings:
 		body = a.settings.View(a.width, bodyHeight)
 	case ScreenNetwork:
@@ -503,7 +506,7 @@ func clampLines(s string, n int) string {
 // renderHeader is the top-of-screen tab strip. On narrow terminals the
 // tab labels collapse to just their number; the full strip never wraps.
 func (a App) renderHeader() string {
-	tabs := []Screen{ScreenDashboard, ScreenSessions, ScreenProjects, ScreenNotes, ScreenClaude, ScreenSettings, ScreenNetwork}
+	tabs := []Screen{ScreenDashboard, ScreenSessions, ScreenProjects, ScreenNotes, ScreenAgents, ScreenSettings, ScreenNetwork}
 	parts := []string{a.styles.Title.Render(" ccmux ")}
 	narrow := isNarrow(a.width)
 	for i, t := range tabs {
