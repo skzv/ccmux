@@ -14,10 +14,20 @@ import (
 )
 
 func TestProtocol_SessionStateRoundTrip(t *testing.T) {
+	// Normalize to UTC so the round-trip's reflected location matches.
+	// JSON encodes time.Time in RFC3339; Unmarshal always returns the
+	// time with a *fixed* location (the offset embedded in the string)
+	// rather than the original *time.Location pointer. On a TZ=local
+	// runner (most laptops) the input pointer and the parsed pointer
+	// don't `==` even though both represent the same wall time, so the
+	// struct-level `==` below fails on CI runners (TZ=UTC) where the
+	// input is local and the parsed back is UTC. Pre-normalizing to
+	// UTC kills the difference.
+	now := time.Now().UTC().Truncate(time.Second)
 	in := SessionState{
 		Name: "c-foo", Host: "local", Project: "foo", Path: "/Users/skz/Projects/foo",
 		State: "needs_input", Attached: true, Windows: 3,
-		Created: time.Now().Truncate(time.Second), LastChange: time.Now().Truncate(time.Second),
+		Created: now, LastChange: now,
 		PromptCount: 42, KeepAwake: true,
 	}
 	b, err := json.Marshal(in)
@@ -253,10 +263,12 @@ func TestClient_Projects(t *testing.T) {
 }
 
 func TestProjectInfo_JSONRoundTrip(t *testing.T) {
+	// UTC for the same time.Location round-trip reason as
+	// TestProtocol_SessionStateRoundTrip — see comment there.
 	in := ProjectInfo{
 		Name: "x", Host: "h", Path: "/p",
 		HasGit: true, HasCM: false, HasDocs: true,
-		Modified: time.Now().Truncate(time.Second),
+		Modified: time.Now().UTC().Truncate(time.Second),
 	}
 	b, _ := json.Marshal(in)
 	var out ProjectInfo

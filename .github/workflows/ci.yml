@@ -48,9 +48,18 @@ jobs:
           # cache key stable across no-op go.mod tweaks.
           cache-dependency-path: go.sum
 
-      - name: Install tmux (Linux only; preinstalled on macOS)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update -qq && sudo apt-get install -y tmux
+      - name: Install tmux
+        # Both runners need it: Ubuntu doesn't ship tmux preinstalled,
+        # and macos-latest stopped shipping it preinstalled at some
+        # point too (the first CI run failed with "tmux: command not
+        # found" on macos-latest). Idempotent installs on both.
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo apt-get update -qq && sudo apt-get install -y tmux
+          else
+            brew install tmux
+          fi
 
       - name: Verify formatting (gofmt -l)
         run: |
@@ -127,9 +136,18 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
-      - name: Install tmux (Linux only; preinstalled on macOS)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update -qq && sudo apt-get install -y tmux
+      - name: Install tmux
+        # Both runners need it: Ubuntu doesn't ship tmux preinstalled,
+        # and macos-latest stopped shipping it preinstalled at some
+        # point too (the first CI run failed with "tmux: command not
+        # found" on macos-latest). Idempotent installs on both.
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo apt-get update -qq && sudo apt-get install -y tmux
+          else
+            brew install tmux
+          fi
 
       - name: Boot a tmux server for the integration tests
         # `tmux start-server` is idempotent; this just ensures a daemon
