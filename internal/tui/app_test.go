@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/project"
 	"github.com/skzv/ccmux/internal/tui/styles"
 )
@@ -292,6 +293,96 @@ func TestTruncatePeerName(t *testing.T) {
 // TestInfoForHost ensures each device-row type renders the right
 // single-fact info string. The Devices panel relies on these distinct
 // renderings to communicate what the user can do for each peer.
+// TestSessionsCursorPreservesName locks in the fix for the bug where
+// clicking (selecting) a session and then waiting for the auto-refresh
+// to fire could silently shift the cursor to a different session.
+//
+// Root cause: SetSessions previously clamped cursor only when it was
+// out of bounds — it never re-anchored to the same session by name
+// when the list arrived in a different order. Because the daemon
+// returns sessions in whatever order tmux list-sessions emits (which
+// can change when a session gets attached, created, or killed),
+// "c-ccmux" at cursor 0 could become "c-ccmux-website" at cursor 0
+// after a single 2-second poll, causing Enter to join the wrong session.
+func TestSessionsCursorPreservesName(t *testing.T) {
+	st := mustStyles(t)
+	km := DefaultKeymap()
+	m := newSessions(st, km)
+
+	initial := []daemon.SessionState{
+		{Name: "c-ccmux", Host: "local"},
+		{Name: "c-ccmux-website", Host: "local"},
+	}
+	m.SetSessions(initial)
+	m.cursor = 0 // user is on c-ccmux
+
+	// Simulate a refresh where the list comes back in reversed order
+	// (e.g. c-ccmux-website was most recently attached).
+	refreshed := []daemon.SessionState{
+		{Name: "c-ccmux-website", Host: "local"},
+		{Name: "c-ccmux", Host: "local"},
+	}
+	m.SetSessions(refreshed)
+
+	sel := m.Selected()
+	if sel == nil {
+		t.Fatal("Selected() = nil after refresh")
+	}
+	if sel.Name != "c-ccmux" {
+		t.Errorf("cursor drifted: got %q, want %q — session order changed but cursor should have followed by name",
+			sel.Name, "c-ccmux")
+	}
+	if m.cursor != 1 {
+		t.Errorf("cursor index = %d, want 1 (c-ccmux moved to index 1 in refreshed list)", m.cursor)
+	}
+}
+
+// TestSessionsCursorClampsWhenSessionKilled verifies that if the
+// currently-selected session disappears (killed by another process),
+// the cursor falls back to the end of the list rather than pointing
+// past the end.
+func TestSessionsCursorClampsWhenSessionKilled(t *testing.T) {
+	st := mustStyles(t)
+	km := DefaultKeymap()
+	m := newSessions(st, km)
+
+	m.SetSessions([]daemon.SessionState{
+		{Name: "c-ccmux", Host: "local"},
+		{Name: "c-ccmux-website", Host: "local"},
+		{Name: "c-other", Host: "local"},
+	})
+	m.cursor = 2 // user was on c-other
+
+	// c-other gets killed externally; next refresh omits it.
+	m.SetSessions([]daemon.SessionState{
+		{Name: "c-ccmux", Host: "local"},
+		{Name: "c-ccmux-website", Host: "local"},
+	})
+
+	if m.cursor >= len(m.sessions) {
+		t.Errorf("cursor %d out of bounds after session killed (len=%d)", m.cursor, len(m.sessions))
+	}
+}
+
+// TestSessionsCursorEmptyList verifies no panic or negative index
+// when all sessions disappear.
+func TestSessionsCursorEmptyList(t *testing.T) {
+	st := mustStyles(t)
+	km := DefaultKeymap()
+	m := newSessions(st, km)
+
+	m.SetSessions([]daemon.SessionState{{Name: "c-ccmux", Host: "local"}})
+	m.cursor = 0
+	m.SetSessions(nil)
+
+	if m.cursor != 0 {
+		t.Errorf("cursor = %d on empty list, want 0", m.cursor)
+	}
+	if sel := m.Selected(); sel != nil {
+		t.Errorf("Selected() on empty list = %v, want nil", sel)
+	}
+}
+
 func TestInfoForHost(t *testing.T) {
 	st := mustStyles(t)
 	const localVer = "abc1234"
