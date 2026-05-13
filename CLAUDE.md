@@ -51,6 +51,10 @@ make lint          # gofmt + go vet + staticcheck if installed
 - TUI screens get golden-file tests via `teatest` (Charm's snapshot tester).
 - Integration tests are tagged `//go:build integration` and run against a real tmux server in CI.
 - **Always run `go test ./...` before every commit.** A clean suite is a precondition for `git commit` in this repo, not a follow-up. If any test fails, fix it (or mark + explain the skip) before the commit. Cross-compile sanity (`GOOS=windows`, `GOOS=linux`) is part of "tests pass" for changes that touch OS-specific code.
+- **TODOs (research + plan in [`docs/01_Specs/03_Testing_And_CI.md`](docs/01_Specs/03_Testing_And_CI.md)):**
+  - **CI integration.** GitHub Actions workflow with test + cross-compile + integration matrix. Today CI is whatever the contributor runs locally — a green PR is a contributor promise, not a machine guarantee.
+  - **Stress testing.** A `cmd/ccmux-stress/` harness exercising the daemon under realistic load (20+ sessions, multi-host fan-out, notification storms, 24h long-haul) with pprof + FD-leak detection.
+  - **Terminal crawling.** A `cmd/ccmux-crawl/` monkey-tester (built on `teatest`) plus native `go test -fuzz` targets for the parsers and `rapid` property tests for the heuristic surfaces (pane classifier, session-name handling, render under degenerate dimensions).
 
 # Feature surface policy
 - **Every feature must be reachable from both the TUI and the CLI.** Pick a key/screen in the TUI *and* a `ccmux <subcommand>` (or flag on an existing one) — never one without the other. Reasoning: the TUI is the daily driver, the CLI is for muscle memory + scripting; shipping a feature in only one creates a discoverability cliff and breaks the "TUI-first, CLI when you want it" promise on the front page.

@@ -414,6 +414,12 @@ Phasing in [`ROADMAP.md`](ROADMAP.md). Headline:
 - **v0.3** — Multi-select session ops, activity heatmap, daily-journal rollups, mDNS host discovery
 - **Long term** — Native SwiftUI iOS app talking directly to ccmuxd over Tailscale
 
+Infrastructure follow-ups tracked in [`docs/01_Specs/03_Testing_And_CI.md`](docs/01_Specs/03_Testing_And_CI.md):
+
+- 🔁 **CI integration** — GitHub Actions matrix (test + cross-compile + integration) so PRs can't merge with regressions
+- 💪 **Stress testing** — `cmd/ccmux-stress/` harness for 20+ session loads, notification storms, 24h long-haul, with pprof + FD-leak detection
+- 🐛 **Terminal crawling** — `cmd/ccmux-crawl/` monkey-tester + native fuzzers + `rapid` property tests to find the bugs no human would think to try
+
 ## Design principles
 
 1. **Terminal-first, not terminal-only.** Must work in a Mosh pane on an iPhone.
