@@ -92,7 +92,26 @@ func run() error {
 	if err := os.MkdirAll(filepath.Dir(sockPath), 0o755); err != nil {
 		return err
 	}
-	// Remove stale socket from a previous crash.
+	// Bind safely:
+	//
+	// The old logic was `os.Remove(sockPath); net.Listen(...)` — a race
+	// that let two daemons start ~1s apart both succeed: the second's
+	// Remove unlinked the first's socket from the filesystem, but the
+	// first listener kept serving on the orphaned inode. The result is
+	// the "rogue daemon" we found in the wild: same binary, no
+	// requests, but accumulating heap from its background poll loop
+	// because it can't be reached for `daemon stop`.
+	//
+	// Fix is to detect a live owner BEFORE removing. Dial the socket
+	// with a short timeout. If dial succeeds, another ccmuxd is alive
+	// and we refuse to start. If dial fails (no socket file, or stale
+	// socket from a crash), it's safe to clean up and bind.
+	if isAnotherDaemonAlive(sockPath, 300*time.Millisecond) {
+		return fmt.Errorf(
+			"another ccmuxd is already listening on %s — stop it first with `ccmux daemon stop`",
+			sockPath,
+		)
+	}
 	_ = os.Remove(sockPath)
 	unixLn, err := net.Listen("unix", sockPath)
 	if err != nil {

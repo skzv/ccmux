@@ -53,13 +53,20 @@ Create `.github/workflows/ci.yml` with three jobs:
    - `GOOS=windows GOARCH=amd64 go build ./...`
    - `GOOS=windows GOARCH=arm64 go build ./...`
 
-3. **`integration`** (ubuntu-latest, `//go:build integration` tag):
+3. **`integration`** (matrix: ubuntu-latest, macos-latest;
+   `//go:build integration` tag):
    - Same setup as `test`
    - `go test -tags=integration ./...`
    - These need a working tmux server in the runner's session;
      `tmux new-session -d -s ci -x 200 -y 50` from a setup step
      should be enough. Failing this job blocks the PR but is
      allowed to retry once on flake.
+   - **macOS coverage is non-negotiable here.** ccmux's primary
+     deployment target is macOS (daemon runs caffeinate on darwin,
+     sleeplock's `pmset` battery reader is darwin-only, moshi-hook
+     and the OSC 52 terminal-compat checks are macOS-flavored).
+     Linux-only integration coverage would miss every regression in
+     the most-used code path.
 
 Optional follow-ups once the basics are stable:
    - `staticcheck ./...` step (Charm uses it; ccmux's `make lint`
