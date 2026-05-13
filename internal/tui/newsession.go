@@ -113,6 +113,8 @@ func (m newSessionFormModel) Update(msg tea.Msg) (newSessionFormModel, tea.Cmd) 
 			if !h.Local {
 				submit.Address = h.Address
 				submit.DialHost = h.DialHost
+				submit.User = h.User
+				submit.Mosh = h.Mosh
 			}
 			return m, func() tea.Msg { return submit }
 		}
@@ -212,11 +214,15 @@ func spawnBareSessionCmd(submit newBareSessionSubmitMsg) tea.Cmd {
 			}
 			dial := submit.DialHost
 			if dial == "" {
+				// Fall back to the display name — better than nothing,
+				// though the user may need to configure DialHost.
 				dial = submit.Host
 			}
 			return remoteSessionStartedMsg{
 				SessionName: res.Session,
 				DialHost:    dial,
+				User:        submit.User,
+				Mosh:        submit.Mosh,
 			}
 		}
 		// Local case. Resolve workdir client-side using the same

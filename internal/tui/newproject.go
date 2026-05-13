@@ -48,13 +48,15 @@ type newProjectFormModel struct {
 }
 
 // hostChoice is one row in the device picker. Local is true exactly
-// once (the local device). Address/DialHost are only populated for
-// remote choices.
+// once (the local device). Address/DialHost/User/Mosh are only
+// populated for remote choices.
 type hostChoice struct {
 	Label    string // shown to the user
 	Local    bool
 	Address  string // ccmuxd http "host:port" for remote daemon
-	DialHost string // ssh target for attach after scaffold
+	DialHost string // bare hostname/IP for ssh/mosh attach after scaffold
+	User     string // login user; empty → client's own username
+	Mosh     bool   // prefer mosh over ssh for this host
 }
 
 // newNewProjectForm builds the form. `hosts` is the live slice from
@@ -114,6 +116,8 @@ func hostChoicesFrom(hosts []hostStatus) []hostChoice {
 			Label:    shortHostname(h.Name),
 			Address:  h.Address,
 			DialHost: h.DialHost,
+			User:     h.User,
+			Mosh:     h.Mosh,
 		})
 	}
 	return out
