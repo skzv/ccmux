@@ -9,70 +9,13 @@ import (
 	"github.com/skzv/ccmux/internal/tui/styles"
 )
 
-// TestMatchesMatrixTrigger covers the literal contract: the matcher
-// fires only when the buffer ends in "matrix" (case-insensitive),
-// because the App appends one keystroke at a time and we want the
-// most recent six runes to win — partial matches mid-buffer aren't
-// triggers, only completions are.
-func TestMatchesMatrixTrigger(t *testing.T) {
-	cases := []struct {
-		buf  string
-		want bool
-	}{
-		{"matrix", true},
-		{"MATRIX", true},
-		{"MaTrIx", true},
-		{"hellomatrix", true},      // suffix match counts (ring buffer is bounded)
-		{"matrix and more", false}, // not at the end
-		{"matri", false},
-		{"matrixs", false}, // extra char after
-		{"", false},
-	}
-	for _, tc := range cases {
-		if got := matchesMatrixTrigger(tc.buf); got != tc.want {
-			t.Errorf("matchesMatrixTrigger(%q) = %v, want %v", tc.buf, got, tc.want)
-		}
-	}
-}
-
-// TestAppendTypedKey checks the ring-buffer behavior — printable
-// runes accumulate, non-printable / multi-char key names clear, and
-// the buffer never exceeds cap.
-func TestAppendTypedKey(t *testing.T) {
-	cap := 6
-	buf := ""
-	for _, r := range "matrix" {
-		buf = appendTypedKey(buf, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}}, cap)
-	}
-	if buf != "matrix" {
-		t.Errorf("after typing 'matrix' buf = %q, want 'matrix'", buf)
-	}
-	// Cap respected: typing more runes drops the oldest.
-	buf = appendTypedKey(buf, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'!'}}, cap)
-	if buf != "atrix!" {
-		t.Errorf("post-cap drop: buf = %q, want 'atrix!'", buf)
-	}
-	// Non-printable resets.
-	buf = appendTypedKey(buf, tea.KeyMsg{Type: tea.KeyTab}, cap)
-	if buf != "" {
-		t.Errorf("tab should reset buf, got %q", buf)
-	}
-	buf = appendTypedKey("abc", tea.KeyMsg{Type: tea.KeyEnter}, cap)
-	if buf != "" {
-		t.Errorf("enter should reset buf, got %q", buf)
-	}
-}
-
-// TestApp_MatrixTriggerOpensOverlay drives the App through the
-// "m-a-t-r-i-x" sequence and asserts the overlay opens + a tick
-// command is returned so the animation can start.
-func TestApp_MatrixTriggerOpensOverlay(t *testing.T) {
+func newTestApp(screen Screen) App {
 	st := styles.Default()
 	km := DefaultKeymap()
-	a := App{
+	return App{
 		styles:    st,
 		keys:      km,
-		screen:    ScreenDashboard,
+		screen:    screen,
 		width:     80,
 		height:    24,
 		dashboard: newDashboard(st, km),
@@ -80,31 +23,34 @@ func TestApp_MatrixTriggerOpensOverlay(t *testing.T) {
 		projectsM: newProjects(st, km),
 		matrix:    newMatrix(),
 	}
-	var cmd tea.Cmd
-	for _, r := range "matrix" {
-		var m tea.Model
-		m, cmd = a.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
-		a = m.(App)
-	}
+}
+
+// TestApp_MatrixMKeyOpensOverlay — pressing shift-M from the navigation
+// surface opens the overlay and returns a tick command.
+func TestApp_MatrixMKeyOpensOverlay(t *testing.T) {
+	a := newTestApp(ScreenDashboard)
+	m, cmd := a.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'M'}})
+	a = m.(App)
 	if !a.matrix.Active() {
-		t.Fatal("typing 'matrix' did not activate the overlay")
+		t.Fatal("pressing M did not activate the overlay")
 	}
 	if cmd == nil {
 		t.Error("expected a tea.Cmd for the matrix tick, got nil")
 	}
-	// Typed buffer should reset after firing so a stray "matrix"
-	// later in the same session re-triggers cleanly.
-	if a.typedBuf != "" {
-		t.Errorf("typedBuf not cleared on trigger: %q", a.typedBuf)
+}
+
+// TestApp_MatrixMKeyOnSessionsScreen — M works from any screen, not just Dashboard.
+func TestApp_MatrixMKeyOnSessionsScreen(t *testing.T) {
+	a := newTestApp(ScreenSessions)
+	m, _ := a.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'M'}})
+	if !m.(App).matrix.Active() {
+		t.Fatal("M did not open overlay on Sessions screen")
 	}
 }
 
-// TestApp_MatrixTriggerSuppressedInFormInput is the regression case
-// for the reported bug: typing "matrix" inside a text-input modal
-// (e.g. naming a new session "matrix-experiment") should NOT
-// hijack the keystrokes and fire the easter egg. The trigger only
-// applies to the navigation surface — the form's text field gets
-// every key untouched.
+// TestApp_MatrixTriggerSuppressedInFormInput is the regression case for
+// the reported bug: pressing M inside a text-input modal (e.g. naming a
+// new session) must NOT fire the easter egg.
 func TestApp_MatrixTriggerSuppressedInFormInput(t *testing.T) {
 	st := styles.Default()
 	km := DefaultKeymap()
@@ -123,48 +69,26 @@ func TestApp_MatrixTriggerSuppressedInFormInput(t *testing.T) {
 	form := newNewSessionForm(st, nil, "")
 	a.sessionsM.form = &form
 
-	for _, r := range "matrix" {
-		m, _ := a.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
-		a = m.(App)
-	}
-	if a.matrix.Active() {
+	m, _ := a.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'M'}})
+	if m.(App).matrix.Active() {
 		t.Fatal("matrix overlay fired while typing into a form — should be suppressed")
-	}
-	// typedBuf must also stay empty so the trigger doesn't latch on
-	// after the form closes.
-	if a.typedBuf != "" {
-		t.Errorf("typedBuf accumulated %q during form input; should stay empty", a.typedBuf)
 	}
 }
 
 // TestApp_MatrixEscClosesOverlay — once the overlay is open, Esc
 // dismisses it and key routing returns to the regular screens.
 func TestApp_MatrixEscClosesOverlay(t *testing.T) {
-	st := styles.Default()
-	km := DefaultKeymap()
-	a := App{
-		styles:    st,
-		keys:      km,
-		screen:    ScreenDashboard,
-		width:     80,
-		height:    24,
-		dashboard: newDashboard(st, km),
-		sessionsM: newSessions(st, km),
-		projectsM: newProjects(st, km),
-		matrix:    newMatrix(),
-	}
+	a := newTestApp(ScreenDashboard)
 	a.matrix.Open()
 	a.matrix.SetSize(80, 24)
 	m, _ := a.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	a2 := m.(App)
-	if a2.matrix.Active() {
+	if m.(App).matrix.Active() {
 		t.Fatal("esc did not close the matrix overlay")
 	}
 }
 
 // TestMatrix_NeoPhaseAdvancesByChar — every tick during phase 1
-// advances at most one character. Drive a few ticks and assert
-// progress.
+// advances at most one character. Drive a few ticks and assert progress.
 func TestMatrix_NeoPhaseAdvancesByChar(t *testing.T) {
 	m := newMatrix()
 	m.Open()
@@ -210,14 +134,11 @@ func TestMatrix_ViewNeoContainsScript(t *testing.T) {
 
 // TestMatrix_RainViewProducesGrid — once in the rain phase, View
 // should return a non-empty multi-line string the size of the
-// viewport. We don't snapshot the rain (randomized) but we do
-// assert it produced output rather than the empty placeholder.
+// viewport.
 func TestMatrix_RainViewProducesGrid(t *testing.T) {
 	m := newMatrix()
 	m.Open()
 	m.SetSize(40, 10)
-	// Force into rain phase + advance enough ticks for heads to
-	// reach into the viewport.
 	m.phase = phaseRain
 	for i := 0; i < 30; i++ {
 		m, _ = m.Update(matrixTickMsg{})
@@ -227,7 +148,7 @@ func TestMatrix_RainViewProducesGrid(t *testing.T) {
 	if len(lines) != 10 {
 		t.Errorf("rain view height = %d, want 10", len(lines))
 	}
-	// Confirm at least one glyph from the pool appears somewhere.
+	// At least one glyph from the pool must appear.
 	pool := string(matrixGlyphs)
 	found := false
 	for _, ch := range out {

@@ -340,34 +340,3 @@ func maxInt(a, b int) int {
 	return b
 }
 
-// matchesMatrixTrigger checks whether the recent-key buffer ends in
-// the literal sequence "matrix" (case-insensitive). Kept as a free
-// function so the App's typed-buffer code stays simple and the
-// detector is independently testable.
-func matchesMatrixTrigger(buf string) bool {
-	return strings.HasSuffix(strings.ToLower(buf), "matrix")
-}
-
-// appendTypedKey adds `msg`'s single-character representation to
-// `buf`, trimming `buf` from the front so it never exceeds
-// `cap`. Non-printable / control keys (Tab, Enter, arrows, mod
-// combos) reset the buffer — they almost certainly mean the user is
-// navigating rather than spelling a word, so we don't want a stray
-// stale 'm' to combine with a later 'a-t-r-i-x' typed minutes apart.
-func appendTypedKey(buf string, msg tea.KeyMsg, cap int) string {
-	r := msg.String()
-	// Single rune, printable? Append. Anything else (multi-char
-	// names like "tab", "enter", "ctrl+c", "shift+left") clears.
-	if len(r) != 1 {
-		return ""
-	}
-	c := r[0]
-	if c < 0x20 || c == 0x7f {
-		return ""
-	}
-	buf += r
-	if len(buf) > cap {
-		buf = buf[len(buf)-cap:]
-	}
-	return buf
-}

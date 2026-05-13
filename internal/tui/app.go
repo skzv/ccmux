@@ -80,17 +80,10 @@ type App struct {
 	lastRefresh  time.Time
 	daemonOnline bool
 
-	// Easter egg: typing the literal sequence "matrix" anywhere opens
-	// a full-screen Matrix overlay. typedBuf is a ring of the last
-	// few printable keystrokes; matrix owns the overlay state itself.
-	typedBuf string
-	matrix   matrixModel
+	// Easter egg: pressing M (shift-M) opens the Matrix overlay.
+	// Consistent with T which reopens the tour.
+	matrix matrixModel
 }
-
-// matrixTriggerLen caps the typed-key ring buffer. Six is the length
-// of "matrix" — anything more wouldn't help the trigger, and would
-// just let stale keystrokes from minutes ago participate.
-const matrixTriggerLen = 6
 
 // modalCapturingText returns true when the App is in a state where
 // keystrokes are going into a text field, so the matrix easter egg
@@ -355,22 +348,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.matrix, cmd = a.matrix.Update(msg)
 			return a, cmd
 		}
-		// Trigger detection: track recent printable keystrokes. Six
-		// chars of buffer is the literal length of "matrix"; anything
-		// older couldn't contribute to the trigger. The trigger ONLY
-		// fires from the regular navigation surface — never while a
-		// text-input modal is focused, otherwise typing a session
-		// name like "matrix-experiment" would hijack the keystroke
-		// and reset the field. Same reasoning for the help overlay,
-		// the tour, and the Notes search field.
-		if !a.modalCapturingText() {
-			a.typedBuf = appendTypedKey(a.typedBuf, msg, matrixTriggerLen)
-			if matchesMatrixTrigger(a.typedBuf) {
-				a.typedBuf = ""
-				a.matrix.Open()
-				a.matrix.SetSize(a.width, a.height)
-				return a, matrixTick()
-			}
+		// M (shift-M) opens the Matrix overlay from any navigation surface,
+		// mirroring T which reopens the tour. Suppressed when a text-input
+		// modal has focus so a session named "My-project" doesn't hijack.
+		if msg.String() == "M" && !a.modalCapturingText() {
+			a.matrix.Open()
+			a.matrix.SetSize(a.width, a.height)
+			return a, matrixTick()
 		}
 
 		// Tour overlay takes top priority. The tour owns the screen
@@ -1026,6 +1010,14 @@ func (a App) attachSelectedSession() tea.Cmd {
 	sel := a.sessionsM.Selected()
 	if sel == nil {
 		return nil
+	}
+	if dbg := debugLogger(); dbg != nil {
+		names := make([]string, len(a.sessions))
+		for i, s := range a.sessions {
+			names[i] = s.Name
+		}
+		dbg.Printf("attachSelectedSession: cursor=%d name=%q all=%v",
+			a.sessionsM.cursor, sel.Name, names)
 	}
 
 	// Local sessions resolved by the helper that handles the
