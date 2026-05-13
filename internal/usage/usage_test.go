@@ -16,19 +16,19 @@ func TestAgentSummary_TotalTokens(t *testing.T) {
 	}
 }
 
-// TestWalkCodex_Stub — Codex walker is intentionally a stub today.
-// HasData must be false so the dashboard renders the install-hint
-// placeholder instead of a misleading "0 tokens" row. When this
-// gets replaced with a real walker (PR landing fixture-driven
-// transcript parsing), the test will fail and the assertion needs
-// to flip.
-func TestWalkCodex_Stub(t *testing.T) {
+// TestWalkCodex_NoTranscripts — with no ~/.codex tree, WalkCodex
+// must return HasData=false (not error) so the dashboard renders the
+// install-hint placeholder. The walker now does real parsing; only
+// the "no data" branch is asserted here because the rich behavior is
+// covered by codexusage's own tests against fixture files.
+func TestWalkCodex_NoTranscripts(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	got, err := WalkCodex(5 * time.Hour)
 	if err != nil {
-		t.Fatalf("stub should not error: %v", err)
+		t.Fatalf("WalkCodex on empty HOME: %v", err)
 	}
 	if got.HasData {
-		t.Errorf("stub returned HasData=true — expected false until a real walker lands. Did you implement WalkCodex? Update this test.")
+		t.Errorf("empty HOME returned HasData=true: %+v", got)
 	}
 }
 

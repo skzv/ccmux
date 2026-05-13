@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/skzv/ccmux/internal/claudeusage"
+	"github.com/skzv/ccmux/internal/codexusage"
 )
 
 // AgentSummary is the cross-agent usage roll-up the dashboard's
@@ -84,20 +85,33 @@ func WalkClaude(window time.Duration) (AgentSummary, error) {
 	}, nil
 }
 
-// WalkCodex is the placeholder until ~/.codex/sessions/ transcripts
-// are fixtured. When that lands, this function will:
+// WalkCodex aggregates per-window usage from ~/.codex/sessions/
+// rollout files via the codexusage package. The cross-agent
+// AgentSummary loses Codex's cached-input breakdown (it's already
+// folded into Input there) — that's fine for the compact dashboard
+// row, which just shows total tokens + best-effort cost.
 //
-//  1. Glob ~/.codex/sessions/*.jsonl (or whatever shape ships)
-//  2. Parse per-message usage records (Codex emits OpenAI-API-style
-//     responses with prompt_tokens / completion_tokens)
-//  3. Filter to messages within `window`
-//  4. Multiply by the published per-1M-token rate for the model
-//     reported in each record
-//
-// Today it returns HasData=false so the dashboard knows to render
-// the install-hint placeholder instead of a "0 tokens" row.
+// Returns HasData=false when ccmux finds no rollout files or every
+// file's events fall outside the window. The dashboard renders that
+// case with the install-hint placeholder so a fresh-install user
+// gets a copy-pasteable command instead of a confusing "0 tokens"
+// row that looks like ccmux is broken.
 func WalkCodex(window time.Duration) (AgentSummary, error) {
-	return AgentSummary{}, nil
+	agg, err := codexusage.Walk(window)
+	if err != nil || agg == nil {
+		return AgentSummary{}, err
+	}
+	if agg.Messages == 0 && agg.UserPrompts == 0 {
+		return AgentSummary{}, nil
+	}
+	return AgentSummary{
+		HasData:       true,
+		Window:        window,
+		Prompts:       agg.UserPrompts,
+		InputTokens:   agg.Total.Input,
+		OutputTokens:  agg.Total.Output,
+		EstimatedCost: agg.EstimatedCost(),
+	}, nil
 }
 
 // WalkGemini mirrors WalkCodex. Gemini's transcripts live under
