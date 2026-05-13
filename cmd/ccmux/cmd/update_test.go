@@ -324,3 +324,120 @@ func TestResolveDefaultBranch_EmptyOnFailure(t *testing.T) {
 		t.Errorf("resolveDefaultBranch on bare repo = %q, want empty", got)
 	}
 }
+
+// realGitRepoWithRemote bootstraps a real git repo whose `main`
+// branch tracks a real `origin/main` remote-tracking ref. Returns
+// the worktree path. The "remote" is a bare clone in a sibling
+// directory — same shape as a real GitHub setup as far as
+// rev-parse is concerned, but no network IO.
+func realGitRepoWithRemote(t *testing.T) string {
+	t.Helper()
+	// Bare remote on disk.
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	mustGit(t, "", "init", "--bare", "-b", "main", remote)
+
+	// Worktree that clones from the bare remote.
+	work := t.TempDir()
+	mustGit(t, "", "clone", remote, work)
+	mustGit(t, work, "config", "user.email", "test@example.com")
+	mustGit(t, work, "config", "user.name", "Test")
+	if err := os.WriteFile(filepath.Join(work, "README"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustGit(t, work, "add", ".")
+	mustGit(t, work, "commit", "-m", "init")
+	mustGit(t, work, "push", "-u", "origin", "main")
+	return work
+}
+
+// TestEnsureGoodUpstream_HealthyRepoIsNoOp — the common case. main
+// tracks origin/main, origin/main exists, nothing to fix. Function
+// must not perturb anything.
+func TestEnsureGoodUpstream_HealthyRepoIsNoOp(t *testing.T) {
+	repo := realGitRepoWithRemote(t)
+	beforeUpstream := remoteTrackingFor(repo, "main")
+	if err := ensureGoodUpstream(repo, false); err != nil {
+		t.Fatalf("healthy repo errored: %v", err)
+	}
+	afterUpstream := remoteTrackingFor(repo, "main")
+	if beforeUpstream != afterUpstream {
+		t.Errorf("upstream changed when it shouldn't have:\n  before=%q\n   after=%q",
+			beforeUpstream, afterUpstream)
+	}
+}
+
+// TestEnsureGoodUpstream_RetargetsDeletedUpstream is the user-
+// reported bug: local main's upstream pointed at a feature branch
+// that got deleted on origin. Function should retarget to
+// origin/main (which still exists) so the next `git pull --ff-only`
+// works without intervention.
+func TestEnsureGoodUpstream_RetargetsDeletedUpstream(t *testing.T) {
+	repo := realGitRepoWithRemote(t)
+	// Create + push a feature branch, set main to track it, then
+	// delete the feature branch on the remote — simulating
+	// auto-delete-after-merge.
+	mustGit(t, repo, "branch", "feature/foo")
+	mustGit(t, repo, "push", "-u", "origin", "feature/foo")
+	mustGit(t, repo, "branch", "--set-upstream-to=origin/feature/foo", "main")
+	mustGit(t, repo, "push", "origin", "--delete", "feature/foo")
+	// Prune the local remote-tracking ref too — otherwise the test
+	// sees a stale refs/remotes/origin/feature/foo and concludes
+	// the upstream is fine.
+	mustGit(t, repo, "remote", "prune", "origin")
+
+	if err := ensureGoodUpstream(repo, false); err != nil {
+		t.Fatalf("retarget errored: %v", err)
+	}
+	if got := remoteTrackingFor(repo, "main"); !strings.HasSuffix(got, "/origin/main") {
+		t.Errorf("upstream not retargeted to origin/main: got %q", got)
+	}
+}
+
+// TestEnsureGoodUpstream_UnfixableIsNoOp — when the local branch has
+// no counterpart on origin (and any configured upstream points at
+// nothing reachable), we fall through silently. Guessing a different
+// remote branch would be a quiet behavior change worse than letting
+// `git pull` print its own diagnostic. Contract: no error, no
+// config mutation.
+func TestEnsureGoodUpstream_UnfixableIsNoOp(t *testing.T) {
+	repo := realGitRepoWithRemote(t)
+	mustGit(t, repo, "checkout", "-b", "weird")
+	mustGit(t, repo, "push", "-u", "origin", "weird")
+	mustGit(t, repo, "push", "origin", "--delete", "weird")
+	mustGit(t, repo, "remote", "prune", "origin")
+	mustGit(t, repo, "branch", "-m", "weird", "absent-on-remote")
+
+	before := mustGit(t, repo, "config", "--get-regexp", "branch\\.absent-on-remote\\.")
+
+	if err := ensureGoodUpstream(repo, false); err != nil {
+		t.Fatalf("unfixable case should not error: %v", err)
+	}
+
+	after := mustGit(t, repo, "config", "--get-regexp", "branch\\.absent-on-remote\\.")
+	if before != after {
+		t.Errorf("branch config mutated when it shouldn't have:\nbefore:\n%safter:\n%s", before, after)
+	}
+}
+
+// TestEnsureGoodUpstream_NoUpstreamSetsOriginSameName — a branch
+// with NO upstream at all + a same-named remote branch existing
+// gets its upstream set automatically. Less common than the
+// deleted-upstream case but it's the same shape of fix.
+func TestEnsureGoodUpstream_NoUpstreamSetsOriginSameName(t *testing.T) {
+	repo := realGitRepoWithRemote(t)
+	mustGit(t, repo, "checkout", "-b", "experiment")
+	mustGit(t, repo, "push", "origin", "experiment") // no -u
+	// At this point origin/experiment exists but local experiment
+	// has no upstream tracking. Verify the setup before running
+	// the function.
+	if got := remoteTrackingFor(repo, "experiment"); got != "" {
+		t.Fatalf("test setup wrong: experiment already has upstream %q", got)
+	}
+
+	if err := ensureGoodUpstream(repo, false); err != nil {
+		t.Fatalf("function errored: %v", err)
+	}
+	if got := remoteTrackingFor(repo, "experiment"); !strings.HasSuffix(got, "/origin/experiment") {
+		t.Errorf("upstream not set to origin/experiment: got %q", got)
+	}
+}

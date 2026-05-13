@@ -53,6 +53,9 @@ Use --dry-run to preview the commands without executing them.`,
 				if err := ensureOnBranch(repo, dryRun); err != nil {
 					return err
 				}
+				if err := ensureGoodUpstream(repo, dryRun); err != nil {
+					return err
+				}
 				if err := runStep(repo, dryRun, "git", "pull", "--ff-only"); err != nil {
 					return err
 				}
@@ -238,6 +241,98 @@ func resolveDefaultBranch(repo string) string {
 		}
 	}
 	return ""
+}
+
+// ensureGoodUpstream rescues the case where the local branch's
+// upstream tracks a remote ref that no longer exists. This happens
+// when:
+//
+//  1. The user checked out a topic branch with `git checkout -b foo
+//     <some-pr-branch>` (auto-sets upstream to origin/foo).
+//  2. The PR merges and the remote branch gets auto-deleted.
+//  3. Later, the user does `git checkout main` — main's upstream
+//     was implicitly set to origin/foo at some earlier point (a
+//     manual `git push -u`?), or main has no upstream at all.
+//  4. `git pull --ff-only` errors with "Your configuration
+//     specifies to merge with the ref 'refs/heads/foo' from the
+//     remote, but no such ref was fetched."
+//
+// User reported this on their other machine running ccmux update.
+// Fix: if the current branch's upstream isn't reachable on origin,
+// retarget it to origin/<current-branch-name> when that exists.
+//
+// We don't retarget to origin/<remote-default-branch> because that
+// could silently switch the user from `main` to whatever origin's
+// default became — a quiet behavior change is worse than a noisy
+// error. If the same-named remote branch isn't there either, we
+// fall through with a clear message instead of trying to be clever.
+func ensureGoodUpstream(repo string, dryRun bool) error {
+	branch, err := currentBranchName(repo)
+	if err != nil || branch == "" {
+		return nil
+	}
+	upstream := remoteTrackingFor(repo, branch)
+	if upstream == "" {
+		// No upstream set at all — `git pull --ff-only` would error
+		// with "There is no tracking information for the current
+		// branch." Set it to origin/<branch> if that ref exists.
+		if remoteRefExists(repo, "origin/"+branch) {
+			fmt.Printf("note: %s has no upstream; setting --set-upstream-to=origin/%s\n", branch, branch)
+			return runStep(repo, dryRun, "git", "branch", "--set-upstream-to=origin/"+branch, branch)
+		}
+		// No same-named remote either. Let pull fail with git's
+		// stock message — the user needs to decide where to track.
+		return nil
+	}
+	// Upstream IS set; check whether the remote ref still exists. A
+	// fast `git rev-parse --verify` against the remote-tracking
+	// branch (e.g. refs/remotes/origin/foo) tells us. If it's
+	// missing, retarget when there's a same-named remote branch.
+	remoteRef := strings.TrimPrefix(upstream, "refs/remotes/")
+	if remoteRefExists(repo, remoteRef) {
+		return nil // upstream points at a real ref — pull will work
+	}
+	fmt.Printf("note: %s tracks %s which no longer exists on origin\n", branch, remoteRef)
+	if remoteRefExists(repo, "origin/"+branch) {
+		fmt.Printf("       retargeting upstream to origin/%s\n", branch)
+		return runStep(repo, dryRun, "git", "branch", "--set-upstream-to=origin/"+branch, branch)
+	}
+	return fmt.Errorf("branch %s tracks a deleted remote (%s) and no origin/%s exists; run `git fetch origin` and then `git branch --set-upstream-to=origin/<branch> %s` yourself", branch, remoteRef, branch, branch)
+}
+
+// currentBranchName returns the short name of HEAD's symbolic ref
+// (e.g. "main"). Empty string on detached HEAD; ensureOnBranch ran
+// first so this shouldn't normally happen.
+func currentBranchName(repo string) (string, error) {
+	out, err := exec.Command("git", "-C", repo, "symbolic-ref", "--short", "-q", "HEAD").Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// remoteTrackingFor returns the upstream ref for `branch`
+// (e.g. "refs/remotes/origin/main"), or empty if no upstream is set.
+func remoteTrackingFor(repo, branch string) string {
+	out, err := exec.Command("git", "-C", repo, "rev-parse", "--symbolic-full-name", "--abbrev-ref=loose", branch+"@{upstream}").Output()
+	if err != nil {
+		return ""
+	}
+	short := strings.TrimSpace(string(out))
+	if short == "" {
+		return ""
+	}
+	// The output is "origin/main" not "refs/remotes/origin/main";
+	// re-prefix so the caller can compare against the ref namespace.
+	return "refs/remotes/" + short
+}
+
+// remoteRefExists returns true if `ref` (e.g. "origin/main") is a
+// resolvable ref in `repo`. Uses rev-parse --verify for the fast
+// path; suppresses output and just looks at the exit code.
+func remoteRefExists(repo, ref string) bool {
+	cmd := exec.Command("git", "-C", repo, "rev-parse", "--verify", "--quiet", "refs/remotes/"+ref)
+	return cmd.Run() == nil
 }
 
 func runStep(cwd string, dryRun bool, name string, args ...string) error {
