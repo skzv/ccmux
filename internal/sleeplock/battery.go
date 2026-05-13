@@ -57,7 +57,22 @@ func parsePmsetBatt(out string) BatteryStatus {
 				}
 				if start < idx {
 					if n, err := strconv.Atoi(line[start:idx]); err == nil {
-						bs.Percent = n
+						// Clamp to [0, 100]. pmset normally reports
+						// 0–100 but a future macOS variant could ship
+						// a different shape (a boot/health percentage,
+						// or a multi-battery sum). The low-battery
+						// cutoff logic compares Percent against an
+						// int threshold, so an out-of-range value
+						// would silently break the cutoff. Defense
+						// in depth at the parser boundary.
+						switch {
+						case n < 0:
+							bs.Percent = 0
+						case n > 100:
+							bs.Percent = 100
+						default:
+							bs.Percent = n
+						}
 					}
 				}
 			}
