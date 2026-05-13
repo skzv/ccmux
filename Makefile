@@ -50,8 +50,17 @@ $(BIN_DIR)/ccmuxd: $(shell find cmd/ccmuxd internal -type f -name '*.go' 2>/dev/
 
 install: build
 	@mkdir -p $(INSTALL_DIR)
-	cp $(BIN_DIR)/ccmux  $(INSTALL_DIR)/ccmux
-	cp $(BIN_DIR)/ccmuxd $(INSTALL_DIR)/ccmuxd
+	@# Write to a sibling temp file then rename, so we can replace the
+	@# currently-running binary. On Linux, `cp` over a running executable
+	@# fails with ETXTBSY ("Text file busy") because cp truncates the
+	@# destination, which the kernel forbids while the file backs a live
+	@# process's text segment. rename(2) is allowed — the old inode stays
+	@# mapped by the running process and new exec()s pick up the new one.
+	@# This is what `ccmux update` relies on to reinstall itself.
+	cp $(BIN_DIR)/ccmux  $(INSTALL_DIR)/ccmux.new
+	mv -f $(INSTALL_DIR)/ccmux.new  $(INSTALL_DIR)/ccmux
+	cp $(BIN_DIR)/ccmuxd $(INSTALL_DIR)/ccmuxd.new
+	mv -f $(INSTALL_DIR)/ccmuxd.new $(INSTALL_DIR)/ccmuxd
 ifeq ($(UNAME_S),Darwin)
 	@# On macOS the cp-into-INSTALL_DIR stamps com.apple.provenance on
 	@# the destination, which can invalidate the ad-hoc signature
