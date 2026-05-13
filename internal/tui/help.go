@@ -57,7 +57,7 @@ func helpForScreen(s Screen) []HelpItem {
 			{"n", "new note picker (Agent Log / Spec / ADR)"},
 			{"e", "open selected file in $EDITOR"},
 		}, common...)
-	case ScreenClaude:
+	case ScreenAgents:
 		return append([]HelpItem{
 			{"m", "pick default model (modal)"},
 			{"e", "pick reasoning effort (modal)"},
