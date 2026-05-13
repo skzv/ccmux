@@ -68,14 +68,36 @@ Optional follow-ups once the basics are stable:
    - Branch-protection rules requiring `test` + `cross-compile` to
      pass before merge
 
-### Open questions
+### Decisions (resolved from research)
 
-- Where do we cache the Go module download? `actions/setup-go@v5`
-  handles this automatically with `go-version-file`; verify on the
-  first run.
-- Should integration tests run against multiple tmux versions? Probably
-  not worth it today — tmux's CLI surface for our use is stable.
-- Code coverage upload (Coveralls / Codecov) — defer to v0.2.
+**Caching.** Resolved: use `actions/setup-go@v5` with `cache: true`
+(default ON since v4) and `cache-dependency-path: go.sum` so the cache
+key is computed from `go.sum` rather than `go.mod` — `go.mod` changes
+less often than transitive deps, so a `go.sum`-keyed cache invalidates
+exactly when it should. The action delegates to `actions/cache`
+internally and caches both the module download (`$GOMODCACHE`) and the
+build cache (`$GOCACHE`). If the cache lookup fails the action prints
+a warning and the job proceeds anyway. (Source:
+<https://github.com/actions/setup-go>.)
+
+**tmux versioning.** Resolved: pin to whatever the runner image
+provides; don't matrix across versions. Concrete numbers as of 2026-05:
+`ubuntu-latest` (Ubuntu 24.04) ships **tmux 3.4**; `macos-latest`
+(macOS 14) ships **tmux 3.5a** via the preinstalled Homebrew. ccmux
+uses only the stable subset (`has-session`, `list-sessions -F`,
+`new-session -d -s`, `kill-session`, `rename-session`, `send-keys`,
+`capture-pane -p`, `set-option`, `show-options -g`) plus the
+`#{session_*}` format keys, all of which have been stable since
+tmux 2.1 (2015). Multi-version testing would burn runner minutes
+without finding bugs. Revisit if/when ccmux starts using a 3.x-only
+feature.
+
+**Coverage upload.** Resolved: defer Codecov / Coveralls. Instead,
+have the CI `test` job emit `-coverprofile=coverage.out` and upload
+the file as a workflow artifact (free, no third-party dependency, lets
+a reviewer download and inspect locally with `go tool cover`).
+Migrate to Codecov when the project has external contributors who
+want a coverage badge / PR comment; until then the artifact is plenty.
 
 ---
 
@@ -143,17 +165,59 @@ Outputs:
 - Markdown report dropped at `docs/03_Agent_Logs/stress-<date>.md`
 - pprof profiles archived under `bin/profiles/`
 
-### Open questions
+### Decisions (resolved from research)
 
-- Where should the long-haul test run? Locally is unrealistic (closes
-  with the laptop). Possibly a dedicated cron on the Mac mini that
-  emails / Moshi-pushes results.
-- Memory leak ceiling — what's "unboundedly climbing"? Probably a
-  pre-set delta threshold (e.g. >50MB / 24h with steady load means
-  fail).
-- Notification storm interaction with moshi-hook: do we test against
-  a real moshi-hook or stub it? Stub is faster but doesn't catch
-  moshi's own backpressure issues.
+**Long-haul host.** Resolved: dedicated launchd job on the Mac mini.
+Why: GitHub-hosted runners cap at **6h per job, 72h per workflow run**
+— a 24h stress run is impossible on `macos-latest`. Self-hosted GHA
+runners can exceed the per-job limit but still hit the 72h workflow
+cap, and require us to keep a runner registered. The Mac mini is
+already always-on (it runs ccmuxd itself, hosts remote-attach
+targets, etc.), so a daily launchd plist that invokes
+`ccmux-stress longhaul --duration=24h` and posts a report through
+moshi-hook (or just writes to `~/.local/state/ccmux/stress-reports/`)
+matches the project's actual deployment model. Cost: zero. (Source:
+<https://github.com/orgs/community/discussions/26679>.)
+
+**Memory leak threshold.** Resolved with measured baseline.
+
+Real numbers from this dev machine on 2026-05-12 (two ccmuxd
+processes alive — both tracking the same two sessions):
+
+  pid 48190  RSS 21.1 MB   (4h47m uptime)  ← well-behaved
+  pid 48205  RSS 388.7 MB  (4h47m uptime)  ← anomaly
+
+That 18× RSS divergence between two daemons doing nominally the same
+work IS the kind of regression the stress test should catch. Concrete
+thresholds for `ccmux-stress longhaul`:
+
+- **Fail** if RSS at any sample > **150 MB** (absolute ceiling — well
+  above the healthy baseline, well below the anomaly we just
+  observed).
+- **Fail** if RSS at end-of-run > 3× RSS at start-of-run *and* the
+  delta is > 30 MB (relative ratio — catches the slow-growth case
+  where absolute stays under 150 MB but the trajectory is wrong).
+- **Warn** (don't fail) if FD count grows by > 50 over the run —
+  hardcoded threshold because macOS makes accurate FD counts a
+  sudo-only operation; warning is what the report should surface
+  rather than killing the run.
+
+These numbers explicitly trace back to a real measurement so the
+spec doesn't drift to wishful thinking. Update them when the
+baseline shifts (e.g. when we add SQLite metrics persistence).
+
+**Moshi interaction.** Resolved: stub by default, real-moshi smoke
+test once per release.
+
+- The default `ccmux-stress notifications` run replaces
+  `moshi.Detect` with a fixed `Status{Paired: true, …}` via a build-
+  tagged `_stress.go` file. Faster runs (no `moshi-hook status` shell
+  out per probe), reproducible across machines, doesn't require
+  pairing the dev machine before each run.
+- A separate `ccmux-stress notifications --real-moshi` flag uses the
+  actual moshi.Detect path. Run before each tagged release as a
+  smoke test for the bell-suppress + push-categorize pipeline. Don't
+  run it on every PR — moshi-hook isn't on every CI runner anyway.
 
 ---
 
@@ -225,16 +289,77 @@ Three deliverables:
 The crawl binary lands under `cmd/` not `internal/` so it can be
 distributed for community bug-bashing.
 
-### Open questions
+### Decisions (resolved from research)
 
-- Coverage: is `go test -fuzz` enough, or do we need a separate
-  long-running fuzzer (OSS-Fuzz integration)? Probably not for v0.1 —
-  the surface is small enough to fuzz on-developer-laptop.
-- Crash reproducibility: what's the report format? Probably write
-  failing seeds to `testdata/fuzz/<func>/` (Go's native fuzzer convention)
-  + a small markdown sidecar with the panic stack.
-- TUI fuzzing under tmux — does teatest get the same input handling
-  the real TUI does? Need to verify before relying on results.
+**Fuzzer scope.** Resolved: `go test -fuzz` only. Skip OSS-Fuzz.
+
+OSS-Fuzz's stated criteria are "significant user base and/or critical
+to the global IT infrastructure"; acceptance is decided case-by-case
+by the OSS-Fuzz maintainers and weighs remote-attack exposure +
+dependent-user count. ccmux is alpha, single-author, and doesn't
+process untrusted network input from anyone except the user's own
+tailnet peers — none of those gates apply today. (Source:
+<https://google.github.io/oss-fuzz/getting-started/accepting-new-projects/>.)
+
+Practical replacement: every PR runs `go test -fuzz=Fuzz` with a
+short budget (`-fuzztime=30s` per target) on the CI matrix. That's
+enough to catch new bugs introduced by a PR; a dedicated longer
+fuzz pass runs as part of the Mac mini's nightly cron alongside the
+stress longhaul, with `-fuzztime=1h` per target. Failing seeds get
+auto-archived into `testdata/fuzz/<FuzzName>/` (Go's standard
+convention) and stay there as regression seeds.
+
+**Crash reproducibility.** Resolved: Go's standard convention plus a
+sidecar.
+
+Go's fuzzer writes failing inputs to
+`testdata/fuzz/<FuzzName>/<sha>` automatically; those files are
+binary and serve as deterministic regression seeds on the next
+`go test` run. Convention works as-is. Two small additions:
+
+- For every NEW failing seed, the harness also writes a sibling
+  `<sha>.md` next to it containing: the panic stack, the OS / arch /
+  Go version it was caught on, and the timestamp. The binary seed
+  reproduces the bug; the markdown sidecar tells a future reader
+  what went wrong without having to re-run.
+- Failing seeds are committed (`git add testdata/fuzz/...`) so they
+  permanently lock down the regression. Storage cost is negligible
+  (each seed is < 1 KB; sidecars are bigger but still small).
+
+(Source: <https://go.dev/doc/security/fuzz/>,
+<https://go.dev/doc/tutorial/fuzz>.)
+
+**teatest input fidelity.** Resolved: teatest is fine for ccmux's
+model-level testing, but it's NOT a substitute for raw-terminal-byte
+fuzzing.
+
+Teatest's `Send()` accepts a `tea.Msg` (e.g. `tea.KeyMsg{Type: tea.KeyTab}`)
+and pushes it straight into the program's message queue. Output is
+captured to an in-memory `bytes.Buffer` wrapped with mutex locks and
+`tea.WithANSICompressor()`. There is **no virtual terminal emulator**;
+the model's `View()` output is the raw bytes the bubbletea renderer
+would have written to stdout. (Source: reading
+`exp/teatest/teatest.go` in
+<https://github.com/charmbracelet/x/tree/main/exp/teatest>.)
+
+What this means for ccmux:
+
+- ✅ Model-level fuzz works perfectly. Sending random KeyMsgs at the
+  new-project form, the dashboard, etc. exercises every code path
+  the real TUI exercises once a keystroke has been parsed into a
+  KeyMsg. The existing `newproject_test.go` already does this.
+- ✅ WindowSizeMsg and MouseMsg work the same way — random resizes
+  at random dimensions are testable.
+- ⚠ The byte-stream parser inside bubbletea (the layer that turns
+  `\x1b[A` into `tea.KeyMsg{Type: tea.KeyUp}`) is upstream code we
+  don't own. teatest bypasses it. If we ever care about how ccmux
+  handles malformed escape sequences (we probably don't — that's
+  bubbletea's job), we'd need a separate harness driving a real PTY
+  via `expect`-style tooling. Out of scope for v1.
+
+The crawl plan stays as written: teatest covers the model layer
+(plenty), `go test -fuzz` covers the parser layer (pane classifier,
+sidecar, OSC 52 wire format) where we actually own the parsing code.
 
 ---
 
