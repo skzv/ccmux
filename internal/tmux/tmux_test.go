@@ -153,12 +153,24 @@ func TestParseList_CLocaleCorruption_RegressionDocumentsBug(t *testing.T) {
 
 func TestSessionNameForPath(t *testing.T) {
 	cases := []struct{ in, want string }{
+		// Original cases — `.` → `_` substitution is preserved.
 		{"/Users/skz/Projects/foo", "c-foo"},
 		{"/Users/skz/Projects/foo/", "c-foo"},
 		{"/Users/skz/Projects/with.dots", "c-with_dots"},
 		{"/Users/skz/Projects/a.b.c", "c-a_b_c"},
 		{"foo", "c-foo"},
 		{"/", "c-"},
+
+		// Broader sanitization added after fuzz uncovered the `:` case
+		// — tmux's `-t` target parser treats `:` as the session/window
+		// separator, so a name like `c-a:b` would route to window `b`
+		// of session `c-a`. Anything outside [a-zA-Z0-9_-] becomes `_`.
+		{"a:b", "c-a_b"},
+		{"a b c", "c-a_b_c"},
+		{"a\nb", "c-a_b"},
+		{"a\x00b", "c-a_b"},
+		{"name-with-dashes", "c-name-with-dashes"},
+		{"under_score", "c-under_score"},
 	}
 	for _, tc := range cases {
 		if got := SessionNameForPath(tc.in); got != tc.want {

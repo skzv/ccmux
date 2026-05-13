@@ -42,10 +42,36 @@ type Project struct {
 	Agent agent.ID
 }
 
-// SessionName returns the ccmux tmux session name for this project,
-// matching the existing `c-<basename>` convention.
+// SessionName returns the ccmux tmux session name for this project.
+// Stays in lock-step with tmux.SessionNameForPath so the two paths
+// (project-list "session name" column + scaffold's tmux.New call)
+// can never disagree about a project's session name.
 func (p Project) SessionName() string {
-	return "c-" + strings.ReplaceAll(p.Name, ".", "_")
+	return "c-" + sanitizeForSessionName(p.Name)
+}
+
+// sanitizeForSessionName mirrors internal/tmux.sanitizeSessionName.
+// Duplicated rather than imported to avoid a project→tmux dep cycle.
+// The two implementations are pinned to the same output by
+// TestSessionName_MatchesTmuxSanitizer (cross-package check).
+func sanitizeForSessionName(name string) string {
+	if name == "" {
+		return ""
+	}
+	out := make([]byte, 0, len(name))
+	for i := 0; i < len(name); i++ {
+		b := name[i]
+		switch {
+		case b >= 'a' && b <= 'z',
+			b >= 'A' && b <= 'Z',
+			b >= '0' && b <= '9',
+			b == '_', b == '-':
+			out = append(out, b)
+		default:
+			out = append(out, '_')
+		}
+	}
+	return string(out)
 }
 
 // Discover walks `root` one level deep and returns every directory that

@@ -187,11 +187,45 @@ func Attach(name string) error {
 }
 
 // SessionNameForPath converts a filesystem path to ccmux's tmux session-naming
-// convention: `c-<basename-with-dots-as-underscores>`. Matches the existing
-// `cc()` zsh function so the old aliases continue to work during transition.
+// convention: `c-<basename>` with any character that's special to tmux's
+// `-t` target parser or to a POSIX shell replaced by `_`.
+//
+// The historical version only swapped `.` → `_`, which covered the common
+// dotted-name case but missed `:` (tmux's session/window separator),
+// `\n` / `\x00` (control bytes that would corrupt `-t` arg parsing), and
+// shell metacharacters that could matter if the name ever ends up in a
+// quoted command string. We use an allowlist — keep `[a-zA-Z0-9_-]`,
+// rewrite everything else to `_` — because the set of "safe enough"
+// characters across tmux + zsh + ssh quoting is small, and an allowlist
+// is the only way to guarantee a future caller that we haven't shipped
+// is safe by default. Matches the existing `cc()` zsh function output
+// for all names that were already safe.
 func SessionNameForPath(path string) string {
 	base := lastSegment(path)
-	return "c-" + strings.ReplaceAll(base, ".", "_")
+	return "c-" + sanitizeSessionName(base)
+}
+
+// sanitizeSessionName rewrites `name` into the tmux-safe alphabet.
+// Exported package-private so the fuzz target can re-derive the same
+// transform.
+func sanitizeSessionName(name string) string {
+	if name == "" {
+		return ""
+	}
+	out := make([]byte, 0, len(name))
+	for i := 0; i < len(name); i++ {
+		b := name[i]
+		switch {
+		case b >= 'a' && b <= 'z',
+			b >= 'A' && b <= 'Z',
+			b >= '0' && b <= '9',
+			b == '_', b == '-':
+			out = append(out, b)
+		default:
+			out = append(out, '_')
+		}
+	}
+	return string(out)
 }
 
 func lastSegment(p string) string {

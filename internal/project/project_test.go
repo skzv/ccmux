@@ -36,6 +36,12 @@ func TestSessionName(t *testing.T) {
 		{"foo.bar", "c-foo_bar"},
 		{"a.b.c", "c-a_b_c"},
 		{"no-dots-here", "c-no-dots-here"},
+		// Broader sanitization — matches the fuzz-driven update to
+		// tmux.SessionNameForPath. Any character outside
+		// [a-zA-Z0-9_-] becomes `_`.
+		{"with:colon", "c-with_colon"},
+		{"with space", "c-with_space"},
+		{"with/slash", "c-with_slash"},
 	}
 	for _, tc := range cases {
 		p := Project{Name: tc.in}
