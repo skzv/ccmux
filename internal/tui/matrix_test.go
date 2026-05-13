@@ -87,6 +87,24 @@ func TestApp_MatrixEscClosesOverlay(t *testing.T) {
 	}
 }
 
+// TestApp_MatrixQClosesOverlay — q is accepted as an alternate
+// exit, mirroring esc. Tests the route through App.Update (not
+// just the matrix model) because the overlay's priority routing
+// in App is where regressions are most likely to hide.
+func TestApp_MatrixQClosesOverlay(t *testing.T) {
+	a := newTestApp(ScreenDashboard)
+	a.matrix.Open()
+	a.matrix.SetSize(80, 24)
+	// Force rain phase so the assertion proves q is intercepted
+	// as an exit and not swallowed by the "any key advances" path
+	// that exists only during phaseNeo.
+	a.matrix.phase = phaseRain
+	m, _ := a.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	if m.(App).matrix.Active() {
+		t.Fatal("q did not close the matrix overlay")
+	}
+}
+
 // TestMatrix_NeoPhaseAdvancesByChar — every tick during phase 1
 // advances at most one character. Drive a few ticks and assert progress.
 func TestMatrix_NeoPhaseAdvancesByChar(t *testing.T) {
