@@ -26,13 +26,13 @@ type Keymap struct {
 	Refresh key.Binding
 
 	// Session actions
-	NewItem    key.Binding
-	Kill       key.Binding
-	Rename     key.Binding
-	KeepAwake  key.Binding
-	Snapshot   key.Binding
-	OpenInApp  key.Binding
-	EditInEd   key.Binding
+	NewItem   key.Binding
+	Kill      key.Binding
+	Rename    key.Binding
+	KeepAwake key.Binding
+	Snapshot  key.Binding
+	OpenInApp key.Binding
+	EditInEd  key.Binding
 }
 
 // DefaultKeymap returns ccmux's canonical bindings. Vim-style and arrow keys

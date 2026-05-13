@@ -5,13 +5,13 @@
 //
 // The bar shows three things:
 //
-//   1. The project / session name on the left in ccmux's brand color
-//      (Catppuccin mauve).
-//   2. A "prefix + d to return to ccmux" hint in the middle so the
-//      detach keybinding is always visible.
-//   3. A "📱 reachable via Moshi" indicator on the right, only when
-//      moshi-hook is paired so the user knows the phone can pick up
-//      this session seamlessly.
+//  1. The project / session name on the left in ccmux's brand color
+//     (Catppuccin mauve).
+//  2. A "prefix + d to return to ccmux" hint in the middle so the
+//     detach keybinding is always visible.
+//  3. A "📱 reachable via Moshi" indicator on the right, only when
+//     moshi-hook is paired so the user knows the phone can pick up
+//     this session seamlessly.
 //
 // All overrides are applied per-session (via `tmux set-option -t <name>`)
 // so they don't leak into other tmux sessions the user has running.

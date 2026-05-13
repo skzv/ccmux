@@ -16,9 +16,9 @@ func makeSearchVault(t *testing.T) Vault {
 	root := t.TempDir()
 	v := Open(root)
 	files := map[string]string{
-		"01_Specs/00_Auth.md": "# Auth flow\n\nWe rebuild login with passkeys.\nNotes about passkeys go here.\n",
+		"01_Specs/00_Auth.md":          "# Auth flow\n\nWe rebuild login with passkeys.\nNotes about passkeys go here.\n",
 		"02_Architecture/00_System.md": "# System design\n\nccmuxd is the daemon.\nPasskeys are stored in the keychain.\n",
-		"03_Agent_Logs/2026-05-11.md": "# Log\n\nFigured out the passkey flow today.\n",
+		"03_Agent_Logs/2026-05-11.md":  "# Log\n\nFigured out the passkey flow today.\n",
 	}
 	for rel, body := range files {
 		full := filepath.Join(v.Root, rel)

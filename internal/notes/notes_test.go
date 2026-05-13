@@ -124,13 +124,13 @@ func TestList_GroupsBySection(t *testing.T) {
 	project, v := makeProject(t)
 	docs := filepath.Join(project, "docs")
 	files := map[string]string{
-		"01_Specs/00_Vision.md":            "# v",
-		"02_Architecture/00_System.md":     "# s",
-		"03_Agent_Logs/2026-05-11.md":      "# log",
-		"03_Agent_Logs/2026-05-10.md":      "# older log",
-		"misc/scratchpad.md":               "# misc",
-		".obsidian/workspace.json":         "{}", // hidden dir should be skipped
-		"README.md":                        "# r",
+		"01_Specs/00_Vision.md":        "# v",
+		"02_Architecture/00_System.md": "# s",
+		"03_Agent_Logs/2026-05-11.md":  "# log",
+		"03_Agent_Logs/2026-05-10.md":  "# older log",
+		"misc/scratchpad.md":           "# misc",
+		".obsidian/workspace.json":     "{}", // hidden dir should be skipped
+		"README.md":                    "# r",
 	}
 	for rel, body := range files {
 		full := filepath.Join(docs, rel)

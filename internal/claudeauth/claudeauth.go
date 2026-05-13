@@ -52,11 +52,11 @@ func (s Status) Tier() string {
 }
 
 var (
-	cacheMu     sync.Mutex
-	cached      *Status
-	cachedAt    time.Time
-	cacheTTL    = 5 * time.Minute
-	cachedErr   error
+	cacheMu   sync.Mutex
+	cached    *Status
+	cachedAt  time.Time
+	cacheTTL  = 5 * time.Minute
+	cachedErr error
 )
 
 // Get returns the current Claude auth status, caching the result for 5

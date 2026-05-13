@@ -33,12 +33,12 @@ type settingsModel struct {
 	moshiState moshi.Status
 	moshiCheck time.Time
 
-	cursor   int // index into editableFields()
-	editing  bool
-	editor   textinput.Model
-	errMsg   string
-	saveMsg  string // transient "saved ✓" message
-	savedAt  time.Time
+	cursor  int // index into editableFields()
+	editing bool
+	editor  textinput.Model
+	errMsg  string
+	saveMsg string // transient "saved ✓" message
+	savedAt time.Time
 }
 
 // editableField is one row the user can move the cursor onto. The

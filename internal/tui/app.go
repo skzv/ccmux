@@ -905,13 +905,13 @@ func appendRemoteProjects(ctx context.Context, into []project.Project, addr, hos
 // attachSelectedSession is Enter on Sessions screen.
 //
 // Three behaviors:
-//   1. Local session, we're NOT inside tmux → exec `tmux attach-session`,
-//      Bubble Tea is suspended until the user detaches.
-//   2. Local session, we ARE inside tmux ($TMUX set, e.g. when running
-//      from inside the outer "ccmux" tmux session on mobile) → call
-//      `tmux switch-client -t <name>` which doesn't nest sessions and
-//      lets `prefix L` jump back to ccmux.
-//   3. Remote session → exec `mosh <host> -- tmux attach -t <name>`.
+//  1. Local session, we're NOT inside tmux → exec `tmux attach-session`,
+//     Bubble Tea is suspended until the user detaches.
+//  2. Local session, we ARE inside tmux ($TMUX set, e.g. when running
+//     from inside the outer "ccmux" tmux session on mobile) → call
+//     `tmux switch-client -t <name>` which doesn't nest sessions and
+//     lets `prefix L` jump back to ccmux.
+//  3. Remote session → exec `mosh <host> -- tmux attach -t <name>`.
 //
 // Before any of these, we apply ccmux's chrome (custom status bar) to
 // the target session so the attached view shows project name + detach
@@ -1049,10 +1049,10 @@ func shellQuote(s string) string {
 // default. The prepended paths cover the common install locations
 // on both ends of the wire:
 //
-//   /opt/homebrew/bin                    — macOS Apple Silicon Homebrew
-//   /usr/local/bin                       — macOS Intel Homebrew + Linux convention
-//   /home/linuxbrew/.linuxbrew/bin       — Linuxbrew on Linux
-//   /snap/bin                            — Snap-installed tmux on Linux
+//	/opt/homebrew/bin                    — macOS Apple Silicon Homebrew
+//	/usr/local/bin                       — macOS Intel Homebrew + Linux convention
+//	/home/linuxbrew/.linuxbrew/bin       — Linuxbrew on Linux
+//	/snap/bin                            — Snap-installed tmux on Linux
 //
 // Non-existent paths in the list are silently ignored by the shell,
 // so this is safe to include unconditionally regardless of whether

@@ -13,17 +13,17 @@ import (
 
 // Config is the root user-configurable state.
 type Config struct {
-	Projects     ProjectsConfig     `toml:"projects"`
-	Theme        string             `toml:"theme"` // catppuccin-mocha (default), dracula, nord, gruvbox, tokyo-night
-	Editor       string             `toml:"editor"`
-	Sleep        SleepConfig        `toml:"sleep"`
-	Daemon       DaemonConfig       `toml:"daemon"`
-	Notes        NotesConfig        `toml:"notes"`
+	Projects      ProjectsConfig      `toml:"projects"`
+	Theme         string              `toml:"theme"` // catppuccin-mocha (default), dracula, nord, gruvbox, tokyo-night
+	Editor        string              `toml:"editor"`
+	Sleep         SleepConfig         `toml:"sleep"`
+	Daemon        DaemonConfig        `toml:"daemon"`
+	Notes         NotesConfig         `toml:"notes"`
 	Notifications NotificationsConfig `toml:"notifications"`
-	Scaffold     ScaffoldConfig     `toml:"scaffold"`
-	Subscription SubscriptionConfig `toml:"subscription"`
-	Tour         TourConfig         `toml:"tour"`
-	Hosts        []Host             `toml:"host"`
+	Scaffold      ScaffoldConfig      `toml:"scaffold"`
+	Subscription  SubscriptionConfig  `toml:"subscription"`
+	Tour          TourConfig          `toml:"tour"`
+	Hosts         []Host              `toml:"host"`
 }
 
 // TourConfig persists whether the user has seen the first-run interactive

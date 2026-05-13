@@ -169,10 +169,10 @@ func TestDiscover_FiltersAndProbes(t *testing.T) {
 	port, _ := strconv.Atoi(portStr)
 
 	peers := []Peer{
-		{HostName: "Self Box", Addr: "1.2.3.4", Online: true, Self: true},          // skipped (Self)
-		{HostName: "Sleeping", Addr: "5.6.7.8", Online: false},                     // skipped (offline)
-		{HostName: "ccmuxd peer", Addr: host, Online: true},                        // probed → found
-		{HostName: "wrong-port", Addr: host, Online: true},                         // probed at different port → fails silently
+		{HostName: "Self Box", Addr: "1.2.3.4", Online: true, Self: true}, // skipped (Self)
+		{HostName: "Sleeping", Addr: "5.6.7.8", Online: false},            // skipped (offline)
+		{HostName: "ccmuxd peer", Addr: host, Online: true},               // probed → found
+		{HostName: "wrong-port", Addr: host, Online: true},                // probed at different port → fails silently
 	}
 	// Probe at `port` for first set, then `port+1` won't respond for last.
 	got := discoverFromPeers(context.Background(), peers, port)

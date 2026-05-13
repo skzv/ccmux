@@ -71,7 +71,7 @@ func TestLooksLikeClaudePrompt(t *testing.T) {
 		{"╭───╮", true},
 		{"│ > ╯", true},
 		{"plain text", false},
-		{"╭", false},          // only 1 hit
+		{"╭", false}, // only 1 hit
 		{"$ ls -la", false},
 		{"", false},
 	}

@@ -48,12 +48,12 @@ type Aggregate struct {
 	WindowEnd   time.Time     // latest message timestamp (or "now")
 	Messages    int           // total assistant API responses with usage data
 	UserPrompts int           // distinct user-initiated turns (filters out
-	                          // tool-result follow-ups, which JSONL also
-	                          // records with type="user"). This is what
-	                          // Anthropic's per-window quota counts toward.
-	Total       Tokens
-	ByModel     map[string]*Tokens
-	ByProject   map[string]*Tokens
+	// tool-result follow-ups, which JSONL also
+	// records with type="user"). This is what
+	// Anthropic's per-window quota counts toward.
+	Total     Tokens
+	ByModel   map[string]*Tokens
+	ByProject map[string]*Tokens
 	// FirstMessageInWindow is the timestamp of the earliest assistant
 	// message that still falls inside the window — used to compute the
 	// "next reset at" time for Pro/Max subscription windows.
@@ -63,8 +63,8 @@ type Aggregate struct {
 // ProjectTotal is one row in the per-project breakdown returned by
 // AggregateReport.TopProjects.
 type ProjectTotal struct {
-	Project string
-	Tokens  Tokens
+	Project  string
+	Tokens   Tokens
 	Messages int
 }
 
@@ -248,12 +248,12 @@ func Walk(window time.Duration) (*Aggregate, error) {
 
 // scanResult bundles everything one transcript scan produces.
 type scanResult struct {
-	total           Tokens
-	byModel         map[string]*Tokens
-	firstMsg        time.Time
-	assistantCount  int // assistant messages with usage (drives token totals)
-	userPrompts     int // type:"user" messages whose content is real text,
-	                    // not tool_result blocks — Anthropic quota counter
+	total          Tokens
+	byModel        map[string]*Tokens
+	firstMsg       time.Time
+	assistantCount int // assistant messages with usage (drives token totals)
+	userPrompts    int // type:"user" messages whose content is real text,
+	// not tool_result blocks — Anthropic quota counter
 }
 
 // scanFile parses one JSONL and returns the per-file scan result over

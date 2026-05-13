@@ -40,10 +40,10 @@ import (
 //   - tmux chrome overrides on every c-* session — unless --keep-chrome
 func newUninstallCmd() *cobra.Command {
 	var (
-		yes         bool
-		keepConfig  bool
-		keepChrome  bool
-		dryRun      bool
+		yes        bool
+		keepConfig bool
+		keepChrome bool
+		dryRun     bool
 	)
 	c := &cobra.Command{
 		Use:   "uninstall",

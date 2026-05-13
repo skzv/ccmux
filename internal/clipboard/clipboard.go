@@ -95,9 +95,9 @@ func Probe(w io.Writer) (string, error) {
 // as far as ccmux knows. Doctor uses this to print actionable advice
 // instead of a generic "OSC 52 may not work" warning.
 type TerminalSupport struct {
-	Program    string // matches $TERM_PROGRAM
-	Name       string // pretty name for output
-	Supported  bool   // OSC 52 writes work
+	Program     string // matches $TERM_PROGRAM
+	Name        string // pretty name for output
+	Supported   bool   // OSC 52 writes work
 	NeedsToggle string // empty if no user action needed; otherwise the setting to flip
 	Advice      string // free-form additional hint (e.g. "use iTerm2 or Ghostty instead")
 }
@@ -111,9 +111,9 @@ type TerminalSupport struct {
 // terminal limitation, not a ccmux bug.
 var terminals = []TerminalSupport{
 	{
-		Program:   "iTerm.app",
-		Name:      "iTerm2",
-		Supported: true,
+		Program:     "iTerm.app",
+		Name:        "iTerm2",
+		Supported:   true,
 		NeedsToggle: `Preferences → General → Selection → "Applications in terminal may access clipboard"`,
 	},
 	{
@@ -143,9 +143,9 @@ var terminals = []TerminalSupport{
 		Advice:    "Terminal.app does not implement OSC 52 writes — install iTerm2 (`brew install --cask iterm2`) or Ghostty (`brew install --cask ghostty`) and ccmux's cross-device clipboard will just work.",
 	},
 	{
-		Program:   "vscode",
-		Name:      "VS Code's integrated terminal",
-		Supported: true,
+		Program:     "vscode",
+		Name:        "VS Code's integrated terminal",
+		Supported:   true,
 		NeedsToggle: `settings.json: "terminal.integrated.enableMultiLinePasteWarning": false (and the default xterm.js OSC 52 setting is already on)`,
 	},
 	{

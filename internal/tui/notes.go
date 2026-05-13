@@ -55,10 +55,10 @@ type notesModel struct {
 	// runs Vault.Search and the result rows take over the list. While
 	// searching, cursor indexes into searchResults rather than entries.
 	// Esc clears search and restores the normal listing.
-	searching      bool
-	searchInput    textinput.Model
-	searchResults  []notes.SearchHit
-	searchQuery    string
+	searching     bool
+	searchInput   textinput.Model
+	searchResults []notes.SearchHit
+	searchQuery   string
 }
 
 // notesFocus tracks which pane receives navigation keys.

@@ -14,10 +14,10 @@ import (
 // tourStep is one slide. Body lines render as-is; bullets get a styled
 // bullet glyph automatically.
 type tourStep struct {
-	Title    string
-	Body     []string
-	Bullets  []string
-	KeyHint  string // a one-line "press X to do Y" footer; empty allowed
+	Title   string
+	Body    []string
+	Bullets []string
+	KeyHint string // a one-line "press X to do Y" footer; empty allowed
 }
 
 // defaultTourSteps is the script the first-run tour runs through. Five

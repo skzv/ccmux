@@ -21,11 +21,11 @@ import (
 // newUpdateCmd: `ccmux update [--repo PATH] [--no-restart] [--dry-run]`.
 func newUpdateCmd() *cobra.Command {
 	var (
-		repoFlag   string
-		noRestart  bool
-		dryRun     bool
-		skipPull   bool
-		runSetup   bool
+		repoFlag      string
+		noRestart     bool
+		dryRun        bool
+		skipPull      bool
+		runSetup      bool
 		noSetupPrompt bool
 	)
 	c := &cobra.Command{

@@ -83,8 +83,8 @@ func TestDaemonOnline_UsesLocalFlag(t *testing.T) {
 
 func TestDialAddrFor_StripsPort(t *testing.T) {
 	cases := []struct {
-		in       hostStatus
-		want     string
+		in   hostStatus
+		want string
 	}{
 		{hostStatus{Address: "100.75.64.20:7474"}, "100.75.64.20"},
 		{hostStatus{Address: "host.example:1234"}, "host.example"},

@@ -4,6 +4,7 @@
 
 **One TUI for every AI coding session — Claude Code, Codex, Gemini CLI — on your Mac, on your phone, anywhere.**
 
+[![CI](https://github.com/skzv/ccmux/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/skzv/ccmux/actions/workflows/ci.yml)
 [![Go Version](https://img.shields.io/badge/go-1.22+-00ADD8.svg)](https://go.dev/)
 [![License: FSL-1.1-MIT](https://img.shields.io/badge/license-FSL--1.1--MIT-blue.svg)](LICENSE)
 [![Status: alpha](https://img.shields.io/badge/status-alpha-orange.svg)](#status)

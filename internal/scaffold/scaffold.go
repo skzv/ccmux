@@ -49,7 +49,7 @@ type Options struct {
 //   - 01_Specs/         PRDs and feature specs
 //   - 02_Architecture/  ADRs and system design
 //   - 03_Agent_Logs/    daily scratchpad — AI sessions append here,
-//                       and `ccmux new` auto-templates today's log
+//     and `ccmux new` auto-templates today's log
 //
 // All of this is overridable via [scaffold].dirs in
 // ~/.config/ccmux/config.toml — set it to whatever shape you actually

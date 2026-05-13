@@ -11,7 +11,7 @@ func TestPrettyKey(t *testing.T) {
 		{"C-a", "Ctrl-a"},
 		{"M-x", "Alt-x"},
 		{"S-F1", "Shift-F1"},
-		{"`", "`"},   // backtick remap left as-is
+		{"`", "`"}, // backtick remap left as-is
 		{"", ""},
 		{"plainkey", "plainkey"},
 	}

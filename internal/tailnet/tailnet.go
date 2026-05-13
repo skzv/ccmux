@@ -175,9 +175,9 @@ type Discovered struct {
 // Scan is the full sweep result, partitioned by what the dashboard
 // wants to render for each kind of peer:
 //
-//   Reachable    — ccmuxd responded; show sessions + version + update flag
-//   NeedsInstall — non-mobile peer online but no ccmuxd reply; show install hint
-//   Mobile       — phone / iPad / Android; show "via Moshi app" hint
+//	Reachable    — ccmuxd responded; show sessions + version + update flag
+//	NeedsInstall — non-mobile peer online but no ccmuxd reply; show install hint
+//	Mobile       — phone / iPad / Android; show "via Moshi app" hint
 //
 // Self is skipped (the local Unix-socket path handles it). Offline
 // peers are dropped entirely from all three lists.
@@ -281,10 +281,10 @@ func probeOne(ctx context.Context, addr string) (daemon.HealthInfo, error) {
 // the MagicDNS short name, so dialing by name matches the existing
 // trust state. Order of preference:
 //
-//   1. Leftmost segment of DNSName when present
-//      ("sashas-mac-mini" from "sashas-mac-mini.tail-abcd.ts.net.")
-//   2. HostName when it isn't the iOS-default "localhost" placeholder
-//   3. Tailnet IP (Addr) as a last resort
+//  1. Leftmost segment of DNSName when present
+//     ("sashas-mac-mini" from "sashas-mac-mini.tail-abcd.ts.net.")
+//  2. HostName when it isn't the iOS-default "localhost" placeholder
+//  3. Tailnet IP (Addr) as a last resort
 func dialHostFor(p Peer) string {
 	if dns := strings.TrimSpace(p.DNSName); dns != "" {
 		dns = strings.TrimSuffix(dns, ".")

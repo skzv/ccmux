@@ -1,0 +1,141 @@
+# ccmux CI — matches docs/01_Specs/03_Testing_And_CI.md.
+#
+# Three jobs:
+#   - test         (matrix: ubuntu, macos)  — go test + vet + gofmt
+#   - cross-compile (single ubuntu)         — darwin/linux/windows × amd64/arm64
+#   - integration  (matrix: ubuntu, macos)  — go test -tags=integration
+#
+# Caching is automatic via actions/setup-go@v5 — keyed off go.sum so
+# the cache invalidates when transitive deps change but not on every
+# go.mod edit.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # Manual button on the Actions tab — handy for re-running after a
+  # remote-flake without pushing a no-op commit.
+  workflow_dispatch:
+
+# Cancel an in-flight run when the same ref/PR gets a newer push. Saves
+# minutes; the older run was about to be obsolete anyway.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  # Read-only — CI never writes to the repo.
+  contents: read
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go (version from go.mod, cache keyed on go.sum)
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          # setup-go caches $GOMODCACHE + $GOCACHE; go.sum keeps the
+          # cache key stable across no-op go.mod tweaks.
+          cache-dependency-path: go.sum
+
+      - name: Install tmux (Linux only; preinstalled on macOS)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y tmux
+
+      - name: Verify formatting (gofmt -l)
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files need gofmt:"
+            echo "$unformatted"
+            echo "---"
+            gofmt -d .
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test -race -coverprofile=coverage.out -covermode=atomic ./...
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.os }}
+          path: coverage.out
+          retention-days: 14
+
+  cross-compile:
+    name: cross-compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      # One target per step so a failure prints exactly which combo
+      # broke instead of a single opaque "build failed". The OS-
+      # specific files (detach_unix.go vs detach_windows.go, sleeplock
+      # battery readers) live under build tags; this matrix is the
+      # safety net for those.
+      - name: darwin/arm64
+        run: GOOS=darwin GOARCH=arm64 go build ./...
+      - name: darwin/amd64
+        run: GOOS=darwin GOARCH=amd64 go build ./...
+      - name: linux/amd64
+        run: GOOS=linux GOARCH=amd64 go build ./...
+      - name: linux/arm64
+        run: GOOS=linux GOARCH=arm64 go build ./...
+      - name: windows/amd64
+        run: GOOS=windows GOARCH=amd64 go build ./...
+      - name: windows/arm64
+        run: GOOS=windows GOARCH=arm64 go build ./...
+
+  integration:
+    name: integration (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # macOS coverage is non-negotiable: ccmux's primary deploy
+        # target is macOS (caffeinate, pmset, moshi-hook, OSC 52
+        # checks all live in macOS-flavored code paths). Linux-only
+        # integration would miss every regression in the most-used
+        # code paths.
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Install tmux (Linux only; preinstalled on macOS)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y tmux
+
+      - name: Boot a tmux server for the integration tests
+        # `tmux start-server` is idempotent; this just ensures a daemon
+        # exists before the integration tests run. Some of the tests
+        # `tmux has-session` / `tmux list-sessions` which need a server.
+        run: tmux start-server
+
+      - name: go test -tags=integration
+        run: go test -race -tags=integration ./...

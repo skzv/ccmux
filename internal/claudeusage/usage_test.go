@@ -24,9 +24,9 @@ func TestTokens_AddAndTotal(t *testing.T) {
 
 func TestPriceFor_KnownAndUnknownModels(t *testing.T) {
 	cases := []struct {
-		model            string
-		wantInput        float64
-		isOpus, isHaiku  bool
+		model           string
+		wantInput       float64
+		isOpus, isHaiku bool
 	}{
 		{"claude-opus-4-7", 15.0, true, false},
 		{"claude-opus-4-6", 15.0, true, false},
@@ -245,8 +245,8 @@ func TestScanFile_CountsAssistantUsageAndUserPrompts(t *testing.T) {
 			"role":  "assistant",
 			"model": "claude-opus-4-7",
 			"usage": map[string]any{
-				"input_tokens":               100,
-				"output_tokens":              50,
+				"input_tokens":                100,
+				"output_tokens":               50,
 				"cache_creation_input_tokens": 10,
 				"cache_read_input_tokens":     5,
 			},

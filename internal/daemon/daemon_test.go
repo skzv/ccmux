@@ -387,10 +387,10 @@ func TestNewProjectRequest_AgentOmitted_WhenEmpty(t *testing.T) {
 // client would have to special-case.
 func TestSessionState_AgentField_RoundTrip(t *testing.T) {
 	cases := []struct {
-		name      string
-		agent     string
+		name       string
+		agent      string
 		wantInWire string // substring expected (or NOT expected via omit)
-		omit      bool
+		omit       bool
 	}{
 		{"codex serialized", "codex", `"agent":"codex"`, false},
 		{"claude serialized", "claude", `"agent":"claude"`, false},

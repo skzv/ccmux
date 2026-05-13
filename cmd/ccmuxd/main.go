@@ -55,8 +55,8 @@ func run() error {
 	}
 
 	srv := &server{
-		cfg:      cfg,
-		seen:     map[string]*tracked{},
+		cfg:       cfg,
+		seen:      map[string]*tracked{},
 		startedAt: time.Now(),
 	}
 	srv.startSleepManager()

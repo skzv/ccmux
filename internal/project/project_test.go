@@ -66,8 +66,8 @@ func TestInspect_AcceptsAndRejects(t *testing.T) {
 	mkdir(t, filepath.Join(root, "weird", "CLAUDE.md"))
 
 	cases := []struct {
-		path           string
-		wantOK         bool
+		path                      string
+		wantOK                    bool
 		wantGit, wantCM, wantDocs bool
 	}{
 		{filepath.Join(root, "has-git"), true, true, false, false},

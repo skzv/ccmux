@@ -19,14 +19,14 @@ import (
 // On wide terminals: hero + (sessions list | stats + usage).
 // On narrow terminals (< 80 cols): everything stacked vertically.
 type dashboardModel struct {
-	st         styles.Styles
-	km         Keymap
-	sessions   []daemon.SessionState
-	hosts      []hostStatus
-	version    string // this build's ccmux version, for the device-network panel
-	cfg        config.Config
-	usage      *claudeusage.Aggregate
-	usageAt    time.Time
+	st       styles.Styles
+	km       Keymap
+	sessions []daemon.SessionState
+	hosts    []hostStatus
+	version  string // this build's ccmux version, for the device-network panel
+	cfg      config.Config
+	usage    *claudeusage.Aggregate
+	usageAt  time.Time
 }
 
 func newDashboard(st styles.Styles, km Keymap) dashboardModel {
