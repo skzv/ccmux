@@ -117,13 +117,22 @@ jobs:
 
   fuzz:
     # PR-time fuzz pass per docs/01_Specs/03_Testing_And_CI.md.
-    # Each FuzzXxx target gets 30s of fuzzing. Failing seeds (if any)
+    # Each FuzzXxx target gets 60s of fuzzing. Failing seeds (if any)
     # get archived under testdata/fuzz/<FuzzName>/ via Go's native
     # convention — those become regression seeds on the next plain
     # `go test` and trip the test job above. A nightly long-budget
     # pass (1h/target) is planned as a Mac mini cron, not here, since
     # GHA-hosted runners cap at 6h per job.
-    name: fuzz (30s/target)
+    #
+    # Budget was 30s originally. Bumped to 60s after a clean-flake
+    # failure on PR #12 (agent FuzzParseID hit "context deadline
+    # exceeded" with execs still streaming at 30.0s — Go's fuzz
+    # framework was mid-shutdown when its own deadline fired). The
+    # underlying ParseID is trim+lower+switch, no slow path; the
+    # extra headroom lets the framework's graceful-shutdown finish
+    # cleanly. 60s × 7 targets ≈ 7min total — still well inside the
+    # CI's typical 10-min PR ceiling.
+    name: fuzz (60s/target)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -131,7 +140,7 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
-      - name: Run all fuzz targets for 30s each
+      - name: Run all fuzz targets for 60s each
         shell: bash
         run: |
           # Each (package, target) pair, kept explicit so a new fuzz
@@ -150,8 +159,8 @@ jobs:
           for pair in "${pairs[@]}"; do
             pkg="${pair% *}"
             target="${pair#* }"
-            echo "::group::$pkg :: $target (30s)"
-            go test "$pkg" -run "^$" -fuzz="^${target}$" -fuzztime=30s
+            echo "::group::$pkg :: $target (60s)"
+            go test "$pkg" -run "^$" -fuzz="^${target}$" -fuzztime=60s
             echo "::endgroup::"
           done
 
