@@ -98,6 +98,9 @@ func (a App) modalCapturingText() bool {
 	if a.projectsM.form != nil || a.sessionsM.form != nil {
 		return true
 	}
+	if a.projectsM.FilterActive() {
+		return true
+	}
 	if a.notes.searching {
 		return true
 	}
@@ -436,6 +439,27 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, cmd
 		}
 
+		// Projects filter mode: textinput owns the keystrokes. Enter
+		// commits the filter and attaches to the highlighted match;
+		// esc clears the filter without firing attach. ctrl+c still
+		// quits so the user is never trapped.
+		if a.screen == ScreenProjects && a.projectsM.FilterActive() {
+			if msg.String() == "ctrl+c" {
+				return a, tea.Quit
+			}
+			if keyMatches(msg, a.keys.Enter) {
+				a.projectsM.commitFilter()
+				return a, a.attachOrCreateForSelectedProject()
+			}
+			if msg.String() == "esc" {
+				a.projectsM.exitFilter()
+				return a, nil
+			}
+			var cmd tea.Cmd
+			a.projectsM, cmd = a.projectsM.Update(msg)
+			return a, cmd
+		}
+
 		// Same modal-routing for the Sessions tab's new-bare-session
 		// form. Without this, the global Enter handler below intercepts
 		// the form's submit key and attaches to whatever session the
@@ -464,10 +488,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		case keyMatches(msg, a.keys.Notes):
 			a.screen = ScreenNotes
-			// Propagate the currently-focused project from Projects.
-			if len(a.projects) > 0 && a.projectsM.cursor >= 0 && a.projectsM.cursor < len(a.projects) {
-				p := a.projects[a.projectsM.cursor]
-				a.notes.SetProject(&p)
+			// Propagate the currently-focused project from Projects,
+			// honoring any active filter so the Notes pane opens on
+			// what the user just highlighted.
+			if sel := a.projectsM.Selected(); sel != nil {
+				a.notes.SetProject(sel)
 			}
 			return a, nil
 		case keyMatches(msg, a.keys.Claude):
@@ -1205,10 +1230,11 @@ func remoteTmuxAttach(session string) string {
 //     session is created on the remote, then ssh-attach into it
 //     using the same dial path the Sessions screen uses.
 func (a App) attachOrCreateForSelectedProject() tea.Cmd {
-	if len(a.projects) == 0 || a.projectsM.cursor < 0 || a.projectsM.cursor >= len(a.projects) {
+	sel := a.projectsM.Selected()
+	if sel == nil {
 		return nil
 	}
-	p := a.projects[a.projectsM.cursor]
+	p := *sel
 	host := projectHost(p)
 	if host == "local" {
 		return a.attachOrCreateLocal(p)

@@ -45,9 +45,11 @@ func helpForScreen(s Screen) []HelpItem {
 	case ScreenProjects:
 		return append([]HelpItem{
 			{"↑↓ / j k", "navigate project list"},
+			{"/", "filter projects by name (esc to clear, enter to attach to top match)"},
 			{"enter", "attach to (or create) that project's session"},
 			{"n", "scaffold a new project (modal form)"},
 			{"u", "upgrade cwd with ccmux structure"},
+			{"a", "switch the selected project's agent (local only)"},
 		}, common...)
 	case ScreenNotes:
 		return append([]HelpItem{
