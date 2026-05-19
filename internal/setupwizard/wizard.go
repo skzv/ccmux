@@ -554,6 +554,7 @@ func stepConfig(ctx context.Context, out io.Writer) error {
 		defaultAgent = "claude"
 	}
 	listenTailnet := cfg.Daemon.ListenTailnet
+	autoCheckUpdates := cfg.Update.AutoCheck
 
 	// Build the default-agent picker dynamically from agent.AllInstalled
 	// so a user without codex / antigravity on $PATH doesn't get offered
@@ -600,6 +601,12 @@ func stepConfig(ctx context.Context, out io.Writer) error {
 			Affirmative("Yes (server mode)").
 			Negative("No (local only)").
 			Value(&listenTailnet),
+		huh.NewConfirm().
+			Title("Check for ccmux updates on launch?").
+			Description("When on, ccmux runs a quick background `git fetch` at startup and shows a dashboard banner if your checkout is behind. It never installs anything on its own — you still run `ccmux update` when you're ready.").
+			Affirmative("Yes (check + notify)").
+			Negative("No").
+			Value(&autoCheckUpdates),
 	)).Run(); err != nil {
 		return err
 	}
@@ -608,6 +615,7 @@ func stepConfig(ctx context.Context, out io.Writer) error {
 	cfg.Agents.Default = strings.TrimSpace(defaultAgent)
 	cfg.Subscription.Tier = strings.TrimSpace(tier)
 	cfg.Daemon.ListenTailnet = listenTailnet
+	cfg.Update.AutoCheck = autoCheckUpdates
 	if err := config.Save(cfg); err != nil {
 		return err
 	}

@@ -368,3 +368,67 @@ func TestSettings_AttachMode_GetShowsEffectiveValue(t *testing.T) {
 		t.Errorf("get() on empty AttachMode = %q, want mirror (effective value)", got)
 	}
 }
+
+// TestSettings_AutoCheck_TogglesBothWays — the update.auto_check
+// Settings field accepts the common on/off vocabularies and flips
+// the bool. Empty resets to on (the default).
+func TestSettings_AutoCheck_TogglesBothWays(t *testing.T) {
+	cases := []struct {
+		input string
+		want  bool
+	}{
+		{"on", true}, {"off", false},
+		{"true", true}, {"false", false},
+		{"yes", true}, {"no", false},
+		{"ON", true}, {"OFF", false},
+		{"", true}, // empty → default on
+	}
+	for _, tc := range cases {
+		t.Run(tc.input, func(t *testing.T) {
+			cfg := config.Defaults()
+			f := byLabel(editableFields(), "update.auto_check")
+			if f == nil {
+				t.Fatal("update.auto_check field not registered")
+			}
+			if err := f.set(&cfg, tc.input); err != nil {
+				t.Fatalf("set(%q) errored: %v", tc.input, err)
+			}
+			if cfg.Update.AutoCheck != tc.want {
+				t.Errorf("AutoCheck = %v, want %v", cfg.Update.AutoCheck, tc.want)
+			}
+		})
+	}
+}
+
+// TestSettings_AutoCheck_RejectsGarbage — a value that's neither
+// on-ish nor off-ish must error rather than silently picking one.
+func TestSettings_AutoCheck_RejectsGarbage(t *testing.T) {
+	cfg := config.Defaults()
+	f := byLabel(editableFields(), "update.auto_check")
+	if f == nil {
+		t.Fatal("update.auto_check field missing")
+	}
+	for _, bad := range []string{"maybe", "sometimes", "2"} {
+		if err := f.set(&cfg, bad); err == nil {
+			t.Errorf("set(%q) should error", bad)
+		}
+	}
+}
+
+// TestSettings_AutoCheck_GetShowsOnOff — the field renders as a
+// human "on"/"off", not Go's "true"/"false".
+func TestSettings_AutoCheck_GetShowsOnOff(t *testing.T) {
+	f := byLabel(editableFields(), "update.auto_check")
+	if f == nil {
+		t.Fatal("update.auto_check field missing")
+	}
+	cfg := config.Defaults()
+	cfg.Update.AutoCheck = true
+	if got := f.get(&cfg); got != "on" {
+		t.Errorf("get() with AutoCheck=true = %q, want on", got)
+	}
+	cfg.Update.AutoCheck = false
+	if got := f.get(&cfg); got != "off" {
+		t.Errorf("get() with AutoCheck=false = %q, want off", got)
+	}
+}

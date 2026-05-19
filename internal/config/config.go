@@ -24,6 +24,7 @@ type Config struct {
 	Scaffold      ScaffoldConfig      `toml:"scaffold"`
 	Sessions      SessionsConfig      `toml:"sessions"`
 	Agents        AgentsConfig        `toml:"agents"`
+	Update        UpdateConfig        `toml:"update"`
 	Subscription  SubscriptionConfig  `toml:"subscription"`
 	Tour          TourConfig          `toml:"tour"`
 	Hosts         []Host              `toml:"host"`
@@ -91,6 +92,21 @@ type AgentsConfig struct {
 	// agent. Empty falls back to "claude" so a fresh install gets
 	// an agent by default — the multi-agent refactor's intent.
 	Default string `toml:"default"`
+}
+
+// UpdateConfig holds the auto-update preference. ccmux installs from a
+// git checkout (`git clone` + `make install`), so "update" means
+// pulling + rebuilding — see `ccmux update`.
+type UpdateConfig struct {
+	// AutoCheck, when true (the default), makes the TUI check on
+	// launch whether the local checkout is behind its upstream and
+	// surface a "update available" banner on the dashboard. It is a
+	// CHECK-AND-NOTIFY toggle only: ccmux never pulls, rebuilds, or
+	// restarts anything on its own — the user still runs `ccmux
+	// update` when they're ready. The check is a background `git
+	// fetch`, so a slow network or an offline machine just means no
+	// banner, never a blocked startup.
+	AutoCheck bool `toml:"auto_check"`
 }
 
 // TourConfig persists whether the user has seen the first-run interactive
@@ -264,6 +280,13 @@ func Defaults() Config {
 			// behaviour set this to "shell"; codex / antigravity users
 			// override via Settings or the setup wizard.
 			Default: "claude",
+		},
+		Update: UpdateConfig{
+			// Check-and-notify on by default — surfacing "an update
+			// exists" is low-cost and low-risk (a background git
+			// fetch). Nothing is rebuilt without the user running
+			// `ccmux update`.
+			AutoCheck: true,
 		},
 		Subscription: SubscriptionConfig{Tier: "api"},
 	}

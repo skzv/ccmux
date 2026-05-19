@@ -12,6 +12,7 @@ import (
 	"github.com/skzv/ccmux/internal/claudeusage"
 	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/daemon"
+	"github.com/skzv/ccmux/internal/selfupdate"
 	"github.com/skzv/ccmux/internal/tui/styles"
 	"github.com/skzv/ccmux/internal/usage"
 )
@@ -35,6 +36,11 @@ type dashboardModel struct {
 	// to decide between "real numbers" and "install hint".
 	codexUsage       usage.AgentSummary
 	antigravityUsage usage.AgentSummary
+
+	// updateAvailable is set by App when the launch-time auto-update
+	// check finds the local checkout behind upstream. Zero value
+	// (Behind=0) renders no banner.
+	updateAvailable selfupdate.Result
 }
 
 func newDashboard(st styles.Styles, km Keymap) dashboardModel {
@@ -60,6 +66,13 @@ func (m *dashboardModel) SetUsage(a *claudeusage.Aggregate) {
 // renderer shows an install-hint placeholder when HasData=false.
 func (m *dashboardModel) SetCodexUsage(s usage.AgentSummary)       { m.codexUsage = s }
 func (m *dashboardModel) SetAntigravityUsage(s usage.AgentSummary) { m.antigravityUsage = s }
+
+// SetUpdateAvailable records a positive auto-update check so the
+// dashboard renders the "update available" banner. Called by App
+// only when the check succeeded AND found commits behind.
+func (m *dashboardModel) SetUpdateAvailable(r selfupdate.Result) {
+	m.updateAvailable = r
+}
 
 func (m dashboardModel) Update(msg tea.Msg) (dashboardModel, tea.Cmd) {
 	return m, nil
@@ -139,8 +152,30 @@ func (m dashboardModel) viewNarrow(width, height int) string {
 func (m dashboardModel) heroPanel(width int) string {
 	title := m.st.Title.Render("Hello.")
 	sub := m.st.Subtitle.Render("Welcome to ccmux. One TUI for every agent session — Claude, Codex, Antigravity — every project, every device.")
-	body := lipgloss.JoinVertical(lipgloss.Left, title, sub)
+	parts := []string{title, sub}
+	// Auto-update banner: only when the launch check found the
+	// checkout behind upstream. Phrased as a nudge, not an alarm —
+	// nothing is broken, there's just newer code. The action is an
+	// explicit `ccmux update` (check-and-notify only).
+	if m.updateAvailable.Available() {
+		parts = append(parts, "", m.updateBanner())
+	}
+	body := lipgloss.JoinVertical(lipgloss.Left, parts...)
 	return m.st.Pane.Width(width - 2).Render(body)
+}
+
+// updateBanner renders the one-line "update available" nudge. Pulled
+// out so the dashboard test can assert its wording without rendering
+// the whole hero panel.
+func (m dashboardModel) updateBanner() string {
+	r := m.updateAvailable
+	commits := "1 commit"
+	if r.Behind != 1 {
+		commits = fmt.Sprintf("%d commits", r.Behind)
+	}
+	return m.st.StatusWarning.Render(
+		fmt.Sprintf("↑ update available — %s behind on %s. Run `ccmux update`.", commits, r.Branch),
+	)
 }
 
 func (m dashboardModel) statsPanel(width int) string {

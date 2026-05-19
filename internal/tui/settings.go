@@ -192,6 +192,27 @@ func editableFields() []editableField {
 			},
 		},
 		{
+			label: "update.auto_check",
+			hint:  "Check for ccmux updates on launch and show a banner. on/off. Never auto-installs.",
+			get: func(c *config.Config) string {
+				if c.Update.AutoCheck {
+					return "on"
+				}
+				return "off"
+			},
+			set: func(c *config.Config, raw string) error {
+				switch strings.ToLower(strings.TrimSpace(raw)) {
+				case "on", "true", "yes", "1", "":
+					c.Update.AutoCheck = true
+					return nil
+				case "off", "false", "no", "0":
+					c.Update.AutoCheck = false
+					return nil
+				}
+				return fmt.Errorf("must be 'on' or 'off'")
+			},
+		},
+		{
 			label: "theme",
 			hint:  "Theme picker UI coming in v0.2. Edit config.toml directly to switch.",
 			get:   func(c *config.Config) string { return c.Theme },

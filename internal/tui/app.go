@@ -23,6 +23,7 @@ import (
 	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/moshi"
 	"github.com/skzv/ccmux/internal/project"
+	"github.com/skzv/ccmux/internal/selfupdate"
 	"github.com/skzv/ccmux/internal/tailnet"
 	"github.com/skzv/ccmux/internal/tmux"
 	"github.com/skzv/ccmux/internal/tmuxchrome"
@@ -212,13 +213,35 @@ func New(cfg config.Config, version string) App {
 
 // Init is called once at startup.
 func (a App) Init() tea.Cmd {
-	return tea.Batch(
+	cmds := []tea.Cmd{
 		a.refreshSessionsCmd(),
 		a.refreshProjectsCmd(),
 		a.refreshUsageCmd(),
-		tickEvery(2*time.Second),
+		tickEvery(2 * time.Second),
 		usageTick(),
-	)
+	}
+	// Auto-update check: a one-shot background `git fetch` + behind-
+	// count when the user hasn't opted out. Fires once per launch —
+	// the user isn't running a TUI for weeks without restarting, so a
+	// timer would be overkill. Any failure is swallowed (see the
+	// updateCheckMsg handler); the worst case is no banner.
+	if a.cfg.Update.AutoCheck {
+		cmds = append(cmds, checkForUpdateCmd())
+	}
+	return tea.Batch(cmds...)
+}
+
+// checkForUpdateCmd runs selfupdate.Check off the UI goroutine and
+// delivers the outcome as an updateCheckMsg. Bounded by a generous
+// timeout — the embedded `git fetch` needs network, but a hung fetch
+// must never wedge the TUI.
+func checkForUpdateCmd() tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+		defer cancel()
+		res, err := selfupdate.Check(ctx)
+		return updateCheckMsg{Result: res, Err: err}
+	}
 }
 
 // usageTick fires every 15s — claudeusage.Walk scans the transcript
@@ -295,6 +318,15 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		a.conversationsM.SetList(msg.List)
+		return a, nil
+
+	case updateCheckMsg:
+		// A failed check (no checkout, no upstream, offline) is not an
+		// error worth surfacing — it just means "can't tell." Silently
+		// drop it; the dashboard shows no banner.
+		if msg.Err == nil && msg.Result.Available() {
+			a.dashboard.SetUpdateAvailable(msg.Result)
+		}
 		return a, nil
 
 	case conversationDeletedMsg:
