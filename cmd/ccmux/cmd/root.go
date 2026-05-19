@@ -67,5 +67,6 @@ func init() {
 		newClipboardPipeCmd(),
 		newListConversationsCmd(),
 		newResumeCmd(),
+		newDeleteConversationCmd(),
 	)
 }

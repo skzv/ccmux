@@ -347,3 +347,129 @@ func TestTruncatedPreview_LengthCap(t *testing.T) {
 		t.Errorf("long preview should be ellipsized: %q", out)
 	}
 }
+
+// TestDelete_RemovesClaudeTranscript — the happy path. A Claude
+// transcript under ~/.claude/projects is removed; ListClaude no
+// longer returns it afterward.
+func TestDelete_RemovesClaudeTranscript(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(home, ".claude/projects/-Users-skz-Projects-foo/abc-123.jsonl")
+	writeFile(t, path,
+		`{"type":"user","message":{"role":"user","content":"hi"},"timestamp":"2026-04-30T10:00:00Z"}`+"\n")
+
+	c := Conversation{ID: "abc-123", Agent: agent.IDClaude, Path: path}
+	if err := Delete(c); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("transcript still exists after Delete: stat err = %v", err)
+	}
+	got, _ := ListClaude(home)
+	if len(got) != 0 {
+		t.Errorf("ListClaude still returns %d conversations after delete", len(got))
+	}
+}
+
+// TestDelete_RemovesAntigravityPB — Antigravity transcripts are .pb
+// files under a different root; Delete must handle that agent's
+// path + extension too.
+func TestDelete_RemovesAntigravityPB(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(home, ".gemini/antigravity-cli/conversations/xyz.pb")
+	writeFile(t, path, "opaque")
+
+	c := Conversation{ID: "xyz", Agent: agent.IDAntigravity, Path: path}
+	if err := Delete(c); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("pb file still exists after Delete")
+	}
+}
+
+// TestDelete_RejectsPathOutsideRoot — the safety guard. A Conversation
+// whose Path points outside the agent's transcript root must be
+// refused, NOT deleted. This is what stops a corrupted or hand-crafted
+// Conversation from turning Delete into an arbitrary `rm`.
+func TestDelete_RejectsPathOutsideRoot(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	// A file the test owns, but NOT under any transcript root.
+	victim := filepath.Join(home, "important.txt")
+	writeFile(t, victim, "do not delete me")
+
+	c := Conversation{ID: "evil", Agent: agent.IDClaude, Path: victim}
+	err := Delete(c)
+	if err == nil {
+		t.Fatal("Delete accepted a path outside the transcript root")
+	}
+	if _, statErr := os.Stat(victim); statErr != nil {
+		t.Errorf("guard failed — the out-of-root file was deleted: %v", statErr)
+	}
+}
+
+// TestDelete_RejectsTraversalEscape — `..` segments must not let a
+// path climb out of the transcript root. filepath.Clean collapses
+// them before the prefix check, so an escape attempt is caught.
+func TestDelete_RejectsTraversalEscape(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	victim := filepath.Join(home, "secret.txt")
+	writeFile(t, victim, "secret")
+
+	// Path that, uncleaned, looks like it's under .claude/projects but
+	// climbs back out via `..`.
+	sneaky := filepath.Join(home, ".claude/projects", "..", "..", "secret.txt")
+	c := Conversation{ID: "x", Agent: agent.IDClaude, Path: sneaky}
+	if err := Delete(c); err == nil {
+		t.Error("Delete accepted a `..` traversal path")
+	}
+	if _, err := os.Stat(victim); err != nil {
+		t.Errorf("traversal guard failed — secret.txt was deleted: %v", err)
+	}
+}
+
+// TestDelete_RejectsWrongExtension — a path under the right root but
+// with the wrong extension (e.g. a stray .txt in ~/.claude/projects)
+// is refused. Defense against deleting a non-transcript file that
+// happens to live in the tree.
+func TestDelete_RejectsWrongExtension(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	notATranscript := filepath.Join(home, ".claude/projects/-x/notes.txt")
+	writeFile(t, notATranscript, "x")
+
+	c := Conversation{ID: "x", Agent: agent.IDClaude, Path: notATranscript}
+	if err := Delete(c); err == nil {
+		t.Error("Delete accepted a non-.jsonl file under the Claude root")
+	}
+	if _, err := os.Stat(notATranscript); err != nil {
+		t.Errorf("extension guard failed — notes.txt was deleted: %v", err)
+	}
+}
+
+// TestDelete_EmptyPath — a Conversation with no Path can't be deleted;
+// Delete must error rather than attempt os.Remove("").
+func TestDelete_EmptyPath(t *testing.T) {
+	if err := Delete(Conversation{ID: "x", Agent: agent.IDClaude}); err == nil {
+		t.Error("Delete on an empty-path conversation should error")
+	}
+}
+
+// TestDelete_UnknownAgent — an unrecognized agent has no transcript
+// root, so Delete can't validate the path and must refuse.
+func TestDelete_UnknownAgent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(home, "somewhere.jsonl")
+	writeFile(t, path, "x")
+	c := Conversation{ID: "x", Agent: agent.ID("imaginary"), Path: path}
+	if err := Delete(c); err == nil {
+		t.Error("Delete on an unknown agent should error")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("unknown-agent guard failed — file was deleted: %v", err)
+	}
+}

@@ -201,3 +201,43 @@ var errExample = exampleError{}
 type exampleError struct{}
 
 func (exampleError) Error() string { return "boom: simulated walker failure" }
+
+// TestApp_ConversationDeletedMsg_RefreshesOnSuccess — a successful
+// delete must trigger a Conversations refresh (so the row vanishes)
+// and put the screen back into loading state while the walk runs.
+func TestApp_ConversationDeletedMsg_RefreshesOnSuccess(t *testing.T) {
+	a := newAppForTest(t)
+	a.screen = ScreenConversations
+	m, cmd := a.Update(conversationDeletedMsg{ID: "abc-123", Agent: "claude"})
+	a2 := m.(App)
+	if !a2.conversationsM.loading {
+		t.Error("successful delete should put the screen into loading (refresh in flight)")
+	}
+	if cmd == nil {
+		t.Fatal("successful delete produced no refresh cmd")
+	}
+}
+
+// TestApp_ConversationDeletedMsg_ErrorToasts — a failed delete must
+// surface a toast and must NOT trigger a refresh (nothing changed on
+// disk, so the list is still valid).
+func TestApp_ConversationDeletedMsg_ErrorToasts(t *testing.T) {
+	a := newAppForTest(t)
+	a.screen = ScreenConversations
+	m, cmd := a.Update(conversationDeletedMsg{ID: "abc-123", Agent: "claude", Err: errExample})
+	a2 := m.(App)
+	if a2.conversationsM.loading {
+		t.Error("failed delete should NOT put the screen into loading")
+	}
+	if cmd == nil {
+		t.Fatal("failed delete produced no cmd (expected an error toast)")
+	}
+	msg := cmd()
+	toast, ok := msg.(toastMsg)
+	if !ok {
+		t.Fatalf("failed delete produced %T, want toastMsg", msg)
+	}
+	if toast.Kind != toastError {
+		t.Errorf("delete-failure toast kind = %v, want toastError", toast.Kind)
+	}
+}

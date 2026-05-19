@@ -317,6 +317,23 @@ type openConversationsForProjectMsg struct {
 	Project string
 }
 
+// conversationDeletedMsg fires after a delete attempt completes. The
+// App handler toasts the result and, on success, refreshes the
+// Conversations list so the deleted row disappears immediately.
+type conversationDeletedMsg struct {
+	// ID is the conversation that was (or wasn't) deleted, for the
+	// toast wording.
+	ID string
+
+	// Agent is the agent the conversation belonged to, also for the
+	// toast.
+	Agent string
+
+	// Err is non-nil when the transcript couldn't be removed (path
+	// guard rejected it, file already gone, permission denied).
+	Err error
+}
+
 // conversationResumedMsg fires after a resume attempt completes (the
 // tmux session has been spawned, or the attempt errored). Drives the
 // post-resume toast + sessions refresh so the new session shows up

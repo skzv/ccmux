@@ -94,6 +94,63 @@ func (c Conversation) ResumeArgs() []string {
 	return nil
 }
 
+// Delete removes a conversation's transcript file from disk. This is
+// irreversible: the transcript is gone, and with it the ability to
+// resume that conversation. Callers must confirm with the user first
+// — the TUI arms an x-then-x confirm, the CLI requires an explicit
+// id argument.
+//
+// Safety guard: the path must sit under the known transcript root for
+// its agent AND carry that agent's expected extension. A Conversation
+// always comes from our own walkers so this is belt-and-suspenders,
+// but it guarantees a hand-constructed or corrupted Conversation
+// can't be turned into an arbitrary `rm` of any file on disk.
+func Delete(c Conversation) error {
+	if c.Path == "" {
+		return fmt.Errorf("conversation %q has no transcript path", c.ID)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("resolve home: %w", err)
+	}
+	if err := guardTranscriptPath(home, c); err != nil {
+		return err
+	}
+	if err := os.Remove(c.Path); err != nil {
+		return fmt.Errorf("delete transcript: %w", err)
+	}
+	return nil
+}
+
+// guardTranscriptPath returns nil only when c.Path is a plausible
+// transcript file for c.Agent: under the agent's root directory and
+// carrying the agent's file extension. Returns a descriptive error
+// otherwise. filepath.Clean resolves any `..` so a path can't escape
+// the root via traversal.
+func guardTranscriptPath(home string, c Conversation) error {
+	var root, ext string
+	switch c.Agent {
+	case agent.IDClaude:
+		root, ext = filepath.Join(home, ".claude", "projects"), ".jsonl"
+	case agent.IDCodex:
+		root, ext = filepath.Join(home, ".codex", "sessions"), ".jsonl"
+	case agent.IDAntigravity:
+		root, ext = filepath.Join(home, ".gemini", "antigravity-cli", "conversations"), ".pb"
+	default:
+		return fmt.Errorf("unknown agent %q — refusing to delete %s", c.Agent, c.Path)
+	}
+	clean := filepath.Clean(c.Path)
+	// HasPrefix on the root + separator: prevents "/a/.claude/projects-evil"
+	// from matching the "/a/.claude/projects" root.
+	if !strings.HasPrefix(clean, root+string(filepath.Separator)) {
+		return fmt.Errorf("refusing to delete %s — not under %s", clean, root)
+	}
+	if !strings.HasSuffix(clean, ext) {
+		return fmt.Errorf("refusing to delete %s — not a %s transcript (%s)", clean, c.Agent, ext)
+	}
+	return nil
+}
+
 // Options modulates a List call. Zero value works (no limit, default
 // home dir resolution).
 type Options struct {
