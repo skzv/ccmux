@@ -19,6 +19,7 @@ import (
 	"github.com/skzv/ccmux/internal/claudeauth"
 	"github.com/skzv/ccmux/internal/claudeusage"
 	"github.com/skzv/ccmux/internal/config"
+	"github.com/skzv/ccmux/internal/conversations"
 	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/moshi"
 	"github.com/skzv/ccmux/internal/project"
@@ -35,6 +36,13 @@ type Screen int
 const (
 	ScreenDashboard Screen = iota
 	ScreenSessions
+	// ScreenConversations is the past-conversations browser:
+	// Claude/Codex/Antigravity transcripts across every project, sorted
+	// by recency. Sits next to Sessions because the user mental model
+	// pairs "running session" with "resumable conversation"; the two
+	// answer adjacent questions. Reached via `3` (top-level) or `c` on
+	// a Projects row (drills in with the project filter pre-applied).
+	ScreenConversations
 	ScreenProjects
 	ScreenNotes
 	ScreenAgents
@@ -46,7 +54,7 @@ func (s Screen) String() string {
 	// "Agents" was "Claude" before Codex / Antigravity joined. The label
 	// drives the top tab bar AND the contextual help footer, so a
 	// rename here is the canonical place to keep them in sync.
-	return []string{"Dashboard", "Sessions", "Projects", "Notes", "Agents", "Settings", "Network"}[s]
+	return []string{"Dashboard", "Sessions", "Conversations", "Projects", "Notes", "Agents", "Settings", "Network"}[s]
 }
 
 // App is the root Bubble Tea model.
@@ -63,13 +71,14 @@ type App struct {
 	projects []project.Project
 	hosts    []hostStatus
 
-	dashboard dashboardModel
-	sessionsM sessionsModel
-	projectsM projectsModel
-	notes     notesModel
-	agentsM   agentsModel
-	settings  settingsModel
-	network   networkModel
+	dashboard      dashboardModel
+	sessionsM      sessionsModel
+	conversationsM conversationsModel
+	projectsM      projectsModel
+	notes          notesModel
+	agentsM        agentsModel
+	settings       settingsModel
+	network        networkModel
 
 	toast      string
 	toastKind  toastKind
@@ -134,20 +143,21 @@ func New(cfg config.Config, version string) App {
 	}
 
 	a := App{
-		cfg:       cfg,
-		styles:    st,
-		keys:      km,
-		version:   version,
-		screen:    ScreenDashboard,
-		dashboard: newDashboard(st, km),
-		sessionsM: newSessions(st, km),
-		projectsM: newProjects(st, km),
-		notes:     newNotes(st, km),
-		agentsM:   newAgents(st, km),
-		settings:  newSettings(st, km, cfg, version),
-		network:   newNetwork(st, km),
-		tour:      newTour(st),
-		matrix:    newMatrix(),
+		cfg:            cfg,
+		styles:         st,
+		keys:           km,
+		version:        version,
+		screen:         ScreenDashboard,
+		dashboard:      newDashboard(st, km),
+		sessionsM:      newSessions(st, km),
+		conversationsM: newConversations(st, km),
+		projectsM:      newProjects(st, km),
+		notes:          newNotes(st, km),
+		agentsM:        newAgents(st, km),
+		settings:       newSettings(st, km, cfg, version),
+		network:        newNetwork(st, km),
+		tour:           newTour(st),
+		matrix:         newMatrix(),
 	}
 	a.dashboard.SetConfig(cfg)
 	a.dashboard.SetVersion(version)
@@ -194,6 +204,18 @@ func (a App) refreshUsageCmd() tea.Cmd {
 	}
 }
 
+// refreshConversationsCmd loads the full conversations list. Fired on
+// Conversations-tab entry and on the Refresh keybind while the screen
+// is focused. Walks ~/.claude, ~/.codex, ~/.gemini/antigravity-cli —
+// can take a beat on machines with hundreds of transcripts, hence the
+// loading-state placeholder in the screen.
+func (a App) refreshConversationsCmd() tea.Cmd {
+	return func() tea.Msg {
+		list, err := conversations.All(conversations.Options{})
+		return conversationsLoadedMsg{List: list, Err: err}
+	}
+}
+
 // Update routes messages to the active screen and handles global keys.
 func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -218,6 +240,44 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case usageTickMsg:
 		return a, tea.Batch(a.refreshUsageCmd(), usageTick())
+
+	case openConversationsForProjectMsg:
+		a.screen = ScreenConversations
+		a.conversationsM.SetProjectFilter(msg.Project)
+		a.conversationsM.SetLoading(true)
+		return a, a.refreshConversationsCmd()
+
+	case conversationsLoadedMsg:
+		if msg.Err != nil {
+			a.conversationsM.SetLoadErr(msg.Err.Error())
+			return a, nil
+		}
+		a.conversationsM.SetList(msg.List)
+		return a, nil
+
+	case conversationResumedMsg:
+		if msg.Err != nil {
+			return a, func() tea.Msg {
+				return toastMsg{
+					Text:  "resume failed: " + msg.Err.Error(),
+					Kind:  toastError,
+					Until: time.Now().Add(5 * time.Second),
+				}
+			}
+		}
+		// Spawn was successful; attach to the new tmux session and
+		// refresh Sessions so the row shows up immediately on return.
+		return a, tea.Batch(
+			a.localAttachCmd(msg.Session, msg.Project),
+			a.refreshSessionsCmd(),
+			func() tea.Msg {
+				return toastMsg{
+					Text:  fmt.Sprintf("resumed %s conversation in %s", msg.Agent, msg.Session),
+					Kind:  toastSuccess,
+					Until: time.Now().Add(4 * time.Second),
+				}
+			},
+		)
 
 	case usageLoadedMsg:
 		if msg.Err == nil && msg.Agg != nil {
@@ -541,6 +601,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case keyMatches(msg, a.keys.Sessions):
 			a.screen = ScreenSessions
 			return a, nil
+		case keyMatches(msg, a.keys.Conversations):
+			a.screen = ScreenConversations
+			// Conversations are read lazily — refresh on every entry so
+			// a newly-saved transcript from another window shows up next
+			// time the user opens this tab.
+			a.conversationsM.SetLoading(true)
+			return a, a.refreshConversationsCmd()
 		case keyMatches(msg, a.keys.Projects):
 			a.screen = ScreenProjects
 			return a, nil
@@ -568,6 +635,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, a.attachSelectedSession()
 		case keyMatches(msg, a.keys.Enter) && a.screen == ScreenProjects:
 			return a, a.attachOrCreateForSelectedProject()
+		case keyMatches(msg, a.keys.Enter) && a.screen == ScreenConversations:
+			return a, a.resumeSelectedConversation()
 		case keyMatches(msg, a.keys.Enter) && a.screen == ScreenNetwork:
 			if c := a.network.SSHCmd(); c != nil {
 				return a, c
@@ -585,6 +654,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.dashboard, cmd = a.dashboard.Update(msg)
 	case ScreenSessions:
 		a.sessionsM, cmd = a.sessionsM.Update(msg)
+	case ScreenConversations:
+		a.conversationsM, cmd = a.conversationsM.Update(msg)
 	case ScreenProjects:
 		a.projectsM, cmd = a.projectsM.Update(msg)
 	case ScreenNotes:
@@ -631,6 +702,8 @@ func (a App) View() string {
 		body = a.dashboard.View(a.width, bodyHeight)
 	case ScreenSessions:
 		body = a.sessionsM.View(a.width, bodyHeight)
+	case ScreenConversations:
+		body = a.conversationsM.View(a.width, bodyHeight)
 	case ScreenProjects:
 		body = a.projectsM.View(a.width, bodyHeight)
 	case ScreenNotes:
@@ -1404,6 +1477,56 @@ func (a App) lookupHostByName(name string) *hostStatus {
 // so both paths handle the nested-tmux case identically — Projects
 // previously always called attach-session, which silently failed
 // inside the outer ccmux session.
+// resumeSelectedConversation spawns a new tmux session running the
+// agent that owns the highlighted conversation, with the agent's
+// per-CLI --resume flag pointed at this conversation's ID. The
+// command produces a conversationResumedMsg the App handler turns
+// into an attach + toast + sessions refresh.
+//
+// Session naming: c-resume-<short-id> rather than the usual
+// c-<project> so resuming twice doesn't try to reuse the same tmux
+// session (which would just attach to the first invocation's running
+// agent instead of starting a new one with the resume flag).
+//
+// cwd: when the conversation has a known Project path, we cd there so
+// the agent's working directory matches what it had originally —
+// otherwise the user falls into $HOME and `/file edit some.go`
+// completions break.
+func (a App) resumeSelectedConversation() tea.Cmd {
+	sel := a.conversationsM.Selected()
+	if sel == nil {
+		return nil
+	}
+	c := *sel
+	return func() tea.Msg {
+		argv := c.ResumeArgs()
+		if len(argv) == 0 {
+			return conversationResumedMsg{Err: fmt.Errorf("don't know how to resume agent %q", c.Agent)}
+		}
+		shortID := c.ID
+		if len(shortID) > 8 {
+			shortID = shortID[:8]
+		}
+		sessionName := "c-resume-" + shortID
+		dir := c.Project
+		// Build the shell command tmux runs in the new pane. Quote the
+		// ID — UUIDs are safe but the principle holds for future agents
+		// that might accept names. zsh fallback keeps the pane alive
+		// if the agent binary is missing.
+		cmdline := strings.Join(argv, " ") + " || zsh"
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := tmux.New(ctx, sessionName, dir, cmdline); err != nil {
+			return conversationResumedMsg{Err: fmt.Errorf("tmux new-session: %w", err)}
+		}
+		return conversationResumedMsg{
+			Session: sessionName,
+			Project: c.Project,
+			Agent:   string(c.Agent),
+		}
+	}
+}
+
 func (a App) localAttachCmd(session, projectLabel string) tea.Cmd {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()

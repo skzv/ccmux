@@ -209,6 +209,18 @@ func (m projectsModel) Update(msg tea.Msg) (projectsModel, tea.Cmd) {
 		case km.String() == "/":
 			m.enterFilter()
 			return m, textinput.Blink
+		case km.String() == "c":
+			// Drill-down: open the Conversations screen with this
+			// project's path pre-applied as a filter. Lets the user
+			// pivot from "what am I working on?" to "what have I
+			// already done on it?" without losing context. Emitted as
+			// a message so App owns the screen-switch — projects.go
+			// has no business poking at App state directly.
+			if sel := m.Selected(); sel != nil {
+				return m, func() tea.Msg {
+					return openConversationsForProjectMsg{Project: sel.Path}
+				}
+			}
 		case keyMatches(km, m.km.NewItem):
 			f := newNewProjectForm(m.st, m.hosts)
 			m.form = &f
@@ -415,7 +427,8 @@ func (m projectsModel) renderDetail(width, height int) string {
 		m.st.Key.Render("n") + "      new project (modal form)",
 		m.st.Key.Render("u") + "      upgrade cwd (current shell, not selected)",
 		m.st.Key.Render("a") + "      switch agent for this project (cycles claude→codex→antigravity; local only)",
-		m.st.Key.Render("4") + "      open Notes for this project (local only)",
+		m.st.Key.Render("c") + "      show conversations for this project",
+		m.st.Key.Render("5") + "      open Notes for this project (local only)",
 	}
 	return m.st.Pane.Width(width - 2).Height(height - 2).Render(strings.Join(lines, "\n"))
 }

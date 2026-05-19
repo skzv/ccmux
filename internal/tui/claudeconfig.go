@@ -259,7 +259,7 @@ func (m claudeModel) viewMain(width, height int) string {
 		"  " + st.Key.Render("m") + "  pick default model       " + st.Key.Render("e") + "  pick reasoning effort",
 		"  " + st.Key.Render("a") + "  toggle always-thinking    " + st.Key.Render("y") + "  toggle yolo mode",
 		"  " + st.Key.Render("c") + "  edit global CLAUDE.md     " + st.Key.Render("j") + "  edit settings.json",
-		"  " + st.Key.Render("4") + "  open project notes",
+		"  " + st.Key.Render("5") + "  open project notes",
 	}
 	if m.lastBackup != "" {
 		lines = append(lines, "",
