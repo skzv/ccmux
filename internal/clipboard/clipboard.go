@@ -76,7 +76,7 @@ func EnableTmuxClipboard(ctx context.Context) error {
 //     like a screaming highlighter. Match the ccmux mauve so the
 //     selection reads as part of the chrome instead of a warning.
 //
-//   - `bind -T copy-mode-vi MouseDragEnd1Pane send -X copy-pipe-no-clear` —
+//   - `bind -T copy-mode-vi MouseDragEnd1Pane send -X copy-pipe-no-clear "ccmux clipboard-pipe"` —
 //     global keytable binding. Tmux's default fires
 //     `copy-pipe-and-cancel` on mouse-release, which immediately exits
 //     copy-mode and blanks the visual selection. Users coming from
@@ -85,6 +85,17 @@ func EnableTmuxClipboard(ctx context.Context) error {
 //     variant copies AND keeps the highlight; OSC 52 forwarding still
 //     fires because `set-clipboard on` is what wires that, not the
 //     binding's flavor.
+//
+//     The trailing `"ccmux clipboard-pipe"` is the runtime-dispatch
+//     hook (see pipe.go). It receives the selection on stdin and
+//     decides per-invocation whether to pipe it through pbcopy /
+//     wl-copy / xclip — based on whether any *local* tmux client is
+//     currently attached. Remote clients (SSH/Mosh) rely on OSC 52
+//     which already travels back through their SSH pipe; running
+//     pbcopy on the daemon machine for them would silently poison
+//     the wrong clipboard. Dispatching at copy time rather than at
+//     binding time lets a single daemon serve mixed local + remote
+//     attaches correctly.
 func TmuxClipboardCommands() [][]string {
 	return [][]string{
 		{"tmux", "set", "-s", "set-clipboard", "on"},
@@ -94,7 +105,7 @@ func TmuxClipboardCommands() [][]string {
 		// and avoid a cycle if tmuxchrome ever wants to call into here.
 		{"tmux", "set", "-g", "mode-style", "bg=#cba6f7,fg=#1e1e2e"},
 		{"tmux", "bind-key", "-T", "copy-mode-vi", "MouseDragEnd1Pane",
-			"send-keys", "-X", "copy-pipe-no-clear"},
+			"send-keys", "-X", "copy-pipe-no-clear", "ccmux clipboard-pipe"},
 	}
 }
 
@@ -193,7 +204,7 @@ var terminals = []TerminalSupport{
 		Program:   "Apple_Terminal",
 		Name:      "Terminal.app",
 		Supported: false,
-		Advice:    "Terminal.app does not implement OSC 52 writes — install iTerm2 (`brew install --cask iterm2`) or Ghostty (`brew install --cask ghostty`) and ccmux's cross-device clipboard will just work.",
+		Advice:    "Terminal.app does not implement OSC 52 writes. Local copies still reach the macOS clipboard — ccmux pipes the selection through pbcopy when it sees a local tmux client. Cross-device clipboard over SSH/Mosh still needs an OSC 52 terminal — install iTerm2 (`brew install --cask iterm2`) or Ghostty (`brew install --cask ghostty`).",
 	},
 	{
 		Program:     "vscode",
@@ -255,7 +266,16 @@ set -g mode-style bg=#cba6f7,fg=#1e1e2e
 # (copy-pipe-no-clear) instead of vanishing immediately. The selection
 # still lands on the system clipboard via 'set-clipboard on' above —
 # that wire is independent of which copy-pipe variant runs.
-bind-key -T copy-mode-vi MouseDragEnd1Pane send-keys -X copy-pipe-no-clear
+#
+# The trailing 'ccmux clipboard-pipe' is the local-clipboard fallback
+# for terminals that don't honor OSC 52 (Terminal.app, most notably).
+# It inspects the currently-attached tmux clients at copy time and
+# routes the selection to pbcopy / wl-copy / xclip ONLY when at least
+# one local (non-SSH) client is attached, so remote attaches don't
+# end up with their selection landing on the daemon machine's
+# clipboard. Safe to drop the trailing argument if you only ever use
+# this tmux from one machine — the OSC 52 path still works on its own.
+bind-key -T copy-mode-vi MouseDragEnd1Pane send-keys -X copy-pipe-no-clear "ccmux clipboard-pipe"
 
 # Keyboard yank still cancels copy-mode so you can resume typing
 # without an extra Escape.

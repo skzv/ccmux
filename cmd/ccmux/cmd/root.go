@@ -64,5 +64,6 @@ func init() {
 		newMoshiSetupCmd(),
 		newUninstallCmd(),
 		newRenameCmd(),
+		newClipboardPipeCmd(),
 	)
 }
