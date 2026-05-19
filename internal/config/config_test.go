@@ -37,6 +37,13 @@ func TestDefaults_SaneShape(t *testing.T) {
 	if d.Sleep.LowBatteryCutoff <= 0 || d.Sleep.LowBatteryCutoff > 100 {
 		t.Errorf("low_battery_cutoff = %d, want 1..100", d.Sleep.LowBatteryCutoff)
 	}
+	// agents.default must seed to claude on fresh installs. A user who
+	// runs `ccmux new` without ever touching Settings shouldn't fall
+	// into a bare shell — that breaks the multi-agent refactor's
+	// "every session lands in an agent" promise.
+	if d.Agents.Default != "claude" {
+		t.Errorf("Agents.Default = %q, want claude (default for fresh installs)", d.Agents.Default)
+	}
 }
 
 func TestPath_LivesUnderHome(t *testing.T) {

@@ -370,7 +370,7 @@ func (s *server) createBareSession(w http.ResponseWriter, r *http.Request) {
 		// Order: explicit request agent → daemon's
 		// sessions.default_agent → $SHELL. Bare sessions don't carry
 		// --continue because they're not tied to a project transcript.
-		launch := bareSessionLaunchCmd(req.Agent, s.cfg.Sessions.DefaultAgent)
+		launch := bareSessionLaunchCmd(req.Agent, s.cfg.Agents.Default)
 		if err := tmux.New(ctx, name, path, launch); err != nil {
 			http.Error(w, "tmux new-session: "+err.Error(), http.StatusInternalServerError)
 			return

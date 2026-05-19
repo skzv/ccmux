@@ -55,7 +55,7 @@ func runMsgs(t *testing.T, m newProjectFormModel, msgs ...tea.Msg) (newProjectFo
 // message should carry Host="local" and empty Address/DialHost.
 func TestNewProjectForm_LocalOnly_Submit(t *testing.T) {
 	st := styles.Default()
-	f := newNewProjectForm(st, nil) // no hosts
+	f := newNewProjectForm(st, nil, "") // no hosts
 	if got := len(f.hosts); got != 1 || f.hosts[0].Label != "local" {
 		t.Fatalf("hosts = %+v, want [{local true}]", f.hosts)
 	}
@@ -82,7 +82,7 @@ func TestNewProjectForm_LocalOnly_Submit(t *testing.T) {
 // set err; this test pins the error-feedback path.)
 func TestNewProjectForm_NameRequired(t *testing.T) {
 	st := styles.Default()
-	f := newNewProjectForm(st, nil)
+	f := newNewProjectForm(st, nil, "")
 	f, msg := runMsgs(t, f, keyMsg("enter"))
 	if msg != nil {
 		t.Fatalf("empty enter should not emit a msg, got %T", msg)
@@ -103,7 +103,7 @@ func TestNewProjectForm_HostPickerCycle(t *testing.T) {
 		{Name: "mac-mini", OK: true, Address: "100.75.64.20:7474", DialHost: "mac-mini"},
 		{Name: "raspi", OK: true, Address: "100.75.64.21:7474", DialHost: "raspi"},
 	}
-	f := newNewProjectForm(st, hosts)
+	f := newNewProjectForm(st, hosts, "")
 	if got := len(f.hosts); got != 3 {
 		t.Fatalf("hosts = %d, want 3 (local + 2 remotes): %+v", got, f.hosts)
 	}
@@ -157,7 +157,7 @@ func TestNewProjectForm_HostPickerWraps(t *testing.T) {
 		{Name: "sputnik", Local: true, OK: true},
 		{Name: "mac-mini", OK: true, Address: "x:7474", DialHost: "mac-mini"},
 	}
-	f := newNewProjectForm(st, hosts)
+	f := newNewProjectForm(st, hosts, "")
 	f, _ = runMsgs(t, f, keyMsg("tab"), keyMsg("tab")) // → host row
 
 	// Wrap backwards from local → mac-mini (last entry).
@@ -183,7 +183,7 @@ func TestNewProjectForm_DropsUnreachablePeers(t *testing.T) {
 		{Name: "old-laptop", NeedsInstall: true, OK: false},
 		{Name: "mac-mini", OK: true, Address: "x:7474", DialHost: "mac-mini"},
 	}
-	f := newNewProjectForm(st, hosts)
+	f := newNewProjectForm(st, hosts, "")
 	if got := len(f.hosts); got != 2 {
 		t.Fatalf("hosts = %d, want 2 (local + mac-mini): %+v", got, f.hosts)
 	}
@@ -195,7 +195,7 @@ func TestNewProjectForm_DropsUnreachablePeers(t *testing.T) {
 // TestNewProjectForm_Cancel — esc emits a newProjectCancelMsg.
 func TestNewProjectForm_Cancel(t *testing.T) {
 	st := styles.Default()
-	f := newNewProjectForm(st, nil)
+	f := newNewProjectForm(st, nil, "")
 	_, msg := runMsgs(t, f, keyMsg("esc"))
 	if _, ok := msg.(newProjectCancelMsg); !ok {
 		t.Errorf("esc emitted %T, want newProjectCancelMsg", msg)
@@ -208,7 +208,7 @@ func TestNewProjectForm_Cancel(t *testing.T) {
 // that contract.
 func TestNewProjectForm_HasAgentRow(t *testing.T) {
 	st := styles.Default()
-	f := newNewProjectForm(st, nil)
+	f := newNewProjectForm(st, nil, "")
 	if len(f.agents) == 0 {
 		t.Fatal("form should seed agents from agent.All() when nothing is installed")
 	}
@@ -234,7 +234,7 @@ func TestNewProjectForm_HasAgentRow(t *testing.T) {
 // what's actually installed on the dev machine.
 func TestNewProjectForm_AgentPickerCycle(t *testing.T) {
 	st := styles.Default()
-	f := newNewProjectForm(st, nil)
+	f := newNewProjectForm(st, nil, "")
 	// Pin the agents list deterministically.
 	f.agents = []agent.Agent{agent.Claude{}, agent.Codex{}, agent.Antigravity{}}
 	f.agentIdx = 0
@@ -272,7 +272,7 @@ func TestNewProjectForm_AgentPickerCycle(t *testing.T) {
 // picked.
 func TestNewProjectForm_SubmitCarriesAgent(t *testing.T) {
 	st := styles.Default()
-	f := newNewProjectForm(st, nil)
+	f := newNewProjectForm(st, nil, "")
 	f.agents = []agent.Agent{agent.Claude{}, agent.Codex{}, agent.Antigravity{}}
 
 	// Type a name, tab to agent row, → twice to land on antigravity.
@@ -296,7 +296,7 @@ func TestNewProjectForm_SubmitCarriesAgent(t *testing.T) {
 // rewrite the focused textinput off-screen.
 func TestNewProjectForm_PickerRowsDontConsumeTypedChars(t *testing.T) {
 	st := styles.Default()
-	f := newNewProjectForm(st, nil)
+	f := newNewProjectForm(st, nil, "")
 	f.agents = []agent.Agent{agent.Claude{}, agent.Codex{}}
 
 	// Tab to agent row, then type "x" — should be ignored.

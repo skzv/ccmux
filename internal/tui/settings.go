@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/moshi"
 	"github.com/skzv/ccmux/internal/tui/styles"
@@ -136,6 +137,34 @@ func editableFields() []editableField {
 					return nil
 				}
 				return fmt.Errorf("must be one of: api, pro, max5x, max20x")
+			},
+		},
+		{
+			label: "agents.default",
+			hint:  "Default agent for new projects and bare sessions. One of: claude, codex, antigravity, shell.",
+			get:   func(c *config.Config) string { return c.Agents.Default },
+			set: func(c *config.Config, raw string) error {
+				raw = strings.TrimSpace(strings.ToLower(raw))
+				// Empty = back to claude (the multi-agent default).
+				if raw == "" {
+					c.Agents.Default = "claude"
+					return nil
+				}
+				// "shell" is the explicit opt-out — bare $SHELL, no agent.
+				if raw == "shell" {
+					c.Agents.Default = "shell"
+					return nil
+				}
+				// Otherwise must be a known agent ID. ParseID accepts
+				// "gemini" as an alias for antigravity, which we want
+				// (back-compat for users with old configs in flight),
+				// but we normalize to the canonical name on write.
+				id, ok := agent.ParseID(raw)
+				if !ok {
+					return fmt.Errorf("must be one of: claude, codex, antigravity, shell")
+				}
+				c.Agents.Default = string(id)
+				return nil
 			},
 		},
 		{

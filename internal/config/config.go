@@ -22,6 +22,7 @@ type Config struct {
 	Notifications NotificationsConfig `toml:"notifications"`
 	Scaffold      ScaffoldConfig      `toml:"scaffold"`
 	Sessions      SessionsConfig      `toml:"sessions"`
+	Agents        AgentsConfig        `toml:"agents"`
 	Subscription  SubscriptionConfig  `toml:"subscription"`
 	Tour          TourConfig          `toml:"tour"`
 	Hosts         []Host              `toml:"host"`
@@ -30,25 +31,39 @@ type Config struct {
 // SessionsConfig holds preferences for the Sessions screen's "new
 // session" flow. A bare session is one started from the Sessions
 // tab — not tied to any project — that opens DefaultDir and runs
-// either DefaultAgent or a plain shell. Useful for ad-hoc work on
+// the default agent (or a plain shell). Useful for ad-hoc work on
 // any device (e.g. a quick session on the Mac mini without first
 // scaffolding a "project").
+//
+// The default-agent choice lives on AgentsConfig, not here — it
+// applies equally to Projects' new-project form and to Sessions'
+// new-bare-session form, so keeping it global is the right level.
 type SessionsConfig struct {
 	// DefaultDir is the working directory new bare sessions open
 	// in. Empty resolves to $HOME on the daemon host. The TUI's
 	// new-session form pre-fills this value; the user can override
 	// per-session.
 	DefaultDir string `toml:"default_dir"`
+}
 
-	// DefaultAgent picks which agent the Sessions-tab "new session"
-	// form is pre-set to, and which agent the daemon launches when
+// AgentsConfig holds the cross-app default-agent preference and
+// (eventually) per-agent toggles. The motivating use case: a user
+// who works primarily in Codex shouldn't have to flip the agent
+// picker every time they create a project — set the default once,
+// new projects pick it up.
+//
+// Lives in its own section so future per-agent settings have a
+// natural home without crowding Sessions / Projects.
+type AgentsConfig struct {
+	// Default picks which agent the new-project and new-bare-session
+	// forms default to, and which agent the daemon launches when
 	// `ccmux shell` / POST /v1/sessions/bare omits the field. Valid
 	// values: "claude" / "codex" / "antigravity" (or the legacy
 	// alias "gemini" for projects scaffolded before the rebrand),
 	// or the explicit string "shell" for a bare $SHELL with no
 	// agent. Empty falls back to "claude" so a fresh install gets
 	// an agent by default — the multi-agent refactor's intent.
-	DefaultAgent string `toml:"default_agent"`
+	Default string `toml:"default"`
 }
 
 // TourConfig persists whether the user has seen the first-run interactive
@@ -209,11 +224,13 @@ func Defaults() Config {
 			// because the daemon may live on a different machine
 			// (cross-device "new bare session") with a different home.
 			DefaultDir: "",
-			// Default to claude so a fresh install lands Sessions-tab
-			// `n` → Enter inside an agent. Users who want the old
-			// no-agent shell behaviour set this to "shell"; codex /
-			// antigravity users override via Settings.
-			DefaultAgent: "claude",
+		},
+		Agents: AgentsConfig{
+			// Default to claude so a fresh install lands new sessions
+			// inside an agent. Users who want the old no-agent shell
+			// behaviour set this to "shell"; codex / antigravity users
+			// override via Settings or the setup wizard.
+			Default: "claude",
 		},
 		Subscription: SubscriptionConfig{Tier: "api"},
 	}

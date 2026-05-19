@@ -65,7 +65,7 @@ type hostChoice struct {
 // with everything that's installed; if none is detected we fall back
 // to agent.All() so the form is still usable (the submit will surface
 // the missing-binary error from the daemon side).
-func newNewProjectForm(st styles.Styles, hosts []hostStatus) newProjectFormModel {
+func newNewProjectForm(st styles.Styles, hosts []hostStatus, defaultAgent string) newProjectFormModel {
 	n := textinput.New()
 	n.Placeholder = "my-project"
 	n.CharLimit = 64
@@ -92,8 +92,34 @@ func newNewProjectForm(st styles.Styles, hosts []hostStatus) newProjectFormModel
 		hosts:    hostChoicesFrom(hosts),
 		hostIdx:  0,
 		agents:   agents,
-		agentIdx: 0,
+		agentIdx: indexOfDefaultProjectAgent(agents, defaultAgent),
 	}
+}
+
+// indexOfDefaultProjectAgent picks the row in the agent picker that
+// matches the user's configured default. Falls back to row 0 (first
+// installed agent) when the default is empty, unrecognized, or names
+// an agent that isn't installed.
+//
+// Differs from newsession.go's indexOfDefaultAgent in that the
+// project form doesn't carry a "shell" option (projects always run an
+// agent) — so the matching surface is just agent.ID, no sentinel
+// empty value to thread through.
+func indexOfDefaultProjectAgent(agents []agent.Agent, configDefault string) int {
+	def := strings.TrimSpace(configDefault)
+	if def == "" || strings.EqualFold(def, "shell") {
+		return 0
+	}
+	id, ok := agent.ParseID(def)
+	if !ok {
+		return 0
+	}
+	for i, a := range agents {
+		if a.ID() == id {
+			return i
+		}
+	}
+	return 0
 }
 
 // hostChoicesFrom flattens the App's hostStatus list into picker rows.

@@ -36,6 +36,11 @@ type projectsModel struct {
 	// the picker shows what the user was looking at.
 	hosts []hostStatus
 
+	// defaultAgent — resolved cfg.Agents.Default, pushed by App on
+	// config load/reload. Selects the new-project form's agent picker
+	// at open time. Empty falls back to the first installed agent.
+	defaultAgent string
+
 	// Filter state. When filterActive is true, keystrokes feed the
 	// textinput and the list view shows only projects whose name
 	// matches the filter (case-insensitive substring). Cursor is
@@ -57,6 +62,14 @@ func newProjects(st styles.Styles, km Keymap) projectsModel {
 func (m *projectsModel) SetProjects(p []project.Project) {
 	m.projects = p
 	m.clampCursor()
+}
+
+// SetDefaultAgent is the App-side hook that pushes cfg.Agents.Default
+// into the projects model so the next "new project" form opens with
+// the user's preferred agent pre-selected. Pushed on startup and on
+// configReloadMsg (after the user edits Settings or config.toml).
+func (m *projectsModel) SetDefaultAgent(a string) {
+	m.defaultAgent = a
 }
 
 // visibleProjects returns the slice the user actually sees: the full
@@ -222,7 +235,7 @@ func (m projectsModel) Update(msg tea.Msg) (projectsModel, tea.Cmd) {
 				}
 			}
 		case keyMatches(km, m.km.NewItem):
-			f := newNewProjectForm(m.st, m.hosts)
+			f := newNewProjectForm(m.st, m.hosts, m.defaultAgent)
 			m.form = &f
 			return m, tea.Batch(textInputBlink())
 		case km.String() == "u":

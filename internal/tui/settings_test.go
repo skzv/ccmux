@@ -242,3 +242,64 @@ func byLabel(fields []editableField, name string) *editableField {
 	}
 	return nil
 }
+
+// TestSettings_AgentsDefault_AcceptsValidIDs — the agents.default
+// field validates against agent.ParseID, so all three canonical IDs
+// plus the legacy "gemini" alias and the "shell" opt-out must round-
+// trip. A regression here would block the user from changing their
+// default from the Settings screen.
+func TestSettings_AgentsDefault_AcceptsValidIDs(t *testing.T) {
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{"claude", "claude"},
+		{"codex", "codex"},
+		{"antigravity", "antigravity"},
+		// Back-compat alias from the rebrand: must accept the input
+		// but normalize to the canonical name when storing, otherwise
+		// "gemini" would persist forever in the user's config.
+		{"gemini", "antigravity"},
+		{"shell", "shell"},
+		{"  CODEX  ", "codex"},
+		// Empty resets to claude (the default-of-default) — see field
+		// doc in settings.go.
+		{"", "claude"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.input, func(t *testing.T) {
+			cfg := config.Defaults()
+			f := byLabel(editableFields(), "agents.default")
+			if f == nil {
+				t.Fatal("agents.default field not registered in editableFields")
+			}
+			if err := f.set(&cfg, tc.input); err != nil {
+				t.Fatalf("set(%q) returned error: %v", tc.input, err)
+			}
+			if got := cfg.Agents.Default; got != tc.want {
+				t.Errorf("Agents.Default = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestSettings_AgentsDefault_RejectsUnknown — typo'd or imaginary
+// agent names must produce an error rather than silently persisting
+// garbage. Without this, "ccode" would end up in config and the
+// next session would fall back to claude with the user thinking
+// their setting "took".
+func TestSettings_AgentsDefault_RejectsUnknown(t *testing.T) {
+	cfg := config.Defaults()
+	f := byLabel(editableFields(), "agents.default")
+	if f == nil {
+		t.Fatal("agents.default field missing")
+	}
+	for _, bad := range []string{"ccode", "gpt-4", "imaginary", "claude-3-sonnet"} {
+		t.Run(bad, func(t *testing.T) {
+			err := f.set(&cfg, bad)
+			if err == nil {
+				t.Errorf("set(%q) should error, got nil", bad)
+			}
+		})
+	}
+}

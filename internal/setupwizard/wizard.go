@@ -524,10 +524,10 @@ func stepSSHKey(_ context.Context, out io.Writer) error {
 	return nil
 }
 
-// stepConfig: confirm the projects root + subscription tier and write
-// ~/.config/ccmux/config.toml. Auto-detects the Claude plan via
-// claudeauth so we don't make the user pick from a list of strings
-// they may not have memorized.
+// stepConfig: confirm the projects root + default agent + subscription
+// tier and write ~/.config/ccmux/config.toml. Auto-detects the Claude
+// plan via claudeauth so we don't make the user pick from a list of
+// strings they may not have memorized.
 func stepConfig(ctx context.Context, out io.Writer) error {
 	cfg, _ := config.Load()
 	if cfg.Projects.Root == "" {
@@ -549,13 +549,41 @@ func stepConfig(ctx context.Context, out io.Writer) error {
 	if tier == "" {
 		tier = "api"
 	}
+	defaultAgent := cfg.Agents.Default
+	if defaultAgent == "" {
+		defaultAgent = "claude"
+	}
 	listenTailnet := cfg.Daemon.ListenTailnet
+
+	// Build the default-agent picker dynamically from agent.AllInstalled
+	// so a user without codex / antigravity on $PATH doesn't get offered
+	// agents they can't run. Claude + the explicit "shell" opt-out are
+	// always present; codex / antigravity show when installed.
+	agentOpts := []huh.Option[string]{
+		huh.NewOption("Claude Code", "claude"),
+	}
+	installed := map[agent.ID]bool{}
+	for _, a := range agent.AllInstalled(ctx) {
+		installed[a.ID()] = true
+	}
+	if installed[agent.IDCodex] {
+		agentOpts = append(agentOpts, huh.NewOption("Codex (OpenAI)", "codex"))
+	}
+	if installed[agent.IDAntigravity] {
+		agentOpts = append(agentOpts, huh.NewOption("Antigravity CLI (Google)", "antigravity"))
+	}
+	agentOpts = append(agentOpts, huh.NewOption("shell (no agent — opt out)", "shell"))
 
 	if err := huh.NewForm(huh.NewGroup(
 		huh.NewInput().
 			Title("Projects root").
 			Description("Where `ccmux new` scaffolds projects and where Projects tab scans.").
 			Value(&root),
+		huh.NewSelect[string]().
+			Title("Default agent").
+			Description("Pre-selected in the new-project and new-session forms. You can still pick a different agent per project at scaffold time.").
+			Options(agentOpts...).
+			Value(&defaultAgent),
 		huh.NewSelect[string]().
 			Title("Claude subscription tier").
 			Description("Drives the dashboard's quota bar — auto-detected from `claude auth status`.").
@@ -577,6 +605,7 @@ func stepConfig(ctx context.Context, out io.Writer) error {
 	}
 
 	cfg.Projects.Root = strings.TrimSpace(root)
+	cfg.Agents.Default = strings.TrimSpace(defaultAgent)
 	cfg.Subscription.Tier = strings.TrimSpace(tier)
 	cfg.Daemon.ListenTailnet = listenTailnet
 	if err := config.Save(cfg); err != nil {
