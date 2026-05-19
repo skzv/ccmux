@@ -349,7 +349,7 @@ func TestScaffold_WritesAgentSidecar(t *testing.T) {
 	}{
 		{"claude explicit", agent.IDClaude, agent.IDClaude},
 		{"codex", agent.IDCodex, agent.IDCodex},
-		{"gemini", agent.IDGemini, agent.IDGemini},
+		{"antigravity", agent.IDAntigravity, agent.IDAntigravity},
 		// Back-compat: callers that haven't migrated still pass "" —
 		// Scaffold defaults to claude.
 		{"empty defaults to claude", "", agent.IDClaude},
@@ -423,13 +423,13 @@ func TestScaffold_OverwritesAgentWhenExplicit(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	// Now scaffold again, this time choosing Gemini.
+	// Now scaffold again, this time choosing Antigravity.
 	if _, err := Scaffold(&Options{
-		Name: "p", Dir: target, SkipGit: true, Agent: agent.IDGemini,
+		Name: "p", Dir: target, SkipGit: true, Agent: agent.IDAntigravity,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if got := project.ReadAgent(target); got != agent.IDGemini {
-		t.Errorf("explicit overwrite failed: got %q, want gemini", got)
+	if got := project.ReadAgent(target); got != agent.IDAntigravity {
+		t.Errorf("explicit overwrite failed: got %q, want antigravity", got)
 	}
 }

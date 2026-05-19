@@ -42,7 +42,7 @@ const (
 )
 
 func (s Screen) String() string {
-	// "Agents" was "Claude" before Codex / Gemini joined. The label
+	// "Agents" was "Claude" before Codex / Antigravity joined. The label
 	// drives the top tab bar AND the contextual help footer, so a
 	// rename here is the canonical place to keep them in sync.
 	return []string{"Dashboard", "Sessions", "Projects", "Notes", "Agents", "Settings", "Network"}[s]
@@ -180,16 +180,16 @@ func (a App) refreshUsageCmd() tea.Cmd {
 	return func() tea.Msg {
 		// 5h matches Anthropic's subscription rolling-window. We pull
 		// the full window once for Claude (the rich panel uses every
-		// field) and the same for Codex/Gemini (their summaries are
-		// today always zero — stub walkers, see internal/usage).
+		// field) and the same for Codex/Antigravity (their summaries
+		// are today always zero — stub walkers, see internal/usage).
 		const window = 5 * time.Hour
 		agg, claudeErr := claudeusage.Walk(window)
 		codex, _ := usage.WalkCodex(window)
-		gemini, _ := usage.WalkGemini(window)
-		// Only surface a top-level Err on Claude failure — Codex/Gemini
+		antigravity, _ := usage.WalkAntigravity(window)
+		// Only surface a top-level Err on Claude failure — Codex/Antigravity
 		// walkers stub out today, and once real, a transient parse
 		// error for one of them shouldn't blank the whole panel.
-		return usageLoadedMsg{Agg: agg, Codex: codex, Gemini: gemini, Err: claudeErr}
+		return usageLoadedMsg{Agg: agg, Codex: codex, Antigravity: antigravity, Err: claudeErr}
 	}
 }
 
@@ -222,12 +222,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Err == nil && msg.Agg != nil {
 			a.dashboard.SetUsage(msg.Agg)
 		}
-		// Codex and Gemini summaries are pushed unconditionally —
+		// Codex and Antigravity summaries are pushed unconditionally —
 		// today they're always empty (stub walkers) but the dashboard
 		// uses HasData to decide between "real numbers" and "install
 		// hint" rendering.
 		a.dashboard.SetCodexUsage(msg.Codex)
-		a.dashboard.SetGeminiUsage(msg.Gemini)
+		a.dashboard.SetAntigravityUsage(msg.Antigravity)
 		return a, nil
 
 	case sessionsLoadedMsg:

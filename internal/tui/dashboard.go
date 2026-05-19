@@ -30,11 +30,11 @@ type dashboardModel struct {
 	usageAt  time.Time
 
 	// Cross-agent token-usage summaries pushed by App on every
-	// usageLoadedMsg. Codex/Gemini are zero-valued today (stub
+	// usageLoadedMsg. Codex/Antigravity are zero-valued today (stub
 	// walkers; see internal/usage); the renderer keys off HasData
 	// to decide between "real numbers" and "install hint".
-	codexUsage  usage.AgentSummary
-	geminiUsage usage.AgentSummary
+	codexUsage       usage.AgentSummary
+	antigravityUsage usage.AgentSummary
 }
 
 func newDashboard(st styles.Styles, km Keymap) dashboardModel {
@@ -55,11 +55,11 @@ func (m *dashboardModel) SetUsage(a *claudeusage.Aggregate) {
 	m.usageAt = time.Now()
 }
 
-// SetCodexUsage / SetGeminiUsage receive cross-agent summaries from
-// the App's usage refresh. Today both walkers stub out; the renderer
-// shows an install-hint placeholder when HasData=false.
-func (m *dashboardModel) SetCodexUsage(s usage.AgentSummary)  { m.codexUsage = s }
-func (m *dashboardModel) SetGeminiUsage(s usage.AgentSummary) { m.geminiUsage = s }
+// SetCodexUsage / SetAntigravityUsage receive cross-agent summaries
+// from the App's usage refresh. Today both walkers stub out; the
+// renderer shows an install-hint placeholder when HasData=false.
+func (m *dashboardModel) SetCodexUsage(s usage.AgentSummary)       { m.codexUsage = s }
+func (m *dashboardModel) SetAntigravityUsage(s usage.AgentSummary) { m.antigravityUsage = s }
 
 func (m dashboardModel) Update(msg tea.Msg) (dashboardModel, tea.Cmd) {
 	return m, nil
@@ -138,7 +138,7 @@ func (m dashboardModel) viewNarrow(width, height int) string {
 
 func (m dashboardModel) heroPanel(width int) string {
 	title := m.st.Title.Render("Hello.")
-	sub := m.st.Subtitle.Render("Welcome to ccmux. One TUI for every agent session — Claude, Codex, Gemini — every project, every device.")
+	sub := m.st.Subtitle.Render("Welcome to ccmux. One TUI for every agent session — Claude, Codex, Antigravity — every project, every device.")
 	body := lipgloss.JoinVertical(lipgloss.Left, title, sub)
 	return m.st.Pane.Width(width - 2).Render(body)
 }
@@ -405,22 +405,22 @@ func (m dashboardModel) usagePanel(width int) string {
 		}
 	}
 
-	// Per-agent rows for Codex and Gemini. Each renders as a single
-	// line — either "(no transcripts yet, install via …)" when the
-	// walker is still a stub or returned no data, or "tokens · cost"
+	// Per-agent rows for Codex and Antigravity. Each renders as a
+	// single line — either "(no transcripts yet, install via …)" when
+	// the walker is still a stub or returned no data, or "tokens · cost"
 	// when there's real usage to show. The Claude block above is
 	// already the rich panel; these two are deliberately compact so
 	// the vertical budget on a narrow terminal stays usable.
 	rows = append(rows, "")
 	rows = append(rows, renderAgentUsageRow(st, "Codex", m.codexUsage,
 		"`npm i -g @openai/codex`"))
-	rows = append(rows, renderAgentUsageRow(st, "Gemini", m.geminiUsage,
-		"`npm i -g @google/gemini-cli`"))
+	rows = append(rows, renderAgentUsageRow(st, "Antigravity", m.antigravityUsage,
+		"`curl -fsSL https://antigravity.google/cli/install.sh | bash`"))
 
 	return st.Pane.Width(width - 2).Render(strings.Join(rows, "\n"))
 }
 
-// renderAgentUsageRow formats one Codex / Gemini line beneath the
+// renderAgentUsageRow formats one Codex / Antigravity line beneath the
 // rich Claude panel. The shape:
 //
 //	Codex   no transcripts yet  (`npm i -g @openai/codex`)
@@ -596,7 +596,7 @@ func renderSessionLine(st styles.Styles, s daemon.SessionState, inner int) strin
 
 	// Agent tag: only render when the session is NOT running the
 	// default agent (claude). Showing "claude" on every row would just
-	// be noise for users who haven't adopted Codex/Gemini. Once a row
+	// be noise for users who haven't adopted Codex/Antigravity. Once a row
 	// is on a non-default agent, the tag tells the user which one.
 	agentTag := ""
 	if s.Agent != "" && s.Agent != string(agent.IDClaude) && inner > 60 {

@@ -35,7 +35,7 @@ type Project struct {
 	HasDocs  bool      // docs/ exists (the notes vault)
 	Modified time.Time // most-recent mtime among CLAUDE.md / README.md / docs/
 
-	// Agent is the AI agent this project runs (claude, codex, gemini).
+	// Agent is the AI agent this project runs (claude, codex, antigravity).
 	// Sourced from <project>/.ccmux/agent on Discover; missing file or
 	// unrecognized content defaults to agent.IDClaude (the back-compat
 	// path for every project scaffolded before the sidecar existed).

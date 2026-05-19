@@ -126,7 +126,7 @@ type newProjectSubmitMsg struct {
 	DialHost string
 
 	// Agent is the AI agent the user picked in the form's agent row
-	// (claude / codex / gemini). Empty defaults to claude downstream.
+	// (claude / codex / antigravity). Empty defaults to claude downstream.
 	// Carried through daemon.NewProjectRequest so remote scaffolds
 	// honor the choice.
 	Agent agent.ID
@@ -282,14 +282,14 @@ type usageTickMsg struct{ At time.Time }
 // usageLoadedMsg carries the result of a per-agent usage refresh.
 // `Agg` is the rich Claude aggregate that drives the dashboard's
 // main usage panel (cache breakdown, 5h quota bar, top projects).
-// `Codex` and `Gemini` are the cross-agent summaries; today they're
-// always zero-valued (stub walkers) until those agents grow real
-// transcript parsers.
+// `Codex` and `Antigravity` are the cross-agent summaries; today
+// they're always zero-valued (stub walkers) until those agents grow
+// real transcript parsers.
 type usageLoadedMsg struct {
-	Agg    *claudeusage.Aggregate
-	Codex  usage.AgentSummary
-	Gemini usage.AgentSummary
-	Err    error
+	Agg         *claudeusage.Aggregate
+	Codex       usage.AgentSummary
+	Antigravity usage.AgentSummary
+	Err         error
 }
 
 // Claude config screen messages.

@@ -16,7 +16,7 @@ import (
 // Name (required), Description (optional but recommended — the agent
 // sees it as its first prompt), Host (where to scaffold — local or
 // any reachable peer running ccmuxd), and Agent (which AI to launch
-// in the new session — claude / codex / gemini).
+// in the new session — claude / codex / antigravity).
 //
 // Tab cycles Name → Description → Host → Agent. On the Host and
 // Agent rows, ←/→ cycle their selections. The submitted message
@@ -41,7 +41,7 @@ type newProjectFormModel struct {
 	// (claude) so the form is always submittable, even on a machine
 	// with no agent binaries installed (the daemon-side scaffold
 	// will surface the install error). Order follows agent.All()'s
-	// canonical claude→codex→gemini sequence; the default cursor
+	// canonical claude→codex→antigravity sequence; the default cursor
 	// position is index 0 (claude) for back-compat continuity.
 	agents   []agent.Agent
 	agentIdx int
@@ -304,7 +304,7 @@ func (m newProjectFormModel) hostCountHint() string {
 
 // renderAgentPicker mirrors renderHostPicker for the agent row. The
 // rendered string includes the agent's display name (Claude Code,
-// Codex, Gemini CLI) plus a count hint, with the ‹›-arrow framing
+// Codex, Antigravity CLI) plus a count hint, with the ‹›-arrow framing
 // only when the row is focused — same UX as the device picker so
 // users don't have to learn two patterns.
 func (m newProjectFormModel) renderAgentPicker() string {

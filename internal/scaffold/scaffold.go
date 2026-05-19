@@ -34,7 +34,7 @@ type Options struct {
 	NoSession   bool   // scaffold only; don't start tmux
 
 	// Agent is the AI agent this project will run (claude / codex /
-	// gemini). Empty means caller didn't care — Scaffold defaults to
+	// antigravity). Empty means caller didn't care — Scaffold defaults to
 	// agent.IDClaude so back-compat with pre-multi-agent callers
 	// (every existing call site) is preserved without changing them.
 	Agent agent.ID

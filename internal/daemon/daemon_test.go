@@ -435,7 +435,7 @@ func TestNewProjectResponse_JSONRoundTrip(t *testing.T) {
 // would silently drop the field, and every new project on that remote
 // would default to claude regardless of the picker.
 func TestNewProjectRequest_AgentField_RoundTrip(t *testing.T) {
-	for _, id := range []string{"claude", "codex", "gemini", ""} {
+	for _, id := range []string{"claude", "codex", "antigravity", "gemini", ""} {
 		in := NewProjectRequest{Name: "p", Description: "d", Agent: id}
 		b, _ := json.Marshal(in)
 		var out NewProjectRequest

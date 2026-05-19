@@ -9,9 +9,10 @@ import (
 //
 //  1. ParseID never panics, regardless of input.
 //  2. ok=true implies the returned ID is one of the three canonical
-//     values (claude / codex / gemini). Anything else would mean
+//     values (claude / codex / antigravity). Anything else would mean
 //     ParseID is silently coining new agents that nothing else in
-//     the codebase knows how to handle.
+//     the codebase knows how to handle. The legacy "gemini" input is
+//     allowed via the back-compat alias and resolves to antigravity.
 //  3. ok=false implies the returned ID is the empty string. Callers
 //     rely on this: a bogus user-typed id should never look like a
 //     "successful" parse with a partial result.
@@ -25,7 +26,9 @@ func FuzzParseID(f *testing.F) {
 	for _, seed := range []string{
 		"claude",
 		"CODEX",
-		"  gemini  ",
+		"  antigravity  ",
+		"AnTiGrAvItY",
+		"gemini", // back-compat alias
 		"GeMiNi",
 		"",
 		"   ",
@@ -44,10 +47,10 @@ func FuzzParseID(f *testing.F) {
 		id, ok := ParseID(s)
 		if ok {
 			switch id {
-			case IDClaude, IDCodex, IDGemini:
+			case IDClaude, IDCodex, IDAntigravity:
 				// canonical id — good
 			default:
-				t.Fatalf("ParseID(%q) returned ok=true but id=%q is not in {claude,codex,gemini}", s, id)
+				t.Fatalf("ParseID(%q) returned ok=true but id=%q is not in {claude,codex,antigravity}", s, id)
 			}
 		} else {
 			if id != "" {

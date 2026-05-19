@@ -236,7 +236,7 @@ func TestNewProjectForm_AgentPickerCycle(t *testing.T) {
 	st := styles.Default()
 	f := newNewProjectForm(st, nil)
 	// Pin the agents list deterministically.
-	f.agents = []agent.Agent{agent.Claude{}, agent.Codex{}, agent.Gemini{}}
+	f.agents = []agent.Agent{agent.Claude{}, agent.Codex{}, agent.Antigravity{}}
 	f.agentIdx = 0
 
 	// Tab to agent row.
@@ -245,10 +245,10 @@ func TestNewProjectForm_AgentPickerCycle(t *testing.T) {
 		t.Fatalf("focus = %d, want 3 (agent row)", f.focus)
 	}
 
-	// → twice → gemini (index 2).
+	// → twice → antigravity (index 2).
 	f, _ = runMsgs(t, f, keyMsg("right"), keyMsg("right"))
 	if f.agentIdx != 2 {
-		t.Errorf("after 2 rights agentIdx = %d, want 2 (gemini)", f.agentIdx)
+		t.Errorf("after 2 rights agentIdx = %d, want 2 (antigravity)", f.agentIdx)
 	}
 
 	// → once more wraps to claude.
@@ -257,10 +257,10 @@ func TestNewProjectForm_AgentPickerCycle(t *testing.T) {
 		t.Errorf("after wrap-right agentIdx = %d, want 0 (claude)", f.agentIdx)
 	}
 
-	// ← from claude wraps to gemini.
+	// ← from claude wraps to antigravity.
 	f, _ = runMsgs(t, f, keyMsg("left"))
 	if f.agentIdx != 2 {
-		t.Errorf("wrap-left agentIdx = %d, want 2 (gemini)", f.agentIdx)
+		t.Errorf("wrap-left agentIdx = %d, want 2 (antigravity)", f.agentIdx)
 	}
 }
 
@@ -273,9 +273,9 @@ func TestNewProjectForm_AgentPickerCycle(t *testing.T) {
 func TestNewProjectForm_SubmitCarriesAgent(t *testing.T) {
 	st := styles.Default()
 	f := newNewProjectForm(st, nil)
-	f.agents = []agent.Agent{agent.Claude{}, agent.Codex{}, agent.Gemini{}}
+	f.agents = []agent.Agent{agent.Claude{}, agent.Codex{}, agent.Antigravity{}}
 
-	// Type a name, tab to agent row, → twice to land on gemini.
+	// Type a name, tab to agent row, → twice to land on antigravity.
 	f, _ = runMsgs(t, f, keyMsg("p"), keyMsg("r"), keyMsg("o"), keyMsg("j"))
 	f, _ = runMsgs(t, f, keyMsg("tab"), keyMsg("tab"), keyMsg("tab"))
 	f, _ = runMsgs(t, f, keyMsg("right"), keyMsg("right"))
@@ -285,8 +285,8 @@ func TestNewProjectForm_SubmitCarriesAgent(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected newProjectSubmitMsg, got %T", msg)
 	}
-	if sub.Agent != agent.IDGemini {
-		t.Errorf("submit.Agent = %q, want gemini", sub.Agent)
+	if sub.Agent != agent.IDAntigravity {
+		t.Errorf("submit.Agent = %q, want antigravity", sub.Agent)
 	}
 }
 
@@ -309,7 +309,7 @@ func TestNewProjectForm_PickerRowsDontConsumeTypedChars(t *testing.T) {
 }
 
 // TestNextAgent — the cycler used by the Projects-screen `a` key.
-// Going claude → codex → gemini → claude must roundtrip through every
+// Going claude → codex → antigravity → claude must roundtrip through every
 // installed agent. The unknown-current case (someone hand-edits the
 // sidecar) defaults to the first registered agent rather than crashing.
 func TestNextAgent(t *testing.T) {
@@ -317,8 +317,8 @@ func TestNextAgent(t *testing.T) {
 		from, to agent.ID
 	}{
 		{agent.IDClaude, agent.IDCodex},
-		{agent.IDCodex, agent.IDGemini},
-		{agent.IDGemini, agent.IDClaude},
+		{agent.IDCodex, agent.IDAntigravity},
+		{agent.IDAntigravity, agent.IDClaude},
 		// Edge: empty / unknown values land on the first agent.
 		{"", agent.IDClaude},
 		{agent.ID("imaginary"), agent.IDClaude},

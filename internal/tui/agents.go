@@ -11,9 +11,9 @@ import (
 )
 
 // agentsModel is the screen formerly known as "Claude". With Codex
-// and Gemini now sharing config concerns, this screen owns a sub-tab
-// row at the top and delegates Update/View to the active per-agent
-// sub-model.
+// and Antigravity now sharing config concerns, this screen owns a
+// sub-tab row at the top and delegates Update/View to the active
+// per-agent sub-model.
 //
 // Claude is the default sub-tab on entry — every user who knew this
 // screen as the Claude screen lands on the same UI. tab / shift-tab
@@ -29,19 +29,19 @@ type agentsModel struct {
 	km     Keymap
 	active agent.ID
 
-	claude claudeModel
-	codex  codexConfigModel
-	gemini geminiConfigModel
+	claude      claudeModel
+	codex       codexConfigModel
+	antigravity antigravityConfigModel
 }
 
 func newAgents(st styles.Styles, km Keymap) agentsModel {
 	return agentsModel{
-		st:     st,
-		km:     km,
-		active: agent.IDClaude,
-		claude: newClaude(st, km),
-		codex:  newCodexConfig(st),
-		gemini: newGeminiConfig(st),
+		st:          st,
+		km:          km,
+		active:      agent.IDClaude,
+		claude:      newClaude(st, km),
+		codex:       newCodexConfig(st),
+		antigravity: newAntigravityConfig(st),
 	}
 }
 
@@ -51,13 +51,13 @@ func newAgents(st styles.Styles, km Keymap) agentsModel {
 func (m *agentsModel) Reload() {
 	m.claude.reload()
 	m.codex.reload()
-	m.gemini.reload()
+	m.antigravity.reload()
 }
 
 func (m agentsModel) Update(msg tea.Msg) (agentsModel, tea.Cmd) {
 	// Sub-tab navigation comes first. We intentionally don't let h/l
 	// reach the per-agent sub-models because Claude's screen doesn't
-	// bind them anyway and the codex/gemini sub-models are read-
+	// bind them anyway and the codex/antigravity sub-models are read-
 	// mostly, so swallowing those keys is safe.
 	if km, ok := msg.(tea.KeyMsg); ok {
 		switch km.String() {
@@ -79,9 +79,9 @@ func (m agentsModel) Update(msg tea.Msg) (agentsModel, tea.Cmd) {
 		c, cmd := m.codex.Update(msg)
 		m.codex = c
 		return m, cmd
-	case agent.IDGemini:
-		g, cmd := m.gemini.Update(msg)
-		m.gemini = g
+	case agent.IDAntigravity:
+		g, cmd := m.antigravity.Update(msg)
+		m.antigravity = g
 		return m, cmd
 	}
 	return m, nil
@@ -100,13 +100,13 @@ func (m agentsModel) View(width, height int) string {
 		body = m.claude.View(width, bodyHeight)
 	case agent.IDCodex:
 		body = m.codex.View(width, bodyHeight)
-	case agent.IDGemini:
-		body = m.gemini.View(width, bodyHeight)
+	case agent.IDAntigravity:
+		body = m.antigravity.View(width, bodyHeight)
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, header, body)
 }
 
-// renderSubtabs draws the [◆ Claude]  Codex  Gemini row. Active tab
+// renderSubtabs draws the [◆ Claude]  Codex  Antigravity row. Active tab
 // gets the emphasis style + a diamond marker so it reads as the
 // current selection even in a screen reader; inactive tabs are
 // muted.
@@ -125,7 +125,7 @@ func (m agentsModel) renderSubtabs() string {
 }
 
 // nextAgentSubtab cycles sub-tabs in agent.All() order. Wraps at the
-// ends so tab from Gemini lands on Claude.
+// ends so tab from Antigravity lands on Claude.
 func nextAgentSubtab(cur agent.ID, dir int) agent.ID {
 	all := agent.All()
 	for i, a := range all {

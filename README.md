@@ -2,7 +2,7 @@
 
 # ccmux
 
-**One TUI for every AI coding session — Claude Code, Codex, Gemini CLI — on your Mac, on your phone, anywhere.**
+**One TUI for every AI coding session — Claude Code, Codex, Antigravity CLI — on your Mac, on your phone, anywhere.**
 
 [![CI](https://github.com/skzv/ccmux/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/skzv/ccmux/actions/workflows/ci.yml)
 [![Go Version](https://img.shields.io/badge/go-1.22+-00ADD8.svg)](https://go.dev/)
@@ -24,9 +24,9 @@ Three things, mostly:
 
 🔁 **Seamlessly switch devices.** Start a session on your laptop, get a push on your iPhone when it needs you, attach from the phone, answer, detach. The session keeps going. Pick it up on your laptop in the morning, exactly where you left it.
 
-🎛️ **One dashboard for every agent.** Live view of every Claude Code / Codex / Gemini CLI session across every project — *active*, *idle*, **waiting for your input** — color-coded, one key to attach. No more remembering tmux session names.
+🎛️ **One dashboard for every agent.** Live view of every Claude Code / Codex / Antigravity CLI session across every project — *active*, *idle*, **waiting for your input** — color-coded, one key to attach. No more remembering tmux session names.
 
-🤖 **Three agents, one workflow.** Pick per project which AI runs it — [Claude Code](https://claude.ai/code), [Codex](https://github.com/openai/codex), or [Gemini CLI](https://github.com/google-gemini/gemini-cli) — and ccmux scaffolds, attaches, supervises identically. Switch agents on an existing project with one keystroke.
+🤖 **Three agents, one workflow.** Pick per project which AI runs it — [Claude Code](https://claude.ai/code), [Codex](https://github.com/openai/codex), or [Antigravity CLI](https://antigravity.google/download) — and ccmux scaffolds, attaches, supervises identically. Switch agents on an existing project with one keystroke.
 
 ☕ **Your laptop won't sleep while the agent is working.** A small background daemon holds a `caffeinate` lock while sessions are active and releases it when they go quiet. Close the lid; the agent keeps thinking.
 
@@ -116,19 +116,19 @@ Attaching to an auto-discovered peer execs `ssh -t <host> -- tmux attach -t <nam
 - **Three sleep-prevention modes** — `safe` (AC only — the macOS default; auto on Linux), `dangerous` (works on battery too, opt-in, auto-releases below a configurable low-battery threshold), `very_dangerous` (system-wide override that survives lid-close; sudo-gated and reverted on daemon exit)
 
 ### 🏗️ Project bootstrapping
-- `ccmux new <name>` — scaffolds a project, creates the `docs/` notes vault, runs `git init`, opens an agent session with your description as the first prompt; the "n" form picker lets you choose Claude / Codex / Gemini per project
+- `ccmux new <name>` — scaffolds a project, creates the `docs/` notes vault, runs `git init`, opens an agent session with your description as the first prompt; the "n" form picker lets you choose Claude / Codex / Antigravity per project
 - `ccmux upgrade` — retrofits the same structure into an existing directory; prints what changed, idempotent on re-runs
 - **Create on any device.** In the Projects tab, press `n` and pick which device should host the new project (local or any reachable peer running `ccmuxd`). The remote daemon scaffolds + starts the session natively, and ccmux ssh-attaches you in. No SSH config, no manual `git init`.
 - Local-only by default — push to GitHub when you're ready with `gh repo create`
 
-### 🤝 Multi-agent (Claude, Codex, Gemini)
+### 🤝 Multi-agent (Claude, Codex, Antigravity)
 - Per-project agent stored in `<project>/.ccmux/agent` — sticky, survives across sessions
-- New-project form's agent row (←/→ to cycle) picks Claude Code / Codex / Gemini CLI when scaffolding
-- Press `a` in the Projects tab to switch the selected project's agent (cycles claude → codex → gemini)
-- Dashboard rows on non-default agents get a small `[codex]` / `[gemini]` tag so a single glance tells you what's running where
+- New-project form's agent row (←/→ to cycle) picks Claude Code / Codex / Antigravity CLI when scaffolding
+- Press `a` in the Projects tab to switch the selected project's agent (cycles claude → codex → antigravity)
+- Dashboard rows on non-default agents get a small `[codex]` / `[antigravity]` tag so a single glance tells you what's running where
 - Daemon's state-detection (active / idle / needs_input) dispatches per agent so each gets the right heuristic
-- `ccmux doctor` enumerates installed agents; setup wizard points at the right `npm i -g` for each
-- Mobile-push integration via Moshi is currently Claude-only — Codex / Gemini sessions get the audible terminal bell (still triggers a generic iOS push); Phase-2 work to broaden categorized notifications is tracked in [`docs/01_Specs/02_Multi_Agent.md`](docs/01_Specs/02_Multi_Agent.md)
+- `ccmux doctor` enumerates installed agents; setup wizard points at the right install command for each (Antigravity uses `curl -fsSL https://antigravity.google/cli/install.sh | bash`)
+- Mobile-push integration via Moshi is currently Claude-only — Codex / Antigravity sessions get the audible terminal bell (still triggers a generic iOS push); Phase-2 work to broaden categorized notifications is tracked in [`docs/01_Specs/02_Multi_Agent.md`](docs/01_Specs/02_Multi_Agent.md)
 
 ### 🤖 Claude Code config management
 - Dedicated "Claude" screen for everything in `~/.claude/`

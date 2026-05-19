@@ -1,10 +1,11 @@
-# Multi-agent support (Codex, Gemini, …)
+# Multi-agent support (Codex, Antigravity, …)
 
 Status: **plan locked, in progress**.
 Owner: skz.
 
 ccmux today is hardcoded to Claude Code. The goal of this work is to let
-users run **Codex** (OpenAI) and **Gemini CLI** (Google) sessions
+users run **Codex** (OpenAI) and **Antigravity CLI** (Google, the
+successor to Gemini CLI) sessions
 through the same TUI, dashboard, and cross-device wiring with no
 second-class behavior — while keeping Claude as the default and not
 breaking existing users.
@@ -15,7 +16,9 @@ These are locked. Open new specs if you want to revisit.
 
 1. **Agent identity is per-project, switchable.**
    Each project has a default agent stored in `<project>/.ccmux/agent`
-   (one of `claude` / `codex` / `gemini`). Missing file → claude
+   (one of `claude` / `codex` / `antigravity`; the legacy `gemini`
+   alias is still accepted for projects scaffolded before the rebrand).
+   Missing file → claude
    (back-compat). The Projects tab gains a key to switch the agent for
    the selected project (writes the sidecar). The new-project form
    gains an agent picker row that defaults to the user's preferred
@@ -27,9 +30,9 @@ These are locked. Open new specs if you want to revisit.
    Per-session agent identity comes from the sidecar + a small status
    bar tag.
 
-3. **Notifications are BEL-only for Codex/Gemini in v1.**
+3. **Notifications are BEL-only for Codex/Antigravity in v1.**
    Claude's path through moshi-hook + Claude Code hooks stays
-   unchanged. Codex and Gemini get the audible terminal bell on
+   unchanged. Codex and Antigravity get the audible terminal bell on
    needs-input transitions (which iOS clients turn into a generic push)
    until those CLIs grow their own hook systems. Building a generic
    ccmuxd-side push dispatcher is its own multi-week project tracked
@@ -41,14 +44,14 @@ The current Claude-specific code becomes an `Agent` strategy with
 three implementations. The single change point is `internal/agent`:
 
 ```go
-type ID string  // "claude", "codex", "gemini"
+type ID string  // "claude", "codex", "antigravity"
 
 type Agent interface {
     ID() ID
     DisplayName() string
-    Binary() string                                          // "claude" / "codex" / "gemini"
+    Binary() string                                          // "claude" / "codex" / "agy"
     LaunchCmd(continueFlag bool) string                      // tmux New() command string
-    ConfigRoot(home string) string                           // ~/.claude, ~/.codex, ~/.gemini
+    ConfigRoot(home string) string                           // ~/.claude, ~/.codex, ~/.gemini/antigravity-cli
     TranscriptsRoot(home string) string                      // for usage panel
     InitialPrompt(name, description string) string           // first message ccmux sends
     Classify(pane string, lastChange time.Time, idle time.Duration) State
@@ -56,7 +59,7 @@ type Agent interface {
 
 func ByID(id ID) Agent          // panics on unknown; ParseID is the safe parser
 func ParseID(s string) (ID, bool)
-func All() []Agent              // claude, codex, gemini (canonical order)
+func All() []Agent              // claude, codex, antigravity (canonical order)
 func AllInstalled(ctx context.Context) []Agent  // intersect with $PATH
 func Default() Agent            // claude
 ```
@@ -85,7 +88,7 @@ Each phase ships independently with its own test coverage. Stable
 master between phases.
 
 1. **Abstraction.** Add `internal/agent` package. Claude impl wraps
-   `internal/claude`; Codex + Gemini get classifier stubs that fall
+   `internal/claude`; Codex + Antigravity get classifier stubs that fall
    back to "pane quiet for N seconds = needs_input". Registry +
    AllInstalled. No callers migrate yet. Tests: per-agent identity
    round-trip, ParseID, AllInstalled against a fake PATH.
@@ -111,18 +114,19 @@ master between phases.
    - ✅ Daemon poll loop reads each session's project agent from the
      sidecar (cached on `tracked.agentID`) and dispatches `Classify()`.
    - ✅ `daemon.SessionState.Agent` carries the agent over the wire.
-   - ✅ Dashboard rows show a `[codex]` / `[gemini]` tag for non-default
+   - ✅ Dashboard rows show a `[codex]` / `[antigravity]` tag for non-default
      agents (Claude rows stay clean for back-compat).
    - ⏸ **Deferred — usage panel split.** `internal/claudeusage`
      stays Claude-only for v1. Per-agent transcript walkers need
      real fixture samples from `~/.codex/sessions/` and
-     `~/.gemini/conversations/`, which we don't have until Codex
-     and Gemini are actually installed and used. Tracked as a
+     `~/.gemini/antigravity-cli/conversations/`, which we don't have
+     until Codex and Antigravity are actually installed and used.
+     Tracked as a
      "Phase 4 remaining" item.
    - ⏸ **Deferred — TUI "Claude" tab refactor.** Renaming to
      "Agents" with per-agent sub-panes is its own UI design pass.
      Today the Claude tab continues to manage Claude's
-     `~/.claude/settings.json`. Codex/Gemini config viewers come
+     `~/.claude/settings.json`. Codex/Antigravity config viewers come
      when their config-file shapes stabilize. Tracked as a
      "Phase 4 remaining" item.
 
@@ -141,10 +145,10 @@ master between phases.
 
 ## Out of scope (v1)
 
-- Categorized push notifications for Codex/Gemini (per decision 3).
+- Categorized push notifications for Codex/Antigravity (per decision 3).
 - Cross-agent transcript browsing in the Notes tab.
 - Per-agent skills / slash-command picker UI. Claude's stays; Codex/
-  Gemini get config-file viewers only until their command surfaces
+  Antigravity get config-file viewers only until their command surfaces
   stabilize.
 
 ## Open questions for v2
@@ -154,4 +158,4 @@ master between phases.
 - Should we offer a "compare agents" mode (one window per agent, same
   prompt, split-pane)?
 - Mobile push categorization for non-Claude agents — likely waits on
-  Codex/Gemini growing hooks.
+  Codex/Antigravity growing hooks.

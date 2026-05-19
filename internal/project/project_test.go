@@ -242,7 +242,7 @@ func TestReadAgent_MissingFile(t *testing.T) {
 // disk so a future agent ID rename trips at least one test instead of
 // silently breaking sidecars in the wild.
 func TestReadAgent_AllKnownIDs(t *testing.T) {
-	for _, id := range []agent.ID{agent.IDClaude, agent.IDCodex, agent.IDGemini} {
+	for _, id := range []agent.ID{agent.IDClaude, agent.IDCodex, agent.IDAntigravity} {
 		t.Run(string(id), func(t *testing.T) {
 			dir := projectScaffold(t, t.TempDir(), "p")
 			if err := SetAgent(dir, id); err != nil {
@@ -295,15 +295,15 @@ func TestSetAgent_CreatesSidecarDir(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, ".ccmux")); err == nil {
 		t.Fatal("test precondition violated: .ccmux already exists")
 	}
-	if err := SetAgent(dir, agent.IDGemini); err != nil {
+	if err := SetAgent(dir, agent.IDAntigravity); err != nil {
 		t.Fatal(err)
 	}
 	body, err := os.ReadFile(filepath.Join(dir, ".ccmux", "agent"))
 	if err != nil {
 		t.Fatalf("sidecar not written: %v", err)
 	}
-	if got := strings.TrimSpace(string(body)); got != "gemini" {
-		t.Errorf("body = %q, want gemini", got)
+	if got := strings.TrimSpace(string(body)); got != "antigravity" {
+		t.Errorf("body = %q, want antigravity", got)
 	}
 	// Trailing newline kept — POSIX text-file convention. A diff
 	// against a git-tracked file should be one-line, not a no-newline-
@@ -370,15 +370,15 @@ func TestSetAgent_Switching(t *testing.T) {
 // downstream dispatch (Phase 4) has no input to work from.
 func TestInspect_PopulatesAgentField(t *testing.T) {
 	dir := projectScaffold(t, t.TempDir(), "p")
-	if err := SetAgent(dir, agent.IDGemini); err != nil {
+	if err := SetAgent(dir, agent.IDAntigravity); err != nil {
 		t.Fatal(err)
 	}
 	p, ok := inspect(dir)
 	if !ok {
 		t.Fatal("expected inspect to recognize project")
 	}
-	if p.Agent != agent.IDGemini {
-		t.Errorf("Project.Agent = %q, want gemini", p.Agent)
+	if p.Agent != agent.IDAntigravity {
+		t.Errorf("Project.Agent = %q, want antigravity", p.Agent)
 	}
 }
 

@@ -260,7 +260,7 @@ func (m projectsModel) Update(msg tea.Msg) (projectsModel, tea.Cmd) {
 
 // nextAgent returns the next agent in canonical order after `cur`.
 // Used by the projects detail-pane switcher: pressing `a` cycles
-// claude → codex → gemini → claude.
+// claude → codex → antigravity → claude.
 func nextAgent(cur agent.ID) agent.ID {
 	all := agent.All()
 	for i, a := range all {
@@ -414,7 +414,7 @@ func (m projectsModel) renderDetail(width, height int) string {
 		m.st.Key.Render("enter") + "  " + enterDesc,
 		m.st.Key.Render("n") + "      new project (modal form)",
 		m.st.Key.Render("u") + "      upgrade cwd (current shell, not selected)",
-		m.st.Key.Render("a") + "      switch agent for this project (cycles claude→codex→gemini; local only)",
+		m.st.Key.Render("a") + "      switch agent for this project (cycles claude→codex→antigravity; local only)",
 		m.st.Key.Render("4") + "      open Notes for this project (local only)",
 	}
 	return m.st.Pane.Width(width - 2).Height(height - 2).Render(strings.Join(lines, "\n"))

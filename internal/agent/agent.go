@@ -1,8 +1,8 @@
-// Package agent abstracts over Claude Code, Codex (OpenAI), and Gemini
-// CLI (Google) — the three interactive AI coding agents ccmux can
-// supervise inside a tmux session. Adding a fourth agent later is a
-// matter of dropping a new `Agent` implementation alongside the
-// existing three and registering it in All().
+// Package agent abstracts over Claude Code, Codex (OpenAI), and
+// Antigravity CLI (Google) — the three interactive AI coding agents
+// ccmux can supervise inside a tmux session. Adding a fourth agent
+// later is a matter of dropping a new `Agent` implementation alongside
+// the existing three and registering it in All().
 //
 // Why this exists: ccmux's first cut was Claude-only. Every layer
 // (session command, state classifier, usage panel, config tab,
@@ -28,9 +28,9 @@ import (
 type ID string
 
 const (
-	IDClaude ID = "claude"
-	IDCodex  ID = "codex"
-	IDGemini ID = "gemini"
+	IDClaude      ID = "claude"
+	IDCodex       ID = "codex"
+	IDAntigravity ID = "antigravity"
 )
 
 // State enumerates the high-level lifecycle of an agent session, mirrored
@@ -57,21 +57,21 @@ const (
 //     existing project; in Claude's case that flips to
 //     `claude --continue || claude || zsh` (the zsh fallback lets the
 //     user inspect the project if Claude is broken).
-//   - ConfigRoot: ~/.claude, ~/.codex, ~/.gemini. The Agents config tab
-//     uses this to pick which file to display.
+//   - ConfigRoot: ~/.claude, ~/.codex, ~/.gemini/antigravity-cli. The
+//     Agents config tab uses this to pick which file to display.
 //   - TranscriptsRoot: where per-project JSONL transcripts live. The
 //     usage panel walks this tree to total tokens / prompts.
 //   - InitialPrompt: the first message ccmux types into the agent's
 //     prompt after the new session is up. Per-agent because the
-//     bootstrapping rituals differ (Claude runs /init; Codex/Gemini
+//     bootstrapping rituals differ (Claude runs /init; Codex/Antigravity
 //     have their own conventions).
 //   - Classify: per-agent heuristic for "needs input" detection. Each
 //     CLI has a different prompt frame, so this is the most agent-
 //     specific method.
 //
 // Implementations live in this package next to this file so an audit
-// can read all three (claude.go, codex.go, gemini.go) without jumping
-// around.
+// can read all three (claude.go, codex.go, antigravity.go) without
+// jumping around.
 type Agent interface {
 	ID() ID
 	DisplayName() string
@@ -84,11 +84,11 @@ type Agent interface {
 }
 
 // All returns every supported agent in canonical order
-// (claude → codex → gemini). Order matters: pickers default to the
-// first installed entry, and that lets us bias new users toward Claude
-// without making it special-case in UI code.
+// (claude → codex → antigravity). Order matters: pickers default to
+// the first installed entry, and that lets us bias new users toward
+// Claude without making it special-case in UI code.
 func All() []Agent {
-	return []Agent{Claude{}, Codex{}, Gemini{}}
+	return []Agent{Claude{}, Codex{}, Antigravity{}}
 }
 
 // ByID returns the Agent for a known ID. Falls back to Default() for
@@ -101,8 +101,12 @@ func ByID(id ID) Agent {
 		return Claude{}
 	case IDCodex:
 		return Codex{}
-	case IDGemini:
-		return Gemini{}
+	case IDAntigravity, "gemini":
+		// "gemini" alias: projects scaffolded against the Gemini CLI
+		// before the Antigravity rebrand wrote "gemini" into their
+		// sidecar. Map it to Antigravity so those projects keep working
+		// without a migration step.
+		return Antigravity{}
 	}
 	panic("agent: unknown ID " + string(id))
 }
@@ -118,8 +122,9 @@ func ParseID(s string) (ID, bool) {
 		return IDClaude, true
 	case IDCodex:
 		return IDCodex, true
-	case IDGemini:
-		return IDGemini, true
+	case IDAntigravity, "gemini":
+		// "gemini" alias retained for back-compat — see ByID.
+		return IDAntigravity, true
 	}
 	return "", false
 }

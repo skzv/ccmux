@@ -168,7 +168,7 @@ type tracked struct {
 	// <project>/.ccmux/agent on first sight. Cached so we don't stat
 	// the sidecar every poll tick. The classifier for state detection
 	// is `agent.ByID(agentID).Classify(…)` — that's what lets Codex
-	// and Gemini sessions get their own heuristics instead of
+	// and Antigravity sessions get their own heuristics instead of
 	// borrowing Claude's box-drawing prompt detector.
 	agentID agent.ID
 	// projectPath is the working directory of the tmux session, used

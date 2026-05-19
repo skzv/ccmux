@@ -32,14 +32,14 @@ func TestWalkCodex_NoTranscripts(t *testing.T) {
 	}
 }
 
-// TestWalkGemini_Stub mirrors WalkCodex_Stub.
-func TestWalkGemini_Stub(t *testing.T) {
-	got, err := WalkGemini(5 * time.Hour)
+// TestWalkAntigravity_Stub mirrors WalkCodex_Stub.
+func TestWalkAntigravity_Stub(t *testing.T) {
+	got, err := WalkAntigravity(5 * time.Hour)
 	if err != nil {
 		t.Fatalf("stub should not error: %v", err)
 	}
 	if got.HasData {
-		t.Errorf("stub returned HasData=true — expected false until a real walker lands. Did you implement WalkGemini? Update this test.")
+		t.Errorf("stub returned HasData=true — expected false until a real walker lands. Did you implement WalkAntigravity? Update this test.")
 	}
 }
 
