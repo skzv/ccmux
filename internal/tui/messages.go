@@ -5,6 +5,7 @@ import (
 
 	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/claudeusage"
+	"github.com/skzv/ccmux/internal/conversations"
 	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/notes"
 	"github.com/skzv/ccmux/internal/project"
@@ -295,6 +296,47 @@ type usageLoadedMsg struct {
 	Codex       usage.AgentSummary
 	Antigravity usage.AgentSummary
 	Err         error
+}
+
+// conversationsLoadedMsg carries the result of a Conversations-screen
+// refresh. The screen reads it via App and forwards List to its model.
+// Err is non-nil only when every agent's walker failed — a per-agent
+// failure is logged and swallowed so one corrupt transcript dir
+// doesn't blank the whole list.
+type conversationsLoadedMsg struct {
+	List []conversations.Conversation
+	Err  error
+}
+
+// openConversationsForProjectMsg is the Projects-screen → App
+// trigger for the per-project drill-down: pressing `c` on a project
+// row emits this with the project's path, App switches to
+// ScreenConversations and pre-applies the path as a filter so the
+// user lands on a view scoped to "this project's history."
+type openConversationsForProjectMsg struct {
+	Project string
+}
+
+// conversationResumedMsg fires after a resume attempt completes (the
+// tmux session has been spawned, or the attempt errored). Drives the
+// post-resume toast + sessions refresh so the new session shows up
+// immediately in the Sessions tab.
+type conversationResumedMsg struct {
+	// Session is the name of the new tmux session ccmux created for
+	// the resumed conversation. Used by App to switch focus to it.
+	Session string
+
+	// Project is the resolved project label/path of the conversation,
+	// for toast wording.
+	Project string
+
+	// Agent is the agent the conversation belongs to, for toast
+	// wording and the post-resume attach.
+	Agent string
+
+	// Err is non-nil when the resume couldn't be started (agent
+	// binary missing, tmux call failed, etc.).
+	Err error
 }
 
 // Claude config screen messages.

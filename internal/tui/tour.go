@@ -63,15 +63,16 @@ func defaultTourSteps() []tourStep {
 			KeyHint: "States: active = working  ·  idle = quiet  ·  needs_input = waiting for you",
 		},
 		{
-			Title: "Projects, Notes, Claude (3-5)",
+			Title: "Conversations, Projects, Notes, Agents (3-6)",
 			Body: []string{
 				"The remaining screens cover the workflow loop:",
 			},
 			Bullets: []string{
-				"3 — Projects: every dir under ~/Projects with a CLAUDE.md or .git",
-				"4 — Notes: per-project docs/ vault — Specs, ADRs, Agent Logs",
-				"5 — Claude: edit ~/.claude config — model picker, MCP, hooks",
-				"6 — Settings: ccmux's own config (paths, daemon, theme)",
+				"3 — Conversations: every past agent dialogue (Claude/Codex/Antigravity) — pick one and resume",
+				"4 — Projects: every dir under ~/Projects with a CLAUDE.md or .git",
+				"5 — Notes: per-project docs/ vault — Specs, ADRs, Agent Logs",
+				"6 — Agents: edit ~/.claude / ~/.codex / ~/.gemini/antigravity-cli config",
+				"7 — Settings: ccmux's own config (paths, daemon, theme)",
 			},
 			KeyHint: "Number keys jump between screens · `?` opens contextual help · q quits",
 		},
