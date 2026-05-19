@@ -302,7 +302,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.projectsM.SetHosts(a.hosts)
 		a.sessionsM.SetHosts(a.hosts)
 		a.sessionsM.SetDefaultDir(a.cfg.Sessions.DefaultDir)
-		a.sessionsM.SetDefaultAgent(a.cfg.Sessions.DefaultAgent)
+		a.sessionsM.SetDefaultAgent(a.cfg.Agents.Default)
+		a.projectsM.SetDefaultAgent(a.cfg.Agents.Default)
 		a.dashboard.SetVersion(a.version)
 		a.sessionsM.SetSessions(a.sessions)
 		if msg.Err != nil {
