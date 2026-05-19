@@ -134,6 +134,13 @@ func TestSuggestTmuxConf_HasKeyDirectives(t *testing.T) {
 	out := SuggestTmuxConf()
 	musts := []string{
 		"set -s set-clipboard on",
+		// Don't blind the user with default highlighter-yellow.
+		"mode-style",
+		// Mouse-drag: keep highlight on release (the user-reported
+		// "selection vanishes" bug). copy-pipe-no-clear, not -and-cancel.
+		"MouseDragEnd1Pane",
+		"copy-pipe-no-clear",
+		// Keyboard yank still cancels (so user can resume typing).
 		"copy-pipe-and-cancel",
 		"# === ccmux clipboard",
 		"# === /ccmux clipboard ===",
@@ -141,6 +148,105 @@ func TestSuggestTmuxConf_HasKeyDirectives(t *testing.T) {
 	for _, m := range musts {
 		if !strings.Contains(out, m) {
 			t.Errorf("tmux conf snippet missing %q:\n%s", m, out)
+		}
+	}
+}
+
+// TestTmuxClipboardCommands_AppliesAllThreeFixes pins the argv vectors
+// EnableTmuxClipboard runs against tmux. Three directives, in order:
+//
+//  1. set -s set-clipboard on   — OSC 52 forwarding (the existing fix)
+//  2. set -g mode-style ...     — replaces ugly yellow selection
+//  3. bind MouseDragEnd1Pane    — selection persists after mouse release
+//
+// Each one corresponds to a symptom the user hit: yellow color, vanish-
+// on-release, and copy-not-reaching-system-clipboard. Locking these in
+// means a future "clean up the clipboard package" refactor that drops
+// any of the three regresses the bug we just shipped a fix for.
+func TestTmuxClipboardCommands_AppliesAllThreeFixes(t *testing.T) {
+	cmds := TmuxClipboardCommands()
+	if len(cmds) != 3 {
+		t.Fatalf("len = %d, want 3 (set-clipboard, mode-style, MouseDragEnd1Pane)", len(cmds))
+	}
+
+	// Each row is an argv. First element is always "tmux".
+	for i, argv := range cmds {
+		if len(argv) == 0 {
+			t.Fatalf("cmds[%d] is empty", i)
+		}
+		if argv[0] != "tmux" {
+			t.Errorf("cmds[%d][0] = %q, want tmux", i, argv[0])
+		}
+	}
+
+	// Flatten for substring-based assertions on each row.
+	join := func(argv []string) string { return strings.Join(argv, " ") }
+
+	// 1. set-clipboard on (server option).
+	if got := join(cmds[0]); !strings.Contains(got, "set -s set-clipboard on") {
+		t.Errorf("cmds[0] should enable set-clipboard server-wide, got: %q", got)
+	}
+
+	// 2. mode-style overrides the harsh default. Must be a global (-g)
+	// set so it applies to every session, and must NOT contain "yellow"
+	// (which would be regression to default).
+	if got := join(cmds[1]); !strings.Contains(got, "set -g mode-style") {
+		t.Errorf("cmds[1] should set mode-style globally, got: %q", got)
+	}
+	if got := join(cmds[1]); strings.Contains(strings.ToLower(got), "yellow") {
+		t.Errorf("cmds[1] should NOT use yellow (the broken default), got: %q", got)
+	}
+
+	// 3. MouseDragEnd1Pane binding under copy-mode-vi must use
+	// copy-pipe-no-clear so the highlight persists after release.
+	// copy-pipe-and-cancel here would be the bug we're fixing.
+	mouseBinding := join(cmds[2])
+	musts := []string{
+		"bind-key",
+		"copy-mode-vi",
+		"MouseDragEnd1Pane",
+		"copy-pipe-no-clear",
+	}
+	for _, want := range musts {
+		if !strings.Contains(mouseBinding, want) {
+			t.Errorf("cmds[2] should contain %q, got: %q", want, mouseBinding)
+		}
+	}
+	if strings.Contains(mouseBinding, "copy-pipe-and-cancel") {
+		t.Errorf("cmds[2] uses copy-pipe-and-cancel — that's the bug. Want copy-pipe-no-clear.\nGot: %q", mouseBinding)
+	}
+}
+
+// TestSuggestTmuxConf_MatchesAppliedConfig — the snippet ccmux pastes
+// into the user's ~/.tmux.conf and the live tmux commands ccmuxd
+// invokes on startup must agree on the load-bearing directives, or a
+// user who follows the snippet gets a different experience than ccmux
+// applies. Pin parity on the keywords that drive the fix.
+func TestSuggestTmuxConf_MatchesAppliedConfig(t *testing.T) {
+	conf := SuggestTmuxConf()
+	for _, argv := range TmuxClipboardCommands() {
+		joined := strings.Join(argv, " ")
+		// Strip the leading "tmux " — the conf file syntax omits it.
+		joined = strings.TrimPrefix(joined, "tmux ")
+		// Pick a stable signature substring per command rather than the
+		// whole argv, since conf-file syntax is slightly different (e.g.
+		// `bind-key -T copy-mode-vi MouseDragEnd1Pane send-keys -X X`
+		// matches both representations on the keyword "copy-pipe-no-clear").
+		// We assert each command has a recognizable substring in the conf.
+		var key string
+		switch {
+		case strings.Contains(joined, "set-clipboard"):
+			key = "set-clipboard on"
+		case strings.Contains(joined, "mode-style"):
+			key = "mode-style"
+		case strings.Contains(joined, "MouseDragEnd1Pane"):
+			key = "copy-pipe-no-clear"
+		default:
+			t.Errorf("unrecognized command in TmuxClipboardCommands: %q — add a parity check", joined)
+			continue
+		}
+		if !strings.Contains(conf, key) {
+			t.Errorf("SuggestTmuxConf missing %q (drift from TmuxClipboardCommands)", key)
 		}
 	}
 }

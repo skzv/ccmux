@@ -34,15 +34,68 @@ import (
 	"strings"
 )
 
-// EnableTmuxClipboard turns on `set-clipboard` server-wide so every
-// session ccmux interacts with emits OSC 52 on copy. Idempotent —
-// rerunning is cheap and there's no "off" mode worth supporting here
-// (the user can disable via their own ~/.tmux.conf if needed).
+// EnableTmuxClipboard applies ccmux's tmux-side clipboard config:
+// turns on OSC 52 forwarding, replaces the harsh-yellow default
+// mode-style with the ccmux mauve, and rebinds MouseDragEnd1Pane so
+// dragging-to-select keeps the highlight on release instead of
+// blanking it the instant the mouse comes up. All best-effort — a
+// failure on any one call doesn't abort the others; the worst case is
+// vanilla tmux behavior, which is what the user had before.
 //
-// We use `set -s` (server option) rather than per-session so attaching
-// from a different terminal doesn't lose the setting.
+// Idempotent — rerunning is cheap; there's no "off" mode worth
+// supporting (the user can override via their own ~/.tmux.conf).
+//
+// Three commands, mirrored exactly in TmuxClipboardCommands() so tests
+// can pin the contract without standing up a real tmux server.
 func EnableTmuxClipboard(ctx context.Context) error {
-	return exec.CommandContext(ctx, "tmux", "set", "-s", "set-clipboard", "on").Run()
+	var firstErr error
+	for _, argv := range TmuxClipboardCommands() {
+		if err := exec.CommandContext(ctx, argv[0], argv[1:]...).Run(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+// TmuxClipboardCommands returns the argv vectors EnableTmuxClipboard
+// invokes, in order. Pure data — no exec, no context, no globals —
+// so tests can pin both the contents and the order without booting
+// tmux.
+//
+// Why each command:
+//
+//   - `set -s set-clipboard on` — server option. Tells tmux to emit
+//     OSC 52 escape sequences whenever something lands in its paste
+//     buffer. The terminal at the other end of the SSH/local pipe is
+//     what actually puts the bytes on the system clipboard; whether
+//     that works depends on the terminal (see TerminalSupport). Use
+//     `-s` so attaching from a different terminal doesn't lose it.
+//
+//   - `set -g mode-style ...` — global session option. The default
+//     mode-style is bg=yellow,fg=black, which makes selections look
+//     like a screaming highlighter. Match the ccmux mauve so the
+//     selection reads as part of the chrome instead of a warning.
+//
+//   - `bind -T copy-mode-vi MouseDragEnd1Pane send -X copy-pipe-no-clear` —
+//     global keytable binding. Tmux's default fires
+//     `copy-pipe-and-cancel` on mouse-release, which immediately exits
+//     copy-mode and blanks the visual selection. Users coming from
+//     native-terminal selection expect the highlight to stay until
+//     they explicitly leave copy-mode (Esc / q). The `-no-clear`
+//     variant copies AND keeps the highlight; OSC 52 forwarding still
+//     fires because `set-clipboard on` is what wires that, not the
+//     binding's flavor.
+func TmuxClipboardCommands() [][]string {
+	return [][]string{
+		{"tmux", "set", "-s", "set-clipboard", "on"},
+		// bg/fg are the same accent + base from tmuxchrome.Options so the
+		// selection reads as part of the ccmux chrome. Hard-coded here
+		// (not imported from tmuxchrome) to keep this package leaf-free
+		// and avoid a cycle if tmuxchrome ever wants to call into here.
+		{"tmux", "set", "-g", "mode-style", "bg=#cba6f7,fg=#1e1e2e"},
+		{"tmux", "bind-key", "-T", "copy-mode-vi", "MouseDragEnd1Pane",
+			"send-keys", "-X", "copy-pipe-no-clear"},
+	}
 }
 
 // TmuxClipboardState returns the current value of `set-clipboard` for
@@ -181,8 +234,9 @@ func DetectTerminal() TerminalSupport {
 
 // SuggestTmuxConf returns the tmux.conf snippet ccmux suggests
 // appending to the user's ~/.tmux.conf when they go through the setup
-// wizard's clipboard step. Includes the server option plus copy-mode
-// keybindings that pipe to OSC 52.
+// wizard's clipboard step. Mirrors what EnableTmuxClipboard /
+// TmuxClipboardCommands apply at runtime; tests pin the parity so a
+// drift here is loud.
 //
 // We don't write this to the user's file ourselves at install time —
 // touching ~/.tmux.conf is too invasive a default. Setup wizard offers
@@ -193,11 +247,19 @@ func SuggestTmuxConf() string {
 # is updated even when you're attached to a remote tmux over SSH.
 set -s set-clipboard on
 
-# Copy-mode bindings: pressing 'y' (vi mode) or Enter (emacs) yanks the
-# selection AND emits OSC 52. Without these, the default copy-pipe
-# uses pbcopy/xclip which doesn't traverse SSH.
+# Don't blind anyone with the default highlighter-yellow selection.
+# Match ccmux's mauve accent so the selection reads as chrome.
+set -g mode-style bg=#cba6f7,fg=#1e1e2e
+
+# Mouse-drag to select: keep the highlight visible after release
+# (copy-pipe-no-clear) instead of vanishing immediately. The selection
+# still lands on the system clipboard via 'set-clipboard on' above —
+# that wire is independent of which copy-pipe variant runs.
+bind-key -T copy-mode-vi MouseDragEnd1Pane send-keys -X copy-pipe-no-clear
+
+# Keyboard yank still cancels copy-mode so you can resume typing
+# without an extra Escape.
 bind-key -T copy-mode-vi y send-keys -X copy-pipe-and-cancel
-bind-key -T copy-mode    MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel
 # === /ccmux clipboard ===
 `
 }
