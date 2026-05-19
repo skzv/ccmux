@@ -2,11 +2,13 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -31,17 +33,112 @@ type projectsModel struct {
 	// sessionsLoadedMsg. Snapshot into the form at "n"-press time so
 	// the picker shows what the user was looking at.
 	hosts []hostStatus
+
+	// Filter state. When filterActive is true, keystrokes feed the
+	// textinput and the list view shows only projects whose name
+	// matches the filter (case-insensitive substring). Cursor is
+	// always an index into the *visible* (filtered) list, so
+	// Selected() reflects what the user sees.
+	filter       textinput.Model
+	filterActive bool
 }
 
 func newProjects(st styles.Styles, km Keymap) projectsModel {
-	return projectsModel{st: st, km: km}
+	ti := textinput.New()
+	ti.Placeholder = "type to filter…"
+	ti.Prompt = "/ "
+	ti.CharLimit = 64
+	ti.Width = 40
+	return projectsModel{st: st, km: km, filter: ti}
 }
 
 func (m *projectsModel) SetProjects(p []project.Project) {
 	m.projects = p
-	if m.cursor >= len(p) {
-		m.cursor = max0(len(p) - 1)
+	m.clampCursor()
+}
+
+// visibleProjects returns the slice the user actually sees: the full
+// list when no filter is engaged, or the case-insensitive substring
+// match against project name + path when the filter has text.
+// Centralized so the renderer and Selected() can't drift.
+func (m projectsModel) visibleProjects() []project.Project {
+	q := strings.TrimSpace(strings.ToLower(m.filter.Value()))
+	if q == "" {
+		return m.projects
 	}
+	out := make([]project.Project, 0, len(m.projects))
+	for _, p := range m.projects {
+		if matchesProjectFilter(p, q) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// matchesProjectFilter is the predicate behind the "/" filter:
+// case-insensitive substring match on the project name. Name-only
+// (not path) because every project shares a parent directory, so
+// path matching makes "/s" trigger on a name like "ccmux" via the
+// "/Projects/" segment of the path — not what the user typed.
+// Pulled out so the test can hit it directly without standing up the
+// full TUI model.
+func matchesProjectFilter(p project.Project, q string) bool {
+	if q == "" {
+		return true
+	}
+	return strings.Contains(strings.ToLower(p.Name), q)
+}
+
+// Selected returns the project under the cursor in the *filtered*
+// view, or nil when nothing is visible. Callers must use this rather
+// than indexing the unfiltered slice directly — otherwise enter on a
+// filtered list attaches to the wrong project.
+func (m projectsModel) Selected() *project.Project {
+	vis := m.visibleProjects()
+	if m.cursor < 0 || m.cursor >= len(vis) {
+		return nil
+	}
+	p := vis[m.cursor]
+	return &p
+}
+
+func (m *projectsModel) clampCursor() {
+	n := len(m.visibleProjects())
+	if m.cursor >= n {
+		m.cursor = max0(n - 1)
+	}
+	if m.cursor < 0 {
+		m.cursor = 0
+	}
+}
+
+// FilterActive reports whether the filter input has focus. App uses
+// this to route keystrokes to the textinput (otherwise typing the
+// session-switch keys 1-7 would jump screens mid-filter).
+func (m projectsModel) FilterActive() bool { return m.filterActive }
+
+// enterFilter focuses the textinput. Idempotent.
+func (m *projectsModel) enterFilter() {
+	m.filterActive = true
+	m.filter.Focus()
+}
+
+// exitFilter drops focus and clears the buffer so the next "/" starts
+// from an empty prompt. Cursor is clamped back into the (now full)
+// list so we don't render with cursor==42 against a 5-row pane.
+func (m *projectsModel) exitFilter() {
+	m.filterActive = false
+	m.filter.Blur()
+	m.filter.SetValue("")
+	m.clampCursor()
+}
+
+// commitFilter blurs the textinput but keeps the filter text so the
+// list stays filtered after Enter. The user can still see what they
+// were searching for; pressing "/" again re-focuses, esc clears.
+func (m *projectsModel) commitFilter() {
+	m.filterActive = false
+	m.filter.Blur()
 }
 
 // SetHosts is called from App so the "n" form can populate its device
@@ -68,7 +165,34 @@ func (m projectsModel) Update(msg tea.Msg) (projectsModel, tea.Cmd) {
 	}
 
 	if km, ok := msg.(tea.KeyMsg); ok {
+		// Filter mode: arrow keys (only — not vim j/k, which are
+		// part of the alphabet the user is typing) move the cursor.
+		// Esc clears the filter; App handles Enter (which calls
+		// Selected() + attach), so this branch never sees Enter.
+		// Every other key feeds the textinput.
+		if m.filterActive {
+			switch km.Type {
+			case tea.KeyUp:
+				if m.cursor > 0 {
+					m.cursor--
+				}
+				return m, nil
+			case tea.KeyDown:
+				if m.cursor < len(m.visibleProjects())-1 {
+					m.cursor++
+				}
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.filter, cmd = m.filter.Update(msg)
+			m.clampCursor()
+			return m, cmd
+		}
+
 		switch {
+		case km.String() == "/":
+			m.enterFilter()
+			return m, textinput.Blink
 		case keyMatches(km, m.km.NewItem):
 			f := newNewProjectForm(m.st, m.hosts)
 			m.form = &f
@@ -81,10 +205,9 @@ func (m projectsModel) Update(msg tea.Msg) (projectsModel, tea.Cmd) {
 			// agent.All() in canonical order. Local-host projects
 			// only; remote-project switching would require a daemon
 			// endpoint we don't ship today (tracked under Phase 4).
-			if m.cursor >= 0 && m.cursor < len(m.projects) {
-				p := m.projects[m.cursor]
-				if projectHost(p) == "local" {
-					return m, switchAgentCmd(p)
+			if sel := m.Selected(); sel != nil {
+				if projectHost(*sel) == "local" {
+					return m, switchAgentCmd(*sel)
 				}
 				return m, func() tea.Msg {
 					return toastMsg{
@@ -99,7 +222,7 @@ func (m projectsModel) Update(msg tea.Msg) (projectsModel, tea.Cmd) {
 				m.cursor--
 			}
 		case keyMatches(km, m.km.Down):
-			if m.cursor < len(m.projects)-1 {
+			if m.cursor < len(m.visibleProjects())-1 {
 				m.cursor++
 			}
 		}
@@ -179,7 +302,7 @@ func (m projectsModel) View(width, height int) string {
 }
 
 func (m projectsModel) renderList(width, height int) string {
-	header := m.st.Emphasis.Render("Projects") + "  " + m.st.Muted.Render("(n: new   u: upgrade cwd   enter: attach)")
+	header := m.st.Emphasis.Render("Projects") + "  " + m.st.Muted.Render("(/: filter   n: new   u: upgrade cwd   enter: attach)")
 	if len(m.projects) == 0 {
 		body := lipgloss.JoinVertical(lipgloss.Left,
 			header,
@@ -190,9 +313,29 @@ func (m projectsModel) renderList(width, height int) string {
 		)
 		return m.st.Pane.Width(width - 2).Height(height - 2).Render(body)
 	}
-	rows := []string{header, ""}
+
+	vis := m.visibleProjects()
+	rows := []string{header}
+	if m.filterActive || m.filter.Value() != "" {
+		// Filter prompt line lives beneath the header. Show the live
+		// match count so the user can tell whether they need to keep
+		// typing or commit.
+		rows = append(rows,
+			m.filter.View()+"  "+m.st.Muted.Render(fmt.Sprintf("(%d/%d)", len(vis), len(m.projects))))
+	}
+	rows = append(rows, "")
+
+	if len(vis) == 0 {
+		rows = append(rows,
+			m.st.Muted.Render("No projects match "+m.filter.Value()+"."),
+			"",
+			m.st.Muted.Render("Press esc to clear the filter."),
+		)
+		return m.st.PaneFocused.Width(width - 2).Height(height - 2).Render(strings.Join(rows, "\n"))
+	}
+
 	currentHost := ""
-	for i, p := range m.projects {
+	for i, p := range vis {
 		host := projectHost(p)
 		if host != currentHost {
 			if i > 0 {
@@ -227,10 +370,11 @@ func (m projectsModel) renderList(width, height int) string {
 }
 
 func (m projectsModel) renderDetail(width, height int) string {
-	if len(m.projects) == 0 || m.cursor < 0 || m.cursor >= len(m.projects) {
+	sel := m.Selected()
+	if sel == nil {
 		return m.st.Pane.Width(width - 2).Height(height - 2).Render(m.st.Muted.Render("No selection."))
 	}
-	p := m.projects[m.cursor]
+	p := *sel
 	host := projectHost(p)
 	enterDesc := "attach or create session locally"
 	if host != "local" {

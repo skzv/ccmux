@@ -32,7 +32,8 @@ Legend: `[P1]` Phase 1, `[P2]` Phase 2, `[P3]` Phase 3, `[L]` Long-term / native
 | Upgrade existing project: inject `CLAUDE.md`, vault structure, `.gitignore` rules | P1 | Replaces `upgrade-proj`. Non-destructive. |
 | Templates: blank, Python (uv), Go, Next.js, Rust (cargo) | P2 | Templates live in `internal/templates/` as embedded FS. |
 | Recently opened projects pinned to top of project list | P2 | Last-opened time in config. |
-| Quick-jump: `Ctrl-P` opens fuzzy finder over all projects | P1 | Bubbles `list` with filter. |
+| `/` on Projects screen filters the visible list by name (case-insensitive substring) | P1 | Type-to-filter via bubbles `textinput`. Esc clears, enter attaches to the highlighted match. |
+| Quick-jump: `Ctrl-P` opens fuzzy finder over all projects | P1 | Global hotkey form of the above, scoped to "from any screen". Not yet shipped. |
 | Per-project `.ccmux.toml` overrides (auto-attach behavior, default branch) | P2 | Optional, merged over user config. |
 
 ## Notes System (plain markdown in `docs/`)
