@@ -65,5 +65,6 @@ func init() {
 		newUninstallCmd(),
 		newRenameCmd(),
 		newClipboardPipeCmd(),
+		newListConversationsCmd(),
 	)
 }
