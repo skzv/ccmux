@@ -9,6 +9,7 @@ import (
 	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/notes"
 	"github.com/skzv/ccmux/internal/project"
+	"github.com/skzv/ccmux/internal/selfupdate"
 	"github.com/skzv/ccmux/internal/usage"
 )
 
@@ -315,6 +316,16 @@ type conversationsLoadedMsg struct {
 // user lands on a view scoped to "this project's history."
 type openConversationsForProjectMsg struct {
 	Project string
+}
+
+// updateCheckMsg carries the result of the launch-time auto-update
+// check. Err non-nil means "couldn't tell" (no checkout, no upstream,
+// offline) — the App silently ignores it; no banner. On success the
+// App stores Result so the dashboard can render the "update
+// available" banner when Result.Available().
+type updateCheckMsg struct {
+	Result selfupdate.Result
+	Err    error
 }
 
 // conversationDeletedMsg fires after a delete attempt completes. The

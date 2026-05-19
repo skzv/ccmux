@@ -252,3 +252,52 @@ func TestAttachMode_MissingKeyKeepsMirrorDefault(t *testing.T) {
 		t.Errorf("AttachMode = %q for a config without the key, want mirror (default preserved)", out.Sessions.AttachMode)
 	}
 }
+
+// TestDefaults_AutoCheckEnabled — auto-update-check defaults on. The
+// feature is opt-out: a fresh install gets the launch-time check
+// without the user doing anything.
+func TestDefaults_AutoCheckEnabled(t *testing.T) {
+	withFakeHome(t)
+	if !Defaults().Update.AutoCheck {
+		t.Error("Defaults().Update.AutoCheck = false, want true (opt-out feature)")
+	}
+}
+
+// TestAutoCheck_SurvivesSaveLoad — a user who turns the check off in
+// Settings expects it to stay off across restarts.
+func TestAutoCheck_SurvivesSaveLoad(t *testing.T) {
+	withFakeHome(t)
+	in := Defaults()
+	in.Update.AutoCheck = false
+	if err := Save(in); err != nil {
+		t.Fatal(err)
+	}
+	out, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Update.AutoCheck {
+		t.Error("AutoCheck = true after saving false — round-trip lost the setting")
+	}
+}
+
+// TestAutoCheck_MissingKeyKeepsDefaultOn — a config.toml predating
+// the [update] section must still get AutoCheck=true. Load() layers
+// the file over Defaults(), so a missing key preserves the default.
+func TestAutoCheck_MissingKeyKeepsDefaultOn(t *testing.T) {
+	home := withFakeHome(t)
+	p := filepath.Join(home, ".config", "ccmux", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte("theme = \"nord\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !out.Update.AutoCheck {
+		t.Error("a config without [update] should keep AutoCheck=true")
+	}
+}

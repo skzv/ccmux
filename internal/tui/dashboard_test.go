@@ -6,6 +6,7 @@ import (
 
 	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/daemon"
+	"github.com/skzv/ccmux/internal/selfupdate"
 	"github.com/skzv/ccmux/internal/tui/styles"
 	"github.com/skzv/ccmux/internal/usage"
 )
@@ -178,5 +179,52 @@ func TestRenderAgentUsageBlock_AntigravityOpaqueTokens(t *testing.T) {
 	// And the literal "0 in" must NOT appear.
 	if strings.Contains(got, "0 in") {
 		t.Errorf("antigravity block should not render literal '0 in':\n%s", got)
+	}
+}
+
+// TestDashboard_UpdateBanner_ShownWhenBehind — once App pushes a
+// positive update check, the hero panel must carry the banner.
+// Pluralization is pinned because "1 commit" vs "3 commits" is the
+// kind of thing a refactor silently breaks.
+func TestDashboard_UpdateBanner_ShownWhenBehind(t *testing.T) {
+	st := styles.Default()
+	cases := []struct {
+		behind int
+		want   string
+	}{
+		{1, "1 commit"},
+		{3, "3 commits"},
+		{12, "12 commits"},
+	}
+	for _, tc := range cases {
+		m := newDashboard(st, DefaultKeymap())
+		m.SetUpdateAvailable(selfupdate.Result{Behind: tc.behind, Branch: "main"})
+		hero := m.heroPanel(120)
+		if !strings.Contains(hero, "update available") {
+			t.Errorf("behind=%d: hero missing the update banner:\n%s", tc.behind, hero)
+		}
+		if !strings.Contains(hero, tc.want) {
+			t.Errorf("behind=%d: banner should say %q:\n%s", tc.behind, tc.want, hero)
+		}
+		if !strings.Contains(hero, "ccmux update") {
+			t.Errorf("behind=%d: banner should tell the user to run `ccmux update`", tc.behind)
+		}
+	}
+}
+
+// TestDashboard_UpdateBanner_HiddenWhenUpToDate — the zero-value
+// Result (no check, or check found 0 behind) must render NO banner.
+// A banner that shows when there's no update would train users to
+// ignore it.
+func TestDashboard_UpdateBanner_HiddenWhenUpToDate(t *testing.T) {
+	m := newDashboard(styles.Default(), DefaultKeymap())
+	// No SetUpdateAvailable call — zero value.
+	if strings.Contains(m.heroPanel(120), "update available") {
+		t.Error("hero panel shows an update banner with no update pending")
+	}
+	// Explicitly Behind=0 must also stay silent.
+	m.SetUpdateAvailable(selfupdate.Result{Behind: 0, Branch: "main"})
+	if strings.Contains(m.heroPanel(120), "update available") {
+		t.Error("Behind=0 should not render the banner")
 	}
 }
