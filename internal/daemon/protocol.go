@@ -73,10 +73,11 @@ type NewSessionRequest struct {
 
 // NewBareSessionRequest is the body of POST /v1/sessions/bare. A
 // "bare" session is one not tied to a project — no scaffold, no
-// agent, just a tmux session running the user's shell at Path.
-// The Sessions tab's "new session" form posts this to either the
-// local daemon (for a local-host session) or to a tailnet peer's
-// daemon (cross-device shell on the Mac mini, say).
+// description — just a tmux session running the picked agent (or
+// $SHELL when Agent is empty) at Path. The Sessions tab's "new
+// session" form posts this to either the local daemon (for a
+// local-host session) or to a tailnet peer's daemon (cross-device
+// session on the Mac mini, say).
 //
 // Why a separate endpoint from NewSessionRequest: extending the
 // existing one would mean an "if Project == ” && !Bare" branch
@@ -88,11 +89,17 @@ type NewBareSessionRequest struct {
 	// of truth for naming so concurrent clients on the same daemon
 	// don't collide.
 	Name string `json:"name,omitempty"`
-	// Path is the working directory the shell opens in. Empty →
+	// Path is the working directory the session opens in. Empty →
 	// resolves to $HOME on the daemon host. We deliberately don't
 	// resolve client-side; the home directory of the *remote*
 	// machine is what matters when "any device" is the point.
 	Path string `json:"path,omitempty"`
+	// Agent picks which AI agent the new session launches. One of
+	// "claude" / "codex" / "antigravity" (or the legacy alias
+	// "gemini"), or the explicit "shell" for no agent. Empty falls
+	// back to the daemon's configured sessions.default_agent; if
+	// that's also empty / "shell" the daemon spawns $SHELL.
+	Agent string `json:"agent,omitempty"`
 }
 
 // NewBareSessionResponse is what POST /v1/sessions/bare returns.

@@ -39,6 +39,11 @@ type sessionsModel struct {
 	// Resolved sessions.default_dir for the form's placeholder.
 	// Pushed by App on config load / reload.
 	defaultDir string
+
+	// Resolved sessions.default_agent — selects the form's agent
+	// picker default at open time. Pushed by App on config load /
+	// reload; empty falls back to the first installed agent.
+	defaultAgent string
 }
 
 func newSessions(st styles.Styles, km Keymap) sessionsModel {
@@ -92,6 +97,12 @@ func (m *sessionsModel) SetDefaultDir(d string) {
 	m.defaultDir = d
 }
 
+// SetDefaultAgent is called by App on startup + configReloadMsg. The
+// new-session form's agent picker pre-selects this value on open.
+func (m *sessionsModel) SetDefaultAgent(a string) {
+	m.defaultAgent = a
+}
+
 func (m sessionsModel) Update(msg tea.Msg) (sessionsModel, tea.Cmd) {
 	// Rename modal: route everything through the rename form except its
 	// own finalizer messages, which App handles.
@@ -130,8 +141,8 @@ func (m sessionsModel) Update(msg tea.Msg) (sessionsModel, tea.Cmd) {
 	if km, ok := msg.(tea.KeyMsg); ok {
 		switch {
 		case keyMatches(km, m.km.NewItem):
-			// Open the bare-session form.
-			f := newNewSessionForm(m.st, m.hosts, m.defaultDir)
+			// Open the new-session form.
+			f := newNewSessionForm(m.st, m.hosts, m.defaultDir, m.defaultAgent)
 			m.form = &f
 			return m, textinput.Blink
 		case keyMatches(km, m.km.Rename):

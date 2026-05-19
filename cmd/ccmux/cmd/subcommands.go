@@ -22,19 +22,21 @@ import (
 	"github.com/skzv/ccmux/internal/daemonservice"
 	"github.com/skzv/ccmux/internal/ghauth"
 	"github.com/skzv/ccmux/internal/moshi"
+	"github.com/skzv/ccmux/internal/project"
 	"github.com/skzv/ccmux/internal/scaffold"
 	"github.com/skzv/ccmux/internal/setupwizard"
 	"github.com/skzv/ccmux/internal/tmux"
 )
 
 // newAttachCmd: `ccmux attach [project]`
-// Attaches to the Claude session for the named project (or the current
-// directory if none is given). If the session doesn't exist, creates it
-// with `claude --continue`, falling back to fresh `claude`.
+// Attaches to the named project's agent session (or the current
+// directory if none is given). If the session doesn't exist, creates
+// it via the agent's LaunchCmd(continue=true) — Claude by default, or
+// whichever agent the project's .ccmux/agent sidecar records.
 func newAttachCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "attach [project]",
-		Short: "Attach to a project's Claude session (creates one if missing)",
+		Short: "Attach to a project's agent session (creates one if missing)",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
 			path := "."
@@ -53,8 +55,11 @@ func newAttachCmd() *cobra.Command {
 				return err
 			}
 			if !has {
-				// Match the existing cc() function's fallback chain.
-				if err := tmux.New(ctx, session, abs, `claude --continue || claude || zsh`); err != nil {
+				// Resolve the launch command from the project's
+				// sidecar so an Antigravity-tagged project doesn't
+				// silently boot into claude.
+				launch := agent.ByID(project.ReadAgent(abs)).LaunchCmd(true)
+				if err := tmux.New(ctx, session, abs, launch); err != nil {
 					return err
 				}
 			}

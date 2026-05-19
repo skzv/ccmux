@@ -53,7 +53,7 @@ func TestApp_SessionsFormInterceptsEnter(t *testing.T) {
 	a.sessionsM.SetSessions([]daemon.SessionState{{Name: "c-ccmux", Host: "local"}})
 
 	// Open the new-session form the same way the `n` key would.
-	form := newNewSessionForm(st, nil, "")
+	form := newNewSessionForm(st, nil, "", "")
 	a.sessionsM.form = &form
 
 	// Press Enter.
@@ -95,7 +95,7 @@ func TestApp_SessionsFormInterceptsScreenKeys(t *testing.T) {
 		sessionsM: newSessions(st, km),
 		projectsM: newProjects(st, km),
 	}
-	form := newNewSessionForm(st, nil, "")
+	form := newNewSessionForm(st, nil, "", "")
 	a.sessionsM.form = &form
 
 	updated, _ := a.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")})

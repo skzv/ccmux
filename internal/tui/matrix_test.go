@@ -66,7 +66,7 @@ func TestApp_MatrixTriggerSuppressedInFormInput(t *testing.T) {
 		matrix:    newMatrix(),
 	}
 	// Open the new-session form so the App is in form-input mode.
-	form := newNewSessionForm(st, nil, "")
+	form := newNewSessionForm(st, nil, "", "")
 	a.sessionsM.form = &form
 
 	m, _ := a.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'M'}})
