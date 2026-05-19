@@ -63,10 +63,23 @@ func newAttachCmd() *cobra.Command {
 					return err
 				}
 			}
-			// Replace this process with tmux attach.
-			return tmux.Attach(session)
+			// Replace this process with tmux attach. Honor the user's
+			// attach-mode preference (mirror vs exclusive).
+			return tmux.Attach(session, attachDetachOthers())
 		},
 	}
+}
+
+// attachDetachOthers loads the user's config and reports whether an
+// attach should detach other clients ("exclusive" mode). A missing or
+// unreadable config falls back to mirror mode (false) — the default —
+// because that's the less-destructive choice when we can't be sure.
+func attachDetachOthers() bool {
+	cfg, err := config.Load()
+	if err != nil {
+		return false
+	}
+	return cfg.Sessions.DetachOthersOnAttach()
 }
 
 // newNewCmd: `ccmux new <name> [-d description]` — successor to mkproj.
@@ -86,7 +99,7 @@ func newNewCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return tmux.Attach(session)
+			return tmux.Attach(session, attachDetachOthers())
 		},
 	}
 	c.Flags().StringVarP(&description, "description", "d", "",

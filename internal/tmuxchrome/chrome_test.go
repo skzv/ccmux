@@ -91,6 +91,23 @@ func TestOptions_IncludesProjectAndDetachHint(t *testing.T) {
 	}
 }
 
+// TestOptions_WindowSizeLatest — ccmux sets window-size=latest on
+// every session so mirror mode (laptop + phone on the same session)
+// sizes the window to whichever client is active rather than the
+// smallest one. Pinned here because it's a per-session option a
+// future "trim the chrome" refactor could drop without noticing —
+// and its absence only shows up when a second client attaches.
+func TestOptions_WindowSizeLatest(t *testing.T) {
+	opts := Options("c-foo", "p", false, false, "Ctrl-b")
+	asMap := map[string]string{}
+	for _, kv := range opts {
+		asMap[kv[0]] = kv[1]
+	}
+	if got := asMap["window-size"]; got != "latest" {
+		t.Errorf("window-size = %q, want latest (mirror-mode sizing)", got)
+	}
+}
+
 // TestOptions_NestedSwitchesDetachHint — when ccmux's outer tmux is
 // running and we got here via `tmux switch-client`, plain "prefix + d"
 // would close the whole client. The chrome must instead tell the user

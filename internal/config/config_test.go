@@ -174,3 +174,81 @@ func TestFirstNonEmpty(t *testing.T) {
 		}
 	}
 }
+
+// TestDefaults_AttachModeIsMirror — the default must be "mirror" so a
+// fresh install lets the same session be watched from laptop + phone
+// at once. The whole point of the feature is that it's on by default.
+func TestDefaults_AttachModeIsMirror(t *testing.T) {
+	withFakeHome(t)
+	if got := Defaults().Sessions.AttachMode; got != "mirror" {
+		t.Errorf("Defaults().Sessions.AttachMode = %q, want mirror", got)
+	}
+}
+
+// TestDetachOthersOnAttach — the predicate every attach call site
+// reads. Only "exclusive" detaches others; everything else (mirror,
+// empty, garbage, casing variants) is treated as mirror — the
+// less-destructive default when the value is anything unexpected.
+func TestDetachOthersOnAttach(t *testing.T) {
+	cases := []struct {
+		mode string
+		want bool
+	}{
+		{"exclusive", true},
+		{"Exclusive", true},     // case-insensitive
+		{"  exclusive  ", true}, // whitespace-tolerant
+		{"mirror", false},
+		{"", false},         // empty → mirror (back-compat with pre-field configs)
+		{"nonsense", false}, // unknown → mirror (safe default)
+	}
+	for _, tc := range cases {
+		t.Run(tc.mode, func(t *testing.T) {
+			s := SessionsConfig{AttachMode: tc.mode}
+			if got := s.DetachOthersOnAttach(); got != tc.want {
+				t.Errorf("AttachMode=%q: DetachOthersOnAttach() = %v, want %v", tc.mode, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestAttachMode_SurvivesSaveLoad — the field must round-trip through
+// config.toml. A user who picks "exclusive" in Settings expects it to
+// stick across restarts.
+func TestAttachMode_SurvivesSaveLoad(t *testing.T) {
+	withFakeHome(t)
+	in := Defaults()
+	in.Sessions.AttachMode = "exclusive"
+	if err := Save(in); err != nil {
+		t.Fatal(err)
+	}
+	out, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Sessions.AttachMode != "exclusive" {
+		t.Errorf("AttachMode = %q after round-trip, want exclusive", out.Sessions.AttachMode)
+	}
+}
+
+// TestAttachMode_MissingKeyKeepsMirrorDefault — a config.toml written
+// before this field existed has no [sessions].attach_mode key. Load()
+// starts from Defaults() and unmarshals on top, so the missing key
+// must leave the mirror default intact rather than zeroing it.
+func TestAttachMode_MissingKeyKeepsMirrorDefault(t *testing.T) {
+	home := withFakeHome(t)
+	// A minimal config with NO [sessions] section at all.
+	p := filepath.Join(home, ".config", "ccmux", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte("theme = \"dracula\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Sessions.AttachMode != "mirror" {
+		t.Errorf("AttachMode = %q for a config without the key, want mirror (default preserved)", out.Sessions.AttachMode)
+	}
+}

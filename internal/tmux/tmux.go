@@ -172,18 +172,40 @@ func SendKeys(ctx context.Context, name, keys string) error {
 	return nil
 }
 
+// AttachArgs returns the tmux argument vector (everything after the
+// `tmux` binary itself) for attaching to `name`. The single source of
+// truth for the attach command shape — local exec, remote ssh, and the
+// foreground Attach() below all build on this so the -d decision can't
+// drift between paths.
+//
+// detachOthers=true appends -d ("exclusive" mode — kick other clients);
+// false omits it ("mirror" mode — other clients stay attached).
+func AttachArgs(name string, detachOthers bool) []string {
+	if detachOthers {
+		return []string{"attach-session", "-d", "-t", name}
+	}
+	return []string{"attach-session", "-t", name}
+}
+
 // Attach replaces the current process with `tmux attach -t name`.
 // This must be called from the foreground of a terminal — typically the TUI
 // suspends itself first, then re-execs into tmux. After tmux detaches, the
 // caller resumes.
 //
+// detachOthers controls the -d flag:
+//   - false (mirror mode) — other clients stay attached; the session is
+//     mirrored across every device viewing it.
+//   - true (exclusive mode) — attaching kicks every other client off,
+//     and the session resizes cleanly to this terminal.
+//
 // On success this function does not return (syscall.Exec replaces the process).
-func Attach(name string) error {
+func Attach(name string, detachOthers bool) error {
 	tmuxBin, err := exec.LookPath("tmux")
 	if err != nil {
 		return fmt.Errorf("tmux not on PATH: %w", err)
 	}
-	return syscall.Exec(tmuxBin, []string{"tmux", "attach-session", "-d", "-t", name}, os.Environ())
+	argv := append([]string{"tmux"}, AttachArgs(name, detachOthers)...)
+	return syscall.Exec(tmuxBin, argv, os.Environ())
 }
 
 // SessionNameForPath converts a filesystem path to ccmux's tmux session-naming
