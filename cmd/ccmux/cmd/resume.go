@@ -138,7 +138,7 @@ func resumeNow(target conversations.Conversation) error {
 	// so when the user detaches they return to whatever shell launched
 	// `ccmux resume`, not to ccmux itself. Same pattern as
 	// `ccmux attach`.
-	return tmux.Attach(sessionName)
+	return tmux.Attach(sessionName, attachDetachOthers())
 }
 
 // joinArgs glues an argv slice with spaces. Local helper to avoid the

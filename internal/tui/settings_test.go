@@ -303,3 +303,68 @@ func TestSettings_AgentsDefault_RejectsUnknown(t *testing.T) {
 		})
 	}
 }
+
+// TestSettings_AttachMode_AcceptsValidModes — the sessions.attach_mode
+// Settings field accepts "mirror" / "exclusive" (and empty → mirror),
+// case-insensitively, and rejects anything else. This is the surface
+// the user flips to opt out of mirror mode.
+func TestSettings_AttachMode_AcceptsValidModes(t *testing.T) {
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{"mirror", "mirror"},
+		{"exclusive", "exclusive"},
+		{"EXCLUSIVE", "exclusive"},
+		{"  Mirror  ", "mirror"},
+		{"", "mirror"}, // empty resets to the default
+	}
+	for _, tc := range cases {
+		t.Run(tc.input, func(t *testing.T) {
+			cfg := config.Defaults()
+			f := byLabel(editableFields(), "sessions.attach_mode")
+			if f == nil {
+				t.Fatal("sessions.attach_mode field not registered")
+			}
+			if err := f.set(&cfg, tc.input); err != nil {
+				t.Fatalf("set(%q) errored: %v", tc.input, err)
+			}
+			if cfg.Sessions.AttachMode != tc.want {
+				t.Errorf("AttachMode = %q, want %q", cfg.Sessions.AttachMode, tc.want)
+			}
+		})
+	}
+}
+
+// TestSettings_AttachMode_RejectsUnknown — a typo must error rather
+// than persist. "miror" silently falling through would leave the user
+// in mirror mode while they think they typed something meaningful.
+func TestSettings_AttachMode_RejectsUnknown(t *testing.T) {
+	cfg := config.Defaults()
+	f := byLabel(editableFields(), "sessions.attach_mode")
+	if f == nil {
+		t.Fatal("sessions.attach_mode field missing")
+	}
+	for _, bad := range []string{"miror", "shared", "solo", "detached"} {
+		t.Run(bad, func(t *testing.T) {
+			if err := f.set(&cfg, bad); err == nil {
+				t.Errorf("set(%q) should error, got nil", bad)
+			}
+		})
+	}
+}
+
+// TestSettings_AttachMode_GetShowsEffectiveValue — an empty stored
+// value must display as "mirror" in the Settings row, not blank, so
+// the user sees what's actually in effect.
+func TestSettings_AttachMode_GetShowsEffectiveValue(t *testing.T) {
+	f := byLabel(editableFields(), "sessions.attach_mode")
+	if f == nil {
+		t.Fatal("sessions.attach_mode field missing")
+	}
+	cfg := config.Defaults()
+	cfg.Sessions.AttachMode = "" // simulate a pre-field config
+	if got := f.get(&cfg); got != "mirror" {
+		t.Errorf("get() on empty AttachMode = %q, want mirror (effective value)", got)
+	}
+}

@@ -123,6 +123,16 @@ func Options(session, projectLabel string, moshiReachable, nested bool, prefix s
 		// Show the window list compactly between the two flanks.
 		{"window-status-current-style", fmt.Sprintf("bg=%s,fg=%s,bold", accentBG, accent)},
 		{"window-status-style", fmt.Sprintf("fg=%s", fgMuted)},
+		// window-size=latest: when more than one client is attached
+		// (ccmux's mirror mode — laptop + phone on the same session),
+		// size the window to whichever client was most recently
+		// active rather than shrinking everyone to the smallest one.
+		// Harmless in exclusive mode too — with a single client,
+		// "latest" is just that client. Set per-session so it doesn't
+		// disturb the user's other (non-ccmux) tmux sessions, and so
+		// it overrides any `window-size smallest` in their ~/.tmux.conf
+		// for ccmux sessions specifically.
+		{"window-size", "latest"},
 	}
 }
 
@@ -165,7 +175,7 @@ func Reset(ctx context.Context, session string) error {
 		"status-position", "status-style", "status-left", "status-right",
 		"status-left-length", "status-right-length",
 		"window-status-current-style", "window-status-style",
-		"status-interval",
+		"status-interval", "window-size",
 	}
 	for _, key := range opts {
 		_ = exec.CommandContext(ctx, "tmux", "set-option", "-t", session, "-u", key).Run()

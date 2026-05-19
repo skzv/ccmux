@@ -207,3 +207,40 @@ func TestListFormatStaysAlignedWithParser(t *testing.T) {
 		t.Fatalf("listFormat has %d fields, parser expects %d — keep them in sync", gotFields, wantFields)
 	}
 }
+
+// TestAttachArgs_MirrorVsExclusive pins the -d flag decision — the
+// single most load-bearing bit of mirror mode. Mirror (detachOthers=
+// false) must omit -d so other clients survive the attach; exclusive
+// (true) must include it so the session resizes cleanly to this
+// terminal. A regression either way silently breaks the feature:
+// a stray -d in mirror mode kicks the user's other device; a missing
+// -d in exclusive mode leaves the window stuck at smallest-client.
+func TestAttachArgs_MirrorVsExclusive(t *testing.T) {
+	mirror := AttachArgs("c-foo", false)
+	if got := strings.Join(mirror, " "); got != "attach-session -t c-foo" {
+		t.Errorf("mirror AttachArgs = %q, want 'attach-session -t c-foo' (no -d)", got)
+	}
+	for _, a := range mirror {
+		if a == "-d" {
+			t.Errorf("mirror mode must not include -d, got %v", mirror)
+		}
+	}
+
+	exclusive := AttachArgs("c-foo", true)
+	if got := strings.Join(exclusive, " "); got != "attach-session -d -t c-foo" {
+		t.Errorf("exclusive AttachArgs = %q, want 'attach-session -d -t c-foo'", got)
+	}
+}
+
+// TestAttachArgs_SessionNameWithSpecials — the session name is the
+// last argv element, passed as-is (exec, not a shell), so no quoting
+// is needed; but the name must land intact even with characters that
+// would matter in a shell context.
+func TestAttachArgs_SessionNameWithSpecials(t *testing.T) {
+	for _, name := range []string{"c-foo", "c-a.b.c", "c-resume-3dc0131a"} {
+		got := AttachArgs(name, false)
+		if got[len(got)-1] != name {
+			t.Errorf("AttachArgs(%q): last arg = %q, want the name verbatim", name, got[len(got)-1])
+		}
+	}
+}

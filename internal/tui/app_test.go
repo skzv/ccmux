@@ -102,7 +102,8 @@ func TestDialAddrFor_StripsPort(t *testing.T) {
 }
 
 func TestRemoteTmuxAttach(t *testing.T) {
-	got := remoteTmuxAttach("c-foo")
+	// detachOthers=false → mirror mode (the default).
+	got := remoteTmuxAttach("c-foo", false)
 	if !strings.HasPrefix(got, "PATH=") {
 		t.Errorf("missing PATH prefix: %q", got)
 	}
@@ -127,9 +128,28 @@ func TestRemoteTmuxAttach(t *testing.T) {
 	if !strings.HasSuffix(got, "'c-foo'") {
 		t.Errorf("session name not quoted as expected: %q", got)
 	}
-	tricky := remoteTmuxAttach("c'foo")
+	tricky := remoteTmuxAttach("c'foo", false)
 	if !strings.HasSuffix(tricky, `'c'\''foo'`) {
 		t.Errorf("single-quote escaping failed: %q", tricky)
+	}
+}
+
+// TestRemoteTmuxAttach_DetachFlag — mirror mode (false) must NOT emit
+// -d so other clients survive; exclusive mode (true) must emit it.
+// This is the wire-format half of the mirror-mode contract: the
+// local user's preference has to actually reach the remote tmux.
+func TestRemoteTmuxAttach_DetachFlag(t *testing.T) {
+	mirror := remoteTmuxAttach("c-foo", false)
+	if strings.Contains(mirror, " -d ") {
+		t.Errorf("mirror mode should NOT pass -d, got: %q", mirror)
+	}
+	if !strings.Contains(mirror, "attach-session -t ") {
+		t.Errorf("mirror mode should attach without -d: %q", mirror)
+	}
+
+	exclusive := remoteTmuxAttach("c-foo", true)
+	if !strings.Contains(exclusive, "attach-session -d -t ") {
+		t.Errorf("exclusive mode should pass -d, got: %q", exclusive)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 )
@@ -44,6 +45,32 @@ type SessionsConfig struct {
 	// new-session form pre-fills this value; the user can override
 	// per-session.
 	DefaultDir string `toml:"default_dir"`
+
+	// AttachMode controls what happens to OTHER clients when ccmux
+	// attaches to a session:
+	//
+	//   "mirror"    (default) — `tmux attach` without -d. Other
+	//               clients stay attached; the session is mirrored
+	//               across every device viewing it. Paired with
+	//               tmux's `window-size latest` so the window tracks
+	//               whichever client is most recently active rather
+	//               than shrinking to the smallest one.
+	//   "exclusive" — `tmux attach -d`. Attaching detaches every
+	//               other client. The window always resizes cleanly
+	//               to the attaching terminal. This was ccmux's
+	//               behavior before mirror mode existed.
+	//
+	// Empty is treated as "mirror" (the default), so a config file
+	// that predates this field gets the new behavior.
+	AttachMode string `toml:"attach_mode"`
+}
+
+// DetachOthersOnAttach reports whether an attach should kick other
+// clients off the session — true only in "exclusive" mode. Centralized
+// so every attach call site (TUI local, TUI remote-ssh, CLI) reads the
+// mode through one predicate instead of string-comparing inline.
+func (s SessionsConfig) DetachOthersOnAttach() bool {
+	return strings.EqualFold(strings.TrimSpace(s.AttachMode), "exclusive")
 }
 
 // AgentsConfig holds the cross-app default-agent preference and
@@ -224,6 +251,12 @@ func Defaults() Config {
 			// because the daemon may live on a different machine
 			// (cross-device "new bare session") with a different home.
 			DefaultDir: "",
+			// Mirror by default: attaching from a second device keeps
+			// the first one attached, so the same session can be
+			// watched from laptop + phone at once. Users who want the
+			// old "attaching kicks everyone else" behavior set this to
+			// "exclusive".
+			AttachMode: "mirror",
 		},
 		Agents: AgentsConfig{
 			// Default to claude so a fresh install lands new sessions

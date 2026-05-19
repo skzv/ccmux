@@ -168,6 +168,30 @@ func editableFields() []editableField {
 			},
 		},
 		{
+			label: "sessions.attach_mode",
+			hint:  "mirror = other devices stay attached (default); exclusive = attaching detaches them.",
+			get: func(c *config.Config) string {
+				// Surface the effective value so an empty field reads
+				// as "mirror" rather than blank.
+				if c.Sessions.AttachMode == "" {
+					return "mirror"
+				}
+				return c.Sessions.AttachMode
+			},
+			set: func(c *config.Config, raw string) error {
+				raw = strings.TrimSpace(strings.ToLower(raw))
+				switch raw {
+				case "", "mirror":
+					c.Sessions.AttachMode = "mirror"
+					return nil
+				case "exclusive":
+					c.Sessions.AttachMode = "exclusive"
+					return nil
+				}
+				return fmt.Errorf("must be 'mirror' or 'exclusive'")
+			},
+		},
+		{
 			label: "theme",
 			hint:  "Theme picker UI coming in v0.2. Edit config.toml directly to switch.",
 			get:   func(c *config.Config) string { return c.Theme },

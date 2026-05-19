@@ -431,7 +431,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.User != "" {
 			target = msg.User + "@" + msg.DialHost
 		}
-		remoteCmd := remoteTmuxAttach(msg.SessionName)
+		remoteCmd := remoteTmuxAttach(msg.SessionName, a.cfg.Sessions.DetachOthersOnAttach())
 		var c *exec.Cmd
 		if msg.Mosh {
 			c = exec.Command("mosh", target, "--", "bash", "-c", remoteCmd)
@@ -1292,8 +1292,9 @@ func (a App) attachSelectedSession() tea.Cmd {
 			if !h.Mosh {
 				bin = "ssh"
 			}
+			remoteArgs := tmux.AttachArgs(sel.Name, a.cfg.Sessions.DetachOthersOnAttach())
 			return tea.ExecProcess(
-				exec.Command(bin, target, "--", "tmux", "attach-session", "-d", "-t", sel.Name),
+				exec.Command(bin, append([]string{target, "--", "tmux"}, remoteArgs...)...),
 				func(err error) tea.Msg { return refreshAfterDetachMsg{} },
 			)
 		}
@@ -1332,7 +1333,7 @@ func (a App) attachSelectedSession() tea.Cmd {
 					return toastMsg{Text: "no reachable address for " + sel.Host, Kind: toastError, Until: time.Now().Add(5 * time.Second)}
 				}
 			}
-			remoteCmd := remoteTmuxAttach(sel.Name)
+			remoteCmd := remoteTmuxAttach(sel.Name, a.cfg.Sessions.DetachOthersOnAttach())
 			cmd := exec.Command("ssh", "-t", dial, remoteCmd)
 			if dbg := debugLogger(); dbg != nil {
 				dbg.Printf("attach discovered: ssh -t %s %q", dial, remoteCmd)
@@ -1419,9 +1420,20 @@ func launchCmdForProjectPath(projectPath string) string {
 // so this is safe to include unconditionally regardless of whether
 // the dialer or the target is macOS or Linux. The trailing $PATH
 // preserves whatever else the remote shell already had set up.
-func remoteTmuxAttach(session string) string {
+//
+// detachOthers carries the local user's attach-mode preference onto
+// the remote tmux: in mirror mode the remote session keeps any other
+// clients (the remote machine's own terminal, another of the user's
+// devices); in exclusive mode it kicks them. The preference is the
+// attaching CLIENT's — "do I want to bump whoever else is viewing
+// this" — so the local config is the right source.
+func remoteTmuxAttach(session string, detachOthers bool) string {
+	flags := ""
+	if detachOthers {
+		flags = " -d"
+	}
 	return "PATH=/opt/homebrew/bin:/usr/local/bin:/home/linuxbrew/.linuxbrew/bin:/snap/bin:$PATH" +
-		" tmux attach-session -d -t " + shellQuote(session)
+		" tmux attach-session" + flags + " -t " + shellQuote(session)
 }
 
 // attachOrCreateForSelectedProject is Enter on Projects screen.
@@ -1603,8 +1615,9 @@ func (a App) localAttachCmd(session, projectLabel string) tea.Cmd {
 			return refreshAfterDetachMsg{}
 		})
 	}
+	attachArgs := tmux.AttachArgs(session, a.cfg.Sessions.DetachOthersOnAttach())
 	return tea.ExecProcess(
-		exec.Command("tmux", "attach-session", "-d", "-t", session),
+		exec.Command("tmux", attachArgs...),
 		func(err error) tea.Msg {
 			if err != nil {
 				return toastMsg{Text: "tmux: " + err.Error(), Kind: toastError, Until: time.Now().Add(5 * time.Second)}
