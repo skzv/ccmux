@@ -28,6 +28,10 @@ type sessionsModel struct {
 	// session on any device. nil when the modal isn't showing.
 	form *newSessionFormModel
 
+	// `R` opens an inline rename form for the selected session.
+	// nil when not showing.
+	renameForm *renameFormModel
+
 	// Cached so the form's device picker has the same set as the
 	// Projects screen. Pushed by App on every sessionsLoadedMsg.
 	hosts []hostStatus
@@ -89,6 +93,22 @@ func (m *sessionsModel) SetDefaultDir(d string) {
 }
 
 func (m sessionsModel) Update(msg tea.Msg) (sessionsModel, tea.Cmd) {
+	// Rename modal: route everything through the rename form except its
+	// own finalizer messages, which App handles.
+	if m.renameForm != nil {
+		switch msg := msg.(type) {
+		case renameSessionCancelMsg:
+			m.renameForm = nil
+			return m, nil
+		case renameSessionSubmitMsg:
+			m.renameForm = nil
+			return m, func() tea.Msg { return msg }
+		}
+		f, cmd := m.renameForm.Update(msg)
+		m.renameForm = &f
+		return m, cmd
+	}
+
 	// Modal mode: route everything through the form except its own
 	// finalizer messages, which the App handles.
 	if m.form != nil {
@@ -114,6 +134,12 @@ func (m sessionsModel) Update(msg tea.Msg) (sessionsModel, tea.Cmd) {
 			f := newNewSessionForm(m.st, m.hosts, m.defaultDir)
 			m.form = &f
 			return m, textinput.Blink
+		case keyMatches(km, m.km.Rename):
+			if sel := m.Selected(); sel != nil {
+				f := newRenameForm(m.st, sel.Name)
+				m.renameForm = &f
+				return m, textinput.Blink
+			}
 		case keyMatches(km, m.km.Up):
 			if m.cursor > 0 {
 				m.cursor--
@@ -133,6 +159,10 @@ func (m sessionsModel) Update(msg tea.Msg) (sessionsModel, tea.Cmd) {
 }
 
 func (m sessionsModel) View(width, height int) string {
+	if m.renameForm != nil {
+		formW := minInt(80, width-4)
+		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, m.renameForm.View(formW))
+	}
 	// Modal form overlay — mirrors how projectsModel renders its
 	// new-project modal: dimmed list behind, centered form on top.
 	if m.form != nil {
@@ -202,7 +232,7 @@ func (m sessionsModel) renderDetail(width, height int) string {
 		m.st.Subtitle.Render("Keys"),
 		m.st.Key.Render("enter") + "  attach (ccmux applies a styled bar to the session)",
 		m.st.Key.Render("x") + "      kill",
-		m.st.Key.Render("R") + "      rename (coming soon)",
+		m.st.Key.Render("R") + "      rename",
 		m.st.Key.Render("k") + "      toggle keep-awake (coming soon)",
 		m.st.Key.Render("s") + "      snapshot (coming soon)",
 		"",

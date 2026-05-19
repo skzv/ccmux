@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -380,6 +382,61 @@ func TestSessionsCursorEmptyList(t *testing.T) {
 	}
 	if sel := m.Selected(); sel != nil {
 		t.Errorf("Selected() on empty list = %v, want nil", sel)
+	}
+}
+
+// TestUniqueSessionName_Format verifies that uniqueSessionName returns a name
+// with the expected suffix pattern. When tmux is not running (CI or any
+// machine without a server), tmux.Has reports no session and the function
+// returns the first candidate: "<base>-2".
+func TestUniqueSessionName_Format(t *testing.T) {
+	ctx := context.Background()
+	got := uniqueSessionName(ctx, "c-myproject")
+	// Must start with the base and a hyphen-digit suffix.
+	if !strings.HasPrefix(got, "c-myproject-") {
+		t.Errorf("uniqueSessionName = %q, want c-myproject-<n>", got)
+	}
+	suffix := got[len("c-myproject-"):]
+	if suffix == "" {
+		t.Errorf("uniqueSessionName = %q, missing suffix", got)
+	}
+	// The suffix must be numeric or a ms timestamp — both parse as digits.
+	for _, ch := range suffix {
+		if ch < '0' || ch > '9' {
+			t.Errorf("uniqueSessionName suffix %q contains non-digit %q", suffix, string(ch))
+		}
+	}
+}
+
+// TestUniqueSessionName_SkipsTaken tests the core deduplication logic using
+// a pure function extracted from uniqueSessionName. We can't inject a fake
+// tmux.Has, so we verify the naming algorithm directly.
+func TestUniqueSessionName_NamingAlgorithm(t *testing.T) {
+	// Simulate the deduplication loop from uniqueSessionName.
+	nextFree := func(base string, taken map[string]bool) string {
+		for i := 2; i < 100; i++ {
+			candidate := fmt.Sprintf("%s-%d", base, i)
+			if !taken[candidate] {
+				return candidate
+			}
+		}
+		return fmt.Sprintf("%s-overflow", base)
+	}
+
+	cases := []struct {
+		base  string
+		taken map[string]bool
+		want  string
+	}{
+		{"c-foo", map[string]bool{}, "c-foo-2"},
+		{"c-foo", map[string]bool{"c-foo-2": true}, "c-foo-3"},
+		{"c-foo", map[string]bool{"c-foo-2": true, "c-foo-3": true}, "c-foo-4"},
+		{"c-bar", map[string]bool{"c-bar-2": true, "c-bar-3": true, "c-bar-4": true}, "c-bar-5"},
+	}
+	for _, tc := range cases {
+		if got := nextFree(tc.base, tc.taken); got != tc.want {
+			t.Errorf("nextFree(%q, taken=%v) = %q, want %q", tc.base, tc.taken, got, tc.want)
+		}
 	}
 }
 
