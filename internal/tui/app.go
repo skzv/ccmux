@@ -48,13 +48,55 @@ const (
 	ScreenAgents
 	ScreenSettings
 	ScreenNetwork
+
+	// screenCount is a sentinel — it must stay LAST in this block. It
+	// equals the number of real screens, so allScreens() can iterate
+	// the full set without a hand-maintained list that drifts. Adding
+	// a new screen above this line is the *only* edit needed for it to
+	// appear in the tab bar; the renderHeader bug (Conversations tab
+	// missing because a hardcoded slice wasn't updated) is structurally
+	// impossible once everything derives from here.
+	screenCount
 )
 
+// screenLabels maps each Screen to its tab-bar / help-footer label.
+// Index by Screen value. TestScreenLabelsCoverEveryScreen pins that
+// this slice stays the same length as screenCount, so a new screen
+// without a label trips a test instead of panicking String() at
+// runtime.
+//
+// "Agents" was "Claude" before Codex / Antigravity joined — rename
+// here is the canonical place since both the tab bar and the help
+// footer read String().
+var screenLabels = [screenCount]string{
+	ScreenDashboard:     "Dashboard",
+	ScreenSessions:      "Sessions",
+	ScreenConversations: "Conversations",
+	ScreenProjects:      "Projects",
+	ScreenNotes:         "Notes",
+	ScreenAgents:        "Agents",
+	ScreenSettings:      "Settings",
+	ScreenNetwork:       "Network",
+}
+
 func (s Screen) String() string {
-	// "Agents" was "Claude" before Codex / Antigravity joined. The label
-	// drives the top tab bar AND the contextual help footer, so a
-	// rename here is the canonical place to keep them in sync.
-	return []string{"Dashboard", "Sessions", "Conversations", "Projects", "Notes", "Agents", "Settings", "Network"}[s]
+	if s < 0 || s >= screenCount {
+		return "?"
+	}
+	return screenLabels[s]
+}
+
+// allScreens returns every Screen in tab-bar order. Derived from the
+// screenCount sentinel so it can never drift out of sync with the
+// const block — the root cause of the "Conversations tab missing
+// from the header" bug. renderHeader iterates this; a new screen
+// joins the tab bar automatically.
+func allScreens() []Screen {
+	out := make([]Screen, screenCount)
+	for i := range out {
+		out[i] = Screen(i)
+	}
+	return out
 }
 
 // App is the root Bubble Tea model.
@@ -768,20 +810,30 @@ func clampLines(s string, n int) string {
 
 // renderHeader is the top-of-screen tab strip. On narrow terminals the
 // tab labels collapse to just their number; the full strip never wraps.
+//
+// The tab list comes from allScreens() — never a hardcoded slice.
+// A hardcoded list is what dropped the Conversations tab from the bar
+// for a release; deriving from the Screen enum makes that class of
+// bug structurally impossible.
 func (a App) renderHeader() string {
-	tabs := []Screen{ScreenDashboard, ScreenSessions, ScreenProjects, ScreenNotes, ScreenAgents, ScreenSettings, ScreenNetwork}
 	parts := []string{a.styles.Title.Render(" ccmux ")}
 	narrow := isNarrow(a.width)
-	for i, t := range tabs {
+	for _, t := range allScreens() {
+		// Number label = enum value + 1. This is the SAME number the
+		// keymap binds (Dashboard→1 … Network→8), because the keymap
+		// and the enum share their order. Using int(t)+1 rather than a
+		// loop index keeps the label correct even if allScreens() is
+		// ever reordered.
+		num := int(t) + 1
 		var label string
 		if narrow {
 			// Just the number when space is tight.
-			label = fmt.Sprintf(" %d ", i+1)
+			label = fmt.Sprintf(" %d ", num)
 			if t == a.screen {
-				label = fmt.Sprintf("[%d %s]", i+1, t.String()[:1])
+				label = fmt.Sprintf("[%d %s]", num, t.String()[:1])
 			}
 		} else {
-			label = fmt.Sprintf("[%d] %s", i+1, t.String())
+			label = fmt.Sprintf("[%d] %s", num, t.String())
 			label = " " + label + " "
 		}
 		if t == a.screen {
