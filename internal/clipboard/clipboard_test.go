@@ -140,6 +140,8 @@ func TestSuggestTmuxConf_HasKeyDirectives(t *testing.T) {
 		// "selection vanishes" bug). copy-pipe-no-clear, not -and-cancel.
 		"MouseDragEnd1Pane",
 		"copy-pipe-no-clear",
+		// Runtime-dispatch hook for local-clipboard fallback (Terminal.app).
+		"ccmux clipboard-pipe",
 		// Keyboard yank still cancels (so user can resume typing).
 		"copy-pipe-and-cancel",
 		"# === ccmux clipboard",
@@ -206,6 +208,12 @@ func TestTmuxClipboardCommands_AppliesAllThreeFixes(t *testing.T) {
 		"copy-mode-vi",
 		"MouseDragEnd1Pane",
 		"copy-pipe-no-clear",
+		// The runtime-dispatch hook: tmux pipes the selection through
+		// `ccmux clipboard-pipe` which decides per-invocation whether
+		// to route to pbcopy / wl-copy / xclip. Without this trailing
+		// arg, Terminal.app users get nothing from the local clipboard
+		// because Terminal.app silently drops OSC 52 writes.
+		"ccmux clipboard-pipe",
 	}
 	for _, want := range musts {
 		if !strings.Contains(mouseBinding, want) {
@@ -214,6 +222,13 @@ func TestTmuxClipboardCommands_AppliesAllThreeFixes(t *testing.T) {
 	}
 	if strings.Contains(mouseBinding, "copy-pipe-and-cancel") {
 		t.Errorf("cmds[2] uses copy-pipe-and-cancel — that's the bug. Want copy-pipe-no-clear.\nGot: %q", mouseBinding)
+	}
+	// The pipe hook must be the LAST argv element — tmux's
+	// copy-pipe-no-clear treats its trailing optional arg as the
+	// shell command. Putting it anywhere else makes tmux read it as
+	// a flag and the dispatch silently breaks.
+	if got := cmds[2][len(cmds[2])-1]; got != "ccmux clipboard-pipe" {
+		t.Errorf("last arg = %q, want %q", got, "ccmux clipboard-pipe")
 	}
 }
 
