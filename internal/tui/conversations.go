@@ -55,6 +55,15 @@ type conversationsModel struct {
 	// during a slow filesystem walk doesn't look like "no
 	// conversations."
 	loading bool
+
+	// pendingDelete holds the conversation ID currently armed for
+	// deletion. Deleting a transcript is irreversible, so `x` arms
+	// rather than acts: first `x` sets this to the selected row's ID
+	// and the row shows a "press x to confirm" warning; a second `x`
+	// on the same row fires the delete. Esc, moving the cursor, or a
+	// refresh all disarm — the user can't accidentally confirm a
+	// delete they armed minutes ago on a different row.
+	pendingDelete string
 }
 
 func newConversations(st styles.Styles, km Keymap) conversationsModel {
@@ -73,6 +82,10 @@ func (m *conversationsModel) SetList(list []conversations.Conversation) {
 	m.list = list
 	m.loading = false
 	m.loadErr = ""
+	// A refresh invalidates any armed delete: the list the user armed
+	// against is no longer the list on screen. Forcing a re-arm after
+	// every reload is the safe choice for an irreversible action.
+	m.pendingDelete = ""
 
 	visible = m.filtered()
 	if selectedID != "" {
@@ -152,11 +165,40 @@ func (m conversationsModel) Update(msg tea.Msg) (conversationsModel, tea.Cmd) {
 		if m.cursor > 0 {
 			m.cursor--
 		}
+		// Moving off the armed row disarms — a delete confirm must be
+		// two presses on the SAME row, never a stale arm + a fresh x.
+		m.pendingDelete = ""
 	case keyMatches(km, m.km.Down):
 		if m.cursor < len(m.filtered())-1 {
 			m.cursor++
 		}
+		m.pendingDelete = ""
+	case keyMatches(km, m.km.Kill):
+		// `x`: arm-then-confirm delete of the selected conversation.
+		sel := m.Selected()
+		if sel == nil {
+			return m, nil
+		}
+		if m.pendingDelete == sel.ID {
+			// Second x on the armed row → fire the delete.
+			c := *sel
+			m.pendingDelete = ""
+			return m, func() tea.Msg {
+				err := conversations.Delete(c)
+				return conversationDeletedMsg{ID: c.ID, Agent: string(c.Agent), Err: err}
+			}
+		}
+		// First x → arm this row.
+		m.pendingDelete = sel.ID
 	case km.String() == "esc":
+		// Esc disarms a pending delete first; only if nothing is armed
+		// does it fall through to clearing the project filter. This
+		// ordering means a user who armed a delete and changed their
+		// mind hits esc once to back out, not twice.
+		if m.pendingDelete != "" {
+			m.pendingDelete = ""
+			return m, nil
+		}
 		// Esc clears the project filter (returns to the global view).
 		// Doesn't navigate away — the user can still hit 1-8 for that.
 		if m.projectFilter != "" {
@@ -214,7 +256,7 @@ func (m conversationsModel) View(width, height int) string {
 	list := m.renderList(visible, listW, height-4)
 	detail := m.renderDetail(visible[m.cursor], detailW, height-4)
 	body := lipgloss.JoinHorizontal(lipgloss.Top, list, " ", detail)
-	hint := st.Muted.Render("enter resume · esc clear filter · 1-8 switch screens")
+	hint := st.Muted.Render("enter resume · x delete · esc clear filter · 1-8 switch screens")
 	return st.Pane.Width(width - 2).Height(height - 2).Render(
 		lipgloss.JoinVertical(lipgloss.Left, header, "", body, hint),
 	)
@@ -250,6 +292,21 @@ func (m conversationsModel) renderList(visible []conversations.Conversation, wid
 		previewBudget := width - len(marker) - agentW - timeW - 4
 		if previewBudget < 10 {
 			previewBudget = 10
+		}
+		// Armed-for-delete row: replace the preview with a loud
+		// confirm prompt so the user can't miss what x-again will do.
+		if c.ID == m.pendingDelete {
+			row := fmt.Sprintf("%s%-*s  %-*s  %s",
+				marker,
+				agentW, m.st.Muted.Render(truncate(agentLabel, agentW)),
+				timeW, m.st.Muted.Render(when),
+				m.st.StatusError.Render("delete this conversation? press x to confirm · esc cancels"),
+			)
+			rows = append(rows, row)
+			if len(rows) >= height {
+				break
+			}
+			continue
 		}
 		row := fmt.Sprintf("%s%-*s  %-*s  %s",
 			marker,

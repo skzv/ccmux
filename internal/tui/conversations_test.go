@@ -281,3 +281,129 @@ func TestConversationsModel_View_ErrorState(t *testing.T) {
 		t.Errorf("error view should surface the error text, got:\n%s", out)
 	}
 }
+
+// TestConversationsModel_DeleteArmsThenConfirms — the core of the
+// destructive-action guard. First `x` arms (no command fired, the row
+// just enters the pending state). Second `x` on the SAME row fires the
+// delete command. A single press must never delete.
+func TestConversationsModel_DeleteArmsThenConfirms(t *testing.T) {
+	m := newConversations(styles.Default(), DefaultKeymap())
+	m.SetList(fakeConversations())
+
+	// First x → arm. No command should fire.
+	m, cmd := m.Update(keyMsg("x"))
+	if cmd != nil {
+		t.Fatal("first x produced a command — delete must require a second press")
+	}
+	if m.pendingDelete != "claude-most-recent" {
+		t.Errorf("first x should arm the selected row, pendingDelete = %q", m.pendingDelete)
+	}
+
+	// Second x on the same row → fire.
+	m, cmd = m.Update(keyMsg("x"))
+	if cmd == nil {
+		t.Fatal("second x on the armed row produced no command")
+	}
+	if m.pendingDelete != "" {
+		t.Errorf("pendingDelete should clear when the delete fires, got %q", m.pendingDelete)
+	}
+	msg := cmd()
+	del, ok := msg.(conversationDeletedMsg)
+	if !ok {
+		t.Fatalf("second x produced %T, want conversationDeletedMsg", msg)
+	}
+	if del.ID != "claude-most-recent" {
+		t.Errorf("delete fired for %q, want claude-most-recent", del.ID)
+	}
+}
+
+// TestConversationsModel_DeleteDisarmsOnCursorMove — arming a delete
+// then moving the cursor must disarm. Otherwise a stale arm on row 1
+// plus an `x` meant for row 3 would delete the wrong conversation.
+func TestConversationsModel_DeleteDisarmsOnCursorMove(t *testing.T) {
+	m := newConversations(styles.Default(), DefaultKeymap())
+	m.SetList(fakeConversations())
+
+	m, _ = m.Update(keyMsg("x")) // arm row 0
+	if m.pendingDelete == "" {
+		t.Fatal("precondition: row should be armed")
+	}
+	m, _ = m.Update(keyMsg("j")) // move down
+	if m.pendingDelete != "" {
+		t.Errorf("cursor move should disarm, pendingDelete = %q", m.pendingDelete)
+	}
+	// And now an x on the new row arms IT, not fires.
+	m, cmd := m.Update(keyMsg("x"))
+	if cmd != nil {
+		t.Error("x after a disarm should re-arm, not fire a delete")
+	}
+	if m.pendingDelete != "codex-yesterday" {
+		t.Errorf("x should arm the new row, pendingDelete = %q", m.pendingDelete)
+	}
+}
+
+// TestConversationsModel_DeleteDisarmsOnEsc — esc on an armed row
+// backs out of the delete WITHOUT also clearing the project filter.
+// The filter-clear is esc's secondary job; a pending delete takes
+// precedence so one esc = "never mind."
+func TestConversationsModel_DeleteDisarmsOnEsc(t *testing.T) {
+	m := newConversations(styles.Default(), DefaultKeymap())
+	m.SetList(fakeConversations())
+	m.SetProjectFilter("/Users/skz/Projects/auth-redesign")
+	m, _ = m.Update(keyMsg("x")) // arm
+	if m.pendingDelete == "" {
+		t.Fatal("precondition: armed")
+	}
+
+	m, _ = m.Update(keyMsg("esc"))
+	if m.pendingDelete != "" {
+		t.Errorf("esc should disarm, pendingDelete = %q", m.pendingDelete)
+	}
+	// The filter must STILL be set — esc consumed by the disarm.
+	if m.projectFilter == "" {
+		t.Error("esc cleared the filter too; a pending delete should take precedence")
+	}
+}
+
+// TestConversationsModel_DeleteDisarmsOnRefresh — SetList (a refresh)
+// invalidates any armed delete. The list the user armed against is no
+// longer on screen, so confirming would be against stale state.
+func TestConversationsModel_DeleteDisarmsOnRefresh(t *testing.T) {
+	m := newConversations(styles.Default(), DefaultKeymap())
+	m.SetList(fakeConversations())
+	m, _ = m.Update(keyMsg("x"))
+	if m.pendingDelete == "" {
+		t.Fatal("precondition: armed")
+	}
+	m.SetList(fakeConversations()) // refresh
+	if m.pendingDelete != "" {
+		t.Errorf("refresh should disarm, pendingDelete = %q", m.pendingDelete)
+	}
+}
+
+// TestConversationsModel_DeleteEmptyList_NoOp — `x` on an empty list
+// must not panic and must not arm anything.
+func TestConversationsModel_DeleteEmptyList_NoOp(t *testing.T) {
+	m := newConversations(styles.Default(), DefaultKeymap())
+	m, cmd := m.Update(keyMsg("x"))
+	if cmd != nil {
+		t.Error("x on empty list should produce no command")
+	}
+	if m.pendingDelete != "" {
+		t.Errorf("x on empty list should not arm, pendingDelete = %q", m.pendingDelete)
+	}
+}
+
+// TestConversationsModel_View_ArmedRowShowsConfirm — the armed row
+// must render a visible confirm prompt so the user knows x-again
+// deletes. A silent armed state would make the second x a surprise.
+func TestConversationsModel_View_ArmedRowShowsConfirm(t *testing.T) {
+	m := newConversations(styles.Default(), DefaultKeymap())
+	m.SetList(fakeConversations())
+	m, _ = m.Update(keyMsg("x")) // arm row 0
+
+	out := m.View(120, 40)
+	if !strings.Contains(out, "press x to confirm") {
+		t.Errorf("armed row should show a confirm prompt:\n%s", out)
+	}
+}

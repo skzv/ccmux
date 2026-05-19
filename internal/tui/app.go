@@ -297,6 +297,30 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.conversationsM.SetList(msg.List)
 		return a, nil
 
+	case conversationDeletedMsg:
+		if msg.Err != nil {
+			return a, func() tea.Msg {
+				return toastMsg{
+					Text:  "delete failed: " + msg.Err.Error(),
+					Kind:  toastError,
+					Until: time.Now().Add(5 * time.Second),
+				}
+			}
+		}
+		// Transcript removed — refresh the list so the row disappears,
+		// and toast the confirmation.
+		a.conversationsM.SetLoading(true)
+		return a, tea.Batch(
+			a.refreshConversationsCmd(),
+			func() tea.Msg {
+				return toastMsg{
+					Text:  fmt.Sprintf("deleted %s conversation %s", msg.Agent, shortConversationID(msg.ID)),
+					Kind:  toastSuccess,
+					Until: time.Now().Add(4 * time.Second),
+				}
+			},
+		)
+
 	case conversationResumedMsg:
 		if msg.Err != nil {
 			return a, func() tea.Msg {
@@ -1542,6 +1566,18 @@ func (a App) lookupHostByName(name string) *hostStatus {
 // so both paths handle the nested-tmux case identically — Projects
 // previously always called attach-session, which silently failed
 // inside the outer ccmux session.
+
+// shortConversationID truncates a conversation UUID to its first 8
+// chars — enough to be recognizable in a tmux session name or a toast
+// without the full 36-char UUID hogging the line. Short IDs that are
+// already ≤8 chars pass through unchanged.
+func shortConversationID(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
+}
+
 // resumeSelectedConversation spawns a new tmux session running the
 // agent that owns the highlighted conversation, with the agent's
 // per-CLI --resume flag pointed at this conversation's ID. The
@@ -1568,11 +1604,7 @@ func (a App) resumeSelectedConversation() tea.Cmd {
 		if len(argv) == 0 {
 			return conversationResumedMsg{Err: fmt.Errorf("don't know how to resume agent %q", c.Agent)}
 		}
-		shortID := c.ID
-		if len(shortID) > 8 {
-			shortID = shortID[:8]
-		}
-		sessionName := "c-resume-" + shortID
+		sessionName := "c-resume-" + shortConversationID(c.ID)
 		dir := c.Project
 		// Build the shell command tmux runs in the new pane. Quote the
 		// ID — UUIDs are safe but the principle holds for future agents
