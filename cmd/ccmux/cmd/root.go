@@ -63,5 +63,6 @@ func init() {
 		newHostCmd(),
 		newMoshiSetupCmd(),
 		newUninstallCmd(),
+		newRenameCmd(),
 	)
 }

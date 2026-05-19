@@ -144,6 +144,29 @@ type projectAgentSwitchedMsg struct {
 // newProjectCancelMsg is emitted by the modal form when the user hits Esc.
 type newProjectCancelMsg struct{}
 
+// projectSessionExistsMsg is emitted by attachOrCreateLocal when the
+// project already has a running tmux session. App responds by opening
+// the session picker modal so the user can choose between rejoining
+// the existing session or spawning a new one with a distinct name.
+type projectSessionExistsMsg struct {
+	Existing    string // name of the already-running tmux session
+	Project     string // project display name (for the label)
+	ProjectPath string // working directory for "start new"
+}
+
+// projectSessionPickMsg is emitted by projectSessionPickerModel on Enter.
+// Action is "rejoin" or "new".
+type projectSessionPickMsg struct {
+	Action      string // "rejoin" | "new"
+	Existing    string // original session name (rejoin target)
+	NewName     string // name for the new session (only used when Action == "new")
+	Project     string
+	ProjectPath string
+}
+
+// projectSessionPickCancelMsg is emitted by the picker on Esc.
+type projectSessionPickCancelMsg struct{}
+
 // projectSessionReadyMsg is emitted after scaffold + StartSession finishes;
 // triggers the actual tmux-attach via tea.ExecProcess. Project is the
 // human-readable label passed to tmuxchrome.Apply so the attached
@@ -199,6 +222,24 @@ type bareSessionReadyMsg struct {
 type sessionKilledMsg struct {
 	Name string
 	Err  error
+}
+
+// Rename flow (Sessions screen `R` key).
+
+// renameSessionSubmitMsg is emitted by renameFormModel on Enter.
+type renameSessionSubmitMsg struct {
+	OldName string
+	NewName string
+}
+
+// renameSessionCancelMsg is emitted by renameFormModel on Esc.
+type renameSessionCancelMsg struct{}
+
+// sessionRenamedMsg is emitted after tmux.Rename completes.
+type sessionRenamedMsg struct {
+	OldName string
+	NewName string
+	Err     error
 }
 
 // Notes screen messages.

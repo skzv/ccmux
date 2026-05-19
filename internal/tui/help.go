@@ -38,7 +38,7 @@ func helpForScreen(s Screen) []HelpItem {
 			{"↑↓ / j k", "navigate session list"},
 			{"enter", "attach (Ctrl-b then d to detach back to ccmux)"},
 			{"x", "kill selected session"},
-			{"R", "rename (coming soon)"},
+			{"R", "rename selected session"},
 			{"k", "toggle keep-awake (coming soon)"},
 			{"s", "snapshot session (coming soon)"},
 		}, common...)

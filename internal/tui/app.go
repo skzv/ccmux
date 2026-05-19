@@ -95,7 +95,10 @@ func (a App) modalCapturingText() bool {
 	if a.tour.Active() || a.helpOpen {
 		return true
 	}
-	if a.projectsM.form != nil || a.sessionsM.form != nil {
+	if a.projectsM.form != nil || a.projectsM.picker != nil {
+		return true
+	}
+	if a.sessionsM.form != nil || a.sessionsM.renameForm != nil {
 		return true
 	}
 	if a.projectsM.FilterActive() {
@@ -258,6 +261,54 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.setToast(msg.Kind, msg.Text, time.Until(msg.Until))
 		return a, nil
 
+	case projectSessionExistsMsg:
+		// A project's session was found already running. Open the picker
+		// so the user can choose between rejoining and spawning a new session.
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		suggestedName := uniqueSessionName(ctx, msg.Existing)
+		cancel()
+		p := newProjectSessionPicker(a.styles, msg.Existing, msg.Project, msg.ProjectPath, suggestedName)
+		a.projectsM.picker = &p
+		return a, nil
+
+	case projectSessionPickMsg:
+		a.projectsM.picker = nil
+		if msg.Action == "rejoin" {
+			return a, a.localAttachCmd(msg.Existing, msg.Project)
+		}
+		// "new": create the named session then attach.
+		name := msg.NewName
+		projectPath := msg.ProjectPath
+		project := msg.Project
+		return a, func() tea.Msg {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := tmux.New(ctx, name, projectPath, `claude --continue || claude || zsh`); err != nil {
+				return toastMsg{Text: "start session: " + err.Error(), Kind: toastError, Until: time.Now().Add(5 * time.Second)}
+			}
+			return projectSessionReadyMsg{Session: name, Project: project}
+		}
+
+	case projectSessionPickCancelMsg:
+		a.projectsM.picker = nil
+		return a, nil
+
+	case renameSessionSubmitMsg:
+		a.sessionsM.renameForm = nil
+		return a, renameSessionCmd(msg.OldName, msg.NewName)
+
+	case renameSessionCancelMsg:
+		a.sessionsM.renameForm = nil
+		return a, nil
+
+	case sessionRenamedMsg:
+		if msg.Err != nil {
+			a.setToast(toastError, "rename failed: "+msg.Err.Error(), 5*time.Second)
+		} else {
+			a.setToast(toastSuccess, "renamed "+msg.OldName+" → "+msg.NewName, 3*time.Second)
+		}
+		return a, a.refreshSessionsCmd()
+
 	case remoteSessionStartedMsg:
 		// Remote daemon already created the tmux session for us;
 		// reuse the same ssh-into-peer path the Sessions screen uses
@@ -270,15 +321,14 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.User != "" {
 			target = msg.User + "@" + msg.DialHost
 		}
+		remoteCmd := remoteTmuxAttach(msg.SessionName)
 		var c *exec.Cmd
 		if msg.Mosh {
-			remoteCmd := remoteTmuxAttach(msg.SessionName)
 			c = exec.Command("mosh", target, "--", "bash", "-c", remoteCmd)
 			if dbg := debugLogger(); dbg != nil {
 				dbg.Printf("remote attach: mosh %s -- bash -c %q", target, remoteCmd)
 			}
 		} else {
-			remoteCmd := remoteTmuxAttach(msg.SessionName)
 			c = exec.Command("ssh", "-t", target, remoteCmd)
 			if dbg := debugLogger(); dbg != nil {
 				dbg.Printf("remote attach: ssh -t %s %q", target, remoteCmd)
@@ -409,7 +459,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Esc dismisses the current toast (when no modal is open). The
 		// projects-screen modal handles esc itself before this code runs.
 		if msg.String() == "esc" && a.toast != "" && time.Now().Before(a.toastUntil) &&
-			!(a.screen == ScreenProjects && a.projectsM.form != nil) {
+			!(a.screen == ScreenProjects && (a.projectsM.form != nil || a.projectsM.picker != nil)) {
 			a.toast = ""
 			return a, nil
 		}
@@ -428,9 +478,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 
-		// If projects screen has its modal open, route through it. We
-		// intentionally still allow global Quit (ctrl+c).
-		if a.screen == ScreenProjects && a.projectsM.form != nil {
+		// If projects screen has its modal open (new-project form or session
+		// picker), route through it. We intentionally still allow global Quit.
+		if a.screen == ScreenProjects && (a.projectsM.form != nil || a.projectsM.picker != nil) {
 			if msg.String() == "ctrl+c" {
 				return a, tea.Quit
 			}
@@ -460,12 +510,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, cmd
 		}
 
-		// Same modal-routing for the Sessions tab's new-bare-session
-		// form. Without this, the global Enter handler below intercepts
-		// the form's submit key and attaches to whatever session the
-		// cursor was on — observed as "Enter in the new-session form
+		// Same modal-routing for the Sessions tab: new-bare-session form and
+		// rename form both need to intercept Enter/digit keys before the global
+		// handlers see them. Without this, the global Enter handler below
+		// intercepts the form's submit key and attaches to whatever session
+		// the cursor was on — observed as "Enter in the new-session form
 		// attaches to c-ccmux instead of creating a new session".
-		if a.screen == ScreenSessions && a.sessionsM.form != nil {
+		if a.screen == ScreenSessions && (a.sessionsM.form != nil || a.sessionsM.renameForm != nil) {
 			if msg.String() == "ctrl+c" {
 				return a, tea.Quit
 			}
@@ -1242,19 +1293,28 @@ func (a App) attachOrCreateForSelectedProject() tea.Cmd {
 	return a.attachOrCreateRemote(p, host)
 }
 
-// attachOrCreateLocal is the existing same-machine path: tmux.New
-// if missing, then localAttachCmd (which routes nested-tmux too).
+// attachOrCreateLocal handles Enter on a local project. If the project's
+// canonical session already exists, it emits projectSessionExistsMsg so the
+// App can open the rejoin/new picker. If the session is new, it creates and
+// attaches immediately — same as before.
 func (a App) attachOrCreateLocal(p project.Project) tea.Cmd {
 	session := p.SessionName()
 	label := p.Name
+	path := p.Path
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		has, _ := tmux.Has(ctx, session)
-		if !has {
-			if err := tmux.New(ctx, session, p.Path, `claude --continue || claude || zsh`); err != nil {
-				return toastMsg{Text: "start session: " + err.Error(), Kind: toastError, Until: time.Now().Add(5 * time.Second)}
+		if has {
+			// Session exists — let the user decide: rejoin or start a new one.
+			return projectSessionExistsMsg{
+				Existing:    session,
+				Project:     label,
+				ProjectPath: path,
 			}
+		}
+		if err := tmux.New(ctx, session, path, `claude --continue || claude || zsh`); err != nil {
+			return toastMsg{Text: "start session: " + err.Error(), Kind: toastError, Until: time.Now().Add(5 * time.Second)}
 		}
 		return projectSessionReadyMsg{Session: session, Project: label}
 	}
@@ -1347,6 +1407,30 @@ func (a App) localAttachCmd(session, projectLabel string) tea.Cmd {
 			return refreshAfterDetachMsg{}
 		},
 	)
+}
+
+// uniqueSessionName finds the next unused tmux session name by appending a
+// numeric suffix to `base` (e.g. "c-myproject-2", "c-myproject-3", …).
+// Falls back to a millisecond timestamp suffix if the first 99 candidates
+// are all taken. The caller is responsible for the context lifetime.
+func uniqueSessionName(ctx context.Context, base string) string {
+	for i := 2; i < 100; i++ {
+		candidate := fmt.Sprintf("%s-%d", base, i)
+		if has, _ := tmux.Has(ctx, candidate); !has {
+			return candidate
+		}
+	}
+	return fmt.Sprintf("%s-%d", base, time.Now().UnixMilli())
+}
+
+// renameSessionCmd runs `tmux rename-session` and returns the result.
+func renameSessionCmd(oldName, newName string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		err := tmux.Rename(ctx, oldName, newName)
+		return sessionRenamedMsg{OldName: oldName, NewName: newName, Err: err}
+	}
 }
 
 func fallbackDirectTmux(ctx context.Context) ([]daemon.SessionState, error) {
