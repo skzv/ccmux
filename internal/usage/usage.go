@@ -25,6 +25,9 @@
 package usage
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/skzv/ccmux/internal/claudeusage"
@@ -114,11 +117,55 @@ func WalkCodex(window time.Duration) (AgentSummary, error) {
 	}, nil
 }
 
-// WalkAntigravity mirrors WalkCodex. Antigravity's transcripts live
-// under ~/.gemini/antigravity-cli/conversations/ in JSON form; the
-// usage record shape (likely `usageMetadata.{prompt,candidates,total}TokenCount`)
-// surfaces with the upstream API's own schema, which we'll fixture
-// against real files when they exist.
+// WalkAntigravity walks ~/.gemini/antigravity-cli/conversations/<uuid>.pb
+// — Antigravity's per-conversation transcripts. The files are opaque
+// protobuf; without a schema we can't extract tokens, models, or the
+// first-prompt preview. What we CAN derive from the filesystem alone:
+// how many conversations live in the window (each pb file = one
+// conversation), and when each one was last touched. That's enough
+// for the dashboard's per-agent panel to surface "you've had N
+// conversations in the last 5 hours."
+//
+// Returns HasData=true when at least one .pb file's mtime falls in the
+// window, even though token fields stay zero. The dashboard renderer
+// reads HasData to decide between "install hint" and "real activity"
+// — token-zero with HasData=true means "the agent IS being used but
+// we can't see inside." Honest about the gap.
 func WalkAntigravity(window time.Duration) (AgentSummary, error) {
-	return AgentSummary{}, nil
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return AgentSummary{}, nil //nolint:nilerr // missing $HOME → empty summary, not an error to surface
+	}
+	root := filepath.Join(home, ".gemini", "antigravity-cli", "conversations")
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return AgentSummary{}, nil
+		}
+		return AgentSummary{}, err
+	}
+	cutoff := time.Now().Add(-window)
+	prompts := 0
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".pb") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if info.ModTime().After(cutoff) {
+			prompts++
+		}
+	}
+	if prompts == 0 {
+		return AgentSummary{}, nil
+	}
+	return AgentSummary{
+		HasData:      true,
+		Window:       window,
+		Prompts:      prompts,
+		InputTokens:  0, // unknown — opaque protobuf
+		OutputTokens: 0,
+	}, nil
 }
