@@ -341,6 +341,11 @@ func (m conversationsModel) renderDetail(c conversations.Conversation, width, he
 		lines = append(lines, "", st.Muted.Render("Preview"), wrap(c.Preview, width-2))
 	}
 	lines = append(lines, "", st.Key.Render("enter")+"  resume this conversation in a new tmux session")
+	if m.pendingDelete == c.ID {
+		lines = append(lines, st.StatusError.Render("x")+"    press x again to confirm delete · esc to cancel")
+	} else {
+		lines = append(lines, st.Key.Render("x")+"    delete this conversation")
+	}
 	body := strings.Join(lines, "\n")
 	_ = height // reserved for future scrolling
 	return body

@@ -291,12 +291,14 @@ func readClaudeTranscript(path, project string) Conversation {
 	}
 	defer f.Close()
 
-	// We need two things from the transcript: the first user prompt
-	// (for Preview) and the latest event timestamp. Event timestamps
-	// reflect actual user activity, so they take priority over mtime —
-	// a stale transcript that got touched by a backup tool shouldn't
-	// jump to the top of the recent list.
+	// We need three things from the transcript: the real working
+	// directory (from the cwd field on the first user event), the
+	// first user prompt (for Preview), and the latest event
+	// timestamp. Event timestamps take priority over mtime so a
+	// stale transcript touched by a backup tool doesn't jump to the
+	// top of the recent list.
 	var latestEvent time.Time
+	var cwdFromTranscript string
 	sc := bufio.NewScanner(f)
 	// Claude transcripts can have long lines (tool outputs etc.); bump
 	// the buffer well past bufio's 64KB default.
@@ -310,12 +312,26 @@ func readClaudeTranscript(path, project string) Conversation {
 		if err := json.Unmarshal(line, &ev); err != nil {
 			continue
 		}
-		if ev.Type == "user" && c.Preview == "" {
-			c.Preview = truncatedPreview(ev.MessageContent())
+		if ev.Type == "user" {
+			// The cwd field on user events is the authoritative project
+			// path. It's more reliable than the directory-name decode
+			// (which uses '-' for both '/' and literal hyphens, making
+			// the decode ambiguous for paths like ~/Projects/my-app).
+			if ev.Cwd != "" && cwdFromTranscript == "" {
+				cwdFromTranscript = ev.Cwd
+			}
+			if c.Preview == "" {
+				c.Preview = truncatedPreview(ev.MessageContent())
+			}
 		}
 		if ts := ev.Timestamp(); !ts.IsZero() && ts.After(latestEvent) {
 			latestEvent = ts
 		}
+	}
+	// Override the decoded-path fallback with the authoritative cwd
+	// from the transcript, if we found one.
+	if cwdFromTranscript != "" {
+		c.Project = cwdFromTranscript
 	}
 
 	if !latestEvent.IsZero() {
@@ -336,6 +352,10 @@ type claudeEvent struct {
 	Type       string          `json:"type"`
 	Message    json.RawMessage `json:"message"`
 	Timestamp_ string          `json:"timestamp"` //nolint:revive
+	// Cwd is present on user events and records the working directory
+	// at the time of the prompt. More reliable than decoding the
+	// project directory name (which is a lossy encoding of the path).
+	Cwd string `json:"cwd"`
 }
 
 // MessageContent extracts the user-visible text from the embedded
