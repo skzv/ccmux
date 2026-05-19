@@ -149,7 +149,7 @@ func (m codexConfigModel) View(width, height int) string {
 
 // emphOrPlaceholder renders `v` with Emphasis if non-empty, otherwise
 // renders `placeholder` in muted style. Centralized so the empty-row
-// look is consistent across the codex/gemini screens.
+// look is consistent across the codex/antigravity screens.
 func emphOrPlaceholder(st styles.Styles, v, placeholder string) string {
 	if strings.TrimSpace(v) == "" {
 		return st.Muted.Render(placeholder)

@@ -7,37 +7,38 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/skzv/ccmux/internal/geminiconfig"
+	"github.com/skzv/ccmux/internal/antigravityconfig"
 	"github.com/skzv/ccmux/internal/tui/styles"
 )
 
-// geminiConfigModel is the Agents → Gemini sub-tab. Parallel to
-// codexConfigModel — same key bindings, same screen shape, just
-// pointed at ~/.gemini/settings.json. Gemini's settings file is
-// straight JSON (not TOML like Codex) but the geminiconfig package
-// hides that detail; both packages expose the same SetYoloMode /
-// SetEffortLevel / EffectiveYoloMode / EffectiveEffortLevel surface.
-type geminiConfigModel struct {
+// antigravityConfigModel is the Agents → Antigravity sub-tab. Parallel
+// to codexConfigModel — same key bindings, same screen shape, just
+// pointed at ~/.gemini/antigravity-cli/settings.json. Antigravity's
+// settings file is straight JSON (not TOML like Codex) but the
+// antigravityconfig package hides that detail; both packages expose
+// the same SetYoloMode / SetEffortLevel / EffectiveYoloMode /
+// EffectiveEffortLevel surface.
+type antigravityConfigModel struct {
 	st       styles.Styles
-	settings *geminiconfig.Settings
-	paths    geminiconfig.Locations
+	settings *antigravityconfig.Settings
+	paths    antigravityconfig.Locations
 	saveMsg  string
 	savedAt  time.Time
 	editor   string
 	err      string
 }
 
-func newGeminiConfig(st styles.Styles) geminiConfigModel {
-	m := geminiConfigModel{st: st, editor: pickEditor()}
+func newAntigravityConfig(st styles.Styles) antigravityConfigModel {
+	m := antigravityConfigModel{st: st, editor: pickEditor()}
 	m.reload()
 	return m
 }
 
-func (m *geminiConfigModel) reload() {
-	if p, err := geminiconfig.Paths(); err == nil {
+func (m *antigravityConfigModel) reload() {
+	if p, err := antigravityconfig.Paths(); err == nil {
 		m.paths = p
 	}
-	if s, err := geminiconfig.ReadSettings(); err == nil {
+	if s, err := antigravityconfig.ReadSettings(); err == nil {
 		m.settings = s
 		m.err = ""
 	} else {
@@ -45,25 +46,25 @@ func (m *geminiConfigModel) reload() {
 	}
 }
 
-func (m geminiConfigModel) Update(msg tea.Msg) (geminiConfigModel, tea.Cmd) {
+func (m antigravityConfigModel) Update(msg tea.Msg) (antigravityConfigModel, tea.Cmd) {
 	if km, ok := msg.(tea.KeyMsg); ok {
 		switch km.String() {
 		case "y":
-			cur, _ := geminiconfig.EffectiveYoloMode()
-			if _, err := geminiconfig.SetYoloMode(!cur); err != nil {
+			cur, _ := antigravityconfig.EffectiveYoloMode()
+			if _, err := antigravityconfig.SetYoloMode(!cur); err != nil {
 				m.err = "set yolo: " + err.Error()
 			} else {
-				m.saveMsg = fmt.Sprintf("Gemini YOLO → %v", !cur)
+				m.saveMsg = fmt.Sprintf("Antigravity YOLO → %v", !cur)
 				m.savedAt = time.Now()
 				m.reload()
 			}
 			return m, nil
 		case "r":
-			next := nextGeminiEffort()
-			if _, err := geminiconfig.SetEffortLevel(next); err != nil {
+			next := nextAntigravityEffort()
+			if _, err := antigravityconfig.SetEffortLevel(next); err != nil {
 				m.err = "set effort: " + err.Error()
 			} else {
-				m.saveMsg = "Gemini effort → " + next
+				m.saveMsg = "Antigravity effort → " + next
 				m.savedAt = time.Now()
 				m.reload()
 			}
@@ -77,9 +78,9 @@ func (m geminiConfigModel) Update(msg tea.Msg) (geminiConfigModel, tea.Cmd) {
 	return m, nil
 }
 
-func nextGeminiEffort() string {
-	cur, _ := geminiconfig.EffectiveEffortLevel()
-	levels := geminiconfig.KnownEffortLevels()
+func nextAntigravityEffort() string {
+	cur, _ := antigravityconfig.EffectiveEffortLevel()
+	levels := antigravityconfig.KnownEffortLevels()
 	for i, l := range levels {
 		if l.Value == cur {
 			return levels[(i+1)%len(levels)].Value
@@ -91,10 +92,10 @@ func nextGeminiEffort() string {
 	return ""
 }
 
-func (m geminiConfigModel) View(width, height int) string {
+func (m antigravityConfigModel) View(width, height int) string {
 	st := m.st
 	rows := []string{
-		st.Emphasis.Render("Gemini configuration"),
+		st.Emphasis.Render("Antigravity configuration"),
 		st.Muted.Render(m.paths.Settings),
 		"",
 	}
@@ -103,10 +104,10 @@ func (m geminiConfigModel) View(width, height int) string {
 	}
 	if s := m.settings; s != nil {
 		rows = append(rows,
-			fmt.Sprintf("model           %s", emphOrPlaceholder(st, s.Model, "(Gemini default)")),
+			fmt.Sprintf("model           %s", emphOrPlaceholder(st, s.Model, "(Antigravity default)")),
 			fmt.Sprintf("effort          %s", emphOrPlaceholder(st, s.ReasoningEffort, "(default)")),
 		)
-		yoloOn, _ := geminiconfig.EffectiveYoloMode()
+		yoloOn, _ := antigravityconfig.EffectiveYoloMode()
 		yoloLabel := "off"
 		if yoloOn {
 			yoloLabel = st.StatusError.Render("YOLO (no approval prompts)")

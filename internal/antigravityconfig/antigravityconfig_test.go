@@ -1,4 +1,4 @@
-package geminiconfig
+package antigravityconfig
 
 import (
 	"encoding/json"
@@ -7,15 +7,15 @@ import (
 	"testing"
 )
 
-func withFakeGeminiDir(t *testing.T) string {
+func withFakeAntigravityDir(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	t.Setenv("GEMINI_HOME", dir)
+	t.Setenv("ANTIGRAVITY_HOME", dir)
 	return dir
 }
 
 func TestPaths_HonorsEnvOverride(t *testing.T) {
-	dir := withFakeGeminiDir(t)
+	dir := withFakeAntigravityDir(t)
 	got, err := Paths()
 	if err != nil {
 		t.Fatal(err)
@@ -29,7 +29,7 @@ func TestPaths_HonorsEnvOverride(t *testing.T) {
 }
 
 func TestReadSettings_MissingFile(t *testing.T) {
-	withFakeGeminiDir(t)
+	withFakeAntigravityDir(t)
 	s, err := ReadSettings()
 	if err != nil {
 		t.Fatalf("missing file should not error: %v", err)
@@ -40,7 +40,7 @@ func TestReadSettings_MissingFile(t *testing.T) {
 }
 
 func TestReadSettings_UnknownFieldsPreservedInExtra(t *testing.T) {
-	dir := withFakeGeminiDir(t)
+	dir := withFakeAntigravityDir(t)
 	body := `{
   "model": "gemini-2.5-pro",
   "theme": "Default",
@@ -65,7 +65,7 @@ func TestReadSettings_UnknownFieldsPreservedInExtra(t *testing.T) {
 }
 
 func TestWriteSettings_PreservesExtras(t *testing.T) {
-	dir := withFakeGeminiDir(t)
+	dir := withFakeAntigravityDir(t)
 	body := `{
   "model": "gemini-2.5-pro",
   "experimentalThing": {"k": "v", "n": 7}
@@ -103,7 +103,7 @@ func TestWriteSettings_PreservesExtras(t *testing.T) {
 }
 
 func TestWriteSettings_CreatesBackup(t *testing.T) {
-	dir := withFakeGeminiDir(t)
+	dir := withFakeAntigravityDir(t)
 	settingsPath := filepath.Join(dir, "settings.json")
 	if err := os.WriteFile(settingsPath, []byte(`{"model":"gemini-2.5-pro"}`), 0o644); err != nil {
 		t.Fatal(err)
@@ -126,7 +126,7 @@ func TestWriteSettings_CreatesBackup(t *testing.T) {
 }
 
 func TestWriteSettings_NoBackupWhenSourceMissing(t *testing.T) {
-	withFakeGeminiDir(t)
+	withFakeAntigravityDir(t)
 	s := &Settings{Model: "gemini-3-pro"}
 	backup, err := WriteSettings(s)
 	if err != nil {
@@ -138,7 +138,7 @@ func TestWriteSettings_NoBackupWhenSourceMissing(t *testing.T) {
 }
 
 func TestSetEffortLevel_RoundTrip(t *testing.T) {
-	withFakeGeminiDir(t)
+	withFakeAntigravityDir(t)
 	if _, err := SetEffortLevel("high"); err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func TestSetEffortLevel_RoundTrip(t *testing.T) {
 }
 
 func TestSetEffortLevel_PreservesUnrelatedFields(t *testing.T) {
-	dir := withFakeGeminiDir(t)
+	dir := withFakeAntigravityDir(t)
 	body := `{"theme":"Default","customKey":"keepMe","model":"gemini-2.5-pro"}`
 	if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
@@ -173,7 +173,7 @@ func TestSetEffortLevel_PreservesUnrelatedFields(t *testing.T) {
 }
 
 func TestSetEffortLevel_ClearOverride(t *testing.T) {
-	withFakeGeminiDir(t)
+	withFakeAntigravityDir(t)
 	if _, err := SetEffortLevel("high"); err != nil {
 		t.Fatal(err)
 	}
@@ -195,8 +195,8 @@ func TestSetEffortLevel_ClearOverride(t *testing.T) {
 }
 
 func TestEffectiveEffortLevel_Precedence(t *testing.T) {
-	withFakeGeminiDir(t)
-	if v, src := EffectiveEffortLevel(); v != "(default)" || src != "Gemini CLI default" {
+	withFakeAntigravityDir(t)
+	if v, src := EffectiveEffortLevel(); v != "(default)" || src != "Antigravity CLI default" {
 		t.Errorf("default: got %q from %q", v, src)
 	}
 	if _, err := SetEffortLevel("medium"); err != nil {
@@ -222,7 +222,7 @@ func TestKnownEffortLevels_IncludesEachLevel(t *testing.T) {
 }
 
 func TestSetYoloMode_RoundTrip(t *testing.T) {
-	withFakeGeminiDir(t)
+	withFakeAntigravityDir(t)
 	if _, err := SetYoloMode(true); err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +239,7 @@ func TestSetYoloMode_RoundTrip(t *testing.T) {
 }
 
 func TestSetYoloMode_DisableOmitsKey(t *testing.T) {
-	withFakeGeminiDir(t)
+	withFakeAntigravityDir(t)
 	if _, err := SetYoloMode(true); err != nil {
 		t.Fatal(err)
 	}
@@ -261,7 +261,7 @@ func TestSetYoloMode_DisableOmitsKey(t *testing.T) {
 }
 
 func TestSetYoloMode_PreservesUnrelatedFields(t *testing.T) {
-	dir := withFakeGeminiDir(t)
+	dir := withFakeAntigravityDir(t)
 	body := `{"theme":"Default","customKey":"keepMe","model":"gemini-2.5-pro"}`
 	if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(body), 0o644); err != nil {
 		t.Fatal(err)

@@ -157,7 +157,7 @@ func stepDeps(ctx context.Context, out io.Writer) error {
 			fmt.Fprintf(out, "  %-7s %s   %s\n",
 				a.Binary(),
 				stWarn.Render("· not installed"),
-				stMuted.Render("install: "+npmInstallFor(a.ID())))
+				stMuted.Render("install: "+installHintFor(a.ID())))
 		} else {
 			fmt.Fprintf(out, "  %-7s %s   %s\n",
 				a.Binary(),
@@ -176,17 +176,19 @@ func stepDeps(ctx context.Context, out io.Writer) error {
 	return installPromptable(ctx, out, promptable)
 }
 
-// npmInstallFor mirrors agentInstallHint in cmd/ccmux/cmd/subcommands.go.
+// installHintFor mirrors agentInstallHint in cmd/ccmux/cmd/subcommands.go.
 // Kept separate so the wizard's wording can evolve independently of
-// doctor's; both centralize on the same npm-based install path today.
-func npmInstallFor(id agent.ID) string {
+// doctor's. Most agents are npm-based; Antigravity uses a curl-piped
+// installer, hence the agent-typed dispatch rather than a single
+// template.
+func installHintFor(id agent.ID) string {
 	switch id {
 	case agent.IDClaude:
 		return "npm i -g @anthropic-ai/claude-code"
 	case agent.IDCodex:
 		return "npm i -g @openai/codex"
-	case agent.IDGemini:
-		return "npm i -g @google/gemini-cli"
+	case agent.IDAntigravity:
+		return "curl -fsSL https://antigravity.google/cli/install.sh | bash"
 	}
 	return ""
 }

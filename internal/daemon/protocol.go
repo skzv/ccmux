@@ -23,8 +23,9 @@ type SessionState struct {
 	KeepAwake   bool      `json:"keep_awake"`   // per-session "always keep awake" pin
 	// Agent is the AI agent driving this session, sourced from the
 	// project's .ccmux/agent sidecar. One of "claude" / "codex" /
-	// "gemini". Empty for sessions whose project we couldn't resolve
-	// (which the client should treat as claude for back-compat).
+	// "antigravity" (or the legacy alias "gemini"). Empty for sessions
+	// whose project we couldn't resolve (which the client should treat
+	// as claude for back-compat).
 	Agent string `json:"agent,omitempty"`
 }
 
@@ -115,9 +116,9 @@ type NewProjectRequest struct {
 	Name        string `json:"name"`
 	Description string `json:"description"` // becomes the first prompt to the agent
 	// Agent picks which AI agent the remote daemon launches inside
-	// the new session. One of "claude" / "codex" / "gemini"; empty
-	// (omitted by older clients) defaults to claude on the daemon
-	// side for back-compat.
+	// the new session. One of "claude" / "codex" / "antigravity" (the
+	// legacy alias "gemini" is also accepted); empty (omitted by older
+	// clients) defaults to claude on the daemon side for back-compat.
 	Agent string `json:"agent,omitempty"`
 }
 

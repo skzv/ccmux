@@ -25,18 +25,18 @@ func TestRenderSessionLine_AgentTag_Default(t *testing.T) {
 	if strings.Contains(got, "[claude]") {
 		t.Errorf("default-agent rows should not show a [claude] tag:\n%s", got)
 	}
-	if strings.Contains(got, "[codex]") || strings.Contains(got, "[gemini]") {
+	if strings.Contains(got, "[codex]") || strings.Contains(got, "[antigravity]") {
 		t.Errorf("non-default tags should not appear on claude row:\n%s", got)
 	}
 }
 
 // TestRenderSessionLine_AgentTag_NonDefault — when the session is
-// running Codex or Gemini, the row gets a small `[codex]` / `[gemini]`
-// tag in muted styling so the user can tell at a glance which agent
-// is driving which row.
+// running Codex or Antigravity, the row gets a small `[codex]` /
+// `[antigravity]` tag in muted styling so the user can tell at a
+// glance which agent is driving which row.
 func TestRenderSessionLine_AgentTag_NonDefault(t *testing.T) {
 	st := styles.Default()
-	for _, id := range []agent.ID{agent.IDCodex, agent.IDGemini} {
+	for _, id := range []agent.ID{agent.IDCodex, agent.IDAntigravity} {
 		t.Run(string(id), func(t *testing.T) {
 			got := renderSessionLine(st, daemon.SessionState{
 				Name:  "c-foo",
@@ -85,9 +85,9 @@ func TestRenderSessionLine_AgentTag_EmptyMeansClaude(t *testing.T) {
 }
 
 // TestRenderAgentUsageRow_NoData — when the cross-agent walker
-// hasn't found transcripts (which is the case for Codex/Gemini
+// hasn't found transcripts (which is the case for Codex/Antigravity
 // today, stub walkers), the dashboard row must show the install
-// hint inline. A silent empty row would let a new Codex/Gemini
+// hint inline. A silent empty row would let a new Codex/Antigravity
 // user assume the panel is broken instead of seeing the next step.
 func TestRenderAgentUsageRow_NoData(t *testing.T) {
 	st := styles.Default()
@@ -142,13 +142,13 @@ func TestRenderAgentUsageRow_WithData(t *testing.T) {
 // looks like an error. Skip the cost suffix entirely.
 func TestRenderAgentUsageRow_ZeroCostOmittedWhenWithData(t *testing.T) {
 	st := styles.Default()
-	got := renderAgentUsageRow(st, "Gemini", usage.AgentSummary{
+	got := renderAgentUsageRow(st, "Antigravity", usage.AgentSummary{
 		HasData:       true,
 		Prompts:       1,
 		InputTokens:   100,
 		OutputTokens:  200,
 		EstimatedCost: 0,
-	}, "`npm i -g @google/gemini-cli`")
+	}, "`curl -fsSL https://antigravity.google/cli/install.sh | bash`")
 	if strings.Contains(got, "$0.00") {
 		t.Errorf("zero cost should be omitted, got:\n%s", got)
 	}

@@ -5,20 +5,20 @@
 //     walker; the dashboard's main Claude panel still uses that
 //     package directly for its 5h-window quota bar + per-project
 //     drill-down).
-//   - Codex, Gemini: stubs that return zero-valued AgentSummary.
+//   - Codex, Antigravity: stubs that return zero-valued AgentSummary.
 //     They'll grow real implementations once we have real
 //     transcripts to fixture against. See
 //     docs/01_Specs/02_Multi_Agent.md, Phase-4 deferred items.
 //
 // The dashboard uses this package to render compact per-agent rows
-// beneath the Claude panel so users adopting Codex / Gemini see at a
-// glance whether ccmux has discovered their transcripts yet. Empty
-// rows still get rendered with an "install hint" so the first-time
-// user knows what to do.
+// beneath the Claude panel so users adopting Codex / Antigravity see
+// at a glance whether ccmux has discovered their transcripts yet.
+// Empty rows still get rendered with an "install hint" so the
+// first-time user knows what to do.
 //
 // Why a separate type from claudeusage.Aggregate: Claude's
 // transcript shape carries cache-create/cache-read tokens and
-// rolling-window quota semantics that don't map to Codex/Gemini's
+// rolling-window quota semantics that don't map to Codex/Antigravity's
 // pricing model. AgentSummary keeps only the fields that mean the
 // same thing across every agent: prompts, input/output tokens, and
 // an API-rates cost estimate.
@@ -69,7 +69,7 @@ func WalkClaude(window time.Duration) (AgentSummary, error) {
 	// the walker ran without error. An empty ~/.claude/projects/
 	// (fresh install, never used Claude) returns a valid-but-zero
 	// Aggregate; we want the dashboard to show the install hint for
-	// that case, same as for Codex/Gemini stubs. Messages > 0 is
+	// that case, same as for Codex/Antigravity stubs. Messages > 0 is
 	// the honest signal — UserPrompts can be 0 even when there are
 	// transcripts if they're all tool-result follow-ups.
 	if agg.Messages == 0 {
@@ -114,11 +114,11 @@ func WalkCodex(window time.Duration) (AgentSummary, error) {
 	}, nil
 }
 
-// WalkGemini mirrors WalkCodex. Gemini's transcripts live under
-// ~/.gemini/conversations/ in JSON form; the usage record shape
-// (likely `usageMetadata.{prompt,candidates,total}TokenCount`)
-// surfaces with the Gemini API's own schema, which we'll fixture
+// WalkAntigravity mirrors WalkCodex. Antigravity's transcripts live
+// under ~/.gemini/antigravity-cli/conversations/ in JSON form; the
+// usage record shape (likely `usageMetadata.{prompt,candidates,total}TokenCount`)
+// surfaces with the upstream API's own schema, which we'll fixture
 // against real files when they exist.
-func WalkGemini(window time.Duration) (AgentSummary, error) {
+func WalkAntigravity(window time.Duration) (AgentSummary, error) {
 	return AgentSummary{}, nil
 }

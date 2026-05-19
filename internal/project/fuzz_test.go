@@ -14,8 +14,9 @@ import (
 //  1. ReadAgent never panics — a user hand-editing `.ccmux/agent` to
 //     anything must not crash the daemon's poll loop.
 //  2. The returned id is always one of the canonical three (claude /
-//     codex / gemini). Unrecognized inputs fall back to claude per
-//     the back-compat spec.
+//     codex / antigravity). Unrecognized inputs fall back to claude
+//     per the back-compat spec. The legacy "gemini" body is allowed
+//     via ParseID's back-compat alias and resolves to antigravity.
 //
 // We materialize each fuzz input as a real sidecar file under a
 // fresh /tmp dir per invocation, then read it back. This is the
@@ -28,7 +29,9 @@ func FuzzReadAgent(f *testing.F) {
 	for _, seed := range []string{
 		"claude",
 		"codex\n",
-		"  gemini  ",
+		"  antigravity  ",
+		"ANTIGRAVITY\n\n",
+		"gemini", // back-compat alias
 		"GEMINI\n\n",
 		"",
 		"claude-3-sonnet", // close-to-valid garbage
@@ -50,10 +53,10 @@ func FuzzReadAgent(f *testing.F) {
 		}
 		got := ReadAgent(dir)
 		switch got {
-		case agent.IDClaude, agent.IDCodex, agent.IDGemini:
+		case agent.IDClaude, agent.IDCodex, agent.IDAntigravity:
 			// canonical — good
 		default:
-			t.Fatalf("ReadAgent(body=%q) = %q — must be one of {claude,codex,gemini}", body, got)
+			t.Fatalf("ReadAgent(body=%q) = %q — must be one of {claude,codex,antigravity}", body, got)
 		}
 	})
 }

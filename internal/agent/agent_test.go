@@ -16,7 +16,7 @@ func TestAll_CanonicalOrder(t *testing.T) {
 	if len(got) != 3 {
 		t.Fatalf("All() len = %d, want 3", len(got))
 	}
-	wantIDs := []ID{IDClaude, IDCodex, IDGemini}
+	wantIDs := []ID{IDClaude, IDCodex, IDAntigravity}
 	for i, a := range got {
 		if a.ID() != wantIDs[i] {
 			t.Errorf("All()[%d].ID() = %q, want %q", i, a.ID(), wantIDs[i])
@@ -37,7 +37,8 @@ func TestParseID(t *testing.T) {
 		{"CLAUDE", IDClaude, true},
 		{"  Claude  ", IDClaude, true},
 		{"codex", IDCodex, true},
-		{"gemini", IDGemini, true},
+		{"antigravity", IDAntigravity, true},
+		{"gemini", IDAntigravity, true}, // back-compat alias
 		{"", "", false},
 		{"   ", "", false},
 		{"gpt", "", false},
@@ -64,8 +65,9 @@ func TestByID_KnownAndEmptyFallback(t *testing.T) {
 	}{
 		{IDClaude, IDClaude},
 		{IDCodex, IDCodex},
-		{IDGemini, IDGemini},
-		{"", IDClaude}, // back-compat
+		{IDAntigravity, IDAntigravity},
+		{"gemini", IDAntigravity}, // back-compat alias for projects scaffolded before the rebrand
+		{"", IDClaude},            // back-compat
 	}
 	for _, tc := range cases {
 		if got := ByID(tc.in).ID(); got != tc.want {
@@ -109,7 +111,7 @@ func TestAgent_Identity_Stable(t *testing.T) {
 	}{
 		{Claude{}, IDClaude, "claude", "Claude Code", ".claude", "projects"},
 		{Codex{}, IDCodex, "codex", "Codex", ".codex", "sessions"},
-		{Gemini{}, IDGemini, "gemini", "Gemini CLI", ".gemini", "conversations"},
+		{Antigravity{}, IDAntigravity, "agy", "Antigravity CLI", ".gemini/antigravity-cli", "conversations"},
 	}
 	for _, tc := range cases {
 		t.Run(string(tc.id), func(t *testing.T) {
@@ -163,7 +165,7 @@ func TestAgent_LaunchCmd_NewVsContinue(t *testing.T) {
 
 // TestAgent_InitialPrompt_SubstitutesNameAndDesc — every agent's
 // prompt template must echo the user's name + description back; a
-// regression here would mean Claude/Codex/Gemini all start their
+// regression here would mean Claude/Codex/Antigravity all start their
 // first session asking generic questions instead of the user's
 // project-specific one.
 func TestAgent_InitialPrompt_SubstitutesNameAndDesc(t *testing.T) {
@@ -231,18 +233,18 @@ func TestCodex_Classify_IdleHeuristic(t *testing.T) {
 	}
 }
 
-// TestGemini_Classify_IdleHeuristic mirrors the Codex test. Same
+// TestAntigravity_Classify_IdleHeuristic mirrors the Codex test. Same
 // stub semantics today.
-func TestGemini_Classify_IdleHeuristic(t *testing.T) {
-	if got := (Gemini{}).Classify("", time.Now(), 3*time.Second); got != StateUnknown {
-		t.Errorf("empty pane: Gemini.Classify = %q, want unknown", got)
+func TestAntigravity_Classify_IdleHeuristic(t *testing.T) {
+	if got := (Antigravity{}).Classify("", time.Now(), 3*time.Second); got != StateUnknown {
+		t.Errorf("empty pane: Antigravity.Classify = %q, want unknown", got)
 	}
-	if got := (Gemini{}).Classify("recent output", time.Now(), 3*time.Second); got != StateActive {
-		t.Errorf("fresh output: Gemini.Classify = %q, want active", got)
+	if got := (Antigravity{}).Classify("recent output", time.Now(), 3*time.Second); got != StateActive {
+		t.Errorf("fresh output: Antigravity.Classify = %q, want active", got)
 	}
 	stale := time.Now().Add(-10 * time.Second)
-	if got := (Gemini{}).Classify("old output", stale, 3*time.Second); got != StateNeedsInput {
-		t.Errorf("stale output: Gemini.Classify = %q, want needs_input", got)
+	if got := (Antigravity{}).Classify("old output", stale, 3*time.Second); got != StateNeedsInput {
+		t.Errorf("stale output: Antigravity.Classify = %q, want needs_input", got)
 	}
 }
 
@@ -263,13 +265,13 @@ func TestAllInstalled_RespectsHook(t *testing.T) {
 		t.Fatalf("only-claude scenario: got %v", agentIDs(got))
 	}
 
-	// Scenario B: claude + gemini, no codex.
+	// Scenario B: claude + antigravity, no codex.
 	installLookupHook = func(_ context.Context, bin string) bool {
-		return bin == "claude" || bin == "gemini"
+		return bin == "claude" || bin == "agy"
 	}
 	got = AllInstalled(context.Background())
-	if len(got) != 2 || got[0].ID() != IDClaude || got[1].ID() != IDGemini {
-		t.Errorf("claude+gemini scenario: got %v (order/contents wrong)", agentIDs(got))
+	if len(got) != 2 || got[0].ID() != IDClaude || got[1].ID() != IDAntigravity {
+		t.Errorf("claude+antigravity scenario: got %v (order/contents wrong)", agentIDs(got))
 	}
 
 	// Scenario C: nothing installed → empty slice (not nil).

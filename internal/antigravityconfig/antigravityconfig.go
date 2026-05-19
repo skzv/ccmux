@@ -1,19 +1,29 @@
-// Package geminiconfig is the read/write layer for the Google Gemini
-// CLI config file at ~/.gemini/settings.json. Mirrors claudeconfig's
-// shape (typed view + Extra map + always-backup-on-write); the file
-// happens to be JSON like Claude's, which keeps this package short.
+// Package antigravityconfig is the read/write layer for the Google
+// Antigravity CLI config file at ~/.gemini/antigravity-cli/settings.json
+// (the rebrand of the Gemini CLI's ~/.gemini/settings.json). Mirrors
+// claudeconfig's shape (typed view + Extra map + always-backup-on-write);
+// the file happens to be JSON like Claude's, which keeps this package
+// short.
 //
 // Why we own a writer: ccmux exposes per-agent "YOLO" and
 // reasoning-effort toggles that need to persist across sessions. The
-// simplest path is to set the same fields Gemini reads at startup so a
+// simplest path is to set the same fields the CLI reads at startup so a
 // ccmux toggle is indistinguishable from the user editing the file.
 //
+// Note: as of agy 1.0.0 the persisted settings.json schema is small
+// (colorScheme, enableTelemetry, trustedWorkspaces). The `yolo` and
+// `reasoningEffort` fields below mirror what the predecessor Gemini CLI
+// honored; whether agy 1.0.0 picks them up is its concern — we write
+// the value and let the CLI decide, mirroring how claudeconfig handles
+// effortLevel.
+//
 // Design principles (same trio as claudeconfig):
-//   - Always back up before writing. ~/.gemini/backups/<file>.<ts>.
-//   - Preserve unknown keys. Gemini's settings shape evolves; the
-//     Extra map carries everything we don't model through a round-trip.
+//   - Always back up before writing.
+//     ~/.gemini/antigravity-cli/backups/<file>.<ts>.
+//   - Preserve unknown keys. The settings shape evolves; the Extra
+//     map carries everything we don't model through a round-trip.
 //   - Never touch credentials. We only read/write settings.json.
-package geminiconfig
+package antigravityconfig
 
 import (
 	"encoding/json"
@@ -25,17 +35,17 @@ import (
 	"time"
 )
 
-// Paths returns the canonical file locations Gemini CLI uses on this
-// host. Honors $GEMINI_HOME for the rare case the user has relocated
-// it, otherwise defaults to ~/.gemini.
+// Paths returns the canonical file locations the Antigravity CLI uses
+// on this host. Honors $ANTIGRAVITY_HOME for tests / relocations,
+// otherwise defaults to ~/.gemini/antigravity-cli.
 func Paths() (Locations, error) {
-	root := os.Getenv("GEMINI_HOME")
+	root := os.Getenv("ANTIGRAVITY_HOME")
 	if root == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return Locations{}, err
 		}
-		root = filepath.Join(home, ".gemini")
+		root = filepath.Join(home, ".gemini", "antigravity-cli")
 	}
 	return Locations{
 		Root:       root,
@@ -52,10 +62,10 @@ type Locations struct {
 }
 
 // Settings is a typed view over the fields ccmux currently edits.
-// Extra carries the rest. JSON tags match the keys Gemini's settings
-// file is documented to use; whether a given version of the CLI honors
+// Extra carries the rest. JSON tags match the keys the CLI's settings
+// file is documented to use; whether a given version of agy honors
 // `yolo` / `reasoningEffort` persistently is its concern — we write
-// the value and let Gemini decide, mirroring how claudeconfig handles
+// the value and let the CLI decide, mirroring how claudeconfig handles
 // effortLevel.
 type Settings struct {
 	Model           string `json:"model,omitempty"`
@@ -184,20 +194,20 @@ func EffectiveEffortLevel() (value, source string) {
 	if err == nil && s.ReasoningEffort != "" {
 		return s.ReasoningEffort, "settings.json"
 	}
-	return "(default)", "Gemini CLI default"
+	return "(default)", "Antigravity CLI default"
 }
 
-// KnownEffortLevels are the levels we offer in the picker. Gemini's
-// CLI uses thinking-budget terminology under the hood, but for parity
-// with the other agents we expose the same low/medium/high vocabulary
-// — the value we write is what gets persisted, regardless of how
-// Gemini interprets it.
+// KnownEffortLevels are the levels we offer in the picker. The CLI
+// uses thinking-budget terminology under the hood, but for parity with
+// the other agents we expose the same low/medium/high vocabulary —
+// the value we write is what gets persisted, regardless of how the
+// CLI interprets it.
 func KnownEffortLevels() []EffortOption {
 	return []EffortOption{
 		{Value: "high", Label: "high", Desc: "Deeper reasoning; slower responses"},
 		{Value: "medium", Label: "medium", Desc: "Balanced"},
 		{Value: "low", Label: "low", Desc: "Fast; minimal reasoning"},
-		{Value: "", Label: "Inherit / no override", Desc: "Use whatever Gemini CLI defaults to"},
+		{Value: "", Label: "Inherit / no override", Desc: "Use whatever Antigravity CLI defaults to"},
 	}
 }
 
@@ -226,5 +236,5 @@ func EffectiveYoloMode() (enabled bool, source string) {
 	if err == nil && s.Yolo {
 		return true, "settings.json"
 	}
-	return false, "Gemini CLI default"
+	return false, "Antigravity CLI default"
 }
