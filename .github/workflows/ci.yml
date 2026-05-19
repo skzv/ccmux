@@ -116,23 +116,29 @@ jobs:
         run: GOOS=windows GOARCH=arm64 go build ./...
 
   fuzz:
-    # PR-time fuzz pass per docs/01_Specs/03_Testing_And_CI.md.
-    # Each FuzzXxx target gets 60s of fuzzing. Failing seeds (if any)
-    # get archived under testdata/fuzz/<FuzzName>/ via Go's native
-    # convention — those become regression seeds on the next plain
-    # `go test` and trip the test job above. A nightly long-budget
-    # pass (1h/target) is planned as a Mac mini cron, not here, since
-    # GHA-hosted runners cap at 6h per job.
+    # PR-time fuzz smoke pass per docs/01_Specs/03_Testing_And_CI.md.
+    # Each FuzzXxx target gets a SHORT budget (10s) — enough to catch
+    # a freshly-broken parser invariant on the PR that introduced it,
+    # not enough to find deep bugs. Deep sweeps belong in the
+    # contributor's `make fuzz` run (default 5m/target) and the
+    # planned Mac mini nightly cron (1h/target). GHA minutes are
+    # finite; PR feedback latency is what we optimize here.
     #
-    # Budget was 30s originally. Bumped to 60s after a clean-flake
-    # failure on PR #12 (agent FuzzParseID hit "context deadline
-    # exceeded" with execs still streaming at 30.0s — Go's fuzz
-    # framework was mid-shutdown when its own deadline fired). The
-    # underlying ParseID is trim+lower+switch, no slow path; the
-    # extra headroom lets the framework's graceful-shutdown finish
-    # cleanly. 60s × 7 targets ≈ 7min total — still well inside the
-    # CI's typical 10-min PR ceiling.
-    name: fuzz (60s/target)
+    # Why 10s and not 60s like before: per-target budget at 60s
+    # pushed the job past 7min and the slow step was gating every
+    # PR's merge latency behind it. The targets are all tight
+    # parsers/classifiers (ParseID, ReadAgent, OSC-52 round-trip,
+    # pmset battery, pane classify, tmux session-name, session-line
+    # render) — 10s is enough to execute tens of thousands of
+    # mutations per target on a GHA runner and surface any same-PR
+    # regression. The original 30s→60s bump (PR #12) was a graceful-
+    # shutdown race the Go fuzz framework has since fixed; 10s does
+    # not reintroduce it.
+    #
+    # Single source of truth: the target list lives in the root
+    # Makefile's FUZZ_TARGETS variable. `make fuzz FUZZTIME=10s` is
+    # exactly what a contributor would run locally to reproduce.
+    name: fuzz (10s/target)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -140,29 +146,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
-      - name: Run all fuzz targets for 60s each
-        shell: bash
-        run: |
-          # Each (package, target) pair, kept explicit so a new fuzz
-          # target gets added here by hand rather than silently
-          # bypassed via globbing.
-          set -e
-          pairs=(
-            "./internal/agent FuzzParseID"
-            "./internal/project FuzzReadAgent"
-            "./internal/clipboard FuzzOSC52RoundTrip"
-            "./internal/sleeplock FuzzParsePmsetBatt"
-            "./internal/claude FuzzClassify"
-            "./internal/tmux FuzzSessionNameForPath"
-            "./internal/tui FuzzRenderSessionLine_DegenerateInputs"
-          )
-          for pair in "${pairs[@]}"; do
-            pkg="${pair% *}"
-            target="${pair#* }"
-            echo "::group::$pkg :: $target (60s)"
-            go test "$pkg" -run "^$" -fuzz="^${target}$" -fuzztime=60s
-            echo "::endgroup::"
-          done
+      - name: Run all fuzz targets for 10s each
+        run: make fuzz FUZZTIME=10s
 
   integration:
     name: integration (${{ matrix.os }})

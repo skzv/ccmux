@@ -308,13 +308,27 @@ process untrusted network input from anyone except the user's own
 tailnet peers — none of those gates apply today. (Source:
 <https://google.github.io/oss-fuzz/getting-started/accepting-new-projects/>.)
 
-Practical replacement: every PR runs `go test -fuzz=Fuzz` with a
-short budget (`-fuzztime=30s` per target) on the CI matrix. That's
-enough to catch new bugs introduced by a PR; a dedicated longer
-fuzz pass runs as part of the Mac mini's nightly cron alongside the
-stress longhaul, with `-fuzztime=1h` per target. Failing seeds get
-auto-archived into `testdata/fuzz/<FuzzName>/` (Go's standard
-convention) and stay there as regression seeds.
+Practical replacement: every PR runs the fuzz targets with a SHORT
+per-target budget (`-fuzztime=10s`, driven by `make fuzz FUZZTIME=10s`
+in CI). That's a smoke check — enough to catch a freshly-broken
+invariant on the same PR that introduced it, not enough to discover
+deep bugs. Two longer entry points exist for that:
+
+- **Contributor local**: `make fuzz` (default `FUZZTIME=5m`, ≈35min
+  for all 7 targets) is the bar before tightening a parser or after
+  touching a heuristic surface. `make fuzz-quick` (10s/target, ≈70s
+  total) mirrors CI exactly for fast iteration. `make fuzz FUZZTIME=1h`
+  is the pre-release overnight sweep.
+- **Planned nightly cron**: a Mac mini job that runs `make fuzz
+  FUZZTIME=1h` and opens a PR with any failing seeds it finds.
+
+The target list lives in `FUZZ_TARGETS` in the root `Makefile` —
+single source of truth. CI's fuzz step is a one-line `make fuzz
+FUZZTIME=10s` so a contributor reproduces CI's behavior byte-for-byte
+with the same Makefile.
+
+Failing seeds get auto-archived into `<pkg>/testdata/fuzz/<FuzzName>/`
+(Go's standard convention) and stay there as regression seeds.
 
 **Crash reproducibility.** Resolved: Go's standard convention plus a
 sidecar.
