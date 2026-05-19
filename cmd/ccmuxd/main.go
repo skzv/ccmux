@@ -185,9 +185,9 @@ type server struct {
 	sleeper   *sleeplock.Manager
 
 	// moshiState is refreshed periodically (not every poll) so we don't
-	// shell out to moshi-hook every 2 seconds. When SuppressBell() is
-	// true, pollOnce skips bell injection because moshi-hook is handling
-	// notifications via Claude Code's hooks system.
+	// shell out to moshi-hook every 2 seconds. Used only to drive the
+	// "moshi reachable" badge in the tmux status bar — the bell rings
+	// independently per the always-ring policy.
 	moshiState   moshi.Status
 	moshiCheckAt time.Time
 	moshiMu      sync.Mutex
@@ -630,7 +630,12 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 	if err != nil {
 		return
 	}
-	suppressBell := s.moshiBellSuppressed(ctx)
+	// Keep the moshi state cache warm — it drives the tmux status-bar
+	// "moshi reachable" badge in applyChrome. The result is no longer
+	// used for the bell decision: ccmux rings the bell on every
+	// needs_input transition when Notifications.Bell is true, and the
+	// phone push (if any) fires alongside it.
+	s.refreshMoshiStateCached(ctx)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -664,15 +669,14 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 		// lastChange/idle threshold pair — so the switch is invisible
 		// from this call site's perspective.
 		newState := agent.ByID(t.agentID).Classify(pane, t.lastChange, idleNeeds)
-		// Transition into NEEDS_INPUT triggers the bell. By default we
-		// ring the bell even when moshi-hook is paired (the two
-		// channels are complementary: audible chime at the laptop,
-		// push on your phone). Set notifications.bell=false to mute
-		// globally, or notifications.moshi_suppresses_bell=true to mute
-		// only when moshi is reporting (the old "no duplicates"
-		// behavior).
+		// Transition into NEEDS_INPUT triggers the bell. Always-ring
+		// policy: the BEL fires whenever notifications.bell is true,
+		// independent of moshi-hook. The two notification channels
+		// are complementary (audible chime at the laptop, push on
+		// your phone); duplicate-suppression was a knob that hid the
+		// laptop signal even when the user was at the laptop.
 		if newState == agent.StateNeedsInput && t.state != agent.StateNeedsInput {
-			if s.shouldRingBell(suppressBell) {
+			if s.cfg.Notifications.Bell {
 				_ = tmux.SendKeys(ctx, ts.Name, "\a")
 			}
 			t.promptCount++
@@ -692,37 +696,17 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 	s.sleeper.SetActive(anyActive)
 }
 
-// moshiBellSuppressed reports whether moshi-hook is paired and
-// reporting. Cached for 60s. Despite the name, it no longer
-// short-circuits the bell on its own — see shouldRingBell for the
-// config-aware decision.
-func (s *server) moshiBellSuppressed(ctx context.Context) bool {
+// refreshMoshiStateCached keeps the moshi.Status cache warm for the
+// tmux status-bar badge. Cached for 60s so we don't shell out to
+// moshi-hook every 2-second poll tick. The cache is consumed by
+// applyChrome — the bell decision itself ignores it (always-ring).
+func (s *server) refreshMoshiStateCached(ctx context.Context) {
 	s.moshiMu.Lock()
 	defer s.moshiMu.Unlock()
 	if time.Since(s.moshiCheckAt) > 60*time.Second {
 		s.moshiState = moshi.Detect(ctx)
 		s.moshiCheckAt = time.Now()
 	}
-	return s.moshiState.SuppressBell()
-}
-
-// shouldRingBell folds the user's two notification toggles into a
-// single bool. Truth table:
-//
-//	bell=false                                 → never ring
-//	bell=true, moshi_suppresses_bell=false     → always ring (default)
-//	bell=true, moshi_suppresses_bell=true,
-//	                       moshi paired       → don't ring (push handles it)
-//	bell=true, moshi_suppresses_bell=true,
-//	                       moshi NOT paired   → ring (no other channel)
-func (s *server) shouldRingBell(moshiPaired bool) bool {
-	if !s.cfg.Notifications.Bell {
-		return false
-	}
-	if s.cfg.Notifications.MoshiSuppressesBell && moshiPaired {
-		return false
-	}
-	return true
 }
 
 // startSleepManager constructs the sleeplock.Manager from config. The

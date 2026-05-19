@@ -272,10 +272,9 @@ low_battery_cutoff = 20              # dangerous mode auto-downgrades below this
 
 [notifications]
 bell = true                          # ring local terminal BEL on needs_input
-moshi_suppresses_bell = false        # mute laptop bell when moshi-hook is also reporting
 ```
 
-> Notifications: the bell rings even when moshi-hook is paired by default — the audible chime at your desk and the push on your phone are complementary, not duplicates. Set `moshi_suppresses_bell = true` if you'd rather mute the bell whenever moshi-hook is reporting.
+> Notifications: the bell always rings on `needs_input` transitions when `bell = true`, regardless of whether moshi-hook is paired. The audible chime at your desk and the push on your phone are complementary, not duplicates. Set `bell = false` if you'd rather rely on phone pushes alone.
 
 > Sleep-mode notes:
 > - `safe` — `caffeinate -s` on macOS (Apple's policy keeps it AC-only; safe to leave on). `systemd-inhibit --what=sleep:idle` on Linux.
