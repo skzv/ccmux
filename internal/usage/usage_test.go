@@ -1,6 +1,8 @@
 package usage
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -32,14 +34,64 @@ func TestWalkCodex_NoTranscripts(t *testing.T) {
 	}
 }
 
-// TestWalkAntigravity_Stub mirrors WalkCodex_Stub.
-func TestWalkAntigravity_Stub(t *testing.T) {
+// TestWalkAntigravity_NoTranscripts — fresh install with no
+// ~/.gemini/antigravity-cli/ tree should return HasData=false with no
+// error. The dashboard renders the install-hint placeholder for that
+// case, same as WalkCodex.
+func TestWalkAntigravity_NoTranscripts(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	got, err := WalkAntigravity(5 * time.Hour)
 	if err != nil {
-		t.Fatalf("stub should not error: %v", err)
+		t.Fatalf("missing tree should not error: %v", err)
 	}
 	if got.HasData {
-		t.Errorf("stub returned HasData=true — expected false until a real walker lands. Did you implement WalkAntigravity? Update this test.")
+		t.Errorf("empty HOME returned HasData=true: %+v", got)
+	}
+}
+
+// TestWalkAntigravity_CountsPBFilesInWindow — Antigravity transcripts
+// are opaque protobuf (no schema available), so the walker derives
+// the only field it CAN: one prompt per .pb file with mtime inside
+// the window. Token fields stay zero — the renderer key off
+// HasData + token=0 to surface "(tokens unavailable)" honestly.
+//
+// Pinning the count semantic here matters because a regression that
+// stopped counting (e.g. wrong file extension filter) would silently
+// blank Antigravity's panel and make the agent look unused.
+func TestWalkAntigravity_CountsPBFilesInWindow(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir := filepath.Join(home, ".gemini", "antigravity-cli", "conversations")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Three .pb files: two recent, one stale. Plus a non-pb file the
+	// walker must skip.
+	for _, name := range []string{"recent-a.pb", "recent-b.pb", "stale.pb", "not-a-conversation.txt"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Backdate the stale file beyond the window.
+	old := time.Now().Add(-48 * time.Hour)
+	if err := os.Chtimes(filepath.Join(dir, "stale.pb"), old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := WalkAntigravity(5 * time.Hour)
+	if err != nil {
+		t.Fatalf("WalkAntigravity: %v", err)
+	}
+	if !got.HasData {
+		t.Fatal("expected HasData=true with 2 recent .pb files")
+	}
+	if got.Prompts != 2 {
+		t.Errorf("Prompts = %d, want 2 (excluding stale + non-pb)", got.Prompts)
+	}
+	// Token fields stay zero — pb is opaque.
+	if got.InputTokens != 0 || got.OutputTokens != 0 {
+		t.Errorf("expected zero tokens (opaque pb), got in=%d out=%d",
+			got.InputTokens, got.OutputTokens)
 	}
 }
 

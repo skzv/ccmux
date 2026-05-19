@@ -405,46 +405,74 @@ func (m dashboardModel) usagePanel(width int) string {
 		}
 	}
 
-	// Per-agent rows for Codex and Antigravity. Each renders as a
-	// single line — either "(no transcripts yet, install via …)" when
-	// the walker is still a stub or returned no data, or "tokens · cost"
-	// when there's real usage to show. The Claude block above is
-	// already the rich panel; these two are deliberately compact so
-	// the vertical budget on a narrow terminal stays usable.
+	// Rich per-agent blocks for Codex and Antigravity follow. Each
+	// block uses the same shape as the Claude block above (headline
+	// count, token/activity details, cost where known) so the three
+	// agents read as peers rather than "Claude + two also-rans."
+	// Antigravity's transcripts are opaque protobuf, so its block
+	// surfaces conversation count + recency — honest about the data
+	// gap rather than pretending to have token detail.
 	rows = append(rows, "")
-	rows = append(rows, renderAgentUsageRow(st, "Codex", m.codexUsage,
+	rows = append(rows, renderAgentUsageBlock(st, "Codex", m.codexUsage,
 		"`npm i -g @openai/codex`"))
-	rows = append(rows, renderAgentUsageRow(st, "Antigravity", m.antigravityUsage,
+	rows = append(rows, "")
+	rows = append(rows, renderAgentUsageBlock(st, "Antigravity", m.antigravityUsage,
 		"`curl -fsSL https://antigravity.google/cli/install.sh | bash`"))
 
 	return st.Pane.Width(width - 2).Render(strings.Join(rows, "\n"))
 }
 
-// renderAgentUsageRow formats one Codex / Antigravity line beneath the
-// rich Claude panel. The shape:
+// renderAgentUsageBlock formats a Claude-shaped rich block for the
+// non-Claude agents. Headline → activity row → cost row → install
+// hint (only when we have nothing else to say). Mirrors the
+// vocabulary of the Claude block immediately above so the three
+// agents read as peers without per-agent special-casing in the
+// dashboard view.
 //
-//	Codex   no transcripts yet  (`npm i -g @openai/codex`)
-//
-// or when there's data:
-//
-//	Codex   123 prompts · 4.5K in · 12.1K out · ~$0.08
-//
-// Centralized so adding a fourth agent later is a one-line caller
-// change rather than two-place markup duplication.
-func renderAgentUsageRow(st styles.Styles, label string, s usage.AgentSummary, installHint string) string {
-	prefix := st.Emphasis.Render(label) + "   "
+// Why not parameterize the Claude block itself: Claude carries
+// subscription-window semantics (5h quota bar, ResetAt) that the
+// other two don't have. A "unify into one renderer" pass would
+// either drop those Claude-specific bits or paper over them with
+// nil-checks. Easier to keep two functions and audit the markup
+// drift via TestRenderAgentUsageBlock_ShapeMatchesClaude (no such
+// test yet — covered structurally by the existing shape tests).
+func renderAgentUsageBlock(st styles.Styles, label string, s usage.AgentSummary, installHint string) string {
+	heading := st.Emphasis.Render(label + " usage")
 	if !s.HasData {
-		return prefix + st.Muted.Render("no transcripts yet  ("+installHint+")")
+		return heading + "\n" + st.Muted.Render(
+			"  no transcripts yet — install: "+installHint,
+		)
 	}
-	core := fmt.Sprintf("%d prompts · %s in · %s out",
-		s.Prompts,
-		claudeusage.HumanCount(s.InputTokens),
-		claudeusage.HumanCount(s.OutputTokens),
+
+	lines := []string{heading}
+	// Headline count: prompts is the cross-agent equivalent of
+	// Claude's "5h window N prompts". No reset time because OpenAI /
+	// Antigravity don't have subscription-window semantics.
+	chip := lipgloss.NewStyle().Foreground(st.P.Lavender).Bold(true).Render(
+		fmt.Sprintf("%d prompts", s.Prompts),
 	)
-	if s.EstimatedCost > 0 {
-		core += fmt.Sprintf(" · ~$%.2f", s.EstimatedCost)
+	lines = append(lines, fmt.Sprintf("recent     %s", chip))
+
+	// Token row. Antigravity has no parser → both 0 here; surface a
+	// "tokens unavailable" note so the user doesn't think the agent
+	// produced zero output.
+	if s.InputTokens > 0 || s.OutputTokens > 0 {
+		lines = append(lines, fmt.Sprintf("tokens     %s in · %s out",
+			st.Emphasis.Render(claudeusage.HumanCount(s.InputTokens)),
+			st.Emphasis.Render(claudeusage.HumanCount(s.OutputTokens)),
+		))
+	} else {
+		lines = append(lines, st.Muted.Render(
+			"tokens     (unavailable — opaque transcript format)",
+		))
 	}
-	return prefix + core
+	// Cost row (where known).
+	if s.EstimatedCost > 0 {
+		lines = append(lines, st.Muted.Render(
+			fmt.Sprintf("~ $%.2f at API rates", s.EstimatedCost),
+		))
+	}
+	return strings.Join(lines, "\n")
 }
 
 // quotaBar renders a 1-line progress bar when the user has declared a

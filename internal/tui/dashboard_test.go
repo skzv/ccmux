@@ -84,30 +84,29 @@ func TestRenderSessionLine_AgentTag_EmptyMeansClaude(t *testing.T) {
 	}
 }
 
-// TestRenderAgentUsageRow_NoData — when the cross-agent walker
-// hasn't found transcripts (which is the case for Codex/Antigravity
-// today, stub walkers), the dashboard row must show the install
-// hint inline. A silent empty row would let a new Codex/Antigravity
-// user assume the panel is broken instead of seeing the next step.
-func TestRenderAgentUsageRow_NoData(t *testing.T) {
+// TestRenderAgentUsageBlock_NoData — when the cross-agent walker
+// hasn't found transcripts, the dashboard block must show the install
+// hint. A silent empty block would let a new Codex/Antigravity user
+// assume the panel is broken instead of seeing the next step.
+func TestRenderAgentUsageBlock_NoData(t *testing.T) {
 	st := styles.Default()
-	got := renderAgentUsageRow(st, "Codex", usage.AgentSummary{HasData: false},
+	got := renderAgentUsageBlock(st, "Codex", usage.AgentSummary{HasData: false},
 		"`npm i -g @openai/codex`")
 	for _, want := range []string{
-		"Codex",
+		"Codex usage",
 		"no transcripts yet",
 		"npm i -g @openai/codex",
 	} {
 		if !strings.Contains(got, want) {
-			t.Errorf("no-data row missing %q in:\n%s", want, got)
+			t.Errorf("no-data block missing %q in:\n%s", want, got)
 		}
 	}
 }
 
-// TestRenderAgentUsageRow_WithData — when the walker reports real
-// usage (HasData=true), the row shows prompts + input/output tokens
-// + an optional cost estimate, NOT the install hint.
-func TestRenderAgentUsageRow_WithData(t *testing.T) {
+// TestRenderAgentUsageBlock_WithData — when the walker reports real
+// usage (HasData=true), the block surfaces prompts + tokens + cost
+// in the same Claude-shaped layout, NOT the install hint.
+func TestRenderAgentUsageBlock_WithData(t *testing.T) {
 	st := styles.Default()
 	s := usage.AgentSummary{
 		HasData:       true,
@@ -116,33 +115,33 @@ func TestRenderAgentUsageRow_WithData(t *testing.T) {
 		OutputTokens:  3700,
 		EstimatedCost: 0.123,
 	}
-	got := renderAgentUsageRow(st, "Codex", s, "`npm i -g @openai/codex`")
+	got := renderAgentUsageBlock(st, "Codex", s, "`npm i -g @openai/codex`")
 	for _, want := range []string{
-		"Codex",
+		"Codex usage",
 		"42 prompts",
+		"tokens",
 		"in",
 		"out",
 		"$0.12",
 	} {
 		if !strings.Contains(got, want) {
-			t.Errorf("with-data row missing %q in:\n%s", want, got)
+			t.Errorf("with-data block missing %q in:\n%s", want, got)
 		}
 	}
 	if strings.Contains(got, "no transcripts yet") {
-		t.Errorf("with-data row leaked the no-data hint:\n%s", got)
+		t.Errorf("with-data block leaked the no-data hint:\n%s", got)
 	}
 	if strings.Contains(got, "npm i -g") {
-		t.Errorf("with-data row leaked the install hint:\n%s", got)
+		t.Errorf("with-data block leaked the install hint:\n%s", got)
 	}
 }
 
-// TestRenderAgentUsageRow_ZeroCostOmittedWhenWithData — when the
-// estimator gives 0 (e.g. cache-only Claude usage that resolves to
-// $0 at API rates), the row should not show "~$0.00" because that
-// looks like an error. Skip the cost suffix entirely.
-func TestRenderAgentUsageRow_ZeroCostOmittedWhenWithData(t *testing.T) {
+// TestRenderAgentUsageBlock_ZeroCostOmittedWhenWithData — when the
+// estimator gives 0, the block should not show "~$0.00" because that
+// looks like an error. Skip the cost row entirely.
+func TestRenderAgentUsageBlock_ZeroCostOmittedWhenWithData(t *testing.T) {
 	st := styles.Default()
-	got := renderAgentUsageRow(st, "Antigravity", usage.AgentSummary{
+	got := renderAgentUsageBlock(st, "Antigravity", usage.AgentSummary{
 		HasData:       true,
 		Prompts:       1,
 		InputTokens:   100,
@@ -151,5 +150,33 @@ func TestRenderAgentUsageRow_ZeroCostOmittedWhenWithData(t *testing.T) {
 	}, "`curl -fsSL https://antigravity.google/cli/install.sh | bash`")
 	if strings.Contains(got, "$0.00") {
 		t.Errorf("zero cost should be omitted, got:\n%s", got)
+	}
+}
+
+// TestRenderAgentUsageBlock_AntigravityOpaqueTokens — Antigravity has
+// HasData=true (we counted .pb files) but Input/Output stay 0 because
+// the protobuf is opaque. The block must surface the "tokens
+// unavailable" note rather than silently rendering "0K in · 0K out"
+// (which would look like the agent produced literally no output).
+func TestRenderAgentUsageBlock_AntigravityOpaqueTokens(t *testing.T) {
+	st := styles.Default()
+	got := renderAgentUsageBlock(st, "Antigravity", usage.AgentSummary{
+		HasData:      true,
+		Prompts:      3,
+		InputTokens:  0,
+		OutputTokens: 0,
+	}, "`curl …`")
+	// Headline still shows prompts.
+	if !strings.Contains(got, "3 prompts") {
+		t.Errorf("antigravity block should still show prompt count: %s", got)
+	}
+	// "unavailable" note replaces the token line so the user doesn't
+	// read "0K in · 0K out" as "the agent did nothing."
+	if !strings.Contains(got, "unavailable") {
+		t.Errorf("antigravity zero-token block missing 'unavailable' note:\n%s", got)
+	}
+	// And the literal "0 in" must NOT appear.
+	if strings.Contains(got, "0 in") {
+		t.Errorf("antigravity block should not render literal '0 in':\n%s", got)
 	}
 }
