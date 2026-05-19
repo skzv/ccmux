@@ -189,8 +189,9 @@ type remoteSessionStartedMsg struct {
 }
 
 // New-bare-session flow (Sessions tab `n` key). Mirrors the new-
-// project flow but doesn't carry a project name, description, or
-// agent — it's just "shell in this dir on this device".
+// project flow but doesn't carry a project name or description —
+// just a session in this dir on this device, running the picked
+// agent (or $SHELL when Agent is "").
 
 // newBareSessionSubmitMsg is emitted by the Sessions tab's form
 // when the user confirms. Host/Address/DialHost are zero for the
@@ -205,6 +206,10 @@ type newBareSessionSubmitMsg struct {
 	DialHost string // bare hostname/IP for ssh/mosh attach
 	User     string // login user; empty → client's own username
 	Mosh     bool   // prefer mosh over ssh for this host
+
+	// Agent is the AI agent the form's picker selected. Empty means
+	// "shell — no agent", the picker's explicit no-agent row.
+	Agent agent.ID
 }
 
 // newBareSessionCancelMsg is emitted by the form on Esc.

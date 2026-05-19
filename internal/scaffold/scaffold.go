@@ -280,41 +280,68 @@ func Scaffold(opts *Options) (*Result, error) {
 func defaultIfZero(b bool) bool { return b }
 
 // InitialPrompt is the single composite message ccmux sends to a fresh
-// Claude session in a new project. Reads the config's
-// scaffold.initial_prompt if set; otherwise uses DefaultInitialPrompt.
-// {{name}} and {{description}} are substituted in the chosen template.
+// agent session in a new project. Resolution order:
+//
+//  1. cfg.Scaffold.InitialPrompt (user override) — applied to every
+//     agent, since a user who set a custom template meant it.
+//  2. The picked agent's own InitialPrompt — Claude asks for /init +
+//     CLAUDE.md, Antigravity asks for AGENTS.md, etc. Each agent's
+//     bootstrap ritual is different and the per-agent string lives in
+//     internal/agent/<id>.go.
+//
+// The Claude-specific DefaultInitialPrompt constant is retained as a
+// back-compat fallback for the config-override path (existing
+// installations referencing it via expanded copies in config.toml
+// keep working).
 func InitialPrompt(opts Options) string {
 	desc := opts.Description
 	if desc == "" {
 		desc = "(no description yet — please ask me what I'm building)"
 	}
 	cfg, _ := config.Load()
-	tmpl := cfg.Scaffold.InitialPrompt
-	if strings.TrimSpace(tmpl) == "" {
-		tmpl = DefaultInitialPrompt
+	if tmpl := strings.TrimSpace(cfg.Scaffold.InitialPrompt); tmpl != "" {
+		return strings.NewReplacer(
+			"{{name}}", opts.Name,
+			"{{description}}", desc,
+		).Replace(tmpl)
 	}
-	return strings.NewReplacer(
-		"{{name}}", opts.Name,
-		"{{description}}", desc,
-	).Replace(tmpl)
+	return agent.ByID(opts.Agent).InitialPrompt(opts.Name, opts.Description)
+}
+
+// LaunchCmd is the tmux launch command for a fresh scaffold. Routes
+// through agent.ByID(opts.Agent).LaunchCmd(false) — `false` because a
+// brand-new project has no prior conversation to resume; passing
+// --continue here would make the agent look for a transcript that
+// doesn't exist. Exposed (and tested) separately from StartSession so
+// the "every agent's binary actually runs" invariant has a unit-test
+// home that doesn't need a live tmux server.
+func LaunchCmd(opts Options) string {
+	return agent.ByID(opts.Agent).LaunchCmd(false)
 }
 
 // StartSession runs Scaffold, then opens a detached tmux session with
-// `claude`, waits for it to boot, and injects the initial prompt. Returns
-// the tmux session name. The caller is responsible for attaching (either
-// via tmux.Attach which exec's, or via tea.ExecProcess from the TUI).
+// the picked agent's binary, waits for it to boot, and injects the
+// initial prompt. Returns the tmux session name. The caller is
+// responsible for attaching (either via tmux.Attach which exec's, or
+// via tea.ExecProcess from the TUI).
+//
+// Bug history: this used to hardcode "claude", which meant projects
+// created with Codex / Antigravity in the picker still launched claude
+// in tmux while the sidecar said otherwise. Now resolves the launch
+// command via agent.ByID(opts.Agent) so the agent the user picked is
+// the agent that runs.
 func StartSession(ctx context.Context, opts Options) (string, error) {
 	if _, err := Scaffold(&opts); err != nil {
 		return "", err
 	}
 	session := tmux.SessionNameForPath(opts.Dir)
-	if err := tmux.New(ctx, session, opts.Dir, "claude"); err != nil {
+	if err := tmux.New(ctx, session, opts.Dir, LaunchCmd(opts)); err != nil {
 		return "", fmt.Errorf("start tmux session: %w", err)
 	}
 	if opts.NoSession {
 		return session, nil
 	}
-	// Wait for Claude Code to boot. 3s matches the existing mkproj zsh
+	// Wait for the agent to boot. 3s matches the existing mkproj zsh
 	// function which has been reliable.
 	time.Sleep(3 * time.Second)
 	if err := tmux.SendKeys(ctx, session, InitialPrompt(opts)); err != nil {

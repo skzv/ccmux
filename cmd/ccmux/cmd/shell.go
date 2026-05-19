@@ -21,53 +21,61 @@ import (
 
 // newShellCmd registers the `ccmux shell` subcommand. CLI parity
 // with the TUI's Sessions-tab `n` form per CLAUDE.md's feature-
-// surface policy. Same three knobs: name, path, host.
+// surface policy. Same four knobs: name, path, host, agent.
 func newShellCmd() *cobra.Command {
 	var (
-		name string
-		path string
-		host string
+		name      string
+		path      string
+		host      string
+		agentFlag string
 	)
 	c := &cobra.Command{
 		Use:   "shell",
-		Short: "Spawn a bare tmux session (shell only, no project) on local or any tailnet peer",
-		Long: `Start a tmux session running $SHELL — no scaffold, no agent, no
-project association. Equivalent to pressing 'n' in the Sessions tab.
+		Short: "Spawn a tmux session (agent or shell only) on local or any tailnet peer",
+		Long: `Start a tmux session running an AI agent (claude / codex / antigravity)
+or a bare shell. Equivalent to pressing 'n' in the Sessions tab.
 
 Defaults:
   --name      auto-generated (c-shell-<runid>)
   --path      sessions.default_dir from config; falls back to $HOME
               on the daemon's host (NOT the client's)
-  --host      local (use a tailnet peer name to spawn on that host)`,
+  --host      local (use a tailnet peer name to spawn on that host)
+  --agent     sessions.default_agent from config (claude unless overridden);
+              pass "shell" for a no-agent $SHELL session`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runShellCmd(cmd.Context(), name, path, host)
+			return runShellCmd(cmd.Context(), name, path, host, agentFlag)
 		},
 	}
 	c.Flags().StringVar(&name, "name", "", "tmux session name; empty for auto")
 	c.Flags().StringVar(&path, "path", "", "working directory; empty uses config default")
 	c.Flags().StringVar(&host, "host", "", "remote tailnet peer; empty for local")
+	c.Flags().StringVar(&agentFlag, "agent", "", `agent to launch: "claude" / "codex" / "antigravity" / "shell"; empty uses config default`)
 	return c
 }
 
-func runShellCmd(ctx context.Context, name, path, host string) error {
+func runShellCmd(ctx context.Context, name, path, host, agentFlag string) error {
 	host = strings.TrimSpace(host)
 	if host == "" || host == "local" {
-		return runShellLocal(ctx, name, path)
+		return runShellLocal(ctx, name, path, agentFlag)
 	}
-	return runShellRemote(ctx, name, path, host)
+	return runShellRemote(ctx, name, path, host, agentFlag)
 }
 
 // runShellLocal goes through the local daemon. Same code path the
 // TUI's local-spawn uses, behind the same /v1/sessions/bare endpoint,
 // so behavior stays uniform.
-func runShellLocal(ctx context.Context, name, path string) error {
+func runShellLocal(ctx context.Context, name, path, agentFlag string) error {
 	cli, err := daemon.LocalClient()
 	if err != nil {
 		return fmt.Errorf("connect to local ccmuxd: %w", err)
 	}
 	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	res, err := cli.NewBareSession(cctx, daemon.NewBareSessionRequest{Name: name, Path: path})
+	res, err := cli.NewBareSession(cctx, daemon.NewBareSessionRequest{
+		Name:  name,
+		Path:  path,
+		Agent: agentFlag,
+	})
 	if err != nil {
 		return fmt.Errorf("new bare session: %w", err)
 	}
@@ -81,7 +89,7 @@ func runShellLocal(ctx context.Context, name, path string) error {
 // resolved against the user's configured hosts; if it's not there,
 // we error out with a hint pointing at `ccmux host add` or the
 // auto-discovery flow.
-func runShellRemote(ctx context.Context, name, path, host string) error {
+func runShellRemote(ctx context.Context, name, path, host, agentFlag string) error {
 	cfg, _ := config.Load()
 	var addr, dial string
 	for _, h := range cfg.Hosts {
@@ -97,7 +105,11 @@ func runShellRemote(ctx context.Context, name, path, host string) error {
 	cli := daemon.RemoteClient(addr)
 	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	res, err := cli.NewBareSession(cctx, daemon.NewBareSessionRequest{Name: name, Path: path})
+	res, err := cli.NewBareSession(cctx, daemon.NewBareSessionRequest{
+		Name:  name,
+		Path:  path,
+		Agent: agentFlag,
+	})
 	if err != nil {
 		return fmt.Errorf("new bare session on %s: %w", host, err)
 	}

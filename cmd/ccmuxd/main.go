@@ -297,13 +297,13 @@ func (s *server) createSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !has {
-		claudeCmd := "claude"
-		if req.Continue {
-			claudeCmd = "claude --continue || claude || zsh"
-		} else {
-			claudeCmd = "claude --continue || claude || zsh"
-		}
-		if err := tmux.New(ctx, session, path, claudeCmd); err != nil {
+		// Launch the agent recorded in the project's sidecar (or the
+		// one the request explicitly named). This used to hardcode
+		// "claude --continue || claude || zsh" regardless, which
+		// meant Codex / Antigravity projects launched claude from
+		// remote starts.
+		launch := projectLaunchCmd(path, req.Continue)
+		if err := tmux.New(ctx, session, path, launch); err != nil {
 			http.Error(w, "tmux new-session: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -367,13 +367,11 @@ func (s *server) createBareSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !has {
-		// Prefer $SHELL on the daemon's host; fall back to /bin/sh so
-		// minimal containers / fresh installs still work.
-		shell := os.Getenv("SHELL")
-		if shell == "" {
-			shell = "/bin/sh"
-		}
-		if err := tmux.New(ctx, name, path, shell); err != nil {
+		// Order: explicit request agent → daemon's
+		// sessions.default_agent → $SHELL. Bare sessions don't carry
+		// --continue because they're not tied to a project transcript.
+		launch := bareSessionLaunchCmd(req.Agent, s.cfg.Sessions.DefaultAgent)
+		if err := tmux.New(ctx, name, path, launch); err != nil {
 			http.Error(w, "tmux new-session: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -390,6 +388,67 @@ func (s *server) createBareSession(w http.ResponseWriter, r *http.Request) {
 		Path:    path,
 		Host:    host,
 	})
+}
+
+// projectLaunchCmd resolves the launch command for a project's tmux
+// session from its .ccmux/agent sidecar. Pure helper so a test can
+// pin "Antigravity project → agy launch" without standing up tmux.
+//
+// continueFlag=true matches the existing UX: every "attach to known
+// project" path passes --continue so the user resumes their prior
+// conversation; only fresh scaffolds start without --continue.
+func projectLaunchCmd(projectPath string, continueFlag bool) string {
+	return agent.ByID(project.ReadAgent(projectPath)).LaunchCmd(continueFlag)
+}
+
+// bareSessionLaunchCmd resolves which command tmux new-session runs
+// inside a new bare session. Precedence:
+//
+//  1. explicit request agent — the picker selection or
+//     `ccmux shell --agent`. The literal "shell" short-circuits to
+//     $SHELL so a conscious "no agent" pick isn't second-guessed by
+//     the config default.
+//  2. daemon's sessions.default_agent config (same rules).
+//  3. $SHELL (or /bin/sh if $SHELL is unset).
+//
+// IDs are normalized via agent.ParseID so the daemon accepts the
+// "gemini" back-compat alias. Exposed for tests so the precedence is
+// pinned without standing up an http server.
+func bareSessionLaunchCmd(reqAgent, configDefault string) string {
+	if cmd := agentLaunchCmdOrShell(reqAgent, false); cmd != "" {
+		return cmd
+	}
+	if cmd := agentLaunchCmdOrShell(configDefault, false); cmd != "" {
+		return cmd
+	}
+	return shellLaunchCmd()
+}
+
+// agentLaunchCmdOrShell decodes a single agent-id-or-"shell" string.
+// Returns the LaunchCmd for a known agent, the shell command for an
+// explicit "shell" pick, and "" for an empty or unrecognized value so
+// the caller can fall through to the next precedence level.
+func agentLaunchCmdOrShell(s string, continueFlag bool) string {
+	trimmed := strings.TrimSpace(s)
+	if trimmed == "" {
+		return ""
+	}
+	if strings.EqualFold(trimmed, "shell") {
+		return shellLaunchCmd()
+	}
+	if id, ok := agent.ParseID(trimmed); ok {
+		return agent.ByID(id).LaunchCmd(continueFlag)
+	}
+	return ""
+}
+
+// shellLaunchCmd is the bare-shell escape hatch.
+func shellLaunchCmd() string {
+	shell := os.Getenv("SHELL")
+	if shell == "" {
+		shell = "/bin/sh"
+	}
+	return shell
 }
 
 // resolveBarePath picks the working directory for a bare session.

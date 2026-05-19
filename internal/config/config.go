@@ -28,17 +28,27 @@ type Config struct {
 }
 
 // SessionsConfig holds preferences for the Sessions screen's "new
-// bare session" flow. A bare session is one started from the
-// Sessions tab — not tied to any project — that just opens a shell
-// in DefaultDir. Useful for ad-hoc work on any device (e.g. a
-// quick shell on the Mac mini without first scaffolding a
-// "project").
+// session" flow. A bare session is one started from the Sessions
+// tab — not tied to any project — that opens DefaultDir and runs
+// either DefaultAgent or a plain shell. Useful for ad-hoc work on
+// any device (e.g. a quick session on the Mac mini without first
+// scaffolding a "project").
 type SessionsConfig struct {
 	// DefaultDir is the working directory new bare sessions open
 	// in. Empty resolves to $HOME on the daemon host. The TUI's
 	// new-session form pre-fills this value; the user can override
 	// per-session.
 	DefaultDir string `toml:"default_dir"`
+
+	// DefaultAgent picks which agent the Sessions-tab "new session"
+	// form is pre-set to, and which agent the daemon launches when
+	// `ccmux shell` / POST /v1/sessions/bare omits the field. Valid
+	// values: "claude" / "codex" / "antigravity" (or the legacy
+	// alias "gemini" for projects scaffolded before the rebrand),
+	// or the explicit string "shell" for a bare $SHELL with no
+	// agent. Empty falls back to "claude" so a fresh install gets
+	// an agent by default — the multi-agent refactor's intent.
+	DefaultAgent string `toml:"default_agent"`
 }
 
 // TourConfig persists whether the user has seen the first-run interactive
@@ -206,6 +216,11 @@ func Defaults() Config {
 			// because the daemon may live on a different machine
 			// (cross-device "new bare session") with a different home.
 			DefaultDir: "",
+			// Default to claude so a fresh install lands Sessions-tab
+			// `n` → Enter inside an agent. Users who want the old
+			// no-agent shell behaviour set this to "shell"; codex /
+			// antigravity users override via Settings.
+			DefaultAgent: "claude",
 		},
 		Subscription: SubscriptionConfig{Tier: "api"},
 	}

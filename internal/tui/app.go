@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/claude"
 	"github.com/skzv/ccmux/internal/claudeauth"
 	"github.com/skzv/ccmux/internal/claudeusage"
@@ -241,6 +242,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.projectsM.SetHosts(a.hosts)
 		a.sessionsM.SetHosts(a.hosts)
 		a.sessionsM.SetDefaultDir(a.cfg.Sessions.DefaultDir)
+		a.sessionsM.SetDefaultAgent(a.cfg.Sessions.DefaultAgent)
 		a.dashboard.SetVersion(a.version)
 		a.sessionsM.SetSessions(a.sessions)
 		if msg.Err != nil {
@@ -276,17 +278,22 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Action == "rejoin" {
 			return a, a.localAttachCmd(msg.Existing, msg.Project)
 		}
-		// "new": create the named session then attach.
+		// "new": create the named session for the picked project and
+		// attach. The launch command comes from the project's
+		// .ccmux/agent sidecar — an Antigravity-tagged project here
+		// used to launch claude regardless, because this branch
+		// hardcoded the Claude command string.
 		name := msg.NewName
 		projectPath := msg.ProjectPath
-		project := msg.Project
+		projectLabel := msg.Project
+		launch := launchCmdForProjectPath(projectPath)
 		return a, func() tea.Msg {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			if err := tmux.New(ctx, name, projectPath, `claude --continue || claude || zsh`); err != nil {
+			if err := tmux.New(ctx, name, projectPath, launch); err != nil {
 				return toastMsg{Text: "start session: " + err.Error(), Kind: toastError, Until: time.Now().Add(5 * time.Second)}
 			}
-			return projectSessionReadyMsg{Session: name, Project: project}
+			return projectSessionReadyMsg{Session: name, Project: projectLabel}
 		}
 
 	case projectSessionPickCancelMsg:
@@ -1252,6 +1259,24 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
 
+// launchCmdForProject and launchCmdForProjectPath are the canonical
+// places to resolve the tmux launch command for a project session.
+// Both go through agent.ByID(...).LaunchCmd(true) — `true` because
+// every project-attach path is "resume the existing conversation"
+// from the user's POV; `--continue` is what makes the resume real.
+//
+// Two flavors because some sites have the Project in hand and others
+// only have the path. Both must agree so a project whose sidecar
+// says Antigravity launches `agy --continue || agy || zsh` no matter
+// which code path the user took.
+func launchCmdForProject(p project.Project) string {
+	return agent.ByID(p.Agent).LaunchCmd(true)
+}
+
+func launchCmdForProjectPath(projectPath string) string {
+	return agent.ByID(project.ReadAgent(projectPath)).LaunchCmd(true)
+}
+
 // remoteTmuxAttach builds the single-string command we hand to ssh
 // for attaching to a remote tmux session. ssh runs it via the user's
 // shell in NON-LOGIN NON-INTERACTIVE mode, so /etc/profile + zshrc/
@@ -1301,6 +1326,10 @@ func (a App) attachOrCreateLocal(p project.Project) tea.Cmd {
 	session := p.SessionName()
 	label := p.Name
 	path := p.Path
+	// Resolve the launch command from the project's sidecar (.ccmux/
+	// agent) up front — this used to hardcode the Claude command,
+	// which silently overrode Codex / Antigravity projects.
+	launch := launchCmdForProject(p)
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
@@ -1313,7 +1342,7 @@ func (a App) attachOrCreateLocal(p project.Project) tea.Cmd {
 				ProjectPath: path,
 			}
 		}
-		if err := tmux.New(ctx, session, path, `claude --continue || claude || zsh`); err != nil {
+		if err := tmux.New(ctx, session, path, launch); err != nil {
 			return toastMsg{Text: "start session: " + err.Error(), Kind: toastError, Until: time.Now().Add(5 * time.Second)}
 		}
 		return projectSessionReadyMsg{Session: session, Project: label}

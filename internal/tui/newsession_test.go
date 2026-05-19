@@ -41,7 +41,7 @@ func openSessionsFormApp(t *testing.T, hosts []hostStatus) App {
 		matrix:    newMatrix(),
 	}
 	a.sessionsM.SetHosts(hosts)
-	form := newNewSessionForm(st, hosts, "")
+	form := newNewSessionForm(st, hosts, "", "")
 	a.sessionsM.form = &form
 	return a
 }
@@ -130,7 +130,7 @@ func TestNewSessionForm_SubmitCarriesDialHostUserMosh(t *testing.T) {
 		{Name: "local", Local: true, OK: true},
 		remoteHost("mac-mini", "mac-mini.local", "sasha", true),
 	}
-	form := newNewSessionForm(st, hosts, "")
+	form := newNewSessionForm(st, hosts, "", "")
 
 	// Cycle to the remote host picker field (tab twice: name → workdir → device).
 	form, _ = form.Update(keyMsg("tab"))
