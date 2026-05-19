@@ -50,12 +50,17 @@ make lint          # gofmt + go vet + staticcheck if installed
 - Unit tests for `internal/tmux` and `internal/project` use table-driven tests against fake `tmux` outputs.
 - TUI screens get golden-file tests via `teatest` (Charm's snapshot tester).
 - Integration tests are tagged `//go:build integration` and run against a real tmux server in CI.
+- **Fuzz targets.** Native Go fuzzers cover the parsers + heuristic surfaces (`FuzzParseID`, `FuzzReadAgent`, `FuzzClassify`, `FuzzOSC52RoundTrip`, `FuzzParsePmsetBatt`, `FuzzSessionNameForPath`, `FuzzRenderSessionLine_DegenerateInputs`). CI runs each for **10s** as a smoke pass; that is just enough to catch a freshly-broken invariant on the PR that introduced it. Run deeper sweeps locally when you touch one of those surfaces:
+  - `make fuzz` — 5min/target (≈35min total), the default for "I want real coverage"
+  - `make fuzz-quick` — 10s/target (≈70s total), mirrors CI exactly
+  - `make fuzz FUZZTIME=1h` — overnight sweep before a release
+  Failing seeds auto-archive under `<pkg>/testdata/fuzz/<FuzzName>/<sha>` (Go's native convention) — commit them so `go test ./...` picks them up as regression seeds. Adding a new `FuzzXxx` target? Append it to `FUZZ_TARGETS` in the root `Makefile` — it's the single source of truth used by CI and locally.
 - **Always run `go test ./...` before every commit.** A clean suite is a precondition for `git commit` in this repo, not a follow-up. If any test fails, fix it (or mark + explain the skip) before the commit. Cross-compile sanity (`GOOS=windows`, `GOOS=linux`) is part of "tests pass" for changes that touch OS-specific code.
 - **Every new feature ships with tests.** No PR should add user-visible behavior without at least one test that fails before the change and passes after. The bar is "exercised in code" — unit tests for pure helpers, fake-driven tests for protocol changes, table-driven keymap tests for new TUI bindings, live-driven integration tests for things that need a real tmux/daemon. A feature without a test is unfinished work, not a candidate for review.
 - **TODOs (research + plan in [`docs/01_Specs/03_Testing_And_CI.md`](docs/01_Specs/03_Testing_And_CI.md)):**
-  - **CI integration.** GitHub Actions workflow with test + cross-compile + integration matrix. Today CI is whatever the contributor runs locally — a green PR is a contributor promise, not a machine guarantee.
   - **Stress testing.** A `cmd/ccmux-stress/` harness exercising the daemon under realistic load (20+ sessions, multi-host fan-out, notification storms, 24h long-haul) with pprof + FD-leak detection.
-  - **Terminal crawling.** A `cmd/ccmux-crawl/` monkey-tester (built on `teatest`) plus native `go test -fuzz` targets for the parsers and `rapid` property tests for the heuristic surfaces (pane classifier, session-name handling, render under degenerate dimensions).
+  - **Terminal crawling.** A `cmd/ccmux-crawl/` monkey-tester (built on `teatest`) plus `rapid` property tests for the heuristic surfaces that the native `go test -fuzz` corpus doesn't already cover (pane classifier deeper invariants, render under degenerate dimensions).
+  - **Nightly long-budget fuzz cron.** A Mac mini cron running `make fuzz FUZZTIME=1h` and committing failing seeds back as PRs. CI's 10s/target PR pass is intentionally a smoke check, not a deep search.
 
 # Feature surface policy
 - **Every feature must be reachable from both the TUI and the CLI.** Pick a key/screen in the TUI *and* a `ccmux <subcommand>` (or flag on an existing one) — never one without the other. Reasoning: the TUI is the daily driver, the CLI is for muscle memory + scripting; shipping a feature in only one creates a discoverability cliff and breaks the "TUI-first, CLI when you want it" promise on the front page.

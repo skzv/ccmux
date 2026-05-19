@@ -1,4 +1,4 @@
-.PHONY: build install setup uninstall run test lint clean fmt vet daemon tui check-go bootstrap
+.PHONY: build install setup uninstall run test lint clean fmt vet daemon tui check-go bootstrap fuzz fuzz-quick
 
 BIN_DIR    := bin
 INSTALL_DIR := $(HOME)/.local/bin
@@ -112,6 +112,40 @@ daemon: check-go
 
 test: check-go
 	go test ./...
+
+# Native Go fuzzer pass — one round-trip over every FuzzXxx target.
+#
+# Pairs are listed verbatim (no globbing) so adding a target is a
+# deliberate one-line edit here, and a forgotten target is loud
+# instead of silently skipped. CI runs `make fuzz FUZZTIME=10s` for
+# a quick PR-time signal; humans run `make fuzz` (default 5m/target)
+# before tightening a parser or after touching a heuristic surface.
+# Bump FUZZTIME=1h for an overnight sweep, e.g. before a release.
+#
+# Failing seeds land under <pkg>/testdata/fuzz/<FuzzName>/<sha> per
+# Go's standard convention — commit them so the next `go test ./...`
+# picks them up as regression seeds.
+FUZZTIME ?= 5m
+FUZZ_TARGETS := \
+	./internal/agent:FuzzParseID \
+	./internal/project:FuzzReadAgent \
+	./internal/clipboard:FuzzOSC52RoundTrip \
+	./internal/sleeplock:FuzzParsePmsetBatt \
+	./internal/claude:FuzzClassify \
+	./internal/tmux:FuzzSessionNameForPath \
+	./internal/tui:FuzzRenderSessionLine_DegenerateInputs
+
+fuzz: check-go
+	@for pair in $(FUZZ_TARGETS); do \
+		pkg=$${pair%:*}; target=$${pair#*:}; \
+		printf '\n=== %s :: %s (%s) ===\n' "$$pkg" "$$target" "$(FUZZTIME)"; \
+		go test "$$pkg" -run '^$$' -fuzz="^$${target}$$" -fuzztime=$(FUZZTIME) || exit 1; \
+	done
+
+# Quick local pass — mirrors CI's per-target budget so `make fuzz-quick`
+# gives the same signal a PR would, in ~70s total.
+fuzz-quick:
+	@$(MAKE) fuzz FUZZTIME=10s
 
 fmt: check-go
 	gofmt -w .
