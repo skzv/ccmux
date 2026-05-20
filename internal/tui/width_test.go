@@ -84,7 +84,7 @@ func TestWidthSweep_AllScreens(t *testing.T) {
 		t0     []string // must appear at every width
 		t2     []string // must be absent below the 120 breakpoint
 	}{
-		{ScreenHome, []string{"Hello.", "Claude usage"}, []string{"Welcome to ccmux", "Codex usage"}},
+		{ScreenHome, []string{"Sessions", "Claude usage"}, []string{"Hello.", "Welcome to ccmux", "Codex usage"}},
 		{ScreenConversations, []string{"Conversations"}, nil},
 		{ScreenProjects, []string{"Projects"}, nil},
 		{ScreenNotes, []string{"Notes"}, nil},

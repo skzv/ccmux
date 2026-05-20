@@ -874,36 +874,49 @@ func clampLines(s string, n int) string {
 	return s
 }
 
-// homeView renders the combined Home screen. On a phone (narrow) it is
-// a single full-width column — hero, sessions, then the stat tiles. On
-// a monitor it splits into two halves: the sessions list + detail on
-// the left, the hero and the three stat tiles stacked on the right.
+// homeView renders the combined Home screen. On a phone (narrow) the
+// hero is dropped entirely and the screen is a single column: sessions,
+// then the stat tiles. On a monitor the hero is a full-width banner
+// across the top; below it the sessions list on the left, and the
+// session detail + the three stat tiles stacked on the right.
 func (a App) homeView(width, height int) string {
 	narrow := isNarrow(width)
 	a.dashboard.narrow = narrow // a is a value copy; the panels read m.narrow
 
+	// A sessions modal (rename / new-session form) takes the whole
+	// Home body, centered — sessionsModel.View owns that rendering.
+	if a.sessionsM.form != nil || a.sessionsM.renameForm != nil {
+		return a.sessionsM.View(width, height, narrow)
+	}
+
 	if narrow {
-		hero := a.dashboard.heroPanel(width)
+		// No hero on a phone — straight to sessions, then the tiles.
 		tiles := a.dashboard.StatsView(width)
-		listH := height - lipgloss.Height(hero) - lipgloss.Height(tiles)
+		listH := height - lipgloss.Height(tiles)
 		if listH < 5 {
 			listH = 5
 		}
 		sessions := a.sessionsM.View(width, listH, true)
-		return lipgloss.JoinVertical(lipgloss.Left, hero, sessions, tiles)
+		return lipgloss.JoinVertical(lipgloss.Left, sessions, tiles)
 	}
 
-	// Monitor: sessions take the left half, the hero + three stat
-	// tiles stack in the right half.
+	// Monitor: hero banner across the top; below it the sessions list
+	// on the left and the session detail + stat tiles on the right.
+	hero := a.dashboard.heroPanel(width)
+	rowH := height - lipgloss.Height(hero)
+	if rowH < 5 {
+		rowH = 5
+	}
 	gutter := 1
 	leftW := (width - gutter) / 2
 	rightW := width - leftW - gutter
-	left := a.sessionsM.View(leftW, height, false)
+	left := a.sessionsM.renderList(leftW, rowH)
 	right := lipgloss.JoinVertical(lipgloss.Left,
-		a.dashboard.heroPanel(rightW),
+		a.sessionsM.renderDetail(rightW, false),
 		a.dashboard.StatsView(rightW),
 	)
-	return lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
+	row := lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
+	return lipgloss.JoinVertical(lipgloss.Left, hero, row)
 }
 
 // renderHeader is the top-of-screen tab strip. On narrow terminals the
