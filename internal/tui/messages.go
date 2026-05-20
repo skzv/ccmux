@@ -295,11 +295,11 @@ type usageTickMsg struct{ At time.Time }
 // block from `npx ccusage blocks --json`; nil when ccusage isn't
 // installed or the command failed.
 type usageLoadedMsg struct {
-	Agg         *claudeusage.Aggregate
-	Codex       usage.AgentSummary
-	Antigravity usage.AgentSummary
+	Agg          *claudeusage.Aggregate
+	Codex        usage.AgentSummary
+	Antigravity  usage.AgentSummary
 	CcusageBlock *ccusageBlock
-	Err         error
+	Err          error
 }
 
 // ccusageBlock is the billing-block data returned by ccusage. Kept as

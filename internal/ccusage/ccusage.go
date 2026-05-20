@@ -16,10 +16,10 @@ import (
 
 // TokenCounts holds the four token categories reported by ccusage.
 type TokenCounts struct {
-	InputTokens        int64
-	OutputTokens       int64
-	CacheCreateTokens  int64
-	CacheReadTokens    int64
+	InputTokens       int64
+	OutputTokens      int64
+	CacheCreateTokens int64
+	CacheReadTokens   int64
 }
 
 // Block is a single five-hour billing window returned by ccusage.
