@@ -129,24 +129,28 @@ func itoaTest(n int) string {
 	return string(rune('0' + n))
 }
 
-// TestHomeView_HeroAboveSessions — the "Hello" hero spans the full
-// width across the top of the Home screen, above the sessions list.
-// A regression here would drop the greeting back inside the right-hand
-// stat column, where it crowds the tiles.
-func TestHomeView_HeroAboveSessions(t *testing.T) {
+// TestHomeView_TileOrder — the Home screen is a single full-width
+// column, stacked top to bottom: the "Hello" hero, the sessions list,
+// then the Session summary / Devices / Usage tiles. A regression here
+// would reorder the column or split it back into side-by-side panes.
+func TestHomeView_TileOrder(t *testing.T) {
 	a := newTestApp(ScreenHome)
-	out := a.homeView(120, 40)
-	heroAt := strings.Index(out, "Hello.")
-	sessAt := strings.Index(out, "Sessions")
-	if heroAt < 0 {
-		t.Fatal(`homeView is missing the "Hello." hero`)
-	}
-	if sessAt < 0 {
-		t.Fatal("homeView is missing the sessions list")
-	}
-	// JoinVertical lays blocks top-to-bottom, so a lower byte offset
-	// means a higher row: the hero must come before the sessions list.
-	if heroAt > sessAt {
-		t.Errorf("hero (offset %d) should render above the sessions list (offset %d)", heroAt, sessAt)
+	// The Devices tile only renders when at least one host is known;
+	// give it one so the full column order can be checked.
+	a.dashboard.SetHosts([]hostStatus{{Name: "sputnik", Local: true, OK: true}})
+	out := a.homeView(120, 60)
+	// JoinVertical lays blocks top-to-bottom, so byte offset increases
+	// with row: each anchor must appear after the previous one.
+	anchors := []string{"Hello.", "Sessions", "Session summary", "Devices", "Claude usage"}
+	prev := -1
+	for _, want := range anchors {
+		at := strings.Index(out, want)
+		if at < 0 {
+			t.Fatalf("homeView is missing %q", want)
+		}
+		if at <= prev {
+			t.Errorf("%q (offset %d) should render below the previous tile (offset %d)", want, at, prev)
+		}
+		prev = at
 	}
 }
