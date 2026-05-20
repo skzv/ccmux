@@ -128,3 +128,25 @@ func itoaTest(n int) string {
 	}
 	return string(rune('0' + n))
 }
+
+// TestHomeView_HeroAboveSessions — the "Hello" hero spans the full
+// width across the top of the Home screen, above the sessions list.
+// A regression here would drop the greeting back inside the right-hand
+// stat column, where it crowds the tiles.
+func TestHomeView_HeroAboveSessions(t *testing.T) {
+	a := newTestApp(ScreenHome)
+	out := a.homeView(120, 40)
+	heroAt := strings.Index(out, "Hello.")
+	sessAt := strings.Index(out, "Sessions")
+	if heroAt < 0 {
+		t.Fatal(`homeView is missing the "Hello." hero`)
+	}
+	if sessAt < 0 {
+		t.Fatal("homeView is missing the sessions list")
+	}
+	// JoinVertical lays blocks top-to-bottom, so a lower byte offset
+	// means a higher row: the hero must come before the sessions list.
+	if heroAt > sessAt {
+		t.Errorf("hero (offset %d) should render above the sessions list (offset %d)", heroAt, sessAt)
+	}
+}

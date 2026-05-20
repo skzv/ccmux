@@ -874,22 +874,29 @@ func clampLines(s string, n int) string {
 	return s
 }
 
-// homeView renders the combined Home screen: sessions list on the left,
-// dashboard stats (hero, usage, update banner) on the right. The split
-// adapts to terminal width — below a threshold the dashboard panel is
-// dropped and the full width goes to the sessions list.
+// homeView renders the combined Home screen: a full-width "Hello" hero
+// across the top, then the sessions list on the left with the dashboard
+// stat tiles stacked in a column on the right. The split adapts to
+// terminal width — below a threshold the right column is dropped and
+// the sessions list spans the full width under the hero.
 func (a App) homeView(width, height int) string {
 	const minDashW = 38
-	// Reserve enough width for a useful dashboard panel. Below the
-	// threshold just show the sessions list full-width.
+	hero := a.dashboard.heroPanel(width)
+	rowH := height - lipgloss.Height(hero)
+	if rowH < 8 {
+		rowH = 8
+	}
+	// Reserve enough width for useful stat tiles. Below the threshold
+	// just show the sessions list full-width under the hero.
 	sessW := width * 55 / 100
 	dashW := width - sessW - 1
 	if dashW < minDashW {
-		return a.sessionsM.View(width, height)
+		return lipgloss.JoinVertical(lipgloss.Left, hero, a.sessionsM.View(width, rowH))
 	}
-	left := a.sessionsM.View(sessW, height)
-	right := a.dashboard.View(dashW, height)
-	return lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
+	left := a.sessionsM.View(sessW, rowH)
+	right := a.dashboard.StatsView(dashW)
+	row := lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
+	return lipgloss.JoinVertical(lipgloss.Left, hero, row)
 }
 
 // renderHeader is the top-of-screen tab strip. On narrow terminals the
