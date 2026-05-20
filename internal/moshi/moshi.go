@@ -51,6 +51,16 @@ type Status struct {
 	StatusRaw string
 }
 
+// Detection timeouts. moshi-hook's own subcommands are local and
+// near-instant, but `brew services list` shells out to Ruby and can be
+// slow on a cold cache — so the budgets are generous. A timeout here is
+// silently read as "not configured", which nagged users who were in
+// fact set up; the headroom keeps that from happening in practice.
+const (
+	moshiHookTimeout = 5 * time.Second
+	brewListTimeout  = 8 * time.Second
+)
+
 // Detect returns the current Moshi/moshi-hook state on this host. Returns
 // a partial Status if any check fails; callers should inspect individual
 // fields rather than treating one missing piece as a fatal error.
@@ -62,24 +72,19 @@ func Detect(ctx context.Context) Status {
 	}
 
 	if s.BinaryInstalled {
-		if out, err := run(ctx, 2*time.Second, s.BinaryPath, "version"); err == nil {
+		if out, err := run(ctx, moshiHookTimeout, s.BinaryPath, "version"); err == nil {
 			s.Version = strings.TrimSpace(out)
 		}
-		if out, err := run(ctx, 2*time.Second, s.BinaryPath, "status"); err == nil {
+		if out, err := run(ctx, moshiHookTimeout, s.BinaryPath, "status"); err == nil {
 			s.StatusRaw = out
-			lower := strings.ToLower(out)
-			// `moshi-hook status` is human-formatted, not JSON. It reports
-			// pairing state only — not live WebSocket connectivity — so
-			// we use ServiceRunning (from brew services) as the closest
-			// proxy for "the daemon is up and reachable from Moshi".
-			s.Paired = strings.Contains(lower, "paired") && !strings.Contains(lower, "not paired") && !strings.Contains(lower, "unpaired")
+			s.Paired = statusReportsPaired(out)
 		}
 	}
 
 	s.HooksInstalled = claudeSettingsMentionsMoshi()
 
 	if _, err := exec.LookPath("brew"); err == nil {
-		if out, err := run(ctx, 2*time.Second, "brew", "services", "list", "--json"); err == nil {
+		if out, err := run(ctx, brewListTimeout, "brew", "services", "list", "--json"); err == nil {
 			s.ServiceRunning = brewServiceStartedFromJSON(out)
 		}
 	}
@@ -242,6 +247,22 @@ func claudeSettingsMentionsMoshi() bool {
 		}
 	}
 	return false
+}
+
+// statusReportsPaired interprets the output of `moshi-hook status`. That
+// command is human-formatted (not JSON) and prints a `status:` line that
+// reads `paired` once pairing has succeeded. We treat the presence of
+// "paired" as affirmative unless it's negated ("not paired" / "unpaired"),
+// so a future wording tweak on the negative side doesn't read as paired.
+//
+// Note this reports pairing state only — not live WebSocket connectivity.
+// Callers use ServiceRunning (from brew services) as the closest proxy
+// for "the daemon is up and reachable from Moshi".
+func statusReportsPaired(out string) bool {
+	lower := strings.ToLower(out)
+	return strings.Contains(lower, "paired") &&
+		!strings.Contains(lower, "not paired") &&
+		!strings.Contains(lower, "unpaired")
 }
 
 // brewServiceStartedFromJSON parses `brew services list --json` and

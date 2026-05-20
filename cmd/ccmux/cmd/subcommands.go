@@ -339,6 +339,8 @@ func runDoctor() error {
 		fmt.Println("  · " + gh.Hint())
 	case ghauth.StateMissing:
 		fmt.Println("  · " + gh.Hint())
+	case ghauth.StateUnknown:
+		fmt.Println("  · gh auth check timed out — couldn't verify (slow network?). Re-run `ccmux doctor` to recheck.")
 	}
 
 	// Moshi / moshi-hook block (optional but the recommended mobile path).
