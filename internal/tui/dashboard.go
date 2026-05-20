@@ -41,6 +41,12 @@ type dashboardModel struct {
 	// check finds the local checkout behind upstream. Zero value
 	// (Behind=0) renders no banner.
 	updateAvailable selfupdate.Result
+
+	// ccusage holds the most recent billing-block data from
+	// `npx ccusage blocks --json`. Nil means ccusage isn't installed or
+	// the last call failed — the usage panel silently skips the block
+	// summary when nil.
+	ccusage *ccusageBlock
 }
 
 func newDashboard(st styles.Styles, km Keymap) dashboardModel {
@@ -66,6 +72,10 @@ func (m *dashboardModel) SetUsage(a *claudeusage.Aggregate) {
 // renderer shows an install-hint placeholder when HasData=false.
 func (m *dashboardModel) SetCodexUsage(s usage.AgentSummary)       { m.codexUsage = s }
 func (m *dashboardModel) SetAntigravityUsage(s usage.AgentSummary) { m.antigravityUsage = s }
+
+// SetCcusageBlock receives billing-block data from `npx ccusage blocks`.
+// Nil clears any previous value (e.g., when ccusage becomes unreachable).
+func (m *dashboardModel) SetCcusageBlock(b *ccusageBlock) { m.ccusage = b }
 
 // SetUpdateAvailable records a positive auto-update check so the
 // dashboard renders the "update available" banner. Called by App
@@ -359,6 +369,28 @@ func normalizeVersion(v string) string {
 func (m dashboardModel) usagePanel(width int) string {
 	st := m.st
 	rows := []string{st.Emphasis.Render("Claude usage")}
+
+	// Billing-block summary from ccusage (most accurate source for
+	// real-time burn rate and end-of-block projection).
+	if b := m.ccusage; b != nil {
+		costChip := lipgloss.NewStyle().Foreground(st.P.Lavender).Bold(true).Render(
+			fmt.Sprintf("$%.2f", b.CostUSD),
+		)
+		var blockRow string
+		if b.BurnRateCostPerHour > 0 {
+			blockRow = fmt.Sprintf("block      %s  @ $%.1f/hr", costChip, b.BurnRateCostPerHour)
+		} else {
+			blockRow = fmt.Sprintf("block      %s", costChip)
+		}
+		rows = append(rows, "", blockRow)
+		if b.ProjectedTotalCost > 0 && b.IsActive {
+			local := b.EndTime.Local()
+			rows = append(rows, st.Muted.Render(
+				fmt.Sprintf("projected  $%.2f by %s", b.ProjectedTotalCost, local.Format("15:04")),
+			))
+		}
+	}
+
 	if m.usage == nil {
 		rows = append(rows,
 			"",

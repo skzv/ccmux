@@ -18,9 +18,16 @@ type HelpItem struct {
 // screen's bindings live here in one place rather than scattered
 // across the screen files — it's easier to keep in sync with the
 // actual implementation when there's a single source.
-func helpForScreen(s Screen) []HelpItem {
+//
+// km is the keymap; we derive the first and last screen key from it
+// so the "switch screens" help entry updates automatically when screens
+// are added or removed.
+func helpForScreen(s Screen, km Keymap) []HelpItem {
+	first := km.Home.Keys()[0]
+	last := km.Network.Keys()[0]
+	switchHint := first + "-" + last + " / F" + first + "-F" + last
 	common := []HelpItem{
-		{"1-7 / F1-F7", "switch screens"},
+		{switchHint, "switch screens"},
 		{"r", "refresh now"},
 		{"?", "this help"},
 		{"T", "re-open the first-run tour"},
@@ -29,18 +36,14 @@ func helpForScreen(s Screen) []HelpItem {
 		{"q / Ctrl-c", "quit"},
 	}
 	switch s {
-	case ScreenDashboard:
-		return append([]HelpItem{
-			{"r", "refresh sessions + usage now"},
-		}, common...)
-	case ScreenSessions:
+	case ScreenHome:
 		return append([]HelpItem{
 			{"↑↓ / j k", "navigate session list"},
 			{"enter", "attach (Ctrl-b then d to detach back to ccmux)"},
+			{"n", "new session"},
 			{"x", "kill selected session"},
 			{"R", "rename selected session"},
-			{"k", "toggle keep-awake (coming soon)"},
-			{"s", "snapshot session (coming soon)"},
+			{"r", "refresh sessions + usage"},
 		}, common...)
 	case ScreenProjects:
 		return append([]HelpItem{
@@ -96,7 +99,7 @@ func (a App) renderHelpOverlay(width, height int) string {
 		"",
 	}
 	maxKeyW := 0
-	items := helpForScreen(a.screen)
+	items := helpForScreen(a.screen, a.keys)
 	for _, it := range items {
 		if w := lipgloss.Width(it.Key); w > maxKeyW {
 			maxKeyW = w

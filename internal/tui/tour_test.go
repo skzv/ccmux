@@ -99,7 +99,7 @@ func TestDefaultTourSteps_ContainsRequiredAnchors(t *testing.T) {
 			all += b + "\n"
 		}
 	}
-	for _, must := range []string{"Dashboard", "Sessions", "Projects", "Notes"} {
+	for _, must := range []string{"Home", "Sessions", "Projects", "Notes"} {
 		if !strings.Contains(all, must) {
 			t.Errorf("tour script missing reference to %q screen", must)
 		}

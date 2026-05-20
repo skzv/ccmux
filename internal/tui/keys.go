@@ -6,14 +6,13 @@ import "github.com/charmbracelet/bubbles/key"
 // Screen-specific bindings live alongside the screen; this is the global set.
 type Keymap struct {
 	// Navigation between screens
-	Dashboard     key.Binding
-	Sessions      key.Binding
+	Home          key.Binding
+	Conversations key.Binding
 	Projects      key.Binding
 	Notes         key.Binding
 	Claude        key.Binding
 	Settings      key.Binding
 	Network       key.Binding
-	Conversations key.Binding
 
 	// In-screen
 	Up      key.Binding
@@ -40,14 +39,13 @@ type Keymap struct {
 // both work. F-keys jump between screens.
 func DefaultKeymap() Keymap {
 	return Keymap{
-		Dashboard:     key.NewBinding(key.WithKeys("1", "f1"), key.WithHelp("1", "dashboard")),
-		Sessions:      key.NewBinding(key.WithKeys("2", "f2"), key.WithHelp("2", "sessions")),
-		Conversations: key.NewBinding(key.WithKeys("3", "f3"), key.WithHelp("3", "conversations")),
-		Projects:      key.NewBinding(key.WithKeys("4", "f4"), key.WithHelp("4", "projects")),
-		Notes:         key.NewBinding(key.WithKeys("5", "f5"), key.WithHelp("5", "notes")),
-		Claude:        key.NewBinding(key.WithKeys("6", "f6"), key.WithHelp("6", "claude")),
-		Settings:      key.NewBinding(key.WithKeys("7", "f7"), key.WithHelp("7", "settings")),
-		Network:       key.NewBinding(key.WithKeys("8", "f8"), key.WithHelp("8", "network (ssh)")),
+		Home:          key.NewBinding(key.WithKeys("1", "f1"), key.WithHelp("1", "home")),
+		Conversations: key.NewBinding(key.WithKeys("2", "f2"), key.WithHelp("2", "conversations")),
+		Projects:      key.NewBinding(key.WithKeys("3", "f3"), key.WithHelp("3", "projects")),
+		Notes:         key.NewBinding(key.WithKeys("4", "f4"), key.WithHelp("4", "notes")),
+		Claude:        key.NewBinding(key.WithKeys("5", "f5"), key.WithHelp("5", "claude")),
+		Settings:      key.NewBinding(key.WithKeys("6", "f6"), key.WithHelp("6", "settings")),
+		Network:       key.NewBinding(key.WithKeys("7", "f7"), key.WithHelp("7", "network (ssh)")),
 
 		Up:      key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),
 		Down:    key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),

@@ -28,7 +28,7 @@ func newTestApp(screen Screen) App {
 // TestApp_MatrixMKeyOpensOverlay — pressing shift-M from the navigation
 // surface opens the overlay and returns a tick command.
 func TestApp_MatrixMKeyOpensOverlay(t *testing.T) {
-	a := newTestApp(ScreenDashboard)
+	a := newTestApp(ScreenHome)
 	m, cmd := a.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'M'}})
 	a = m.(App)
 	if !a.matrix.Active() {
@@ -41,7 +41,7 @@ func TestApp_MatrixMKeyOpensOverlay(t *testing.T) {
 
 // TestApp_MatrixMKeyOnSessionsScreen — M works from any screen, not just Dashboard.
 func TestApp_MatrixMKeyOnSessionsScreen(t *testing.T) {
-	a := newTestApp(ScreenSessions)
+	a := newTestApp(ScreenHome)
 	m, _ := a.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'M'}})
 	if !m.(App).matrix.Active() {
 		t.Fatal("M did not open overlay on Sessions screen")
@@ -57,7 +57,7 @@ func TestApp_MatrixTriggerSuppressedInFormInput(t *testing.T) {
 	a := App{
 		styles:    st,
 		keys:      km,
-		screen:    ScreenSessions,
+		screen:    ScreenHome,
 		width:     80,
 		height:    24,
 		dashboard: newDashboard(st, km),
@@ -78,7 +78,7 @@ func TestApp_MatrixTriggerSuppressedInFormInput(t *testing.T) {
 // TestApp_MatrixEscClosesOverlay — once the overlay is open, Esc
 // dismisses it and key routing returns to the regular screens.
 func TestApp_MatrixEscClosesOverlay(t *testing.T) {
-	a := newTestApp(ScreenDashboard)
+	a := newTestApp(ScreenHome)
 	a.matrix.Open()
 	a.matrix.SetSize(80, 24)
 	m, _ := a.Update(tea.KeyMsg{Type: tea.KeyEsc})
@@ -92,7 +92,7 @@ func TestApp_MatrixEscClosesOverlay(t *testing.T) {
 // just the matrix model) because the overlay's priority routing
 // in App is where regressions are most likely to hide.
 func TestApp_MatrixQClosesOverlay(t *testing.T) {
-	a := newTestApp(ScreenDashboard)
+	a := newTestApp(ScreenHome)
 	a.matrix.Open()
 	a.matrix.SetSize(80, 24)
 	// Force rain phase so the assertion proves q is intercepted

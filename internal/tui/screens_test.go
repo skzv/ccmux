@@ -60,7 +60,7 @@ func TestRenderHeader_ShowsEveryScreen(t *testing.T) {
 		styles: styles.Default(),
 		keys:   DefaultKeymap(),
 		width:  200, // wide enough that labels aren't collapsed to numbers
-		screen: ScreenDashboard,
+		screen: ScreenHome,
 	}
 	header := a.renderHeader()
 	for _, s := range allScreens() {
@@ -81,7 +81,7 @@ func TestRenderHeader_NumbersMatchKeymap(t *testing.T) {
 		styles: styles.Default(),
 		keys:   DefaultKeymap(),
 		width:  200,
-		screen: ScreenDashboard,
+		screen: ScreenHome,
 	}
 	header := a.renderHeader()
 	// Each screen's tab should render as "[N] Label" with N = enum+1.

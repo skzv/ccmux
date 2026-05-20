@@ -35,7 +35,7 @@ func openSessionsFormApp(t *testing.T, hosts []hostStatus) App {
 	a := App{
 		styles:    st,
 		keys:      km,
-		screen:    ScreenSessions,
+		screen:    ScreenHome,
 		sessionsM: newSessions(st, km),
 		projectsM: newProjects(st, km),
 		matrix:    newMatrix(),
@@ -181,7 +181,7 @@ func TestRemoteSessionStartedMsg_MoshFields(t *testing.T) {
 	a := App{
 		styles:    st,
 		keys:      km,
-		screen:    ScreenSessions,
+		screen:    ScreenHome,
 		sessionsM: newSessions(st, km),
 		projectsM: newProjects(st, km),
 		matrix:    newMatrix(),
@@ -214,7 +214,7 @@ func TestRemoteSessionStartedMsg_EmptyDialHostToasts(t *testing.T) {
 	a := App{
 		styles:    st,
 		keys:      km,
-		screen:    ScreenSessions,
+		screen:    ScreenHome,
 		sessionsM: newSessions(st, km),
 		projectsM: newProjects(st, km),
 		matrix:    newMatrix(),

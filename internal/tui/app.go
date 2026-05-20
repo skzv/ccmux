@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/skzv/ccmux/internal/agent"
+	"github.com/skzv/ccmux/internal/ccusage"
 	"github.com/skzv/ccmux/internal/claude"
 	"github.com/skzv/ccmux/internal/claudeauth"
 	"github.com/skzv/ccmux/internal/claudeusage"
@@ -35,14 +36,15 @@ import (
 type Screen int
 
 const (
-	ScreenDashboard Screen = iota
-	ScreenSessions
+	// ScreenHome is the combined home screen: running sessions list on
+	// the left, dashboard stats (usage, update banner, device health) on
+	// the right. Merges what were previously separate Dashboard and
+	// Sessions tabs — the user can attach to a session directly from the
+	// same view that shows token usage and host health.
+	ScreenHome Screen = iota
 	// ScreenConversations is the past-conversations browser:
 	// Claude/Codex/Antigravity transcripts across every project, sorted
-	// by recency. Sits next to Sessions because the user mental model
-	// pairs "running session" with "resumable conversation"; the two
-	// answer adjacent questions. Reached via `3` (top-level) or `c` on
-	// a Projects row (drills in with the project filter pre-applied).
+	// by recency. Reached via `2` (top-level) or `c` on a Projects row.
 	ScreenConversations
 	ScreenProjects
 	ScreenNotes
@@ -70,8 +72,7 @@ const (
 // here is the canonical place since both the tab bar and the help
 // footer read String().
 var screenLabels = [screenCount]string{
-	ScreenDashboard:     "Dashboard",
-	ScreenSessions:      "Sessions",
+	ScreenHome:          "Home",
 	ScreenConversations: "Conversations",
 	ScreenProjects:      "Projects",
 	ScreenNotes:         "Notes",
@@ -190,7 +191,7 @@ func New(cfg config.Config, version string) App {
 		styles:         st,
 		keys:           km,
 		version:        version,
-		screen:         ScreenDashboard,
+		screen:         ScreenHome,
 		dashboard:      newDashboard(st, km),
 		sessionsM:      newSessions(st, km),
 		conversationsM: newConversations(st, km),
@@ -262,10 +263,20 @@ func (a App) refreshUsageCmd() tea.Cmd {
 		agg, claudeErr := claudeusage.Walk(window)
 		codex, _ := usage.WalkCodex(window)
 		antigravity, _ := usage.WalkAntigravity(window)
-		// Only surface a top-level Err on Claude failure — Codex/Antigravity
-		// walkers stub out today, and once real, a transient parse
-		// error for one of them shouldn't blank the whole panel.
-		return usageLoadedMsg{Agg: agg, Codex: codex, Antigravity: antigravity, Err: claudeErr}
+		// Run ccusage alongside the transcript walk — it's an npx
+		// invocation so it takes a second, but it's the most accurate
+		// source for billing-block burn rate and projections.
+		var blk *ccusageBlock
+		if b, err := ccusage.CurrentBlock(context.Background()); err == nil {
+			blk = &ccusageBlock{
+				CostUSD:             b.CostUSD,
+				BurnRateCostPerHour: b.BurnRateCostPerHour,
+				ProjectedTotalCost:  b.ProjectedTotalCost,
+				EndTime:             b.EndTime,
+				IsActive:            b.IsActive,
+			}
+		}
+		return usageLoadedMsg{Agg: agg, Codex: codex, Antigravity: antigravity, CcusageBlock: blk, Err: claudeErr}
 	}
 }
 
@@ -387,6 +398,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// hint" rendering.
 		a.dashboard.SetCodexUsage(msg.Codex)
 		a.dashboard.SetAntigravityUsage(msg.Antigravity)
+		a.dashboard.SetCcusageBlock(msg.CcusageBlock)
 		return a, nil
 
 	case sessionsLoadedMsg:
@@ -682,7 +694,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// intercepts the form's submit key and attaches to whatever session
 		// the cursor was on — observed as "Enter in the new-session form
 		// attaches to c-ccmux instead of creating a new session".
-		if a.screen == ScreenSessions && (a.sessionsM.form != nil || a.sessionsM.renameForm != nil) {
+		if a.screen == ScreenHome && (a.sessionsM.form != nil || a.sessionsM.renameForm != nil) {
 			if msg.String() == "ctrl+c" {
 				return a, tea.Quit
 			}
@@ -694,11 +706,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch {
 		case keyMatches(msg, a.keys.Quit):
 			return a, tea.Quit
-		case keyMatches(msg, a.keys.Dashboard):
-			a.screen = ScreenDashboard
-			return a, nil
-		case keyMatches(msg, a.keys.Sessions):
-			a.screen = ScreenSessions
+		case keyMatches(msg, a.keys.Home):
+			a.screen = ScreenHome
 			return a, nil
 		case keyMatches(msg, a.keys.Conversations):
 			a.screen = ScreenConversations
@@ -730,7 +739,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		case keyMatches(msg, a.keys.Refresh):
 			return a, a.refreshSessionsCmd()
-		case keyMatches(msg, a.keys.Enter) && a.screen == ScreenSessions:
+		case keyMatches(msg, a.keys.Enter) && a.screen == ScreenHome:
 			return a, a.attachSelectedSession()
 		case keyMatches(msg, a.keys.Enter) && a.screen == ScreenProjects:
 			return a, a.attachOrCreateForSelectedProject()
@@ -749,10 +758,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Forward to the active screen.
 	var cmd tea.Cmd
 	switch a.screen {
-	case ScreenDashboard:
-		a.dashboard, cmd = a.dashboard.Update(msg)
-	case ScreenSessions:
+	case ScreenHome:
+		// Dashboard always updates (handles usage ticks, refresh msgs).
+		// Sessions handles navigation and session-action keys.
+		var dcmd tea.Cmd
+		a.dashboard, dcmd = a.dashboard.Update(msg)
 		a.sessionsM, cmd = a.sessionsM.Update(msg)
+		cmd = tea.Batch(cmd, dcmd)
 	case ScreenConversations:
 		a.conversationsM, cmd = a.conversationsM.Update(msg)
 	case ScreenProjects:
@@ -797,10 +809,8 @@ func (a App) View() string {
 
 	var body string
 	switch a.screen {
-	case ScreenDashboard:
-		body = a.dashboard.View(a.width, bodyHeight)
-	case ScreenSessions:
-		body = a.sessionsM.View(a.width, bodyHeight)
+	case ScreenHome:
+		body = a.homeView(a.width, bodyHeight)
 	case ScreenConversations:
 		body = a.conversationsM.View(a.width, bodyHeight)
 	case ScreenProjects:
@@ -862,6 +872,24 @@ func clampLines(s string, n int) string {
 		}
 	}
 	return s
+}
+
+// homeView renders the combined Home screen: sessions list on the left,
+// dashboard stats (hero, usage, update banner) on the right. The split
+// adapts to terminal width — below a threshold the dashboard panel is
+// dropped and the full width goes to the sessions list.
+func (a App) homeView(width, height int) string {
+	const minDashW = 38
+	// Reserve enough width for a useful dashboard panel. Below the
+	// threshold just show the sessions list full-width.
+	sessW := width * 55 / 100
+	dashW := width - sessW - 1
+	if dashW < minDashW {
+		return a.sessionsM.View(width, height)
+	}
+	left := a.sessionsM.View(sessW, height)
+	right := a.dashboard.View(dashW, height)
+	return lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
 }
 
 // renderHeader is the top-of-screen tab strip. On narrow terminals the

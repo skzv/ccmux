@@ -291,12 +291,26 @@ type usageTickMsg struct{ At time.Time }
 // main usage panel (cache breakdown, 5h quota bar, top projects).
 // `Codex` and `Antigravity` are the cross-agent summaries; today
 // they're always zero-valued (stub walkers) until those agents grow
-// real transcript parsers.
+// real transcript parsers. `CcusageBlock` is the current billing
+// block from `npx ccusage blocks --json`; nil when ccusage isn't
+// installed or the command failed.
 type usageLoadedMsg struct {
-	Agg         *claudeusage.Aggregate
-	Codex       usage.AgentSummary
-	Antigravity usage.AgentSummary
-	Err         error
+	Agg          *claudeusage.Aggregate
+	Codex        usage.AgentSummary
+	Antigravity  usage.AgentSummary
+	CcusageBlock *ccusageBlock
+	Err          error
+}
+
+// ccusageBlock is the billing-block data returned by ccusage. Kept as
+// an unexported type so only the messages and dashboard need to import
+// internal/ccusage; other screens don't need the dependency.
+type ccusageBlock struct {
+	CostUSD             float64
+	BurnRateCostPerHour float64
+	ProjectedTotalCost  float64
+	EndTime             time.Time
+	IsActive            bool
 }
 
 // conversationsLoadedMsg carries the result of a Conversations-screen

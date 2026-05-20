@@ -212,6 +212,36 @@ func TestDashboard_UpdateBanner_ShownWhenBehind(t *testing.T) {
 	}
 }
 
+// TestDashboard_CcusageBlock_ShowsBurnRate — when a billing-block is
+// pushed via SetCcusageBlock, the usage panel must surface cost and
+// burn rate. Zero block (nil) must not crash and must not show the block.
+func TestDashboard_CcusageBlock_ShowsBurnRate(t *testing.T) {
+	st := styles.Default()
+	m := newDashboard(st, DefaultKeymap())
+	m.SetCcusageBlock(&ccusageBlock{
+		CostUSD:             48.21,
+		BurnRateCostPerHour: 25.1,
+		ProjectedTotalCost:  125.22,
+		IsActive:            true,
+	})
+	panel := m.usagePanel(120)
+	for _, want := range []string{"$48.21", "$25.1/hr", "$125.22"} {
+		if !strings.Contains(panel, want) {
+			t.Errorf("ccusage block: panel missing %q:\n%s", want, panel)
+		}
+	}
+}
+
+// TestDashboard_CcusageBlock_NilDoesNotCrash — nil block means ccusage
+// isn't installed; the panel must render the loading state without panic.
+func TestDashboard_CcusageBlock_NilDoesNotCrash(t *testing.T) {
+	m := newDashboard(styles.Default(), DefaultKeymap())
+	// no SetCcusageBlock call — zero value / nil
+	if got := m.usagePanel(120); got == "" {
+		t.Error("usagePanel returned empty with nil ccusage block")
+	}
+}
+
 // TestDashboard_UpdateBanner_HiddenWhenUpToDate — the zero-value
 // Result (no check, or check found 0 behind) must render NO banner.
 // A banner that shows when there's no update would train users to

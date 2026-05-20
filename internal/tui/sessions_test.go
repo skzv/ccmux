@@ -39,7 +39,7 @@ func TestApp_SessionsFormInterceptsEnter(t *testing.T) {
 	a := App{
 		styles:    st,
 		keys:      km,
-		screen:    ScreenSessions,
+		screen:    ScreenHome,
 		sessionsM: newSessions(st, km),
 		// Other screens get zero-valued models. They're not touched
 		// because the screen is fixed to Sessions and the modal-
@@ -91,7 +91,7 @@ func TestApp_SessionsFormInterceptsScreenKeys(t *testing.T) {
 	a := App{
 		styles:    st,
 		keys:      km,
-		screen:    ScreenSessions,
+		screen:    ScreenHome,
 		sessionsM: newSessions(st, km),
 		projectsM: newProjects(st, km),
 	}
@@ -100,8 +100,8 @@ func TestApp_SessionsFormInterceptsScreenKeys(t *testing.T) {
 
 	updated, _ := a.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")})
 	a2 := updated.(App)
-	if a2.screen != ScreenSessions {
-		t.Errorf("digit while form open switched screen to %v; expected to stay on ScreenSessions", a2.screen)
+	if a2.screen != ScreenHome {
+		t.Errorf("digit while form open switched screen to %v; expected to stay on ScreenHome", a2.screen)
 	}
 	if a2.sessionsM.form == nil {
 		t.Error("digit while form open dismissed the form")
@@ -118,7 +118,7 @@ func newSessionsApp(t *testing.T) App {
 	return App{
 		styles:    st,
 		keys:      km,
-		screen:    ScreenSessions,
+		screen:    ScreenHome,
 		sessionsM: newSessions(st, km),
 		projectsM: newProjects(st, km),
 		matrix:    newMatrix(),
