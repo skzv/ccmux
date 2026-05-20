@@ -301,6 +301,14 @@ func stepGitHubAuth(ctx context.Context, out io.Writer) error {
 		fmt.Fprintln(out, stWarn.Render("  gh installed but not signed in"))
 		fmt.Fprintln(out, "  Run "+stEmphasis.Render("gh auth login")+" in another terminal (opens a browser), then re-run "+stEmphasis.Render("ccmux setup")+" to verify.")
 		return nil
+	case ghauth.StateUnknown:
+		// The check timed out — `gh auth status` validates the token
+		// online, so a slow network stalls it. We don't know the auth
+		// state, so we say so plainly instead of nagging a signed-in
+		// user to run `gh auth login`.
+		fmt.Fprintln(out, stMuted.Render("  couldn't verify gh auth (the check timed out — slow network?)"))
+		fmt.Fprintln(out, "  Re-run "+stEmphasis.Render("ccmux doctor")+" to recheck. "+stMuted.Render("If you're already signed in, nothing to do."))
+		return nil
 	}
 	return nil
 }

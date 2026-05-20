@@ -4,7 +4,53 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
+
+// TestStatusReportsPaired pins how `moshi-hook status` output is read.
+// The command is human-formatted, so the parse is substring-based;
+// this locks the "paired" / "not paired" / "unpaired" handling so a
+// reworded status line can't silently flip a paired host to unpaired.
+func TestStatusReportsPaired(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{
+			"verbatim status of a paired host",
+			"status:       paired\nhost id:      host_abc\ndisplay name: sputnik.mini.skz.dev\nplatform:     macos",
+			true,
+		},
+		{"bare paired line", "status: paired", true},
+		{"case-insensitive", "STATUS: PAIRED", true},
+		{"not paired", "status: not paired", false},
+		{"unpaired", "status: unpaired", false},
+		{"empty output", "", false},
+		{"unrelated text", "moshi-hook v1.2.3", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := statusReportsPaired(tc.in); got != tc.want {
+				t.Errorf("statusReportsPaired(%q) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestDetectionTimeoutsHaveHeadroom guards the detection timeouts from
+// being tightened back to the 2s that produced false "moshi not set up"
+// in the setup wizard: `brew services list` shells out to Ruby and is
+// genuinely slow on a cold cache, so a timeout was read as "service not
+// running" and nagged users who were in fact configured.
+func TestDetectionTimeoutsHaveHeadroom(t *testing.T) {
+	if brewListTimeout < 5*time.Second {
+		t.Errorf("brewListTimeout=%v is too tight; brew is slow on a cold cache", brewListTimeout)
+	}
+	if moshiHookTimeout < 3*time.Second {
+		t.Errorf("moshiHookTimeout=%v is too tight", moshiHookTimeout)
+	}
+}
 
 func TestSuppressBell_HooksAlone(t *testing.T) {
 	s := Status{HooksInstalled: true}

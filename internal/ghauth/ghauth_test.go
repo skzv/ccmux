@@ -1,12 +1,16 @@
 package ghauth
 
-import "testing"
+import (
+	"errors"
+	"testing"
+	"time"
+)
 
 func TestStatus_OK(t *testing.T) {
 	if !(Status{State: StateAuthed}).OK() {
 		t.Error("authed status should be OK")
 	}
-	for _, s := range []State{StateMissing, StateNotAuthed} {
+	for _, s := range []State{StateMissing, StateNotAuthed, StateUnknown} {
 		if (Status{State: s}).OK() {
 			t.Errorf("state %v should not be OK", s)
 		}
@@ -22,6 +26,64 @@ func TestStatus_Hint(t *testing.T) {
 	}
 	if got := (Status{State: StateNotAuthed}).Hint(); got == "" {
 		t.Error("not-authed should have a hint")
+	}
+	// StateUnknown is "we couldn't check" — there's no action for the
+	// user to take, so Hint must stay empty (no nag).
+	if got := (Status{State: StateUnknown}).Hint(); got != "" {
+		t.Errorf("unknown should have empty hint (no nag), got %q", got)
+	}
+}
+
+// TestClassify locks in the fix for the false "gh not signed in" the
+// setup wizard reported when `gh auth status` was slow. That command
+// validates the token against the GitHub API, so a degraded network can
+// blow past the timeout. A timed-out check means "couldn't tell"
+// (StateUnknown) — it must NEVER be reported as StateNotAuthed, which
+// would nag an already-signed-in user to re-run `gh auth login`.
+func TestClassify(t *testing.T) {
+	cases := []struct {
+		name      string
+		out       string
+		runErr    error
+		timedOut  bool
+		wantState State
+		wantUser  string
+	}{
+		{
+			"happy path → authed, user parsed",
+			"github.com\n  ✓ Logged in to github.com account skzv (keyring)",
+			nil, false, StateAuthed, "skzv",
+		},
+		{
+			"non-zero exit, not a timeout → not authed",
+			"You are not logged into any GitHub hosts.",
+			errors.New("exit status 1"), false, StateNotAuthed, "",
+		},
+		{
+			"command killed by our deadline → unknown, NOT not-authed",
+			"", errors.New("signal: killed"), true, StateUnknown, "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := classify([]byte(tc.out), tc.runErr, tc.timedOut)
+			if got.State != tc.wantState {
+				t.Errorf("State = %v, want %v", got.State, tc.wantState)
+			}
+			if got.User != tc.wantUser {
+				t.Errorf("User = %q, want %q", got.User, tc.wantUser)
+			}
+		})
+	}
+}
+
+// TestAuthStatusTimeoutHasHeadroom guards the timeout from being tightened
+// back to a value that turns a slow network into a false negative.
+// `gh auth status` does a network round-trip; 3s (the old value) had no
+// headroom for a Mac that just woke or a tailnet still settling.
+func TestAuthStatusTimeoutHasHeadroom(t *testing.T) {
+	if authStatusTimeout < 8*time.Second {
+		t.Errorf("authStatusTimeout=%v is too tight for a network-bound check", authStatusTimeout)
 	}
 }
 
