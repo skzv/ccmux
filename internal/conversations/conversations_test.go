@@ -99,6 +99,33 @@ func TestListClaude_HandlesArrayContent(t *testing.T) {
 	}
 }
 
+// TestListClaude_CwdFieldOverridesDecodedPath — a project path with
+// hyphens (e.g. ~/Projects/auth-redesign) encodes to the same Claude
+// directory name as a nested path (~/Projects/auth/redesign), so the
+// decode is ambiguous. The cwd field on user events is the authoritative
+// source: when present it must win over the decoded directory name. This
+// is the fix for the "conversation ID can't be found" bug where claude
+// was launched from the wrong directory.
+func TestListClaude_CwdFieldOverridesDecodedPath(t *testing.T) {
+	home := t.TempDir()
+	// Directory name decodes to /Users/skz/Projects/auth/redesign (wrong).
+	// Transcript cwd says /Users/skz/Projects/auth-redesign (right).
+	writeFile(t,
+		filepath.Join(home, ".claude/projects/-Users-skz-Projects-auth-redesign/sess.jsonl"),
+		`{"type":"user","cwd":"/Users/skz/Projects/auth-redesign","message":{"role":"user","content":"hello"},"timestamp":"2026-04-30T10:00:00Z"}`+"\n",
+	)
+	got, err := ListClaude(home)
+	if err != nil {
+		t.Fatalf("ListClaude: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1", len(got))
+	}
+	if got[0].Project != "/Users/skz/Projects/auth-redesign" {
+		t.Errorf("Project = %q, want /Users/skz/Projects/auth-redesign (cwd from transcript)", got[0].Project)
+	}
+}
+
 // TestListClaude_TolerantToBadLines — a corrupt or partial JSONL line
 // must NOT break the rest of the transcript scan. We've seen these in
 // the wild (claude killed mid-write).
