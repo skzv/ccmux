@@ -21,7 +21,7 @@ func newAppForTest(t *testing.T) App {
 	return App{
 		styles:         st,
 		keys:           km,
-		screen:         ScreenDashboard,
+		screen:         ScreenHome,
 		dashboard:      newDashboard(st, km),
 		sessionsM:      newSessions(st, km),
 		conversationsM: newConversations(st, km),
@@ -32,14 +32,14 @@ func newAppForTest(t *testing.T) App {
 	}
 }
 
-// TestApp_KeyConversations_SwitchesScreen — pressing 3 (the
+// TestApp_KeyConversations_SwitchesScreen — pressing 2 (the
 // Conversations keybind) from any other screen must land the user on
 // ScreenConversations AND fire the refresh cmd so the list is fresh.
 func TestApp_KeyConversations_SwitchesScreen(t *testing.T) {
 	a := newAppForTest(t)
-	a.screen = ScreenDashboard
+	a.screen = ScreenHome
 
-	m, cmd := a.Update(keyMsg("3"))
+	m, cmd := a.Update(keyMsg(a.keys.Conversations.Keys()[0]))
 	a2 := m.(App)
 	if a2.screen != ScreenConversations {
 		t.Errorf("screen = %v, want ScreenConversations", a2.screen)
