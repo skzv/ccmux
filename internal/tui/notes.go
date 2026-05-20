@@ -434,20 +434,25 @@ func (m notesModel) View(width, height int) string {
 	leftW := width / 3
 	rightW := width - leftW - 1
 	return lipgloss.JoinHorizontal(lipgloss.Top,
-		m.renderList(leftW, height),
+		m.renderList(leftW, height, false),
 		" ",
 		m.renderPreview(rightW, height),
 	)
 }
 
-func (m notesModel) renderList(width, height int) string {
+// renderList draws the note list. `narrow` is the terminal's narrow
+// state (not derived from `width`, which in wide mode is only the
+// left sub-pane): on narrow the T2 key-hint line is dropped.
+func (m notesModel) renderList(width, height int, narrow bool) string {
 	focusMark := ""
 	if m.focus == focusList {
 		focusMark = m.st.Emphasis.Render(" ◀")
 	}
 	header := m.st.Emphasis.Render(m.project.Name+" / docs") + focusMark
-	hint := m.st.Muted.Render("p: switch project   /: search   tab: focus preview   n: new   e: edit")
-	lines := []string{header, hint}
+	lines := []string{header}
+	if !narrow {
+		lines = append(lines, m.st.Muted.Render("p: switch project   /: search   tab: focus preview   n: new   e: edit"))
+	}
 
 	// Search box / search-results banner.
 	if m.searching && m.searchInput.Focused() {
@@ -548,8 +553,8 @@ func focusLabel(f notesFocus) string {
 }
 
 func (m notesModel) renderListOnly(width, height int) string {
-	// Narrow layout: just the list, full width.
-	return m.renderList(width, height)
+	// Narrow layout: just the list, full width, no preview pane.
+	return m.renderList(width, height, true)
 }
 
 // renderActionPicker is the "new note" sub-modal (a/s/d).

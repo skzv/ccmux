@@ -243,16 +243,17 @@ func (m conversationsModel) View(width, height int) string {
 		)
 	}
 
-	// Two-column layout: list on the left, detail on the right.
-	listW := width * 5 / 8
-	detailW := width - listW - 1
-	if detailW < 20 {
-		// Narrow terminal: drop the detail pane.
+	// Narrow: list only — drop the detail pane (T2) and the inline
+	// hint line (T2). Shares the one TUI breakpoint via isNarrow.
+	if isNarrow(width) {
 		return st.Pane.Width(width - 2).Height(height - 2).Render(
-			lipgloss.JoinVertical(lipgloss.Left, header, "", m.renderList(visible, listW, height-4)),
+			lipgloss.JoinVertical(lipgloss.Left, header, "", m.renderList(visible, width-4, height-4)),
 		)
 	}
 
+	// Wide: two-column — list on the left, detail on the right.
+	listW := width * 5 / 8
+	detailW := width - listW - 1
 	list := m.renderList(visible, listW, height-4)
 	detail := m.renderDetail(visible[m.cursor], detailW, height-4)
 	body := lipgloss.JoinHorizontal(lipgloss.Top, list, " ", detail)

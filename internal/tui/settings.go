@@ -365,17 +365,27 @@ func (m *settingsModel) SetConfig(cfg config.Config) {
 }
 
 func (m settingsModel) View(width, height int) string {
-	cfgPath, _ := config.Path()
+	narrow := isNarrow(width)
 
 	lines := []string{
 		m.st.Emphasis.Render("Settings"),
 		"",
 		m.renderMoshiBlock(),
 		"",
-		fmt.Sprintf("ccmux version    %s", m.version),
-		fmt.Sprintf("config file      %s", cfgPath),
-		"",
-		m.st.Subtitle.Render("Editable (↑/↓ to move, enter to edit, e to open config in $EDITOR)"),
+	}
+	// The version + config-path lines are T2 reference detail, dropped
+	// on narrow. The "Editable" header keeps a short section label but
+	// sheds the (↑/↓ to move…) instructions (also T2).
+	if !narrow {
+		cfgPath, _ := config.Path()
+		lines = append(lines,
+			fmt.Sprintf("ccmux version    %s", m.version),
+			fmt.Sprintf("config file      %s", cfgPath),
+			"",
+			m.st.Subtitle.Render("Editable (↑/↓ to move, enter to edit, e to open config in $EDITOR)"),
+		)
+	} else {
+		lines = append(lines, m.st.Subtitle.Render("Editable"))
 	}
 
 	fields := editableFields()
@@ -428,7 +438,7 @@ func (m settingsModel) View(width, height int) string {
 		m.st.Subtitle.Render("Remote hosts"),
 		m.renderHosts(),
 	)
-	return m.st.Pane.Width(width - 2).Height(height - 2).Render(strings.Join(lines, "\n"))
+	return m.st.Pane.Width(width - 2).Height(height - 2).MaxWidth(width).Render(strings.Join(lines, "\n"))
 }
 
 // renderMoshiBlock shows the most useful one-glance view of the mobile

@@ -874,19 +874,36 @@ func clampLines(s string, n int) string {
 	return s
 }
 
-// homeView renders the combined Home screen as a single full-width
-// column, stacked top to bottom: the "Hello" hero, the sessions list,
-// then the Session-summary / Devices / Usage stat tiles. The sessions
-// list absorbs whatever vertical space the hero and tiles leave.
+// homeView renders the combined Home screen. On a phone (narrow) it is
+// a single full-width column — hero, sessions, then the stat tiles. On
+// a monitor it splits into two halves: the sessions list + detail on
+// the left, the hero and the three stat tiles stacked on the right.
 func (a App) homeView(width, height int) string {
-	hero := a.dashboard.heroPanel(width)
-	tiles := a.dashboard.StatsView(width)
-	listH := height - lipgloss.Height(hero) - lipgloss.Height(tiles)
-	if listH < 5 {
-		listH = 5
+	narrow := isNarrow(width)
+	a.dashboard.narrow = narrow // a is a value copy; the panels read m.narrow
+
+	if narrow {
+		hero := a.dashboard.heroPanel(width)
+		tiles := a.dashboard.StatsView(width)
+		listH := height - lipgloss.Height(hero) - lipgloss.Height(tiles)
+		if listH < 5 {
+			listH = 5
+		}
+		sessions := a.sessionsM.View(width, listH, true)
+		return lipgloss.JoinVertical(lipgloss.Left, hero, sessions, tiles)
 	}
-	sessions := a.sessionsM.View(width, listH)
-	return lipgloss.JoinVertical(lipgloss.Left, hero, sessions, tiles)
+
+	// Monitor: sessions take the left half, the hero + three stat
+	// tiles stack in the right half.
+	gutter := 1
+	leftW := (width - gutter) / 2
+	rightW := width - leftW - gutter
+	left := a.sessionsM.View(leftW, height, false)
+	right := lipgloss.JoinVertical(lipgloss.Left,
+		a.dashboard.heroPanel(rightW),
+		a.dashboard.StatsView(rightW),
+	)
+	return lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
 }
 
 // renderHeader is the top-of-screen tab strip. On narrow terminals the
@@ -897,8 +914,13 @@ func (a App) homeView(width, height int) string {
 // for a release; deriving from the Screen enum makes that class of
 // bug structurally impossible.
 func (a App) renderHeader() string {
-	parts := []string{a.styles.Title.Render(" ccmux ")}
 	narrow := isNarrow(a.width)
+	var parts []string
+	// The " ccmux " brand title is T2 — dropped on narrow so the tab
+	// numbers get the reclaimed width.
+	if !narrow {
+		parts = append(parts, a.styles.Title.Render(" ccmux "))
+	}
 	for _, t := range allScreens() {
 		// Number label = enum value + 1. This is the SAME number the
 		// keymap binds (Dashboard→1 … Network→8), because the keymap
@@ -930,8 +952,10 @@ func (a App) renderHeader() string {
 // renderStatusBar is the bottom-most informational strip. Forced to 1 line.
 // On narrow terminals the right-side details are dropped first.
 func (a App) renderStatusBar() string {
+	narrow := isNarrow(a.width)
+
 	host, _ := os.Hostname()
-	left := a.styles.HostColor("local").Render("● " + shortHostname(host))
+	hostChip := a.styles.HostColor("local").Render("● " + shortHostname(host))
 
 	daemonChip := a.styles.StatusError.Render("⚠ offline")
 	if a.daemonOnline {
@@ -943,31 +967,38 @@ func (a App) renderStatusBar() string {
 		dangerBanner = a.styles.StatusDanger.Render("⚠ BATT") + " "
 	}
 
-	leftBlock := left + "  " + dangerBanner + daemonChip
+	// Left block ordered T0-first — battery-danger, daemon, then host
+	// — so if forceSingleLine still has to truncate it eats the lower-
+	// priority host before the safety-critical chips.
+	leftBlock := dangerBanner + daemonChip + "  " + hostChip
 
-	refreshed := "—"
-	if !a.lastRefresh.IsZero() {
-		refreshed = a.lastRefresh.Format("15:04:05")
+	// Right block: the session count (T1) always; the refreshed-at
+	// clock and the version chip (both T2) only when wide. Dirty
+	// builds (`<sha>-dirty`) still self-flag in the wide version chip.
+	right := a.styles.Muted.Render(fmt.Sprintf("%d sess", len(a.sessions)))
+	if !narrow {
+		refreshed := "—"
+		if !a.lastRefresh.IsZero() {
+			refreshed = a.lastRefresh.Format("15:04:05")
+		}
+		versionChip := a.styles.Muted.Render("v" + a.version)
+		if strings.Contains(a.version, "dirty") {
+			versionChip = a.styles.StatusWarning.Render(a.version)
+		}
+		right = a.styles.Muted.Render(fmt.Sprintf("%d sess • %s", len(a.sessions), refreshed)) + "  " + versionChip
 	}
-	count := fmt.Sprintf("%d sess", len(a.sessions))
-	// Surface the running binary's version on the right of the status
-	// bar so screenshots of a bug immediately reveal which build was in
-	// play. Dirty builds (`<sha>-dirty`) call themselves out so we
-	// remember we're running uncommitted code.
-	versionChip := a.styles.Muted.Render("v" + a.version)
-	if strings.Contains(a.version, "dirty") {
-		versionChip = a.styles.StatusWarning.Render(a.version)
-	}
-	right := a.styles.Muted.Render(fmt.Sprintf("%s • %s", count, refreshed)) + "  " + versionChip
 
-	// Compute available space for the right block. If the left side
-	// already overflows, we just render the left side and skip right
-	// rather than letting PlaceHorizontal misbehave with negative width.
+	// Compute available space for the right block. The StatusBar style
+	// adds 1-col padding each side, so the composed body must target
+	// width-2 — otherwise forceSingleLine would chop the right tail
+	// (the version chip). If the left side already overflows we skip
+	// the right block rather than feeding strings.Repeat a negative.
+	inner := a.width - 2
 	leftW := lipgloss.Width(leftBlock)
 	rightW := lipgloss.Width(right)
 	body := leftBlock
-	if a.width-leftW-rightW >= 2 {
-		spacer := strings.Repeat(" ", a.width-leftW-rightW)
+	if inner-leftW-rightW >= 2 {
+		spacer := strings.Repeat(" ", inner-leftW-rightW)
 		body = leftBlock + spacer + right
 	}
 	line := a.styles.StatusBar.Render(body)
@@ -988,7 +1019,14 @@ func (a App) renderFooter() string {
 		}
 		return forceSingleLine(base.Render(a.toast), a.width)
 	}
-	hint := "1-6 screens • n new • x kill • r refresh • ? help • q quit"
+	// Hint line ordered T0-first: `? help` (the gateway to every
+	// binding) and `q quit` lead, so if forceSingleLine still has to
+	// truncate it eats the T2 action hints from the tail. On narrow
+	// only the T0/T1 pair is shown.
+	hint := "? help • q quit"
+	if !isNarrow(a.width) {
+		hint += " • r refresh • x kill • n new • 1-7 screens"
+	}
 	return forceSingleLine(a.styles.Muted.Render(hint), a.width)
 }
 

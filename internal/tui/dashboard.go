@@ -19,7 +19,7 @@ import (
 
 // dashboardModel renders the at-a-glance landing screen.
 // On wide terminals: hero + (sessions list | stats + usage).
-// On narrow terminals (< 80 cols): everything stacked vertically.
+// On narrow terminals (< 120 cols): everything stacked vertically.
 type dashboardModel struct {
 	st       styles.Styles
 	km       Keymap
@@ -29,6 +29,13 @@ type dashboardModel struct {
 	cfg      config.Config
 	usage    *claudeusage.Aggregate
 	usageAt  time.Time
+
+	// narrow mirrors the terminal's layout state (isNarrow of the
+	// terminal width). homeView sets it before rendering so the panels
+	// curate by terminal width, not by their own column width — a
+	// half-width column on a monitor is itself < 120 yet must still
+	// show the full (wide) content.
+	narrow bool
 
 	// Cross-agent token-usage summaries pushed by App on every
 	// usageLoadedMsg. Codex/Antigravity are zero-valued today (stub
@@ -172,9 +179,12 @@ func (m dashboardModel) viewNarrow(width, height int) string {
 }
 
 func (m dashboardModel) heroPanel(width int) string {
-	title := m.st.Title.Render("Hello.")
-	sub := m.st.Subtitle.Render("Welcome to ccmux. One TUI for every agent session — Claude, Codex, Antigravity — every project, every device.")
-	parts := []string{title, sub}
+	parts := []string{m.st.Title.Render("Hello.")}
+	// The welcome subtitle is T2 — decoration. Drop it on narrow so a
+	// phone gets straight to the hero and the (T1) update banner.
+	if !m.narrow {
+		parts = append(parts, m.st.Subtitle.Render("Welcome to ccmux. One TUI for every agent session — Claude, Codex, Antigravity — every project, every device."))
+	}
 	// Auto-update banner: only when the launch check found the
 	// checkout behind upstream. Phrased as a nudge, not an alarm —
 	// nothing is broken, there's just newer code. The action is an
@@ -183,7 +193,7 @@ func (m dashboardModel) heroPanel(width int) string {
 		parts = append(parts, "", m.updateBanner())
 	}
 	body := lipgloss.JoinVertical(lipgloss.Left, parts...)
-	return m.st.Pane.Width(width - 2).Render(body)
+	return m.st.Pane.Width(width - 2).MaxWidth(width).Render(body)
 }
 
 // updateBanner renders the one-line "update available" nudge. Pulled
@@ -220,10 +230,12 @@ func (m dashboardModel) statsPanel(width int) string {
 		fmt.Sprintf("%s  %d active", m.st.StateActive.Render("●"), active),
 		fmt.Sprintf("%s  %d idle", m.st.StateIdle.Render("●"), idle),
 		fmt.Sprintf("%s  %d waiting for input", m.st.StateNeedsInput.Render("●"), waiting),
-		"",
-		m.st.Muted.Render(time.Now().Format("Mon Jan 2 — 15:04:05")),
 	}
-	return m.st.Pane.Width(width - 2).Render(strings.Join(rows, "\n"))
+	// The live clock is T2 — a phone already has one. Drop it on narrow.
+	if !m.narrow {
+		rows = append(rows, "", m.st.Muted.Render(time.Now().Format("Mon Jan 2 — 15:04:05")))
+	}
+	return m.st.Pane.Width(width - 2).MaxWidth(width).Render(strings.Join(rows, "\n"))
 }
 
 // devicesPanel renders the tailnet/network view. One row per device,
@@ -271,22 +283,26 @@ func (m dashboardModel) devicesPanel(width int) string {
 		rows = append(rows, fmt.Sprintf("%s %s %s",
 			icon, padRight(name, nameW), info))
 	}
-	if m.version != "" {
-		rows = append(rows, "", st.Muted.Render("this build: "+m.version))
-	}
-	hasMissing := false
-	for _, h := range m.hosts {
-		if h.NeedsInstall {
-			hasMissing = true
-			break
+	// "this build:" and the unreachable-peer help are T2 reference
+	// detail — drop them on narrow so the device rows stand alone.
+	if !m.narrow {
+		if m.version != "" {
+			rows = append(rows, "", st.Muted.Render("this build: "+m.version))
+		}
+		hasMissing := false
+		for _, h := range m.hosts {
+			if h.NeedsInstall {
+				hasMissing = true
+				break
+			}
+		}
+		if hasMissing {
+			rows = append(rows,
+				st.Muted.Render("unreachable peer? install ccmux there with `make bootstrap`,"),
+				st.Muted.Render("or run `ccmux setup` on it to enable server mode."))
 		}
 	}
-	if hasMissing {
-		rows = append(rows,
-			st.Muted.Render("unreachable peer? install ccmux there with `make bootstrap`,"),
-			st.Muted.Render("or run `ccmux setup` on it to enable server mode."))
-	}
-	return st.Pane.Width(width - 2).Render(strings.Join(rows, "\n"))
+	return st.Pane.Width(width - 2).MaxWidth(width).Render(strings.Join(rows, "\n"))
 }
 
 // iconForHost returns the colored status indicator for a row.
@@ -380,6 +396,12 @@ func normalizeVersion(v string) string {
 // $cost. Falls back gracefully when no data is available yet.
 func (m dashboardModel) usagePanel(width int) string {
 	st := m.st
+	// Narrow: the whole panel collapses to one headline line. The
+	// cache/token detail, top projects, and Codex/Antigravity blocks
+	// (all T2) are dropped — the CLI surfaces the full picture.
+	if m.narrow {
+		return st.Pane.Width(width - 2).MaxWidth(width).Render(m.usageSummaryLine())
+	}
 	rows := []string{st.Emphasis.Render("Claude usage")}
 
 	// Billing-block summary from ccusage (most accurate source for
@@ -408,7 +430,7 @@ func (m dashboardModel) usagePanel(width int) string {
 			"",
 			st.Muted.Render("(loading transcripts…)"),
 		)
-		return st.Pane.Width(width - 2).Render(strings.Join(rows, "\n"))
+		return st.Pane.Width(width - 2).MaxWidth(width).Render(strings.Join(rows, "\n"))
 	}
 	a := m.usage
 	rows = append(rows, "")
@@ -498,7 +520,34 @@ func (m dashboardModel) usagePanel(width int) string {
 	rows = append(rows, renderAgentUsageBlock(st, "Antigravity", m.antigravityUsage,
 		"`curl -fsSL https://antigravity.google/cli/install.sh | bash`"))
 
-	return st.Pane.Width(width - 2).Render(strings.Join(rows, "\n"))
+	return st.Pane.Width(width - 2).MaxWidth(width).Render(strings.Join(rows, "\n"))
+}
+
+// usageSummaryLine is the one-line collapse of usagePanel for narrow
+// terminals: the Claude headline only — prompt count, block cost, and
+// reset time. Everything the wide panel adds (cache, tokens, top
+// projects, the Codex/Antigravity blocks) is T2 and dropped here.
+func (m dashboardModel) usageSummaryLine() string {
+	st := m.st
+	parts := []string{st.Emphasis.Render("Claude usage")}
+	if a := m.usage; a != nil {
+		count, label := a.UserPrompts, "prompts"
+		if count == 0 {
+			count, label = a.Messages, "msgs"
+		}
+		parts = append(parts, fmt.Sprintf("%d %s", count, label))
+	} else {
+		parts = append(parts, st.Muted.Render("loading…"))
+	}
+	if b := m.ccusage; b != nil {
+		parts = append(parts, fmt.Sprintf("$%.2f", b.CostUSD))
+	}
+	if a := m.usage; a != nil {
+		if reset := a.ResetAt(5 * time.Hour); !reset.IsZero() {
+			parts = append(parts, "resets "+reset.Local().Format("15:04"))
+		}
+	}
+	return strings.Join(parts, " · ")
 }
 
 // renderAgentUsageBlock formats a Claude-shaped rich block for the

@@ -17,7 +17,7 @@ import (
 )
 
 // sessionsModel is the full session list with a details pane.
-// Under narrow terminals (< 80 cols), only the list is shown.
+// Under narrow terminals (< 120 cols), a condensed detail is shown.
 type sessionsModel struct {
 	st       styles.Styles
 	km       Keymap
@@ -169,7 +169,12 @@ func (m sessionsModel) Update(msg tea.Msg) (sessionsModel, tea.Cmd) {
 	return m, nil
 }
 
-func (m sessionsModel) View(width, height int) string {
+// View renders the sessions list with a detail pane for the selected
+// row stacked beneath it. `narrow` is the terminal's narrow state (a
+// phone) — when set the detail collapses to a condensed form. It is
+// passed in rather than derived from `width`, which on a monitor is
+// only this component's column and is itself below the breakpoint.
+func (m sessionsModel) View(width, height int, narrow bool) string {
 	if m.renameForm != nil {
 		formW := minInt(80, width-4)
 		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, m.renameForm.View(formW))
@@ -180,15 +185,17 @@ func (m sessionsModel) View(width, height int) string {
 		formW := minInt(80, width-4)
 		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, m.form.View(formW))
 	}
-	if isNarrow(width) {
-		return m.renderList(width, height)
+	// List on top, detail for the selected row below. The detail keeps
+	// the full key cheatsheet when the terminal is wide and collapses
+	// to a condensed form on a phone.
+	detail := m.renderDetail(width, narrow)
+	listH := height - lipgloss.Height(detail)
+	if listH < 3 {
+		listH = 3
 	}
-	leftW := width * 2 / 3
-	rightW := width - leftW - 1
-	return lipgloss.JoinHorizontal(lipgloss.Top,
-		m.renderList(leftW, height),
-		" ",
-		m.renderDetail(rightW, height),
+	return lipgloss.JoinVertical(lipgloss.Left,
+		m.renderList(width, listH),
+		detail,
 	)
 }
 
@@ -219,10 +226,18 @@ func (m sessionsModel) renderList(width, height int) string {
 	return m.st.PaneFocused.Width(width - 2).Height(height - 2).Render(strings.Join(rows, "\n"))
 }
 
-func (m sessionsModel) renderDetail(width, height int) string {
+// renderDetail draws the Sessions detail pane for the selected row.
+// `narrow` is the terminal's narrow state (a phone): when set the
+// pane collapses to a condensed form, otherwise it shows the full key
+// cheatsheet. It renders at its natural height so the caller can stack
+// the list above it.
+func (m sessionsModel) renderDetail(width int, narrow bool) string {
 	sel := m.Selected()
 	if sel == nil {
-		return m.st.Pane.Width(width - 2).Height(height - 2).Render(m.st.Muted.Render("Nothing selected."))
+		return m.st.Pane.Width(width - 2).MaxWidth(width).Render(m.st.Muted.Render("No session selected."))
+	}
+	if narrow {
+		return m.renderDetailNarrow(*sel, width)
 	}
 	attachedLine := fmt.Sprintf("attached %v", sel.Attached)
 	if sel.Attached {
@@ -254,7 +269,29 @@ func (m sessionsModel) renderDetail(width, height int) string {
 		"  " + m.st.Muted.Render("Cmd+D / Ctrl+D do NOT work — those are terminal/shell shortcuts."),
 		"  " + m.st.Muted.Render("ccmux's status bar inside the attached session shows the right one."),
 	}
-	return m.st.Pane.Width(width - 2).Height(height - 2).Render(strings.Join(lines, "\n"))
+	return m.st.Pane.Width(width - 2).MaxWidth(width).Render(strings.Join(lines, "\n"))
+}
+
+// renderDetailNarrow is the condensed Sessions detail for narrow
+// terminals: T0 identity (name / host / state / project) plus the T1
+// attached state and a one-line detach reminder. The path, window
+// count, timestamps, and the full key cheatsheet (all T2) are dropped
+// — the wide layout and the CLI still carry them.
+func (m sessionsModel) renderDetailNarrow(sel daemon.SessionState, width int) string {
+	attached := "no"
+	if sel.Attached {
+		attached = lipgloss.NewStyle().Foreground(m.st.P.Mauve).Bold(true).Render("⊙ yes")
+	}
+	lines := []string{
+		m.st.Emphasis.Render(sel.Name),
+		m.st.Muted.Render("on " + sel.Host),
+		"",
+		fmt.Sprintf("state     %s %s", stateGlyph(m.st, sel.State), sel.State),
+		fmt.Sprintf("project   %s", sel.Project),
+		fmt.Sprintf("attached  %s", attached),
+		m.st.Muted.Render("detach: press " + detectedPrefix() + " then d"),
+	}
+	return m.st.Pane.Width(width - 2).MaxWidth(width).Render(strings.Join(lines, "\n"))
 }
 
 // detectedPrefix returns the user's tmux prefix key as a pretty string

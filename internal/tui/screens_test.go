@@ -99,23 +99,37 @@ func TestRenderHeader_NumbersMatchKeymap(t *testing.T) {
 // also iterates every screen (a hardcoded narrow-mode slice would be
 // the same bug in a different spot).
 func TestRenderHeader_NarrowCollapsesToNumbers(t *testing.T) {
-	a := App{
-		styles: styles.Default(),
-		keys:   DefaultKeymap(),
-		width:  60, // < 80 → narrow
-		screen: ScreenConversations,
-	}
-	header := a.renderHeader()
-	// Every screen's number must be present even in narrow mode.
-	for _, s := range allScreens() {
-		num := itoaTest(int(s) + 1)
-		if !strings.Contains(header, num) {
-			t.Errorf("narrow header missing number %q for screen %q:\n%s", num, s.String(), header)
+	// Every width below the 120 breakpoint collapses the tab strip to
+	// numbers; the active screen still shows its initial. 80–119 is
+	// the band that used to get the wide layout under the old < 80
+	// breakpoint — it must now be narrow too.
+	for _, w := range []int{60, 80, 100, 119} {
+		a := App{
+			styles: styles.Default(),
+			keys:   DefaultKeymap(),
+			width:  w,
+			screen: ScreenConversations,
+		}
+		header := a.renderHeader()
+		for _, s := range allScreens() {
+			num := itoaTest(int(s) + 1)
+			if !strings.Contains(header, num) {
+				t.Errorf("width %d: narrow header missing number %q for screen %q:\n%s", w, num, s.String(), header)
+			}
+		}
+		// The active screen (Conversations) shows its initial "C".
+		if !strings.Contains(header, "C") {
+			t.Errorf("width %d: narrow header should show the active screen's initial:\n%s", w, header)
+		}
+		// Full labels must NOT appear in narrow mode.
+		if strings.Contains(header, "Conversations") {
+			t.Errorf("width %d: narrow header should collapse to numbers, not labels:\n%s", w, header)
 		}
 	}
-	// The active screen (Conversations) shows its initial "C".
-	if !strings.Contains(header, "C") {
-		t.Errorf("narrow header should show the active screen's initial:\n%s", header)
+	// At the breakpoint (120) and above, the full labels return.
+	a := App{styles: styles.Default(), keys: DefaultKeymap(), width: 120, screen: ScreenConversations}
+	if header := a.renderHeader(); !strings.Contains(header, "Conversations") {
+		t.Errorf("width 120: header should show full screen labels:\n%s", header)
 	}
 }
 
@@ -129,16 +143,16 @@ func itoaTest(n int) string {
 	return string(rune('0' + n))
 }
 
-// TestHomeView_TileOrder — the Home screen is a single full-width
-// column, stacked top to bottom: the "Hello" hero, the sessions list,
-// then the Session summary / Devices / Usage tiles. A regression here
-// would reorder the column or split it back into side-by-side panes.
-func TestHomeView_TileOrder(t *testing.T) {
+// TestHomeView_NarrowSingleColumn — below the breakpoint the Home
+// screen is a single full-width column, stacked top to bottom: the
+// "Hello" hero, the sessions list, then the Session summary / Devices
+// / Usage tiles. A regression here would reorder the column.
+func TestHomeView_NarrowSingleColumn(t *testing.T) {
 	a := newTestApp(ScreenHome)
 	// The Devices tile only renders when at least one host is known;
 	// give it one so the full column order can be checked.
 	a.dashboard.SetHosts([]hostStatus{{Name: "sputnik", Local: true, OK: true}})
-	out := a.homeView(120, 60)
+	out := a.homeView(80, 60) // < 120 → single column
 	// JoinVertical lays blocks top-to-bottom, so byte offset increases
 	// with row: each anchor must appear after the previous one.
 	anchors := []string{"Hello.", "Sessions", "Session summary", "Devices", "Claude usage"}
@@ -152,5 +166,26 @@ func TestHomeView_TileOrder(t *testing.T) {
 			t.Errorf("%q (offset %d) should render below the previous tile (offset %d)", want, at, prev)
 		}
 		prev = at
+	}
+}
+
+// TestHomeView_WideTwoColumn — at or above the breakpoint the Home
+// screen splits into two halves: the sessions list + detail on the
+// left, the hero and stat tiles on the right. Every tile is still
+// present and no line overflows.
+func TestHomeView_WideTwoColumn(t *testing.T) {
+	a := newTestApp(ScreenHome)
+	a.dashboard.SetHosts([]hostStatus{{Name: "sputnik", Local: true, OK: true}})
+	out := a.homeView(200, 60) // ≥ 120 → two columns
+	assertNoOverflow(t, out, 200)
+	for _, want := range []string{"Hello.", "Sessions", "Session summary", "Devices", "Claude usage"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("wide homeView is missing %q", want)
+		}
+	}
+	// Sessions is the left column and the hero leads the right column,
+	// so on the rendered rows "Sessions" sits left of "Hello.".
+	if strings.Index(out, "Sessions") > strings.Index(out, "Hello.") {
+		t.Errorf("expected Sessions (left column) to render before Hello. (right column):\n%s", out)
 	}
 }

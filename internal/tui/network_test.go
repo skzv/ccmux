@@ -138,3 +138,18 @@ func TestHostStatus_DialHostOrAddr(t *testing.T) {
 		})
 	}
 }
+
+// TestNetwork_NarrowLayout — at phone width the Network screen keeps
+// the device rows (T0) but drops the colour legend, the inline action
+// hint, and the Selected block's os/address/dial/version detail (T2).
+func TestNetwork_NarrowLayout(t *testing.T) {
+	m := newNetwork(mustStyles(t), DefaultKeymap())
+	m.SetHosts([]hostStatus{
+		{Name: "sputnik", Local: true, OK: true, OS: "darwin", Address: "100.1.2.3", Version: "v1.0"},
+		{Name: "mir", OK: true, OS: "linux", Address: "100.4.5.6", DialHost: "mir.tail", Version: "v1.0"},
+	})
+	out := m.View(50, 40)
+	assertNoOverflow(t, out, 50)
+	assertPresent(t, out, "sputnik", "mir")
+	assertAbsent(t, out, "100.1.2.3", "ccmuxd reachable", "enter: ssh")
+}

@@ -94,20 +94,35 @@ func (m networkModel) SSHCmd() tea.Cmd {
 
 func (m networkModel) View(width, height int) string {
 	st := m.st
-	header := st.Emphasis.Render("Network") + "  " +
-		st.Muted.Render(fmt.Sprintf("(%d device(s) — enter: ssh   r: refresh)", len(m.hosts)))
-	if len(m.hosts) == 0 {
-		body := strings.Join([]string{
-			header, "",
-			st.Muted.Render("No devices discovered yet."),
-			"",
-			"This screen lists every machine on your tailnet that ccmux can see.",
-			"Make sure tailscale is signed in (" + st.Key.Render("tailscale status") + ") and try " + st.Key.Render("r") + " to refresh.",
-		}, "\n")
-		return st.Pane.Width(width - 2).Height(height - 2).Render(body)
+	narrow := isNarrow(width)
+
+	// Header: the device count (T1) stays; the inline action hint
+	// (T2) is dropped on narrow.
+	header := st.Emphasis.Render("Network") + "  "
+	if narrow {
+		header += st.Muted.Render(fmt.Sprintf("(%d)", len(m.hosts)))
+	} else {
+		header += st.Muted.Render(fmt.Sprintf("(%d device(s) — enter: ssh   r: refresh)", len(m.hosts)))
 	}
 
-	rows := []string{header, "", st.Muted.Render(networkLegend()), ""}
+	if len(m.hosts) == 0 {
+		parts := []string{header, "", st.Muted.Render("No devices discovered yet.")}
+		// The explanatory help paragraph is T2 — dropped on narrow.
+		if !narrow {
+			parts = append(parts,
+				"",
+				"This screen lists every machine on your tailnet that ccmux can see.",
+				"Make sure tailscale is signed in ("+st.Key.Render("tailscale status")+") and try "+st.Key.Render("r")+" to refresh.",
+			)
+		}
+		return st.Pane.Width(width - 2).Height(height - 2).MaxWidth(width).Render(strings.Join(parts, "\n"))
+	}
+
+	// The colour legend is T2 — dropped on narrow.
+	rows := []string{header, ""}
+	if !narrow {
+		rows = append(rows, st.Muted.Render(networkLegend()), "")
+	}
 	for i, h := range m.hosts {
 		row := m.renderRow(h, i == m.cursor)
 		rows = append(rows, row)
@@ -117,17 +132,21 @@ func (m networkModel) View(width, height int) string {
 	if sel := m.Selected(); sel != nil {
 		rows = append(rows, st.Subtitle.Render("Selected"))
 		rows = append(rows, "  name      "+sel.Name)
-		if sel.OS != "" {
-			rows = append(rows, "  os        "+sel.OS)
-		}
-		if sel.Address != "" {
-			rows = append(rows, "  address   "+sel.Address)
-		}
-		if sel.DialHost != "" {
-			rows = append(rows, "  dial      "+sel.DialHost)
-		}
-		if sel.Version != "" {
-			rows = append(rows, "  ccmuxd    "+sel.Version)
+		// The os / address / dial / ccmuxd-version detail is T2 —
+		// dropped on narrow so the Selected block stays compact.
+		if !narrow {
+			if sel.OS != "" {
+				rows = append(rows, "  os        "+sel.OS)
+			}
+			if sel.Address != "" {
+				rows = append(rows, "  address   "+sel.Address)
+			}
+			if sel.DialHost != "" {
+				rows = append(rows, "  dial      "+sel.DialHost)
+			}
+			if sel.Version != "" {
+				rows = append(rows, "  ccmuxd    "+sel.Version)
+			}
 		}
 		rows = append(rows, "")
 		switch {
@@ -140,7 +159,7 @@ func (m networkModel) View(width, height int) string {
 		}
 	}
 
-	return st.Pane.Width(width - 2).Height(height - 2).Render(strings.Join(rows, "\n"))
+	return st.Pane.Width(width - 2).Height(height - 2).MaxWidth(width).Render(strings.Join(rows, "\n"))
 }
 
 func (m networkModel) renderRow(h hostStatus, selected bool) string {

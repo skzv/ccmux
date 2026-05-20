@@ -38,6 +38,7 @@ type claudeModel struct {
 	picker         pickerKind
 	pickerCursor   int
 	editor         string
+	narrow         bool // terminal is below the layout breakpoint
 }
 
 // pickerKind identifies which modal picker is currently open on the
@@ -227,6 +228,7 @@ func (m claudeModel) updatePicker(msg tea.KeyMsg) (claudeModel, tea.Cmd) {
 }
 
 func (m claudeModel) View(width, height int) string {
+	m.narrow = isNarrow(width) // m is a value copy; the mutation stays local
 	if m.picker != pickerNone {
 		return m.viewPicker(width, height)
 	}
@@ -235,9 +237,12 @@ func (m claudeModel) View(width, height int) string {
 
 func (m claudeModel) viewMain(width, height int) string {
 	st := m.st
-	lines := []string{
-		st.Emphasis.Render("Claude Code Configuration"),
-		st.Muted.Render("settings: " + m.paths.Settings),
+	lines := []string{st.Emphasis.Render("Claude Code Configuration")}
+	// The settings-file path is T2 — drop it on narrow.
+	if !m.narrow {
+		lines = append(lines, st.Muted.Render("settings: "+m.paths.Settings))
+	}
+	lines = append(lines,
 		"",
 		m.renderModelBlock(),
 		"",
@@ -254,29 +259,35 @@ func (m claudeModel) viewMain(width, height int) string {
 		m.renderCommandsBlock(),
 		"",
 		m.renderSkillsBlock(),
-		"",
-		st.Subtitle.Render("Keys"),
-		"  " + st.Key.Render("m") + "  pick default model       " + st.Key.Render("e") + "  pick reasoning effort",
-		"  " + st.Key.Render("a") + "  toggle always-thinking    " + st.Key.Render("y") + "  toggle yolo mode",
-		"  " + st.Key.Render("c") + "  edit global CLAUDE.md     " + st.Key.Render("j") + "  edit settings.json",
-		"  " + st.Key.Render("5") + "  open project notes",
-	}
-	if m.lastBackup != "" {
-		lines = append(lines, "",
-			st.Muted.Render("last write backed up to "+summarizePath(m.lastBackup)),
+	)
+	// The Keys cheatsheet and the backup-path note are T2.
+	if !m.narrow {
+		lines = append(lines,
+			"",
+			st.Subtitle.Render("Keys"),
+			"  "+st.Key.Render("m")+"  pick default model       "+st.Key.Render("e")+"  pick reasoning effort",
+			"  "+st.Key.Render("a")+"  toggle always-thinking    "+st.Key.Render("y")+"  toggle yolo mode",
+			"  "+st.Key.Render("c")+"  edit global CLAUDE.md     "+st.Key.Render("j")+"  edit settings.json",
+			"  "+st.Key.Render("5")+"  open project notes",
 		)
+		if m.lastBackup != "" {
+			lines = append(lines, "", st.Muted.Render("last write backed up to "+summarizePath(m.lastBackup)))
+		}
 	}
-	return st.Pane.Width(width - 2).Height(height - 2).Render(strings.Join(lines, "\n"))
+	return st.Pane.Width(width - 2).Height(height - 2).MaxWidth(width).Render(strings.Join(lines, "\n"))
 }
 
 func (m claudeModel) renderModelBlock() string {
 	st := m.st
 	hint := "(set in " + m.modelSource + ")"
-	return strings.Join([]string{
+	lines := []string{
 		st.Subtitle.Render("Default model"),
 		"  " + st.Emphasis.Render(m.model) + "  " + st.Muted.Render(hint),
-		st.Muted.Render("  press " + st.Key.Render("m") + " to change"),
-	}, "\n")
+	}
+	if !m.narrow {
+		lines = append(lines, st.Muted.Render("  press "+st.Key.Render("m")+" to change"))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m claudeModel) renderEffortBlock() string {
@@ -286,13 +297,18 @@ func (m claudeModel) renderEffortBlock() string {
 	if m.alwaysThinking {
 		thinkLabel = "on"
 	}
-	return strings.Join([]string{
+	lines := []string{
 		st.Subtitle.Render("Reasoning effort"),
 		"  " + st.Emphasis.Render(m.effort) + "  " + st.Muted.Render(hint),
 		"  always-thinking: " + st.Emphasis.Render(thinkLabel),
-		st.Muted.Render("  " + st.Key.Render("e") + " pick effort  · " + st.Key.Render("a") + " toggle always-thinking"),
-		st.Muted.Render("  (CLI override: `claude --effort <low|medium|high|xhigh|max>` per session)"),
-	}, "\n")
+	}
+	if !m.narrow {
+		lines = append(lines,
+			st.Muted.Render("  "+st.Key.Render("e")+" pick effort  · "+st.Key.Render("a")+" toggle always-thinking"),
+			st.Muted.Render("  (CLI override: `claude --effort <low|medium|high|xhigh|max>` per session)"),
+		)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // renderSafetyBlock surfaces the YOLO toggle. Pulled into its own block
@@ -305,12 +321,17 @@ func (m claudeModel) renderSafetyBlock() string {
 		yoloLabel = "on"
 	}
 	hint := "(set in " + m.yoloSource + ")"
-	return strings.Join([]string{
+	lines := []string{
 		st.Subtitle.Render("Safety"),
 		"  yolo mode: " + st.Emphasis.Render(yoloLabel) + "  " + st.Muted.Render(hint),
-		st.Muted.Render("  " + st.Key.Render("y") + " toggle  · writes permissions.defaultMode = \"bypassPermissions\""),
-		st.Muted.Render("  (CLI override: `claude --dangerously-skip-permissions` per session)"),
-	}, "\n")
+	}
+	if !m.narrow {
+		lines = append(lines,
+			st.Muted.Render("  "+st.Key.Render("y")+" toggle  · writes permissions.defaultMode = \"bypassPermissions\""),
+			st.Muted.Render("  (CLI override: `claude --dangerously-skip-permissions` per session)"),
+		)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m claudeModel) renderHooksBlock() string {
@@ -389,12 +410,15 @@ func (m claudeModel) renderPermissionsBlock() string {
 	if m.settings == nil || (len(m.settings.Permissions.Allow) == 0 && len(m.settings.Permissions.Deny) == 0) {
 		return st.Subtitle.Render("Permissions") + "\n  " + st.Muted.Render("(no explicit allow/deny — Claude prompts each time)")
 	}
-	return strings.Join([]string{
+	lines := []string{
 		st.Subtitle.Render("Permissions"),
 		fmt.Sprintf("  allow: %d pattern(s)", len(m.settings.Permissions.Allow)),
 		fmt.Sprintf("  deny:  %d pattern(s)", len(m.settings.Permissions.Deny)),
-		st.Muted.Render("  edit with " + st.Key.Render("j") + " (opens settings.json)"),
-	}, "\n")
+	}
+	if !m.narrow {
+		lines = append(lines, st.Muted.Render("  edit with "+st.Key.Render("j")+" (opens settings.json)"))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m claudeModel) renderCommandsBlock() string {

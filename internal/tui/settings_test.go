@@ -432,3 +432,15 @@ func TestSettings_AutoCheck_GetShowsOnOff(t *testing.T) {
 		t.Errorf("get() with AutoCheck=false = %q, want off", got)
 	}
 }
+
+// TestSettings_NarrowLayout — at phone width the Settings screen keeps
+// the editable field rows (T0) but drops the version line, the config
+// path line, and the (↑/↓ to move…) instructions (T2), with no line
+// overflowing the terminal.
+func TestSettings_NarrowLayout(t *testing.T) {
+	m := newSettings(styles.Default(), DefaultKeymap(), config.Defaults(), "v9.9.9")
+	out := m.View(50, 60)
+	assertNoOverflow(t, out, 50)
+	assertPresent(t, out, "Settings", "Editable")
+	assertAbsent(t, out, "v9.9.9", "config file", "↑/↓ to move")
+}

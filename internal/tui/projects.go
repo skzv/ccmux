@@ -335,19 +335,25 @@ func (m projectsModel) View(width, height int) string {
 		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, m.form.View(formW))
 	}
 	if isNarrow(width) {
-		return m.renderList(width, height)
+		return m.renderList(width, height, true)
 	}
 	leftW := width * 2 / 3
 	rightW := width - leftW - 1
 	return lipgloss.JoinHorizontal(lipgloss.Top,
-		m.renderList(leftW, height),
+		m.renderList(leftW, height, false),
 		" ",
 		m.renderDetail(rightW, height),
 	)
 }
 
-func (m projectsModel) renderList(width, height int) string {
-	header := m.st.Emphasis.Render("Projects") + "  " + m.st.Muted.Render("(/: filter   n: new   u: upgrade cwd   enter: attach)")
+// renderList draws the project list. `narrow` is the terminal's
+// narrow state (not derived from `width`, which in wide mode is only
+// the left sub-pane): on narrow the T2 key-hint is dropped.
+func (m projectsModel) renderList(width, height int, narrow bool) string {
+	header := m.st.Emphasis.Render("Projects")
+	if !narrow {
+		header += "  " + m.st.Muted.Render("(/: filter   n: new   u: upgrade cwd   enter: attach)")
+	}
 	if len(m.projects) == 0 {
 		body := lipgloss.JoinVertical(lipgloss.Left,
 			header,
@@ -538,7 +544,12 @@ func textInputBlink() tea.Cmd {
 	return nil
 }
 
-func isNarrow(width int) bool { return width < 80 }
+// isNarrow reports whether the terminal is too narrow for side-by-side
+// layouts. The single layout breakpoint for the whole TUI: every screen
+// and the chrome rows branch on this and nothing else. 120 catches the
+// whole phone — iPhone portrait (~40–65 cols) and landscape (~90–110)
+// both fall below it — so a real phone never gets the desktop layout.
+func isNarrow(width int) bool { return width < 120 }
 
 func minInt(a, b int) int {
 	if a < b {

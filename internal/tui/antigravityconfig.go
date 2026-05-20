@@ -94,11 +94,13 @@ func nextAntigravityEffort() string {
 
 func (m antigravityConfigModel) View(width, height int) string {
 	st := m.st
-	rows := []string{
-		st.Emphasis.Render("Antigravity configuration"),
-		st.Muted.Render(m.paths.Settings),
-		"",
+	narrow := isNarrow(width)
+	rows := []string{st.Emphasis.Render("Antigravity configuration")}
+	// The settings-file path is T2 — drop it on narrow.
+	if !narrow {
+		rows = append(rows, st.Muted.Render(m.paths.Settings))
 	}
+	rows = append(rows, "")
 	if m.err != "" {
 		rows = append(rows, st.StatusError.Render("⚠ "+m.err), "")
 	}
@@ -115,17 +117,20 @@ func (m antigravityConfigModel) View(width, height int) string {
 		rows = append(rows, fmt.Sprintf("yolo mode       %s", yoloLabel))
 	}
 
-	rows = append(rows, "",
-		st.Subtitle.Render("Keys"),
-		st.Key.Render("y")+"  toggle YOLO mode",
-		st.Key.Render("r")+"  cycle reasoning effort",
-		st.Key.Render("e")+"  open settings.json in $EDITOR",
-		st.Key.Render("tab")+"  switch agent",
-	)
+	// The Keys cheatsheet is T2 — dropped on narrow.
+	if !narrow {
+		rows = append(rows, "",
+			st.Subtitle.Render("Keys"),
+			st.Key.Render("y")+"  toggle YOLO mode",
+			st.Key.Render("r")+"  cycle reasoning effort",
+			st.Key.Render("e")+"  open settings.json in $EDITOR",
+			st.Key.Render("tab")+"  switch agent",
+		)
+	}
 
 	if m.saveMsg != "" && time.Since(m.savedAt) < 3*time.Second {
 		rows = append(rows, "", st.StatusGood.Render("saved ✓  "+m.saveMsg))
 	}
 
-	return st.Pane.Width(width - 2).Height(height - 2).Render(strings.Join(rows, "\n"))
+	return st.Pane.Width(width - 2).Height(height - 2).MaxWidth(width).Render(strings.Join(rows, "\n"))
 }
