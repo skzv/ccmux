@@ -144,23 +144,25 @@ func itoaTest(n int) string {
 }
 
 // TestHomeView_NarrowSingleColumn — below the breakpoint the Home
-// screen is a single full-width column, stacked top to bottom: the
-// "Hello" hero, the sessions list, then the Session summary / Devices
-// / Usage tiles. A regression here would reorder the column.
+// screen is a single full-width column with the hero dropped entirely:
+// sessions, then the Session summary / Devices / Usage tiles.
 func TestHomeView_NarrowSingleColumn(t *testing.T) {
 	a := newTestApp(ScreenHome)
 	// The Devices tile only renders when at least one host is known;
 	// give it one so the full column order can be checked.
 	a.dashboard.SetHosts([]hostStatus{{Name: "sputnik", Local: true, OK: true}})
-	out := a.homeView(80, 60) // < 120 → single column
+	out := a.homeView(80, 60) // < 120 → single column, no hero
+	if strings.Contains(out, "Hello.") {
+		t.Errorf("narrow homeView should drop the Hello hero entirely:\n%s", out)
+	}
 	// JoinVertical lays blocks top-to-bottom, so byte offset increases
 	// with row: each anchor must appear after the previous one.
-	anchors := []string{"Hello.", "Sessions", "Session summary", "Devices", "Claude usage"}
+	anchors := []string{"Sessions", "Session summary", "Devices", "Claude usage"}
 	prev := -1
 	for _, want := range anchors {
 		at := strings.Index(out, want)
 		if at < 0 {
-			t.Fatalf("homeView is missing %q", want)
+			t.Fatalf("narrow homeView is missing %q", want)
 		}
 		if at <= prev {
 			t.Errorf("%q (offset %d) should render below the previous tile (offset %d)", want, at, prev)
@@ -170,22 +172,35 @@ func TestHomeView_NarrowSingleColumn(t *testing.T) {
 }
 
 // TestHomeView_WideTwoColumn — at or above the breakpoint the Home
-// screen splits into two halves: the sessions list + detail on the
-// left, the hero and stat tiles on the right. Every tile is still
+// screen is a hero banner over two columns: the sessions list on the
+// left, the session detail + stat tiles on the right. Every tile is
 // present and no line overflows.
 func TestHomeView_WideTwoColumn(t *testing.T) {
 	a := newTestApp(ScreenHome)
 	a.dashboard.SetHosts([]hostStatus{{Name: "sputnik", Local: true, OK: true}})
-	out := a.homeView(200, 60) // ≥ 120 → two columns
+	out := a.homeView(200, 60) // ≥ 120 → banner + two columns
 	assertNoOverflow(t, out, 200)
 	for _, want := range []string{"Hello.", "Sessions", "Session summary", "Devices", "Claude usage"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("wide homeView is missing %q", want)
 		}
 	}
-	// Sessions is the left column and the hero leads the right column,
-	// so on the rendered rows "Sessions" sits left of "Hello.".
-	if strings.Index(out, "Sessions") > strings.Index(out, "Hello.") {
-		t.Errorf("expected Sessions (left column) to render before Hello. (right column):\n%s", out)
+}
+
+// TestHomeView_WideHeroIsBanner — the hero is a full-width banner
+// above both columns, so "Hello." renders before the sessions list
+// (left column) and before "Session summary" (right column).
+func TestHomeView_WideHeroIsBanner(t *testing.T) {
+	a := newTestApp(ScreenHome)
+	a.dashboard.SetHosts([]hostStatus{{Name: "sputnik", Local: true, OK: true}})
+	out := a.homeView(200, 60)
+	hello := strings.Index(out, "Hello.")
+	sessions := strings.Index(out, "Sessions")
+	summary := strings.Index(out, "Session summary")
+	if hello < 0 || sessions < 0 || summary < 0 {
+		t.Fatalf("wide homeView missing an expected anchor:\n%s", out)
+	}
+	if hello > sessions || hello > summary {
+		t.Errorf("the hero banner should render above both columns:\n%s", out)
 	}
 }
