@@ -49,6 +49,17 @@ type Status struct {
 	// StatusRaw is the verbatim output of `moshi-hook status`, useful
 	// for surfacing in the TUI/doctor output.
 	StatusRaw string
+
+	// StatusErr holds the error from `moshi-hook status` when that
+	// command failed to run at all (timeout, crash, non-zero exit).
+	// When non-nil, Paired is not meaningful — we could not determine
+	// pairing, which is different from "determined: not paired". Carries
+	// the command's stderr so `ccmux doctor` can show why.
+	StatusErr error
+
+	// ServiceErr holds the error from `brew services list` when it
+	// failed. When non-nil, ServiceRunning could not be determined.
+	ServiceErr error
 }
 
 // Detection timeouts. moshi-hook's own subcommands are local and
@@ -75,7 +86,9 @@ func Detect(ctx context.Context) Status {
 		if out, err := run(ctx, moshiHookTimeout, s.BinaryPath, "version"); err == nil {
 			s.Version = strings.TrimSpace(out)
 		}
-		if out, err := run(ctx, moshiHookTimeout, s.BinaryPath, "status"); err == nil {
+		if out, err := run(ctx, moshiHookTimeout, s.BinaryPath, "status"); err != nil {
+			s.StatusErr = withOutput(err, out)
+		} else {
 			s.StatusRaw = out
 			s.Paired = statusReportsPaired(out)
 		}
@@ -84,7 +97,9 @@ func Detect(ctx context.Context) Status {
 	s.HooksInstalled = claudeSettingsMentionsMoshi()
 
 	if _, err := exec.LookPath("brew"); err == nil {
-		if out, err := run(ctx, brewListTimeout, "brew", "services", "list", "--json"); err == nil {
+		if out, err := run(ctx, brewListTimeout, "brew", "services", "list", "--json"); err != nil {
+			s.ServiceErr = withOutput(err, out)
+		} else {
 			s.ServiceRunning = brewServiceStartedFromJSON(out)
 		}
 	}
@@ -215,6 +230,21 @@ func StartService(ctx context.Context) error {
 	}
 	_, err := run(ctx, 30*time.Second, "brew", "services", "start", "moshi-hook")
 	return err
+}
+
+// withOutput folds a failed command's combined output into its error so
+// the diagnostic isn't lost. moshi-hook and brew print the actual reason
+// to stderr; without this a caller only sees a bare "exit status 1". The
+// output is trimmed to its first line — enough to diagnose, no spew.
+func withOutput(err error, out string) error {
+	out = strings.TrimSpace(out)
+	if out == "" {
+		return err
+	}
+	if i := strings.IndexByte(out, '\n'); i >= 0 {
+		out = strings.TrimSpace(out[:i])
+	}
+	return fmt.Errorf("%w: %s", err, out)
 }
 
 // run is a tiny helper around exec that adds a context timeout and

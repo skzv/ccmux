@@ -44,6 +44,12 @@ const (
 type Status struct {
 	State State
 	User  string
+	// Detail is a human-readable diagnostic, populated for the
+	// non-authed states: the trimmed output of `gh auth status` when it
+	// exited non-zero, a note that the check timed out, or why the
+	// binary wasn't found. Empty when State is StateAuthed. Surfaced by
+	// `ccmux doctor` so a failure is debuggable instead of a bare "·".
+	Detail string
 }
 
 // OK reports whether the user can rely on gh for repo creation.
@@ -71,7 +77,7 @@ func (s Status) Hint() string {
 func Detect(ctx context.Context) Status {
 	bin, err := exec.LookPath("gh")
 	if err != nil {
-		return Status{State: StateMissing}
+		return Status{State: StateMissing, Detail: "gh not found on $PATH"}
 	}
 	c, cancel := context.WithTimeout(ctx, authStatusTimeout)
 	defer cancel()
@@ -87,9 +93,16 @@ func Detect(ctx context.Context) Status {
 func classify(out []byte, runErr error, timedOut bool) Status {
 	if runErr != nil {
 		if timedOut {
-			return Status{State: StateUnknown}
+			return Status{
+				State:  StateUnknown,
+				Detail: "`gh auth status` timed out after " + authStatusTimeout.String(),
+			}
 		}
-		return Status{State: StateNotAuthed}
+		detail := strings.TrimSpace(string(out))
+		if detail == "" {
+			detail = runErr.Error()
+		}
+		return Status{State: StateNotAuthed, Detail: detail}
 	}
 	return Status{State: StateAuthed, User: parseUser(string(out))}
 }

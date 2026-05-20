@@ -262,6 +262,19 @@ func installPromptable(ctx context.Context, out io.Writer, deps []depCheck) erro
 	return nil
 }
 
+// printWizardDetail prints a captured diagnostic (a command's stderr, a
+// timeout note) under a wizard status line — indented and muted so it
+// reads as a sub-note rather than a second instruction.
+func printWizardDetail(out io.Writer, detail string) {
+	detail = strings.TrimSpace(detail)
+	if detail == "" {
+		return
+	}
+	for _, ln := range strings.Split(detail, "\n") {
+		fmt.Fprintln(out, stMuted.Render("    ↳ "+ln))
+	}
+}
+
 // stepGitHubAuth: gh is recommended (not required) for `ccmux new` to
 // auto-create a private GitHub repo. We never block the wizard on this
 // — just nudge.
@@ -299,6 +312,7 @@ func stepGitHubAuth(ctx context.Context, out io.Writer) error {
 		return nil
 	case ghauth.StateNotAuthed:
 		fmt.Fprintln(out, stWarn.Render("  gh installed but not signed in"))
+		printWizardDetail(out, s.Detail)
 		fmt.Fprintln(out, "  Run "+stEmphasis.Render("gh auth login")+" in another terminal (opens a browser), then re-run "+stEmphasis.Render("ccmux setup")+" to verify.")
 		return nil
 	case ghauth.StateUnknown:
@@ -339,6 +353,16 @@ func stepMoshi(ctx context.Context, out io.Writer) error {
 	if s.BinaryInstalled && s.Paired && s.HooksInstalled && s.ServiceRunning {
 		fmt.Fprintf(out, "  %s  installed, paired, hooks wired, service running\n", stOK.Render("✓"))
 		return nil
+	}
+	// A failed detection check is not the same as "not configured" —
+	// surface why so a paired user isn't left guessing why we're nagging.
+	if s.StatusErr != nil {
+		fmt.Fprintln(out, stWarn.Render("  couldn't verify moshi-hook pairing — the status check failed:"))
+		printWizardDetail(out, s.StatusErr.Error())
+	}
+	if s.ServiceErr != nil {
+		fmt.Fprintln(out, stWarn.Render("  couldn't verify the moshi-hook service — the check failed:"))
+		printWizardDetail(out, s.ServiceErr.Error())
 	}
 	fmt.Fprintln(out, stMuted.Render("  Moshi gives you categorized push notifications on iOS/Android when"))
 	fmt.Fprintln(out, stMuted.Render("  Claude needs your input. Get the app at getmoshi.app."))

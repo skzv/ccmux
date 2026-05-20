@@ -1,11 +1,43 @@
 package moshi
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
+
+// TestWithOutput covers the diagnostic-folding helper: a failed
+// moshi-hook / brew command prints the real reason to stderr, and
+// withOutput keeps that reason attached to the error so `ccmux doctor`
+// can show it instead of a bare "exit status 1".
+func TestWithOutput(t *testing.T) {
+	base := errors.New("exit status 1")
+
+	// No usable output → the error is returned unchanged.
+	if got := withOutput(base, ""); got != base {
+		t.Errorf("empty output should return the error unchanged, got %v", got)
+	}
+	if got := withOutput(base, "   \n  "); got != base {
+		t.Errorf("whitespace-only output should return the error unchanged, got %v", got)
+	}
+
+	// Output is folded in — first line only, no multi-line spew.
+	got := withOutput(base, "moshi-hook: socket not found\nrun `brew services start moshi-hook`")
+	msg := got.Error()
+	if !strings.Contains(msg, "socket not found") {
+		t.Errorf("error should carry the first output line, got %q", msg)
+	}
+	if strings.Contains(msg, "brew services start") {
+		t.Errorf("error should NOT carry lines past the first, got %q", msg)
+	}
+	// withOutput must wrap, not replace — errors.Is still sees the base.
+	if !errors.Is(got, base) {
+		t.Error("withOutput must wrap (not replace) the base error")
+	}
+}
 
 // TestStatusReportsPaired pins how `moshi-hook status` output is read.
 // The command is human-formatted, so the parse is substring-based;
