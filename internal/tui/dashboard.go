@@ -112,6 +112,18 @@ func (m dashboardModel) View(width, height int) string {
 	return m.viewWide(width, height)
 }
 
+// StatsView renders the dashboard's stat tiles — session summary,
+// devices, and usage — stacked in a single column. The hero panel and
+// the sessions list are rendered separately by homeView() in app.go:
+// the hero spans the full width above, and the sessions list occupies
+// the column to the left of these tiles.
+func (m dashboardModel) StatsView(width int) string {
+	stats := m.statsPanel(width)
+	devices := m.devicesPanel(width)
+	usage := m.usagePanel(width)
+	return lipgloss.JoinVertical(lipgloss.Left, stats, devices, usage)
+}
+
 func (m dashboardModel) viewWide(width, height int) string {
 	hero := m.heroPanel(width)
 	heroH := lipgloss.Height(hero)
