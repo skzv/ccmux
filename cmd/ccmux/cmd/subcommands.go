@@ -354,7 +354,7 @@ func runDoctor() error {
 	case ghauth.StateMissing:
 		fmt.Println("  · " + gh.Hint())
 	case ghauth.StateUnknown:
-		fmt.Println("  · gh auth check timed out — couldn't verify (slow network?). Re-run `ccmux doctor` to recheck.")
+		fmt.Println("  · gh auth couldn't be verified")
 		printDoctorDetail(gh.Detail)
 	}
 
@@ -366,7 +366,7 @@ func runDoctor() error {
 	case !ms.BinaryInstalled:
 		fmt.Println("  · moshi-hook not installed — run `ccmux moshi-setup` to add it")
 	case ms.StatusErr != nil:
-		fmt.Println("  · moshi-hook installed but the pairing check failed — couldn't verify")
+		fmt.Println("  · moshi-hook installed but pairing couldn't be verified")
 		printDoctorDetail(ms.StatusErr.Error())
 	case !ms.Paired:
 		fmt.Println("  · moshi-hook installed but not paired — `ccmux moshi-setup` to pair")

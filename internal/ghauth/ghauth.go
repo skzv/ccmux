@@ -12,6 +12,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/skzv/ccmux/internal/keychain"
 )
 
 // authStatusTimeout bounds `gh auth status`. It's deliberately generous:
@@ -82,7 +84,33 @@ func Detect(ctx context.Context) Status {
 	c, cancel := context.WithTimeout(ctx, authStatusTimeout)
 	defer cancel()
 	out, err := exec.CommandContext(c, bin, "auth", "status").CombinedOutput()
-	return classify(out, err, errors.Is(c.Err(), context.DeadlineExceeded))
+	st := classify(out, err, errors.Is(c.Err(), context.DeadlineExceeded))
+	// gh keeps its OAuth token in the macOS keychain. A locked keychain
+	// makes that token unreadable, so gh falls back to a stale
+	// config-file token and reports it invalid — which is "couldn't
+	// verify", not "not signed in". Only probe the keychain when we'd
+	// otherwise be about to nag a (possibly signed-in) user.
+	if st.State == StateNotAuthed {
+		st = relabelForLockedKeychain(st, keychain.Locked(ctx))
+	}
+	return st
+}
+
+// keychainLockedDetail explains a StateUnknown caused by a locked login
+// keychain, naming both fixes: unlock now, or auto-login at boot.
+const keychainLockedDetail = "login keychain is locked — gh's token is stored there and can't be read. " +
+	"This is expected when you SSH into a Mac with no console login. " +
+	"Fix: run `security unlock-keychain`, or enable auto-login so the keychain unlocks at boot."
+
+// relabelForLockedKeychain rewrites a StateNotAuthed result to
+// StateUnknown when a locked login keychain is the real cause: gh can't
+// be trusted to report "not signed in" if it couldn't read the token in
+// the first place. Pure, so the relabel is unit-testable.
+func relabelForLockedKeychain(st Status, keychainLocked bool) Status {
+	if st.State == StateNotAuthed && keychainLocked {
+		return Status{State: StateUnknown, Detail: keychainLockedDetail}
+	}
+	return st
 }
 
 // classify turns the result of a `gh auth status` invocation into a

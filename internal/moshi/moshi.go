@@ -21,6 +21,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/skzv/ccmux/internal/keychain"
 )
 
 // Status is a snapshot of the user's Moshi/moshi-hook configuration on
@@ -72,6 +74,13 @@ const (
 	brewListTimeout  = 8 * time.Second
 )
 
+// ErrKeychainLocked marks a moshi-hook pairing result as untrustworthy:
+// the login keychain is locked, so moshi-hook can't read its pairing
+// secret and reports `unpaired` even on a host that is in fact paired.
+var ErrKeychainLocked = errors.New("login keychain is locked — moshi-hook's pairing secret can't be read. " +
+	"This is expected when you SSH into a Mac with no console login. " +
+	"Fix: run `security unlock-keychain`, or enable auto-login so the keychain unlocks at boot")
+
 // Detect returns the current Moshi/moshi-hook state on this host. Returns
 // a partial Status if any check fails; callers should inspect individual
 // fields rather than treating one missing piece as a fatal error.
@@ -104,7 +113,24 @@ func Detect(ctx context.Context) Status {
 		}
 	}
 
+	// moshi-hook keeps its pairing secret in the macOS keychain, so a
+	// locked keychain makes `moshi-hook status` cleanly report
+	// `unpaired` on a host that is in fact paired. Probe the keychain
+	// only when a not-paired verdict is still in doubt — this keeps the
+	// `security` shell-out off the daemon's hot path for paired hosts.
+	if needsKeychainProbe(s) && keychain.Locked(ctx) {
+		s.StatusErr = ErrKeychainLocked
+	}
+
 	return s
+}
+
+// needsKeychainProbe reports whether a not-paired result is still in
+// doubt — i.e. worth the cost of probing keychain lock state. False for
+// an already-paired host (keeps `security` off the daemon's hot path)
+// and for one whose status command already produced its own error.
+func needsKeychainProbe(s Status) bool {
+	return s.BinaryInstalled && !s.Paired && s.StatusErr == nil
 }
 
 // SuppressBell returns true if ccmuxd should skip injecting a BEL into

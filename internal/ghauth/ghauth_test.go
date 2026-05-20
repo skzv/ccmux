@@ -99,6 +99,36 @@ func TestClassify(t *testing.T) {
 	}
 }
 
+// TestRelabelForLockedKeychain locks in that a "not signed in" verdict
+// is downgraded to StateUnknown when the login keychain is locked. gh
+// stores its token in the keychain, so a locked keychain reads as a bad
+// token — reporting that as StateNotAuthed nagged a signed-in user
+// (typically while SSHed into a headless Mac) to re-run `gh auth login`.
+func TestRelabelForLockedKeychain(t *testing.T) {
+	// Locked keychain + not-authed → upgraded to Unknown, detail points
+	// at the keychain.
+	got := relabelForLockedKeychain(Status{State: StateNotAuthed, Detail: "bad token"}, true)
+	if got.State != StateUnknown {
+		t.Fatalf("locked keychain should relabel NotAuthed → Unknown, got %v", got.State)
+	}
+	if !strings.Contains(got.Detail, "keychain") {
+		t.Errorf("relabeled Detail should mention the keychain, got %q", got.Detail)
+	}
+
+	// Keychain not locked → left exactly as-is.
+	in := Status{State: StateNotAuthed, Detail: "bad token"}
+	if got := relabelForLockedKeychain(in, false); got != in {
+		t.Errorf("unlocked keychain must not change the status, got %+v", got)
+	}
+
+	// A genuine StateAuthed is never touched, even if the keychain is
+	// (somehow) reported locked.
+	authed := Status{State: StateAuthed, User: "skzv"}
+	if got := relabelForLockedKeychain(authed, true); got != authed {
+		t.Errorf("authed status must never be relabeled, got %+v", got)
+	}
+}
+
 // TestAuthStatusTimeoutHasHeadroom guards the timeout from being tightened
 // back to a value that turns a slow network into a false negative.
 // `gh auth status` does a network round-trip; 3s (the old value) had no
