@@ -262,6 +262,19 @@ func installPromptable(ctx context.Context, out io.Writer, deps []depCheck) erro
 	return nil
 }
 
+// printWizardDetail prints a captured diagnostic (a command's stderr, a
+// timeout note) under a wizard status line — indented and muted so it
+// reads as a sub-note rather than a second instruction.
+func printWizardDetail(out io.Writer, detail string) {
+	detail = strings.TrimSpace(detail)
+	if detail == "" {
+		return
+	}
+	for _, ln := range strings.Split(detail, "\n") {
+		fmt.Fprintln(out, stMuted.Render("    ↳ "+ln))
+	}
+}
+
 // stepGitHubAuth: gh is recommended (not required) for `ccmux new` to
 // auto-create a private GitHub repo. We never block the wizard on this
 // — just nudge.
@@ -299,15 +312,16 @@ func stepGitHubAuth(ctx context.Context, out io.Writer) error {
 		return nil
 	case ghauth.StateNotAuthed:
 		fmt.Fprintln(out, stWarn.Render("  gh installed but not signed in"))
+		printWizardDetail(out, s.Detail)
 		fmt.Fprintln(out, "  Run "+stEmphasis.Render("gh auth login")+" in another terminal (opens a browser), then re-run "+stEmphasis.Render("ccmux setup")+" to verify.")
 		return nil
 	case ghauth.StateUnknown:
-		// The check timed out — `gh auth status` validates the token
-		// online, so a slow network stalls it. We don't know the auth
-		// state, so we say so plainly instead of nagging a signed-in
-		// user to run `gh auth login`.
-		fmt.Fprintln(out, stMuted.Render("  couldn't verify gh auth (the check timed out — slow network?)"))
-		fmt.Fprintln(out, "  Re-run "+stEmphasis.Render("ccmux doctor")+" to recheck. "+stMuted.Render("If you're already signed in, nothing to do."))
+		// We couldn't complete the check — a network timeout, or a
+		// locked keychain when running over SSH. Say so plainly and
+		// show why, instead of nagging a signed-in user to re-auth.
+		fmt.Fprintln(out, stWarn.Render("  couldn't verify gh auth"))
+		printWizardDetail(out, s.Detail)
+		fmt.Fprintln(out, "  "+stMuted.Render("If you're already signed in, nothing to do."))
 		return nil
 	}
 	return nil
@@ -339,6 +353,19 @@ func stepMoshi(ctx context.Context, out io.Writer) error {
 	if s.BinaryInstalled && s.Paired && s.HooksInstalled && s.ServiceRunning {
 		fmt.Fprintf(out, "  %s  installed, paired, hooks wired, service running\n", stOK.Render("✓"))
 		return nil
+	}
+	// A blocked pairing check is not "not paired" — surface why and
+	// stop, rather than nagging the user to re-pair something we simply
+	// couldn't read (classically: a locked login keychain over SSH).
+	if s.StatusErr != nil {
+		fmt.Fprintln(out, stWarn.Render("  couldn't verify moshi-hook pairing:"))
+		printWizardDetail(out, s.StatusErr.Error())
+		fmt.Fprintln(out, "  "+stMuted.Render("Verify from a console login, or after `security unlock-keychain`."))
+		return nil
+	}
+	if s.ServiceErr != nil {
+		fmt.Fprintln(out, stWarn.Render("  couldn't verify the moshi-hook service:"))
+		printWizardDetail(out, s.ServiceErr.Error())
 	}
 	fmt.Fprintln(out, stMuted.Render("  Moshi gives you categorized push notifications on iOS/Android when"))
 	fmt.Fprintln(out, stMuted.Render("  Claude needs your input. Get the app at getmoshi.app."))

@@ -1,11 +1,43 @@
 package moshi
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
+
+// TestWithOutput covers the diagnostic-folding helper: a failed
+// moshi-hook / brew command prints the real reason to stderr, and
+// withOutput keeps that reason attached to the error so `ccmux doctor`
+// can show it instead of a bare "exit status 1".
+func TestWithOutput(t *testing.T) {
+	base := errors.New("exit status 1")
+
+	// No usable output → the error is returned unchanged.
+	if got := withOutput(base, ""); got != base {
+		t.Errorf("empty output should return the error unchanged, got %v", got)
+	}
+	if got := withOutput(base, "   \n  "); got != base {
+		t.Errorf("whitespace-only output should return the error unchanged, got %v", got)
+	}
+
+	// Output is folded in — first line only, no multi-line spew.
+	got := withOutput(base, "moshi-hook: socket not found\nrun `brew services start moshi-hook`")
+	msg := got.Error()
+	if !strings.Contains(msg, "socket not found") {
+		t.Errorf("error should carry the first output line, got %q", msg)
+	}
+	if strings.Contains(msg, "brew services start") {
+		t.Errorf("error should NOT carry lines past the first, got %q", msg)
+	}
+	// withOutput must wrap, not replace — errors.Is still sees the base.
+	if !errors.Is(got, base) {
+		t.Error("withOutput must wrap (not replace) the base error")
+	}
+}
 
 // TestStatusReportsPaired pins how `moshi-hook status` output is read.
 // The command is human-formatted, so the parse is substring-based;
@@ -43,6 +75,49 @@ func TestStatusReportsPaired(t *testing.T) {
 // in the setup wizard: `brew services list` shells out to Ruby and is
 // genuinely slow on a cold cache, so a timeout was read as "service not
 // running" and nagged users who were in fact configured.
+// TestNeedsKeychainProbe pins the gate that decides whether a not-paired
+// result is still in doubt — and so worth a `security` keychain probe.
+// moshi-hook stores its pairing secret in the macOS keychain, so a
+// locked keychain makes it report `unpaired` on a host that is actually
+// paired (the classic SSH case). The gate must skip already-paired
+// hosts (keeps `security` off the daemon's hot path) and hosts whose
+// status command already produced its own error.
+func TestNeedsKeychainProbe(t *testing.T) {
+	cases := []struct {
+		name string
+		s    Status
+		want bool
+	}{
+		{
+			"installed, not paired, status ran clean → in doubt, probe",
+			Status{BinaryInstalled: true, Paired: false},
+			true,
+		},
+		{
+			"already paired → nothing to second-guess",
+			Status{BinaryInstalled: true, Paired: true},
+			false,
+		},
+		{
+			"status command already errored → StatusErr owns the diagnostic",
+			Status{BinaryInstalled: true, Paired: false, StatusErr: errors.New("boom")},
+			false,
+		},
+		{
+			"binary not installed → not a pairing question",
+			Status{BinaryInstalled: false},
+			false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := needsKeychainProbe(tc.s); got != tc.want {
+				t.Errorf("needsKeychainProbe(%+v) = %v, want %v", tc.s, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestDetectionTimeoutsHaveHeadroom(t *testing.T) {
 	if brewListTimeout < 5*time.Second {
 		t.Errorf("brewListTimeout=%v is too tight; brew is slow on a cold cache", brewListTimeout)

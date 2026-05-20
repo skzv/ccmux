@@ -236,6 +236,19 @@ func newSetupCmd() *cobra.Command {
 	}
 }
 
+// printDoctorDetail writes a captured diagnostic (a command's stderr, a
+// timeout note, etc.) under a doctor status line — each line indented
+// and arrow-prefixed so a failure shows *why*, not just a bare "·".
+func printDoctorDetail(detail string) {
+	detail = strings.TrimSpace(detail)
+	if detail == "" {
+		return
+	}
+	for _, ln := range strings.Split(detail, "\n") {
+		fmt.Println("      ↳ " + ln)
+	}
+}
+
 // newDoctorCmd: `ccmux doctor` — non-interactive health check.
 func newDoctorCmd() *cobra.Command {
 	return &cobra.Command{
@@ -337,10 +350,12 @@ func runDoctor() error {
 		fmt.Printf("  ✓ gh authenticated as %s\n", who)
 	case ghauth.StateNotAuthed:
 		fmt.Println("  · " + gh.Hint())
+		printDoctorDetail(gh.Detail)
 	case ghauth.StateMissing:
 		fmt.Println("  · " + gh.Hint())
 	case ghauth.StateUnknown:
-		fmt.Println("  · gh auth check timed out — couldn't verify (slow network?). Re-run `ccmux doctor` to recheck.")
+		fmt.Println("  · gh auth couldn't be verified")
+		printDoctorDetail(gh.Detail)
 	}
 
 	// Moshi / moshi-hook block (optional but the recommended mobile path).
@@ -350,10 +365,16 @@ func runDoctor() error {
 	switch {
 	case !ms.BinaryInstalled:
 		fmt.Println("  · moshi-hook not installed — run `ccmux moshi-setup` to add it")
+	case ms.StatusErr != nil:
+		fmt.Println("  · moshi-hook installed but pairing couldn't be verified")
+		printDoctorDetail(ms.StatusErr.Error())
 	case !ms.Paired:
 		fmt.Println("  · moshi-hook installed but not paired — `ccmux moshi-setup` to pair")
 	case !ms.HooksInstalled:
 		fmt.Println("  ⚠ moshi-hook paired but Claude Code hooks not wired — run `moshi-hook install`")
+	case ms.ServiceErr != nil:
+		fmt.Println("  ⚠ moshi-hook paired + wired, but the service check failed — couldn't verify")
+		printDoctorDetail(ms.ServiceErr.Error())
 	case !ms.ServiceRunning:
 		fmt.Println("  ⚠ moshi-hook wired but not running as a service — `brew services start moshi-hook`")
 	default:

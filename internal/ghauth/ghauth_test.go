@@ -2,6 +2,7 @@ package ghauth
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -42,26 +43,40 @@ func TestStatus_Hint(t *testing.T) {
 // would nag an already-signed-in user to re-run `gh auth login`.
 func TestClassify(t *testing.T) {
 	cases := []struct {
-		name      string
-		out       string
-		runErr    error
-		timedOut  bool
-		wantState State
-		wantUser  string
+		name       string
+		out        string
+		runErr     error
+		timedOut   bool
+		wantState  State
+		wantUser   string
+		wantDetail string // substring expected in Detail; "" means Detail must be empty
 	}{
 		{
-			"happy path → authed, user parsed",
-			"github.com\n  ✓ Logged in to github.com account skzv (keyring)",
-			nil, false, StateAuthed, "skzv",
+			name:      "happy path → authed, user parsed, no detail",
+			out:       "github.com\n  ✓ Logged in to github.com account skzv (keyring)",
+			wantState: StateAuthed, wantUser: "skzv", wantDetail: "",
 		},
 		{
-			"non-zero exit, not a timeout → not authed",
-			"You are not logged into any GitHub hosts.",
-			errors.New("exit status 1"), false, StateNotAuthed, "",
+			name:       "non-zero exit → not authed, detail carries gh's message",
+			out:        "You are not logged into any GitHub hosts. Run gh auth login.",
+			runErr:     errors.New("exit status 1"),
+			wantState:  StateNotAuthed,
+			wantDetail: "not logged into any GitHub hosts",
 		},
 		{
-			"command killed by our deadline → unknown, NOT not-authed",
-			"", errors.New("signal: killed"), true, StateUnknown, "",
+			name:       "non-zero exit with no output → detail falls back to the error",
+			out:        "",
+			runErr:     errors.New("exit status 1"),
+			wantState:  StateNotAuthed,
+			wantDetail: "exit status 1",
+		},
+		{
+			name:       "killed by our deadline → unknown (NOT not-authed), detail says timed out",
+			out:        "",
+			runErr:     errors.New("signal: killed"),
+			timedOut:   true,
+			wantState:  StateUnknown,
+			wantDetail: "timed out",
 		},
 	}
 	for _, tc := range cases {
@@ -73,7 +88,44 @@ func TestClassify(t *testing.T) {
 			if got.User != tc.wantUser {
 				t.Errorf("User = %q, want %q", got.User, tc.wantUser)
 			}
+			if tc.wantDetail == "" {
+				if got.Detail != "" {
+					t.Errorf("Detail = %q, want empty", got.Detail)
+				}
+			} else if !strings.Contains(got.Detail, tc.wantDetail) {
+				t.Errorf("Detail = %q, want substring %q", got.Detail, tc.wantDetail)
+			}
 		})
+	}
+}
+
+// TestRelabelForLockedKeychain locks in that a "not signed in" verdict
+// is downgraded to StateUnknown when the login keychain is locked. gh
+// stores its token in the keychain, so a locked keychain reads as a bad
+// token — reporting that as StateNotAuthed nagged a signed-in user
+// (typically while SSHed into a headless Mac) to re-run `gh auth login`.
+func TestRelabelForLockedKeychain(t *testing.T) {
+	// Locked keychain + not-authed → upgraded to Unknown, detail points
+	// at the keychain.
+	got := relabelForLockedKeychain(Status{State: StateNotAuthed, Detail: "bad token"}, true)
+	if got.State != StateUnknown {
+		t.Fatalf("locked keychain should relabel NotAuthed → Unknown, got %v", got.State)
+	}
+	if !strings.Contains(got.Detail, "keychain") {
+		t.Errorf("relabeled Detail should mention the keychain, got %q", got.Detail)
+	}
+
+	// Keychain not locked → left exactly as-is.
+	in := Status{State: StateNotAuthed, Detail: "bad token"}
+	if got := relabelForLockedKeychain(in, false); got != in {
+		t.Errorf("unlocked keychain must not change the status, got %+v", got)
+	}
+
+	// A genuine StateAuthed is never touched, even if the keychain is
+	// (somehow) reported locked.
+	authed := Status{State: StateAuthed, User: "skzv"}
+	if got := relabelForLockedKeychain(authed, true); got != authed {
+		t.Errorf("authed status must never be relabeled, got %+v", got)
 	}
 }
 
