@@ -88,7 +88,7 @@ func (m agentsModel) Update(msg tea.Msg) (agentsModel, tea.Cmd) {
 }
 
 func (m agentsModel) View(width, height int) string {
-	header := m.renderSubtabs()
+	header := m.renderSubtabs(isNarrow(width))
 	// Account for the header row + a blank line between header and body.
 	bodyHeight := height - 2
 	if bodyHeight < 1 {
@@ -110,7 +110,7 @@ func (m agentsModel) View(width, height int) string {
 // gets the emphasis style + a diamond marker so it reads as the
 // current selection even in a screen reader; inactive tabs are
 // muted.
-func (m agentsModel) renderSubtabs() string {
+func (m agentsModel) renderSubtabs(narrow bool) string {
 	parts := []string{}
 	for _, a := range agent.All() {
 		label := a.DisplayName()
@@ -120,8 +120,12 @@ func (m agentsModel) renderSubtabs() string {
 			parts = append(parts, m.st.Muted.Render("  "+label))
 		}
 	}
-	hint := "   " + m.st.Muted.Render("(tab / h·l: switch agent)")
-	return strings.Join(parts, "   ") + hint
+	subtabs := strings.Join(parts, "   ")
+	// The "(tab / h·l: switch agent)" hint is T2 — dropped on narrow.
+	if narrow {
+		return subtabs
+	}
+	return subtabs + "   " + m.st.Muted.Render("(tab / h·l: switch agent)")
 }
 
 // nextAgentSubtab cycles sub-tabs in agent.All() order. Wraps at the

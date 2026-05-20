@@ -264,3 +264,35 @@ func TestApp_SelectionStableUnderRepeatedIdenticalRefreshes(t *testing.T) {
 		}
 	}
 }
+
+// TestSessionsDetail_NarrowKeepsDetach — on a narrow terminal the
+// Sessions detail collapses to a condensed form: identity and the
+// detach reminder (T0/T1) survive, while the path, window count, and
+// full key cheatsheet (T2) are dropped.
+func TestSessionsDetail_NarrowKeepsDetach(t *testing.T) {
+	m := newSessions(styles.Default(), DefaultKeymap())
+	m.SetSessions([]daemon.SessionState{{
+		Name:    "c-auth",
+		Host:    "local",
+		State:   "active",
+		Project: "auth-redesign",
+		Path:    "/Users/skz/Projects/auth-redesign",
+		Windows: 3,
+	}})
+	out := m.View(50, 40, true)
+	assertNoOverflow(t, out, 50)
+	assertPresent(t, out, "c-auth", "auth-redesign", "detach: press")
+	assertAbsent(t, out, "/Users/skz/Projects/auth-redesign", "windows  3", "snapshot")
+}
+
+// TestSessionsDetail_WideShowsAttachKeys — when the terminal is wide
+// the detail pane must render the full Keys cheatsheet (how to attach,
+// the detach instructions), regardless of how wide the sessions
+// component's own column is.
+func TestSessionsDetail_WideShowsAttachKeys(t *testing.T) {
+	m := newSessions(styles.Default(), DefaultKeymap())
+	m.SetSessions([]daemon.SessionState{{Name: "c-auth", Host: "local", State: "active"}})
+	out := m.View(200, 40, false)
+	assertNoOverflow(t, out, 200)
+	assertPresent(t, out, "applies a styled bar", "To return after attaching")
+}

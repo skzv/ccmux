@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/project"
@@ -487,5 +488,58 @@ func TestInfoForHost(t *testing.T) {
 	missing := infoForHost(hostStatus{Version: ""}, localVer, st)
 	if missing == "" {
 		t.Errorf("missing version should still produce some info: %q", missing)
+	}
+}
+
+// TestStatusBar_NarrowKeepsDaemonAndBattery — the safety-critical
+// chrome (battery-danger banner, daemon status) is T0 and survives at
+// phone width.
+func TestStatusBar_NarrowKeepsDaemonAndBattery(t *testing.T) {
+	a := App{styles: styles.Default(), width: 50, daemonOnline: true}
+	a.cfg.Sleep.DangerousKeepAwakeOnBattery = true
+	bar := a.renderStatusBar()
+	assertNoOverflow(t, bar, 50)
+	assertPresent(t, bar, "BATT", "daemon")
+}
+
+// TestStatusBar_NarrowDropsClockAndVersion — the refreshed-at clock
+// and the version chip are T2: dropped on narrow, kept when wide.
+func TestStatusBar_NarrowDropsClockAndVersion(t *testing.T) {
+	a := App{styles: styles.Default(), width: 50, version: "v9.9.9", daemonOnline: true}
+	a.lastRefresh = time.Date(2026, 5, 20, 14, 30, 45, 0, time.Local)
+	narrow := a.renderStatusBar()
+	assertNoOverflow(t, narrow, 50)
+	assertAbsent(t, narrow, "14:30:45", "v9.9.9")
+	a.width = 200
+	assertPresent(t, a.renderStatusBar(), "14:30:45", "v9.9.9")
+}
+
+// TestFooter_NarrowKeepsHelp — the footer collapses to the T0/T1 pair
+// `? help • q quit` on narrow; the T2 action hints are dropped.
+func TestFooter_NarrowKeepsHelp(t *testing.T) {
+	a := App{styles: styles.Default(), width: 50}
+	footer := a.renderFooter()
+	assertNoOverflow(t, footer, 50)
+	assertPresent(t, footer, "? help", "q quit")
+	assertAbsent(t, footer, "n new", "x kill")
+}
+
+// TestFooter_TruncationKeepsHelpOverActionHints — the hint line is
+// ordered T0-first so any truncation eats the action hints from the
+// tail; `? help` always leads and survives even an extreme width.
+func TestFooter_TruncationKeepsHelpOverActionHints(t *testing.T) {
+	wide := App{styles: styles.Default(), width: 200}
+	footer := wide.renderFooter()
+	help := strings.Index(footer, "? help")
+	newHint := strings.Index(footer, "n new")
+	if help < 0 || newHint < 0 {
+		t.Fatalf("wide footer missing expected hints:\n%s", footer)
+	}
+	if help > newHint {
+		t.Errorf("`? help` must precede `n new` so truncation eats action hints first:\n%s", footer)
+	}
+	tiny := App{styles: styles.Default(), width: 10}
+	if f := tiny.renderFooter(); !strings.Contains(f, "? help") {
+		t.Errorf("at width 10 the footer must still show `? help`:\n%s", f)
 	}
 }

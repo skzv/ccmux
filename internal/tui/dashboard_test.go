@@ -4,7 +4,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
+
 	"github.com/skzv/ccmux/internal/agent"
+	"github.com/skzv/ccmux/internal/claudeusage"
 	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/selfupdate"
 	"github.com/skzv/ccmux/internal/tui/styles"
@@ -256,5 +259,62 @@ func TestDashboard_UpdateBanner_HiddenWhenUpToDate(t *testing.T) {
 	m.SetUpdateAvailable(selfupdate.Result{Behind: 0, Branch: "main"})
 	if strings.Contains(m.heroPanel(120), "update available") {
 		t.Error("Behind=0 should not render the banner")
+	}
+}
+
+// TestDashboardPanels_NarrowOmitsT2 — below the breakpoint each panel
+// drops its T2 (reference) content: the hero's welcome subtitle, the
+// session-summary clock, the devices help text, and the usage panel
+// collapses to a single headline line.
+func TestDashboardPanels_NarrowOmitsT2(t *testing.T) {
+	st := styles.Default()
+	m := newDashboard(st, DefaultKeymap())
+	m.narrow = true // homeView sets this from the terminal width
+	m.version = "v1.2.3"
+	m.SetHosts([]hostStatus{{Name: "peer", NeedsInstall: true}})
+	m.SetCcusageBlock(&ccusageBlock{CostUSD: 48.21})
+	m.SetUsage(&claudeusage.Aggregate{UserPrompts: 47})
+
+	if strings.Contains(m.heroPanel(50), "Welcome to ccmux") {
+		t.Error("narrow heroPanel still shows the welcome subtitle (T2)")
+	}
+	// The live clock is the only statsPanel row with a "HH:MM:SS"
+	// colon — its absence proves the clock row was dropped.
+	if strings.Contains(m.statsPanel(50), ":") {
+		t.Error("narrow statsPanel did not drop the live-clock row (T2)")
+	}
+	if dev := m.devicesPanel(50); strings.Contains(dev, "this build:") || strings.Contains(dev, "make bootstrap") {
+		t.Errorf("narrow devicesPanel still shows T2 help:\n%s", dev)
+	}
+	u := m.usagePanel(50)
+	if h := lipgloss.Height(u); h > 5 {
+		t.Errorf("narrow usagePanel should collapse to ~one line, got %d rows:\n%s", h, u)
+	}
+	for _, gone := range []string{"Codex usage", "Antigravity", "cache", "top projects"} {
+		if strings.Contains(u, gone) {
+			t.Errorf("narrow usagePanel still shows T2 %q:\n%s", gone, u)
+		}
+	}
+	if !strings.Contains(u, "47 prompts") {
+		t.Errorf("narrow usagePanel lost the prompt count (T0):\n%s", u)
+	}
+}
+
+// TestDashboardPanels_WideKeepsT2 — at wide widths the same panels
+// keep everything: the welcome subtitle and the full usage breakdown
+// with the per-agent Codex/Antigravity blocks.
+func TestDashboardPanels_WideKeepsT2(t *testing.T) {
+	st := styles.Default()
+	m := newDashboard(st, DefaultKeymap())
+	if !strings.Contains(m.heroPanel(120), "Welcome to ccmux") {
+		t.Error("wide heroPanel dropped the welcome subtitle")
+	}
+	m.SetCcusageBlock(&ccusageBlock{CostUSD: 48.21})
+	m.SetUsage(&claudeusage.Aggregate{UserPrompts: 47})
+	u := m.usagePanel(120)
+	for _, want := range []string{"Codex usage", "Antigravity usage"} {
+		if !strings.Contains(u, want) {
+			t.Errorf("wide usagePanel missing %q:\n%s", want, u)
+		}
 	}
 }

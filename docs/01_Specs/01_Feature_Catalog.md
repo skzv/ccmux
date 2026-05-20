@@ -141,7 +141,7 @@ A "Claude" screen in the TUI that surfaces and edits the settings Claude Code it
 | Loading spinners for any operation > 200ms | P1 | Bubbles `spinner`. |
 | `Ctrl-P` global fuzzy command palette | P2 | All actions reachable from one place. |
 | Mouse support (optional, on by default) | P1 | Bubble Tea has it for free. |
-| Mobile-friendly narrow-terminal layout (auto-switches under 80 cols) | P1 | |
+| Mobile-friendly narrow-terminal layout (auto-switches under 120 cols; curates reference detail away) | P1 | |
 
 ## Observability / Metrics
 

@@ -407,3 +407,35 @@ func TestConversationsModel_View_ArmedRowShowsConfirm(t *testing.T) {
 		t.Errorf("armed row should show a confirm prompt:\n%s", out)
 	}
 }
+
+// TestConversations_UsesSharedBreakpoint — the screen now branches on
+// the shared isNarrow (width < 120), not its old derived detail-pane
+// width. Narrow drops the detail pane and the inline hint; wide keeps
+// both.
+func TestConversations_UsesSharedBreakpoint(t *testing.T) {
+	m := newConversations(styles.Default(), DefaultKeymap())
+	m.SetList(fakeConversations())
+	const hint = "enter resume"
+	if narrow := m.View(119, 40); strings.Contains(narrow, hint) {
+		t.Errorf("width 119 should render the narrow layout (no detail/hint):\n%s", narrow)
+	}
+	if wide := m.View(120, 40); !strings.Contains(wide, hint) {
+		t.Errorf("width 120 should render the wide layout (detail + hint):\n%s", wide)
+	}
+}
+
+// TestConversations_NarrowLayout — at phone width the conversation
+// rows survive (T0) with no overflow, while the inline hint line (T2)
+// is dropped.
+func TestConversations_NarrowLayout(t *testing.T) {
+	m := newConversations(styles.Default(), DefaultKeymap())
+	m.SetList(fakeConversations())
+	out := m.View(50, 40)
+	assertNoOverflow(t, out, 50)
+	if !strings.Contains(out, "[codex]") {
+		t.Errorf("narrow conversations dropped the conversation rows:\n%s", out)
+	}
+	if strings.Contains(out, "enter resume") {
+		t.Errorf("narrow conversations still shows the inline hint (T2):\n%s", out)
+	}
+}

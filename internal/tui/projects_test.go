@@ -285,3 +285,15 @@ func names(ps []project.Project) string {
 	}
 	return strings.Join(out, ",")
 }
+
+// TestProjects_NarrowLayout — at phone width the project list keeps
+// the project names (T0) but drops the inline key-hint (T2), with no
+// line overflowing the terminal.
+func TestProjects_NarrowLayout(t *testing.T) {
+	m := newProjects(styles.Default(), DefaultKeymap())
+	m.SetProjects(sampleProjects())
+	out := m.View(50, 40)
+	assertNoOverflow(t, out, 50)
+	assertPresent(t, out, "ccmux-website", "dotfiles")
+	assertAbsent(t, out, "/: filter", "upgrade cwd")
+}
