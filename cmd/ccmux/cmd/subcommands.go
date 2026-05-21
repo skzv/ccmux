@@ -215,8 +215,13 @@ func newKillCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			name := args[0]
+			// A bare project name/path is resolved to its session name
+			// through the same sanitizer `ccmux attach` and the daemon
+			// use (tmux.SessionNameForPath) — a weaker dots-only rewrite
+			// here would build the wrong target for any project whose
+			// name contains a space, colon, or other special character.
 			if !strings.HasPrefix(name, "c-") {
-				name = "c-" + strings.ReplaceAll(name, ".", "_")
+				name = tmux.SessionNameForPath(name)
 			}
 			return tmux.Kill(context.Background(), name)
 		},

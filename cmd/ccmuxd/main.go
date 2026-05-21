@@ -54,11 +54,7 @@ func run() error {
 		cfg.Daemon.IdleSecondsForNeedsInput = 3
 	}
 
-	srv := &server{
-		cfg:       cfg,
-		seen:      map[string]*tracked{},
-		startedAt: time.Now(),
-	}
+	srv := newServer(cfg)
 	srv.startSleepManager()
 	// Make sure any system-wide override (very_dangerous mode) is
 	// reverted on every clean exit path. SIGKILL won't run defers; for
@@ -191,6 +187,27 @@ type server struct {
 	moshiState   moshi.Status
 	moshiCheckAt time.Time
 	moshiMu      sync.Mutex
+
+	// Poll-loop seams. Defaulted by newServer to the real tmux-backed
+	// implementations; tests override them to drive pollOnce
+	// deterministically without a real pane. capture reads a session's
+	// pane content; bell signals a needs-input transition.
+	capture func(ctx context.Context, name string, lines int) (string, error)
+	bell    func(ctx context.Context, name string) error
+}
+
+// newServer builds a server with its default (real, tmux-backed)
+// poll-loop seams wired. Both the daemon entrypoint and the
+// integration tests construct through here so the seam defaults stay
+// in one place.
+func newServer(cfg config.Config) *server {
+	return &server{
+		cfg:       cfg,
+		seen:      map[string]*tracked{},
+		startedAt: time.Now(),
+		capture:   tmux.CapturePane,
+		bell:      func(ctx context.Context, name string) error { return tmux.SendKeys(ctx, name, "\a") },
+	}
 }
 
 func (s *server) routes(mux *http.ServeMux) {
@@ -227,12 +244,17 @@ func (s *server) handleSessions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) listSessions(w http.ResponseWriter, r *http.Request) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
 
+	// tmux.List shells out to the tmux CLI — slow enough that holding
+	// s.mu across it would stall the poll loop, which needs the same
+	// lock. Snapshot the session list first, then take the lock only
+	// to read the per-session tracked state.
 	tss, _ := tmux.List(ctx)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	out := make([]daemon.SessionState, 0, len(tss))
 	for _, ts := range tss {
 		t, ok := s.seen[ts.Name]
@@ -349,7 +371,11 @@ func (s *server) createBareSession(w http.ResponseWriter, r *http.Request) {
 	}
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
-		name = fmt.Sprintf("c-shell-%d", time.Now().UnixMilli())
+		// AutoSessionName appends an atomic counter so two bare-session
+		// requests in the same millisecond can't be handed the same
+		// name (which the idempotent has-session check below would then
+		// silently collapse into one session).
+		name = tmux.AutoSessionName("c-shell")
 	}
 	// Reject obviously-bad names — the same rule createProject uses,
 	// for the same reason (we'll pass it to tmux as -s).
@@ -654,8 +680,13 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 			}
 			s.seen[ts.Name] = t
 		}
-		pane, err := tmux.CapturePane(ctx, ts.Name, 60)
+		pane, err := s.capture(ctx, ts.Name, 60)
 		if err != nil {
+			// A capture failure (pane closing mid-poll, tmux busy)
+			// must not be swallowed silently — log it. The session's
+			// state is left as last classified rather than blanked,
+			// since the failure is usually transient.
+			log.Printf("ccmuxd: capture-pane %s: %v", ts.Name, err)
 			continue
 		}
 		if pane != t.last {
@@ -677,7 +708,7 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 		// laptop signal even when the user was at the laptop.
 		if newState == agent.StateNeedsInput && t.state != agent.StateNeedsInput {
 			if s.cfg.Notifications.Bell {
-				_ = tmux.SendKeys(ctx, ts.Name, "\a")
+				_ = s.bell(ctx, ts.Name)
 			}
 			t.promptCount++
 		}

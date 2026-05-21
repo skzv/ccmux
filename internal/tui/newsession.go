@@ -353,7 +353,7 @@ func spawnBareSessionCmd(submit newBareSessionSubmitMsg) tea.Cmd {
 		}
 		name := submit.Name
 		if name == "" {
-			name = fmt.Sprintf("c-shell-%d", time.Now().UnixMilli())
+			name = tmux.AutoSessionName("c-shell")
 		}
 		launch := launchCmdForBareSession(submit.Agent)
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

@@ -1,4 +1,4 @@
-.PHONY: build install setup uninstall run test lint clean fmt vet daemon tui check-go bootstrap fuzz fuzz-quick
+.PHONY: build install setup uninstall run test test-e2e lint clean fmt vet daemon tui check-go bootstrap fuzz fuzz-quick
 
 BIN_DIR    := bin
 INSTALL_DIR := $(HOME)/.local/bin
@@ -112,6 +112,13 @@ daemon: check-go
 
 test: check-go
 	go test ./...
+
+# Integration / e2e suite — builds the binaries and runs every
+# //go:build integration test. Requires tmux to be installed.
+# Packages covered: internal/e2e (subprocess CUJs) and cmd/ccmuxd
+# (poll-loop white-box tests).
+test-e2e: check-go build
+	go test -tags integration -timeout 180s ./internal/e2e/ ./cmd/ccmuxd/
 
 # Native Go fuzzer pass — one round-trip over every FuzzXxx target.
 #

@@ -49,7 +49,11 @@ make lint          # gofmt + go vet + staticcheck if installed
 # Testing
 - Unit tests for `internal/tmux` and `internal/project` use table-driven tests against fake `tmux` outputs.
 - TUI screens get golden-file tests via `teatest` (Charm's snapshot tester).
-- Integration tests are tagged `//go:build integration` and run against a real tmux server in CI.
+- **Integration / e2e tests** are tagged `//go:build integration` and live in two places:
+  - `internal/e2e/` — hermetic subprocess tests (real `ccmux` + `ccmuxd` binaries, isolated tmux server via `TMUX_TMPDIR`, temp `$HOME`). Covers every key CUJ: session lifecycle, project lifecycle, notes, conversations, daemon IPC, onboarding.
+  - `cmd/ccmuxd/` — daemon poll-loop white-box tests (direct `pollOnce` calls, injectable `capture` + `bell` seams). Covers classify, bell, capture-failure handling.
+  - Run with: `make test-e2e` (builds binaries then runs both packages). Requires `tmux` on PATH.
+  - CI: the `integration` job in `.github/workflows/ci.yml` runs `make test-e2e` on ubuntu-latest and macos-latest.
 - **Fuzz targets.** Native Go fuzzers cover the parsers + heuristic surfaces (`FuzzParseID`, `FuzzReadAgent`, `FuzzClassify`, `FuzzOSC52RoundTrip`, `FuzzParsePmsetBatt`, `FuzzSessionNameForPath`, `FuzzRenderSessionLine_DegenerateInputs`). CI runs each for **10s** as a smoke pass; that is just enough to catch a freshly-broken invariant on the PR that introduced it. Run deeper sweeps locally when you touch one of those surfaces:
   - `make fuzz` — 5min/target (≈35min total), the default for "I want real coverage"
   - `make fuzz-quick` — 10s/target (≈70s total), mirrors CI exactly

@@ -9,9 +9,24 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
+
+// autoSeq backs AutoSessionName's collision-free suffix.
+var autoSeq atomic.Int64
+
+// AutoSessionName mints a process-unique tmux session name for a
+// session the user did not name (e.g. the "new bare session" form
+// left the name blank). A wall-clock timestamp alone can repeat —
+// two calls within the same millisecond, or even the same nanosecond
+// on a coarse clock — so an atomic counter is appended to guarantee
+// every call within the process returns a distinct name. `prefix` is
+// the leading segment, conventionally "c-shell".
+func AutoSessionName(prefix string) string {
+	return fmt.Sprintf("%s-%d-%d", prefix, time.Now().UnixNano(), autoSeq.Add(1))
+}
 
 // command builds an *exec.Cmd for a tmux invocation with a UTF-8 locale
 // forced. Without this, when ccmuxd runs under launchd/systemd no LANG or
