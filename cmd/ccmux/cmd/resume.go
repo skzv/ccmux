@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -136,9 +137,13 @@ func resumeNow(target conversations.Conversation) error {
 	}
 	// Hand off to tmux attach via exec — replaces the current process
 	// so when the user detaches they return to whatever shell launched
-	// `ccmux resume`, not to ccmux itself. Same pattern as
-	// `ccmux attach`.
-	return tmux.Attach(sessionName, attachDetachOthers())
+	// `ccmux resume`, not to ccmux itself. attachWithChrome applies
+	// ccmux chrome first, same as `ccmux attach` and `ccmux new`.
+	label := ""
+	if target.Project != "" {
+		label = filepath.Base(target.Project)
+	}
+	return attachWithChrome(sessionName, label)
 }
 
 // joinArgs glues an argv slice with spaces. Local helper to avoid the

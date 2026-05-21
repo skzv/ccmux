@@ -67,11 +67,12 @@ func buildBinaries() error {
 	return nil
 }
 
-// installStubAgents writes stub `claude` and `codex` executables into a
-// temp dir. ccmux launches the configured agent by bare name ("claude"
-// / "codex"), which tmux resolves through PATH; on a CI runner no such
-// binary exists, so the agent command exits instantly and tmux tears
-// the session down before a test can observe it. The stub stands in for
+// installStubAgents writes stub `claude`, `codex`, and `agy`
+// (antigravity / gemini) executables into a temp dir. ccmux launches
+// the configured agent by bare name ("claude" / "codex" / "agy"), which
+// tmux resolves through PATH; on a CI runner no such binary exists, so
+// the agent command exits instantly and tmux tears the session down
+// before a test can observe it. The stub stands in for
 // a real agent: it echoes `ccmux-stub-agent=<name>` (so a test can
 // assert which agent a session launched) then sleeps, keeping the pane
 // — and therefore the session — alive exactly like an agent waiting for
@@ -91,7 +92,7 @@ func installStubAgents() error {
 echo "ccmux-stub-agent=$(basename "$0")"
 exec sleep 86400
 `
-	for _, name := range []string{"claude", "codex"} {
+	for _, name := range []string{"claude", "codex", "agy"} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(stub), 0o755); err != nil {
 			return err
 		}
