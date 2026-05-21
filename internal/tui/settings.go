@@ -62,6 +62,13 @@ type editableField struct {
 	// in the cursor but aren't editable. Useful for showing computed
 	// state alongside the editable knobs.
 	readOnly bool
+
+	// options, when non-empty, turns the row into a cycle-picker:
+	// pressing Enter advances to the next value (wrapping at the end)
+	// and saves immediately, instead of opening the inline textinput.
+	// For a fixed enum like the agent list, cycling beats making the
+	// user type the exact string.
+	options []string
 }
 
 func editableFields() []editableField {
@@ -140,9 +147,10 @@ func editableFields() []editableField {
 			},
 		},
 		{
-			label: "agents.default",
-			hint:  "Default agent for new projects and bare sessions. One of: claude, codex, antigravity, shell.",
-			get:   func(c *config.Config) string { return c.Agents.Default },
+			label:   "agents.default",
+			hint:    "Default agent for new projects and bare sessions. Enter cycles: claude → codex → antigravity → shell.",
+			options: []string{"claude", "codex", "antigravity", "shell"},
+			get:     func(c *config.Config) string { return c.Agents.Default },
 			set: func(c *config.Config, raw string) error {
 				raw = strings.TrimSpace(strings.ToLower(raw))
 				// Empty = back to claude (the multi-agent default).
@@ -279,12 +287,19 @@ func (m settingsModel) Update(msg tea.Msg) (settingsModel, tea.Cmd) {
 			}
 			m.errMsg = ""
 		case "enter":
-			if m.cursor >= 0 && m.cursor < len(fields) && !fields[m.cursor].readOnly {
-				m.startEdit(fields[m.cursor])
-				return m, textinput.Blink
-			}
-			if m.cursor < len(fields) && fields[m.cursor].readOnly {
-				m.errMsg = "field is read-only: " + fields[m.cursor].hint
+			if m.cursor >= 0 && m.cursor < len(fields) {
+				f := fields[m.cursor]
+				switch {
+				case f.readOnly:
+					m.errMsg = "field is read-only: " + f.hint
+				case len(f.options) > 0:
+					// Cycle-picker row (e.g. agents.default): advance to
+					// the next value and persist, no inline editor.
+					return m.cycleField(f)
+				default:
+					m.startEdit(f)
+					return m, textinput.Blink
+				}
 			}
 		case "e":
 			// Open ~/.config/ccmux/config.toml in $EDITOR for the
@@ -329,6 +344,36 @@ func (m settingsModel) commit() (settingsModel, tea.Cmd) {
 	m.editing = false
 	m.errMsg = ""
 	m.saveMsg = "saved ✓"
+	m.savedAt = time.Now()
+	return m, nil
+}
+
+// cycleField advances a cycle-picker row (one with options) to its next
+// value, wrapping at the end, and persists immediately. This is the
+// Enter behavior for fixed-enum fields like agents.default, where
+// tabbing through the choices beats making the user type the exact
+// string. The current value is matched against options via get(); an
+// unrecognized current value (e.g. a hand-edited config) starts the
+// cycle from the first option.
+func (m settingsModel) cycleField(f editableField) (settingsModel, tea.Cmd) {
+	cur := f.get(&m.cfg)
+	next := f.options[0]
+	for i, o := range f.options {
+		if o == cur {
+			next = f.options[(i+1)%len(f.options)]
+			break
+		}
+	}
+	if err := f.set(&m.cfg, next); err != nil {
+		m.errMsg = err.Error()
+		return m, nil
+	}
+	if err := config.Save(m.cfg); err != nil {
+		m.errMsg = "save: " + err.Error()
+		return m, nil
+	}
+	m.errMsg = ""
+	m.saveMsg = "saved ✓  " + f.label + " → " + next
 	m.savedAt = time.Now()
 	return m, nil
 }
