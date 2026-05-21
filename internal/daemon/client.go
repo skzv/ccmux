@@ -84,18 +84,6 @@ func (c *Client) Health(ctx context.Context) (HealthInfo, error) {
 	return out, nil
 }
 
-// ToggleKeepAwake flips the per-session keep-awake pin.
-func (c *Client) ToggleKeepAwake(ctx context.Context, session string) error {
-	return c.post(ctx, "/v1/sessions/"+session+"/keep-awake", nil, nil)
-}
-
-// Kill terminates a session via the daemon. (For local-only operations
-// the TUI can also call internal/tmux directly; going through the daemon
-// lets the daemon clean up its own state in one path.)
-func (c *Client) Kill(ctx context.Context, session string) error {
-	return c.post(ctx, "/v1/sessions/"+session+"/kill", nil, nil)
-}
-
 // Projects returns the list of projects discovered by this daemon
 // under its configured projects root. Each entry is tagged with the
 // daemon's hostname so callers merging across hosts can attribute

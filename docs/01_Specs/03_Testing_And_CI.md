@@ -410,3 +410,66 @@ Ordered by ROI / dependency:
   in "Crawl targets" above.
 - Native fuzzers exist for the four parsers listed under "Plan part 2".
 - This doc updated with deferred items as they ship.
+
+---
+
+## CUJ inventory
+
+The canonical list of key Critical User Journeys. Each has an automated
+end-to-end test (build tag `integration`, see `internal/e2e`). The
+test column names the test that covers it; `make test-e2e` runs them
+all against a real, isolated tmux server.
+
+### Session lifecycle
+
+| CUJ | Entry point | End state |
+|---|---|---|
+| Create a session | `ccmux shell` / TUI new-session form / `POST /v1/sessions/bare` | a detached tmux session exists running the chosen agent or `$SHELL` |
+| List sessions | `ccmux list [--json]` / TUI Home screen | every live tmux session is reported with name, host, state, path |
+| Rename a session | `ccmux rename <old> <new>` / TUI `r` | the tmux session is renamed; the old name is gone |
+| Kill a session | `ccmux kill <project\|session>` / TUI `x`+confirm | the tmux session no longer exists |
+| Attach to a session | `ccmux attach [project]` / TUI Enter | the attach argv targets the correct session (`tmux attach`/`switch-client`, or `mosh`/`ssh` for remote) |
+
+### Project lifecycle
+
+| CUJ | Entry point | End state |
+|---|---|---|
+| Discover projects | `GET /v1/projects` / TUI Projects screen | every dir under the projects root with `CLAUDE.md` or `.git` is listed |
+| Scaffold a new project | `ccmux new <name>` / TUI new-project wizard / `POST /v1/projects` | the project dir exists with the docs structure + a running session |
+| Upgrade an existing project | `ccmux upgrade` / TUI `u` | ccmux scaffolding is injected non-destructively and idempotently |
+| Attach-or-create for a project | TUI Projects Enter | rejoin the running session or create a distinctly-named new one |
+
+### Notes
+
+| CUJ | Entry point | End state |
+|---|---|---|
+| Browse + preview notes | TUI Notes screen | the `docs/` tree is listed by section; the selected note renders |
+| Create a templated note | TUI Notes `n` (Agent Log / Spec / ADR) | a markdown file is created with templated frontmatter at the right path |
+| Search notes | TUI Notes `/` | matching notes are returned; non-matching excluded |
+
+### Conversations
+
+| CUJ | Entry point | End state |
+|---|---|---|
+| List conversations | `ccmux list-conversations` / TUI Conversations screen | past transcripts are listed sorted by recency with project + agent |
+| Resume a conversation | `ccmux resume [id]` / TUI Conversations Enter | a tmux session is created for the conversation's project + agent |
+| Delete a conversation | `ccmux delete-conversation <id>` / TUI Conversations `x` | the transcript file is removed |
+
+### Daemon
+
+| CUJ | Entry point | End state |
+|---|---|---|
+| Poll + classify | `ccmuxd` poll loop | each tmux session is reported with a classified state |
+| Bell on needs-input | `ccmuxd` poll loop | a BEL byte is injected once on a `needs_input` transition (when bell enabled) |
+| Unix-socket IPC | `daemon.LocalClient` | sessions/projects/health match observed tmux state |
+| Tailnet HTTP API | `daemon.RemoteClient` | HTTP responses are schema-identical to the Unix-socket responses |
+| Sleep lock | `ccmuxd` + `sleeplock.Manager` | the inhibit lock is requested while sessions are active, released when idle |
+
+### Config & onboarding
+
+| CUJ | Entry point | End state |
+|---|---|---|
+| Switch default agent | TUI Agents screen / config | the choice persists; new sessions launch that agent |
+| Reload config | TUI config-reload | edited values take effect; an invalid edit surfaces an error |
+| Health check | `ccmux doctor` | every dependency is reported; exit code = problem count |
+| Host management | `ccmux host add/list/remove` | hosts round-trip through `~/.config/ccmux/config.toml` |

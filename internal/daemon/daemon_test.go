@@ -181,14 +181,16 @@ func TestClient_PostJSONAndDecodeResponse(t *testing.T) {
 }
 
 func TestClient_PostNoBodyStillSucceeds(t *testing.T) {
+	// Regression: a typed-nil io.Reader trips net/http's non-nil body
+	// path and nil-dereferences on Read. c.post(nil, nil) must send a
+	// bare POST with no body — not a typed-nil Reader.
 	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/sessions/c-foo/keep-awake", func(w http.ResponseWriter, r *http.Request) {
-		// No request body expected.
-		w.WriteHeader(204)
+	mux.HandleFunc("/v1/noop", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
 	})
 	c := spawnFakeDaemon(t, mux)
 
-	if err := c.ToggleKeepAwake(context.Background(), "c-foo"); err != nil {
+	if err := c.post(context.Background(), "/v1/noop", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 }

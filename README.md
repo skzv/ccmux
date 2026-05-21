@@ -448,6 +448,7 @@ Plus [Cobra](https://cobra.dev/) for the CLI surface and [SQLite](https://gitlab
 Issues and PRs welcome. See `CONTRIBUTING.md` (TBD). The short version:
 
 - Code style: `gofmt`, `go vet`, `staticcheck`
+- Tests: `make test` (unit) and `make test-e2e` (integration — requires `tmux`)
 - Bug reports: include `ccmux doctor` output
 - Feature requests: read `docs/01_Specs/01_Feature_Catalog.md` first
 

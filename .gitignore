@@ -28,10 +28,11 @@ Thumbs.db
 *.sqlite
 *.sqlite3
 
-# Obsidian (per project policy)
-.obsidian/workspace.json
-.obsidian/workspace-mobile.json
-.obsidian/graph.json
+# Agent / editor tooling state — local, never committed.
+.agent/
+.claude/
+.codex/
+.obsidian/
 
 # Maintainer scratchpad — never published.
 MAINTAINER_NOTES.md

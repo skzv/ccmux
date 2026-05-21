@@ -183,11 +183,8 @@ jobs:
             brew install tmux
           fi
 
-      - name: Boot a tmux server for the integration tests
-        # `tmux start-server` is idempotent; this just ensures a daemon
-        # exists before the integration tests run. Some of the tests
-        # `tmux has-session` / `tmux list-sessions` which need a server.
-        run: tmux start-server
-
-      - name: go test -tags=integration
-        run: go test -race -tags=integration ./...
+      - name: make test-e2e
+        # Each test gets its own isolated tmux server via TMUX_TMPDIR —
+        # no shared server is needed. Explicit package list avoids
+        # compile-time noise from non-integration packages.
+        run: make test-e2e
