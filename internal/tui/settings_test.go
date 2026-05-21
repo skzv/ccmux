@@ -444,3 +444,46 @@ func TestSettings_NarrowLayout(t *testing.T) {
 	assertPresent(t, out, "Settings", "Editable")
 	assertAbsent(t, out, "v9.9.9", "config file", "↑/↓ to move")
 }
+
+// TestSettings_AgentsDefault_CyclePicker — the agents.default row is a
+// cycle-picker: pressing Enter advances claude → codex → antigravity →
+// shell (wrapping) and persists each step, instead of opening the
+// free-text inline editor. This is the surface the user flips to make
+// codex (or any agent) their default.
+func TestSettings_AgentsDefault_CyclePicker(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	m := newSettings(styles.Default(), DefaultKeymap(), config.Defaults(), "test")
+
+	// The field must be registered as a cycle-picker (non-empty options).
+	f := byLabel(editableFields(), "agents.default")
+	if f == nil || len(f.options) == 0 {
+		t.Fatal("agents.default should be a cycle-picker with non-empty options")
+	}
+
+	// Park the cursor on agents.default.
+	for i, fld := range editableFields() {
+		if fld.label == "agents.default" {
+			m.cursor = i
+		}
+	}
+
+	// Default is claude; Enter cycles forward and wraps back to claude.
+	for _, want := range []string{"codex", "antigravity", "shell", "claude"} {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		if m.editing {
+			t.Fatal("cycle-picker Enter must not open the inline editor")
+		}
+		if m.cfg.Agents.Default != want {
+			t.Fatalf("after cycle: Agents.Default = %q, want %q", m.cfg.Agents.Default, want)
+		}
+	}
+
+	// The final cycle persisted to disk.
+	reloaded, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.Agents.Default != "claude" {
+		t.Errorf("cycle did not persist: config.toml has Agents.Default = %q", reloaded.Agents.Default)
+	}
+}
