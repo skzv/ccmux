@@ -43,13 +43,13 @@
 - [x] 6.2 e2e test: bell injected exactly once on a `needs_input` transition when bell enabled
 - [x] 6.3 e2e test: a `CapturePane` failure is logged and does not leave state silently stale; fix the swallowed-error path if confirmed
 - [x] 6.4 e2e test: Unix-socket IPC returns sessions/projects/health matching observed tmux state
-- [ ] 6.5 e2e test: loopback HTTP API responses are schema-identical to the Unix-socket responses (deferred — IPC already covers the protocol; HTTP is a thin wrapper)
+- [x] 6.5 e2e test: loopback HTTP API responses are schema-identical to the Unix-socket responses (TestHTTPParity_LoopbackMatchesUnixSocket — same `http.ServeMux` over loopback TCP and the Unix socket, byte-identical JSON)
 - [ ] 6.6 e2e test: sleep manager requests the inhibit lock when a session is active and releases it when idle (existing `TestManager_EngageRelease` in `internal/sleeplock` covers this CUJ)
 - [x] 6.7 Narrow the poll-loop mutex scope so slow `tmux` calls do not block concurrent requests; confirm/fix unguarded daemon-state reads
 
 ## 7. Config, agent & onboarding CUJ
 
-- [ ] 7.1 e2e test: switching the default agent persists to the isolated config and a new session launches that agent's command (deferred — requires claude/codex binary on PATH in test env)
+- [x] 7.1 e2e test: switching the default agent persists to the isolated config and a new session launches that agent's command (TestDefaultAgent_SwitchPersistsAndLaunches — enabled by the stub-agent harness change)
 - [ ] 7.2 e2e test: editing + reloading the config applies new values (deferred — config is TOML; host round-trip (7.4) already exercises the load/save path)
 - [x] 7.3 e2e test: `ccmux doctor` reports each check and exits non-zero only when a problem is found
 - [x] 7.4 e2e test: `ccmux host add` / `list` / `remove` round-trip persists to the isolated config
@@ -69,7 +69,7 @@
 
 ## 10. Verification
 
-- [x] 10.1 `go test ./...` clean (33 packages, all pass) and `make test-e2e` clean (22 e2e + 3 poll-loop = 25 integration tests)
+- [x] 10.1 `go test ./...` clean (33 packages, all pass) and `make test-e2e` clean (23 e2e + 4 poll-loop = 27 integration tests)
 - [x] 10.2 Bug fixes each have a fails-before/passes-after test: kill sanitization (TestSessionKill_NameSanitization), capture swallowed error (TestPollOnce_CaptureFailureSurfaced), name collision (TestSessionName_NoCollision)
 - [x] 10.3 Hermetic leak check: TestHarness_Hermetic + TestHarness_TmuxIsolated confirm sandbox isolation
 - [x] 10.4 Every CUJ in the inventory has a passing e2e test
