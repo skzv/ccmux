@@ -28,6 +28,10 @@ var (
 	builtCcmuxd string
 )
 
+// stubBinDir holds fake `claude`/`codex` agent executables — see
+// installStubAgents. Populated once by TestMain.
+var stubBinDir string
+
 // repoRoot returns the absolute path of the repository root, derived
 // from this source file's location (internal/e2e/harness_test.go).
 func repoRoot() string {
@@ -58,6 +62,32 @@ func buildBinaries() error {
 		cmd.Dir = root
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("build %s: %v\n%s", b.pkg, err, out)
+		}
+	}
+	return nil
+}
+
+// installStubAgents writes stub `claude` and `codex` executables into a
+// temp dir. ccmux launches the configured agent by bare name ("claude"
+// / "codex"), which tmux resolves through PATH; on a CI runner no such
+// binary exists, so the agent command exits instantly and tmux tears
+// the session down before a test can observe it. The stub stands in for
+// a real agent: it sleeps, keeping the pane — and therefore the session
+// — alive exactly like an agent waiting for input. newEnv prepends
+// stubBinDir to PATH so every spawned session resolves these, making
+// the suite hermetic instead of silently depending on the dev's PATH.
+func installStubAgents() error {
+	dir, err := os.MkdirTemp("", "ccmux-e2e-agents")
+	if err != nil {
+		return err
+	}
+	stubBinDir = dir
+	const stub = "#!/bin/sh\n" +
+		"# ccmux e2e stub agent: stay alive like an agent awaiting input.\n" +
+		"exec sleep 86400\n"
+	for _, name := range []string{"claude", "codex"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(stub), 0o755); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -127,6 +157,10 @@ func newEnv(t *testing.T) *Env {
 	// sessions or with other tests.
 	t.Setenv("HOME", home)
 	t.Setenv("TMUX_TMPDIR", home)
+	// Resolve `claude`/`codex` to the sleeping stub (installStubAgents).
+	// Prepend so the stub wins over any real agent on the dev's PATH;
+	// the rest of PATH (tmux, sh, the go toolchain) still resolves.
+	t.Setenv("PATH", stubBinDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	root := filepath.Join(home, "Projects")
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatalf("mkdir projects root: %v", err)

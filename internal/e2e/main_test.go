@@ -26,9 +26,16 @@ func TestMain(m *testing.M) {
 		fmt.Fprintln(os.Stderr, "e2e: "+err.Error())
 		os.Exit(1)
 	}
+	if err := installStubAgents(); err != nil {
+		fmt.Fprintln(os.Stderr, "e2e: install stub agents: "+err.Error())
+		os.Exit(1)
+	}
 	code := m.Run()
 	if binDir != "" {
 		_ = os.RemoveAll(binDir)
+	}
+	if stubBinDir != "" {
+		_ = os.RemoveAll(stubBinDir)
 	}
 	os.Exit(code)
 }
