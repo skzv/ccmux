@@ -61,10 +61,9 @@ func TestLaunchCmdForProject_EmptyAgentDefaultsToClaude(t *testing.T) {
 }
 
 // TestLaunchCmdForProjectPath_HonorsSidecar — the path-flavoured
-// helper reads `.ccmux/agent` and uses that. Without this, the
-// projectSessionPickMsg "Start new" path would hardcode claude
-// regardless of the sidecar (the exact regression we just fixed in
-// app.go).
+// helper reads `.ccmux/agent` and uses that. Without this, the project
+// menu's "Start a new session" path would hardcode claude regardless
+// of the sidecar.
 func TestLaunchCmdForProjectPath_HonorsSidecar(t *testing.T) {
 	for _, a := range agent.All() {
 		t.Run(string(a.ID()), func(t *testing.T) {

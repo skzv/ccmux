@@ -149,7 +149,7 @@ func (a App) modalCapturingText() bool {
 	if a.tour.Active() || a.helpOpen {
 		return true
 	}
-	if a.projectsM.form != nil || a.projectsM.picker != nil {
+	if a.projectsM.form != nil || a.projectsM.menu != nil {
 		return true
 	}
 	if a.sessionsM.form != nil || a.sessionsM.renameForm != nil {
@@ -434,41 +434,49 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.setToast(msg.Kind, msg.Text, time.Until(msg.Until))
 		return a, nil
 
-	case projectSessionExistsMsg:
-		// A project's session was found already running. Open the picker
-		// so the user can choose between rejoining and spawning a new session.
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		suggestedName := uniqueSessionName(ctx, msg.Existing)
-		cancel()
-		p := newProjectSessionPicker(a.styles, msg.Existing, msg.Project, msg.ProjectPath, suggestedName)
-		a.projectsM.picker = &p
+	case projectMenuMsg:
+		// A project was opened — show its running sessions and past
+		// conversations so the user can attach, resume, or start new.
+		menu := newProjectMenu(a.styles, msg.Project, msg.ProjectPath, msg.Sessions, msg.Conversations)
+		a.projectsM.menu = &menu
 		return a, nil
 
-	case projectSessionPickMsg:
-		a.projectsM.picker = nil
-		if msg.Action == "rejoin" {
-			return a, a.localAttachCmd(msg.Existing, msg.Project)
-		}
-		// "new": create the named session for the picked project and
-		// attach. The launch command comes from the project's
-		// .ccmux/agent sidecar — an Antigravity-tagged project here
-		// used to launch claude regardless, because this branch
-		// hardcoded the Claude command string.
-		name := msg.NewName
-		projectPath := msg.ProjectPath
-		projectLabel := msg.Project
-		launch := launchCmdForProjectPath(projectPath)
-		return a, func() tea.Msg {
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			if err := tmux.New(ctx, name, projectPath, launch); err != nil {
-				return toastMsg{Text: "start session: " + err.Error(), Kind: toastError, Until: time.Now().Add(5 * time.Second)}
+	case projectMenuPickMsg:
+		a.projectsM.menu = nil
+		switch msg.Entry.kind {
+		case menuSession:
+			// Attach to the chosen running session.
+			return a, a.localAttachCmd(msg.Entry.session.Name, msg.Project)
+		case menuConversation:
+			// Resume the chosen past conversation in a fresh session.
+			return a, a.resumeConversationCmd(msg.Entry.conv)
+		case menuNewSession:
+			// Start a new session for the project. The launch command
+			// comes from the project's .ccmux/agent sidecar so an
+			// Antigravity/Codex project doesn't silently boot claude.
+			projectPath := msg.ProjectPath
+			projectLabel := msg.Project
+			launch := launchCmdForProjectPath(projectPath)
+			return a, func() tea.Msg {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				// Name it c-<project>, uniquified when that is already
+				// running — the menu's "new" is explicitly a second
+				// session alongside any existing one.
+				name := tmux.SessionNameForPath(projectPath)
+				if has, _ := tmux.Has(ctx, name); has {
+					name = uniqueSessionName(ctx, name)
+				}
+				if err := tmux.New(ctx, name, projectPath, launch); err != nil {
+					return toastMsg{Text: "start session: " + err.Error(), Kind: toastError, Until: time.Now().Add(5 * time.Second)}
+				}
+				return projectSessionReadyMsg{Session: name, Project: projectLabel}
 			}
-			return projectSessionReadyMsg{Session: name, Project: projectLabel}
 		}
+		return a, nil
 
-	case projectSessionPickCancelMsg:
-		a.projectsM.picker = nil
+	case projectMenuCancelMsg:
+		a.projectsM.menu = nil
 		return a, nil
 
 	case renameSessionSubmitMsg:
@@ -637,7 +645,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Esc dismisses the current toast (when no modal is open). The
 		// projects-screen modal handles esc itself before this code runs.
 		if msg.String() == "esc" && a.toast != "" && time.Now().Before(a.toastUntil) &&
-			!(a.screen == ScreenProjects && (a.projectsM.form != nil || a.projectsM.picker != nil)) {
+			!(a.screen == ScreenProjects && (a.projectsM.form != nil || a.projectsM.menu != nil)) {
 			a.toast = ""
 			return a, nil
 		}
@@ -658,7 +666,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// If projects screen has its modal open (new-project form or session
 		// picker), route through it. We intentionally still allow global Quit.
-		if a.screen == ScreenProjects && (a.projectsM.form != nil || a.projectsM.picker != nil) {
+		if a.screen == ScreenProjects && (a.projectsM.form != nil || a.projectsM.menu != nil) {
 			if msg.String() == "ctrl+c" {
 				return a, tea.Quit
 			}
@@ -1588,12 +1596,13 @@ func (a App) attachOrCreateForSelectedProject() tea.Cmd {
 	return a.attachOrCreateRemote(p, host)
 }
 
-// attachOrCreateLocal handles Enter on a local project. If the project's
-// canonical session already exists, it emits projectSessionExistsMsg so the
-// App can open the rejoin/new picker. If the session is new, it creates and
-// attaches immediately — same as before.
+// attachOrCreateLocal handles Enter on a local project. It gathers the
+// project's running tmux sessions and past conversations and emits a
+// projectMenuMsg so the App opens the project menu modal — the user
+// then attaches, resumes, or starts a new session. When the project has
+// neither (a brand-new project, never run) it skips the modal and
+// creates+attaches in one step, since a one-item menu is pointless.
 func (a App) attachOrCreateLocal(p project.Project) tea.Cmd {
-	session := p.SessionName()
 	label := p.Name
 	path := p.Path
 	// Resolve the launch command from the project's sidecar (.ccmux/
@@ -1603,20 +1612,49 @@ func (a App) attachOrCreateLocal(p project.Project) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
-		has, _ := tmux.Has(ctx, session)
-		if has {
-			// Session exists — let the user decide: rejoin or start a new one.
-			return projectSessionExistsMsg{
-				Existing:    session,
-				Project:     label,
-				ProjectPath: path,
+
+		var sessions []tmux.Session
+		if all, err := tmux.List(ctx); err == nil {
+			for _, s := range all {
+				if s.Path == path {
+					sessions = append(sessions, s)
+				}
 			}
 		}
-		if err := tmux.New(ctx, session, path, launch); err != nil {
-			return toastMsg{Text: "start session: " + err.Error(), Kind: toastError, Until: time.Now().Add(5 * time.Second)}
+		convs := conversationsForProject(path)
+
+		if len(sessions) == 0 && len(convs) == 0 {
+			// Nothing to choose between — create and attach directly.
+			session := p.SessionName()
+			if err := tmux.New(ctx, session, path, launch); err != nil {
+				return toastMsg{Text: "start session: " + err.Error(), Kind: toastError, Until: time.Now().Add(5 * time.Second)}
+			}
+			return projectSessionReadyMsg{Session: session, Project: label}
 		}
-		return projectSessionReadyMsg{Session: session, Project: label}
+		return projectMenuMsg{
+			Project:       label,
+			ProjectPath:   path,
+			Sessions:      sessions,
+			Conversations: convs,
+		}
 	}
+}
+
+// conversationsForProject returns past conversations whose recorded
+// working directory matches projectPath, newest first (conversations.All
+// already sorts by recency). Drives the project menu's "resume" rows.
+func conversationsForProject(projectPath string) []conversations.Conversation {
+	all, err := conversations.All(conversations.Options{})
+	if err != nil {
+		return nil
+	}
+	var out []conversations.Conversation
+	for _, c := range all {
+		if c.Project == projectPath {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // attachOrCreateRemote starts (or attaches to) a Claude session on a
@@ -1706,22 +1744,27 @@ func (a App) resumeSelectedConversation() tea.Cmd {
 	if sel == nil {
 		return nil
 	}
-	c := *sel
+	return a.resumeConversationCmd(*sel)
+}
+
+// resumeConversationCmd spawns a fresh tmux session that resumes
+// conversation `c` and emits a conversationResumedMsg. Shared by the
+// Conversations screen's Enter handler and the project menu's "resume"
+// rows. See resumeSelectedConversation's doc for the naming/cwd
+// rationale.
+func (a App) resumeConversationCmd(c conversations.Conversation) tea.Cmd {
 	return func() tea.Msg {
 		argv := c.ResumeArgs()
 		if len(argv) == 0 {
 			return conversationResumedMsg{Err: fmt.Errorf("don't know how to resume agent %q", c.Agent)}
 		}
 		sessionName := "c-resume-" + shortConversationID(c.ID)
-		dir := c.Project
-		// Build the shell command tmux runs in the new pane. Quote the
-		// ID — UUIDs are safe but the principle holds for future agents
-		// that might accept names. zsh fallback keeps the pane alive
-		// if the agent binary is missing.
+		// Build the shell command tmux runs in the new pane. zsh
+		// fallback keeps the pane alive if the agent binary is missing.
 		cmdline := strings.Join(argv, " ") + " || zsh"
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := tmux.New(ctx, sessionName, dir, cmdline); err != nil {
+		if err := tmux.New(ctx, sessionName, c.Project, cmdline); err != nil {
 			return conversationResumedMsg{Err: fmt.Errorf("tmux new-session: %w", err)}
 		}
 		return conversationResumedMsg{

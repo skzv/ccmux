@@ -116,3 +116,30 @@ func TestProjectAttach_NoDuplicate(t *testing.T) {
 		t.Errorf("attach-or-create spawned extra sessions: %v (want exactly [c-dupcheck])", names)
 	}
 }
+
+// TestProjectCmd_ListsSessionsAndConversations covers `ccmux project
+// <name>` — the CLI mirror of the TUI project menu. It must report the
+// project's running tmux sessions and its past conversations for that
+// folder.
+func TestProjectCmd_ListsSessionsAndConversations(t *testing.T) {
+	e := newEnv(t)
+	proj := filepath.Join(e.Root, "projcmd")
+	writeFile(t, filepath.Join(proj, "CLAUDE.md"), "# projcmd\n")
+	// A running tmux session whose working directory is the project.
+	e.newTmuxSession("c-projcmd", proj)
+	// A past Claude conversation recorded against the project folder.
+	e.writeClaudeTranscript(
+		"projcmd0-1111-2222-3333-444444444444", proj,
+		"an older prompt about projcmd", "2026-05-19T10:00:00Z")
+
+	stdout, stderr, err := e.ccmux("project", "projcmd")
+	if err != nil {
+		t.Fatalf("ccmux project: %v\nstderr: %s", err, stderr)
+	}
+	if !strings.Contains(stdout, "c-projcmd") {
+		t.Errorf("`ccmux project` output missing the running session c-projcmd:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "an older prompt about projcmd") {
+		t.Errorf("`ccmux project` output missing the past conversation:\n%s", stdout)
+	}
+}
