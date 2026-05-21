@@ -28,13 +28,25 @@ import (
 //
 // On success this does not return: tmux.Attach replaces the process.
 func attachWithChrome(session, projectLabel string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	// moshi state drives the "reachable via Moshi" badge — detected the
-	// same way the TUI's localAttachCmd does. nested=false: the CLI
-	// always does a standalone `attach-session`, never switch-client.
-	mst := moshi.Detect(ctx)
+	// The moshi probe drives only the cosmetic "reachable via Moshi"
+	// badge, and on macOS it shells out to slow tooling. Give it its
+	// own bounded context so a slow probe can't starve the chrome step
+	// below — if it times out, reachable just stays false.
+	mctx, mcancel := context.WithTimeout(context.Background(), 2*time.Second)
+	mst := moshi.Detect(mctx)
+	mcancel()
 	reachable := mst.Paired && mst.HooksInstalled && mst.ServiceRunning
-	_ = tmuxchrome.Apply(ctx, session, projectLabel, reachable, false)
-	cancel()
+
+	// Apply chrome on a fresh, independent context: the tmux set-option
+	// calls must always get their full deadline regardless of how long
+	// the moshi probe took. Sharing one context with moshi.Detect is
+	// what made CLI chrome flaky on macOS CI — the shared deadline
+	// expired mid-probe and every set-option got cancelled, leaving the
+	// session with vanilla tmux styling. nested=false: the CLI always
+	// does a standalone attach-session, never switch-client.
+	cctx, ccancel := context.WithTimeout(context.Background(), 5*time.Second)
+	_ = tmuxchrome.Apply(cctx, session, projectLabel, reachable, false)
+	ccancel()
+
 	return tmux.Attach(session, attachDetachOthers())
 }
