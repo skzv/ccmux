@@ -72,19 +72,25 @@ func buildBinaries() error {
 // / "codex"), which tmux resolves through PATH; on a CI runner no such
 // binary exists, so the agent command exits instantly and tmux tears
 // the session down before a test can observe it. The stub stands in for
-// a real agent: it sleeps, keeping the pane — and therefore the session
-// — alive exactly like an agent waiting for input. newEnv prepends
-// stubBinDir to PATH so every spawned session resolves these, making
-// the suite hermetic instead of silently depending on the dev's PATH.
+// a real agent: it echoes `ccmux-stub-agent=<name>` (so a test can
+// assert which agent a session launched) then sleeps, keeping the pane
+// — and therefore the session — alive exactly like an agent waiting for
+// input. newEnv prepends stubBinDir to PATH so every spawned session
+// resolves these, making the suite hermetic instead of silently
+// depending on the dev's PATH.
 func installStubAgents() error {
 	dir, err := os.MkdirTemp("", "ccmux-e2e-agents")
 	if err != nil {
 		return err
 	}
 	stubBinDir = dir
-	const stub = "#!/bin/sh\n" +
-		"# ccmux e2e stub agent: stay alive like an agent awaiting input.\n" +
-		"exec sleep 86400\n"
+	const stub = `#!/bin/sh
+# ccmux e2e stub agent: announce which agent ran (so a test can assert
+# which agent a session launched), then stay alive like an agent
+# awaiting input so the tmux session persists.
+echo "ccmux-stub-agent=$(basename "$0")"
+exec sleep 86400
+`
 	for _, name := range []string{"claude", "codex"} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(stub), 0o755); err != nil {
 			return err
