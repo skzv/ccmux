@@ -22,14 +22,14 @@ import (
 // projectsModel is the Projects screen. Three states:
 //   - listing: tree of projects with detail pane
 //   - form != nil: modal for creating a new project
-//   - picker != nil: modal for choosing rejoin vs new-session
+//   - menu != nil: modal listing the project's sessions + conversations
 type projectsModel struct {
 	st       styles.Styles
 	km       Keymap
 	projects []project.Project
 	cursor   int
 	form     *newProjectFormModel
-	picker   *projectSessionPickerModel
+	menu     *projectMenuModel
 
 	// hosts is the live reachable-peer list, fed in from App on every
 	// sessionsLoadedMsg. Snapshot into the form at "n"-press time so
@@ -163,17 +163,17 @@ func (m *projectsModel) SetHosts(h []hostStatus) {
 }
 
 func (m projectsModel) Update(msg tea.Msg) (projectsModel, tea.Cmd) {
-	// Picker modal: routes rejoin/new-session choice. App intercepts
-	// the submit/cancel messages before they reach here, so we only
-	// forward unrecognized messages to the picker's own Update.
-	if m.picker != nil {
+	// Menu modal: lists the project's sessions + conversations. App
+	// intercepts the pick/cancel messages before they reach here, so we
+	// only forward unrecognized messages to the menu's own Update.
+	if m.menu != nil {
 		switch msg.(type) {
-		case projectSessionPickMsg, projectSessionPickCancelMsg:
+		case projectMenuPickMsg, projectMenuCancelMsg:
 			// App handles these at the top level; forward them up.
 			return m, func() tea.Msg { return msg }
 		}
-		p, cmd := m.picker.Update(msg)
-		m.picker = &p
+		mm, cmd := m.menu.Update(msg)
+		m.menu = &mm
 		return m, cmd
 	}
 
@@ -325,9 +325,9 @@ func switchAgentCmd(p project.Project) tea.Cmd {
 }
 
 func (m projectsModel) View(width, height int) string {
-	if m.picker != nil {
-		pickerW := minInt(80, width-4)
-		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, m.picker.View(pickerW))
+	if m.menu != nil {
+		menuW := minInt(80, width-4)
+		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, m.menu.View(menuW))
 	}
 	if m.form != nil {
 		// Show form centered with project list dimmed behind it.

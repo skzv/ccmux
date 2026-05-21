@@ -118,6 +118,7 @@ Attaching to an auto-discovered peer execs `ssh -t <host> -- tmux attach -t <nam
 ### 🏗️ Project bootstrapping
 - `ccmux new <name>` — scaffolds a project, creates the `docs/` notes vault, runs `git init`, opens an agent session with your description as the first prompt; the "n" form picker lets you choose Claude / Codex / Antigravity per project
 - `ccmux upgrade` — retrofits the same structure into an existing directory; prints what changed, idempotent on re-runs
+- **Open a project = see its history.** Pressing Enter on a project in the Projects tab opens a menu listing its running sessions *and* its past agent conversations, so you can attach, resume an earlier conversation, or start fresh in one place. `ccmux project <name>` prints the same from the CLI.
 - **Create on any device.** In the Projects tab, press `n` and pick which device should host the new project (local or any reachable peer running `ccmuxd`). The remote daemon scaffolds + starts the session natively, and ccmux ssh-attaches you in. No SSH config, no manual `git init`.
 - Local-only by default — push to GitHub when you're ready with `gh repo create`
 

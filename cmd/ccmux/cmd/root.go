@@ -56,6 +56,7 @@ func init() {
 		newUpgradeCmd(),
 		newUpdateCmd(),
 		newListCmd(),
+		newProjectCmd(),
 		newKillCmd(),
 		newSetupCmd(),
 		newDoctorCmd(),
