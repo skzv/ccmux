@@ -1733,9 +1733,12 @@ func (a App) resumeSelectedConversation() tea.Cmd {
 }
 
 func (a App) localAttachCmd(session, projectLabel string) tea.Cmd {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	mst := moshi.Detect(ctx)
+	// moshi.Detect drives only the cosmetic Moshi badge and can be slow
+	// on macOS (it shells out). Give it its own bounded context so it
+	// can't starve the chrome step below.
+	mctx, mcancel := context.WithTimeout(context.Background(), 2*time.Second)
+	mst := moshi.Detect(mctx)
+	mcancel()
 	nested := tmuxchrome.InTmux()
 	// Moshi badge is "reachable" when the whole pipeline is wired AND
 	// running: paired with Moshi cloud, Claude Code hooks installed,
@@ -1744,7 +1747,12 @@ func (a App) localAttachCmd(session, projectLabel string) tea.Cmd {
 	// state — so the chrome read "phone: not paired" even on a fully
 	// configured host.
 	reachable := mst.Paired && mst.HooksInstalled && mst.ServiceRunning
-	_ = tmuxchrome.Apply(ctx, session, projectLabel, reachable, nested)
+	// Apply chrome on a fresh, independent context — a context shared
+	// with moshi.Detect would let a slow probe cancel the set-option
+	// calls, leaving the session in vanilla tmux styling.
+	cctx, ccancel := context.WithTimeout(context.Background(), 5*time.Second)
+	_ = tmuxchrome.Apply(cctx, session, projectLabel, reachable, nested)
+	ccancel()
 
 	if nested {
 		c := exec.Command("tmux", "switch-client", "-t", session)
