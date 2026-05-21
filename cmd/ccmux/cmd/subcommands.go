@@ -63,9 +63,10 @@ func newAttachCmd() *cobra.Command {
 					return err
 				}
 			}
-			// Replace this process with tmux attach. Honor the user's
-			// attach-mode preference (mirror vs exclusive).
-			return tmux.Attach(session, attachDetachOthers())
+			// Replace this process with tmux attach, applying ccmux
+			// chrome first so a CLI-spawned session looks the same as a
+			// TUI/daemon-spawned one.
+			return attachWithChrome(session, filepath.Base(abs))
 		},
 	}
 }
@@ -99,7 +100,7 @@ func newNewCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return tmux.Attach(session, attachDetachOthers())
+			return attachWithChrome(session, args[0])
 		},
 	}
 	c.Flags().StringVarP(&description, "description", "d", "",
