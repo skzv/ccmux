@@ -154,10 +154,11 @@ func TestAgent_LaunchCmd_NewVsContinue(t *testing.T) {
 			if !strings.Contains(cont, "--continue") {
 				t.Errorf("continue LaunchCmd = %q, expected --continue", cont)
 			}
-			// Fallback to zsh keeps the pane alive if the agent is
-			// broken — every agent should provide it.
-			if !strings.Contains(cont, "zsh") {
-				t.Errorf("continue LaunchCmd = %q, expected zsh fallback", cont)
+			// The fallback chain must end in `|| sh` so the pane stays
+			// alive on minimal hosts without zsh (typical Linux CI). zsh
+			// is still nice when present, but sh is the POSIX guarantee.
+			if !strings.Contains(cont, "|| sh") {
+				t.Errorf("continue LaunchCmd = %q, missing `|| sh` POSIX fallback", cont)
 			}
 		})
 	}

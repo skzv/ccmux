@@ -20,10 +20,13 @@ func (Claude) Binary() string      { return "claude" }
 
 func (Claude) LaunchCmd(continueFlag bool) string {
 	if continueFlag {
-		// The zsh fallback lets the user inspect the project state if
-		// Claude itself is broken — better than dropping the user into
-		// a dead pane.
-		return "claude --continue || claude || zsh"
+		// Cascade through preferred → portable shells so the pane stays
+		// alive when Claude itself can't run. zsh is the nicest UX where
+		// available (macOS default); bash covers most Linux hosts; sh is
+		// the POSIX guarantee — always present. Without the bash/sh tail
+		// minimal Linux CI images (no zsh) silently fail the chain and
+		// the tmux session dies the instant new-session returns.
+		return "claude --continue || claude || zsh || bash || sh"
 	}
 	return "claude"
 }
