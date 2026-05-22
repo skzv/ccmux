@@ -265,14 +265,20 @@ func (m conversationsModel) View(width, height int) string {
 
 // renderList draws the scrollable conversation list. Each row shows
 // agent, relative time, project (or "—" for Antigravity rows that
-// don't carry one), and a preview snippet.
+// don't carry one), and a preview snippet. Rows are windowed around the
+// cursor so a long list never scrolls the highlighted row out of view.
 func (m conversationsModel) renderList(visible []conversations.Conversation, width, height int) string {
-	rows := make([]string, 0, len(visible))
+	if len(visible) == 0 {
+		return ""
+	}
+	start, end := windowAroundCursor(m.cursor, len(visible), height)
+	rows := make([]string, 0, end-start)
 	const (
 		agentW = 12
 		timeW  = 12
 	)
-	for i, c := range visible {
+	for i := start; i < end; i++ {
+		c := visible[i]
 		marker := "  "
 		if i == m.cursor {
 			marker = m.st.Emphasis.Render("▸ ")
@@ -304,9 +310,6 @@ func (m conversationsModel) renderList(visible []conversations.Conversation, wid
 				m.st.StatusError.Render("delete this conversation? press x to confirm · esc cancels"),
 			)
 			rows = append(rows, row)
-			if len(rows) >= height {
-				break
-			}
 			continue
 		}
 		row := fmt.Sprintf("%s%-*s  %-*s  %s",
@@ -319,9 +322,6 @@ func (m conversationsModel) renderList(visible []conversations.Conversation, wid
 			row = m.st.ListItemSelected.Render(row)
 		}
 		rows = append(rows, row)
-		if len(rows) >= height {
-			break
-		}
 	}
 	return strings.Join(rows, "\n")
 }

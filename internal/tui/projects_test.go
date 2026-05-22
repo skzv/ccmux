@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -296,4 +297,35 @@ func TestProjects_NarrowLayout(t *testing.T) {
 	assertNoOverflow(t, out, 50)
 	assertPresent(t, out, "ccmux-website", "dotfiles")
 	assertAbsent(t, out, "/: filter", "upgrade cwd")
+}
+
+// TestProjects_CursorVisibleWhenScrolledPastWindow — regression for the
+// "scroll down far enough and the cursor disappears" bug. With many
+// projects and a small pane height, the cursor at the bottom of the
+// list must still appear in the rendered View (it used to be clipped
+// because all rows were appended unwindowed and lipgloss let the box
+// overflow the terminal).
+func TestProjects_CursorVisibleWhenScrolledPastWindow(t *testing.T) {
+	m := newProjects(styles.Default(), DefaultKeymap())
+	many := make([]project.Project, 30)
+	for i := range many {
+		many[i] = project.Project{
+			Name: fmt.Sprintf("project-%02d", i),
+			Host: "local",
+			Path: fmt.Sprintf("/home/u/Projects/p%02d", i),
+		}
+	}
+	m.SetProjects(many)
+	m.cursor = 28 // near the bottom
+
+	// Small pane — list budget is tighter than the full project count.
+	out := m.View(120, 15)
+	if !strings.Contains(out, "project-28") {
+		t.Errorf("cursor row project-28 missing from rendered view (clipped at bottom?):\n%s", out)
+	}
+	// And the top of the unfiltered list should have been dropped by the
+	// windowing — otherwise the window isn't actually doing its job.
+	if strings.Contains(out, "project-00") {
+		t.Errorf("project-00 still visible when cursor is at row 28 — windowing didn't shift")
+	}
 }

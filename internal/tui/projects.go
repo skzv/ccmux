@@ -380,11 +380,21 @@ func (m projectsModel) renderList(width, height int, narrow bool) string {
 		return m.st.PaneFocused.Width(width - 2).Height(height - 2).Render(strings.Join(rows, "\n"))
 	}
 
+	// Window the project rows around the cursor so a long list never
+	// scrolls the cursor out of the visible pane. Pane height passed to
+	// lipgloss is `height-2`; subtract another 2 for the rounded border
+	// rows, then the lines we've already pushed (header, optional filter
+	// line, blank), and reserve 1 row of headroom for the "on <host>"
+	// subheader that we re-emit at the top of the window.
+	budget := (height - 4) - len(rows) - 1
+	start, end := windowAroundCursor(m.cursor, len(vis), budget)
+
 	currentHost := ""
-	for i, p := range vis {
+	for i := start; i < end; i++ {
+		p := vis[i]
 		host := projectHost(p)
 		if host != currentHost {
-			if i > 0 {
+			if i > start {
 				rows = append(rows, "")
 			}
 			rows = append(rows, m.st.Subtitle.Render("on "+host))
