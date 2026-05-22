@@ -322,10 +322,32 @@ func (s *server) createSession(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "project path not found: "+path, http.StatusNotFound)
 		return
 	}
-	session := tmux.SessionNameForPath(path)
+
+	// Caller-supplied name wins; same rule createBareSession uses to
+	// keep names safe for `tmux new-session -s`.
+	var session string
+	if name := strings.TrimSpace(req.Name); name != "" {
+		if strings.ContainsAny(name, "/\\:") {
+			http.Error(w, "name must not contain /, \\, or :", http.StatusBadRequest)
+			return
+		}
+		session = name
+	} else {
+		session = tmux.SessionNameForPath(path)
+	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
+
+	// Caller-supplied agent persists to .ccmux/agent so the launch
+	// command (read via project.ReadAgent) and future attaches all
+	// pick the same one. Invalid agent strings are ignored — the
+	// sidecar then keeps its current value (or stays unset → Claude).
+	if a := strings.TrimSpace(req.Agent); a != "" {
+		if id, ok := agent.ParseID(a); ok {
+			_ = project.SetAgent(path, id)
+		}
+	}
 
 	has, herr := tmux.Has(ctx, session)
 	if herr != nil {
