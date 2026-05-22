@@ -180,6 +180,10 @@ type server struct {
 	seen      map[string]*tracked
 	sleeper   *sleeplock.Manager
 
+	tokens  *daemon.TokenStore
+	events  *daemon.EventBus
+	sshUser string
+
 	// moshiState is refreshed periodically (not every poll) so we don't
 	// shell out to moshi-hook every 2 seconds. Used only to drive the
 	// "moshi reachable" badge in the tmux status bar — the bell rings
@@ -201,12 +205,19 @@ type server struct {
 // integration tests construct through here so the seam defaults stay
 // in one place.
 func newServer(cfg config.Config) *server {
+	sshUser := cfg.Daemon.SSHUser
+	if sshUser == "" {
+		sshUser, _ = os.LookupEnv("USER")
+	}
 	return &server{
 		cfg:       cfg,
 		seen:      map[string]*tracked{},
 		startedAt: time.Now(),
 		capture:   tmux.CapturePane,
 		bell:      func(ctx context.Context, name string) error { return tmux.SendKeys(ctx, name, "\a") },
+		tokens:    daemon.NewTokenStore(),
+		events:    daemon.NewEventBus(),
+		sshUser:   sshUser,
 	}
 }
 
@@ -220,6 +231,9 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/v1/sessions/bare", s.createBareSession)
 	mux.HandleFunc("/v1/sessions/", s.handleSessionsItem)
 	mux.HandleFunc("/v1/projects", s.handleProjects)
+	mux.HandleFunc("/v1/pair-token", s.handlePairToken)
+	mux.HandleFunc("/v1/pair", s.handlePair)
+	mux.HandleFunc("/v1/events", s.handleEvents)
 }
 
 func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -528,8 +542,212 @@ func (s *server) applyChrome(ctx context.Context, session, projectLabel string) 
 }
 
 func (s *server) handleSessionsItem(w http.ResponseWriter, r *http.Request) {
-	// /v1/sessions/<name>[/<subaction>] — minimal stub.
-	http.Error(w, "not implemented in v0.1", http.StatusNotImplemented)
+	// /v1/sessions/<name>[/<subaction>]
+	tail := strings.TrimPrefix(r.URL.Path, "/v1/sessions/")
+	parts := strings.SplitN(tail, "/", 2)
+	name := parts[0]
+	if name == "" {
+		http.Error(w, "session name required", http.StatusBadRequest)
+		return
+	}
+	if len(parts) == 1 {
+		http.Error(w, "subaction required", http.StatusBadRequest)
+		return
+	}
+	switch parts[1] {
+	case "kill":
+		s.handleKill(w, r, name)
+	case "rename":
+		s.handleRename(w, r, name)
+	case "keep-awake":
+		s.handleKeepAwake(w, r, name)
+	case "send-keys":
+		s.handleSendKeys(w, r, name)
+	case "attach":
+		s.handleAttach(w, r, name)
+	default:
+		http.Error(w, "unknown subaction", http.StatusNotFound)
+	}
+}
+
+func (s *server) handleKill(w http.ResponseWriter, r *http.Request, name string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	if err := tmux.Kill(ctx, name); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.mu.Lock()
+	delete(s.seen, name)
+	s.mu.Unlock()
+	s.events.Publish(daemon.SessionEvent{At: time.Now(), Kind: "killed", Session: daemon.SessionState{Name: name, Host: "local"}})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *server) handleRename(w http.ResponseWriter, r *http.Request, name string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req daemon.RenameRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
+		http.Error(w, "name required", http.StatusBadRequest)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	if err := tmux.Rename(ctx, name, req.Name); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.mu.Lock()
+	if t, ok := s.seen[name]; ok {
+		s.seen[req.Name] = t
+		delete(s.seen, name)
+	}
+	s.mu.Unlock()
+	writeJSON(w, daemon.SessionState{Name: req.Name, Host: "local"})
+}
+
+func (s *server) handleKeepAwake(w http.ResponseWriter, r *http.Request, name string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req daemon.KeepAwakeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "decode: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	s.mu.Lock()
+	if t, ok := s.seen[name]; ok {
+		t.keepAwake = req.Enabled
+	}
+	s.mu.Unlock()
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *server) handleSendKeys(w http.ResponseWriter, r *http.Request, name string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req daemon.SendKeysRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Keys == "" {
+		http.Error(w, "keys required", http.StatusBadRequest)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	if err := tmux.SendKeys(ctx, name, req.Keys); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *server) handlePairToken(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	token, err := s.tokens.Create(5 * time.Minute)
+	if err != nil {
+		http.Error(w, "generate token: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// Build the ccmux:// deep-link URL.
+	host, _ := os.Hostname()
+	tailIP, _ := tailscaleAddr(s.cfg.Daemon.TailnetPort)
+	// Use MagicDNS hostname if available, otherwise tailscale IP.
+	pairHost := host
+	if tailIP != "" {
+		// tailIP is "IP:port"; strip the port
+		if idx := strings.LastIndex(tailIP, ":"); idx >= 0 {
+			pairHost = tailIP[:idx]
+		}
+	}
+	sshUser := s.cfg.Daemon.SSHUser
+	if sshUser == "" {
+		sshUser, _ = os.LookupEnv("USER")
+	}
+	pairURL := fmt.Sprintf("ccmux://pair?host=%s&user=%s&port=%d&token=%s",
+		pairHost, sshUser, s.cfg.Daemon.TailnetPort, token)
+	writeJSON(w, daemon.PairTokenResponse{Token: token, URL: pairURL})
+}
+
+func (s *server) handlePair(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req daemon.PairRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "decode: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !s.tokens.Consume(req.Token) {
+		http.Error(w, "invalid or expired token", http.StatusUnauthorized)
+		return
+	}
+	if err := appendAuthorizedKey(req.PublicKey); err != nil {
+		http.Error(w, "write authorized_keys: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	host, _ := os.Hostname()
+	writeJSON(w, daemon.PairResponse{Hostname: host, Version: version})
+}
+
+func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+	ch := s.events.Subscribe()
+	defer s.events.Unsubscribe(ch)
+	enc := json.NewEncoder(w)
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case ev, open := <-ch:
+			if !open {
+				return
+			}
+			fmt.Fprintf(w, "data: ")
+			_ = enc.Encode(ev)
+			fmt.Fprintf(w, "\n")
+			flusher.Flush()
+		}
+	}
+}
+
+func appendAuthorizedKey(pubKey string) error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	sshDir := filepath.Join(home, ".ssh")
+	if err := os.MkdirAll(sshDir, 0o700); err != nil {
+		return err
+	}
+	authKeys := filepath.Join(sshDir, "authorized_keys")
+	f, err := os.OpenFile(authKeys, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	key := strings.TrimSpace(pubKey) + "\n"
+	_, err = f.WriteString(key)
+	return err
 }
 
 // handleProjects routes /v1/projects:
@@ -565,7 +783,7 @@ func (s *server) listProjects(w http.ResponseWriter, _ *http.Request) {
 		out = append(out, daemon.ProjectInfo{
 			Name: p.Name, Host: host, Path: p.Path,
 			HasGit: p.HasGit, HasCM: p.HasCM, HasDocs: p.HasDocs,
-			Modified: p.Modified,
+			Agent: string(p.Agent), Modified: p.Modified,
 		})
 	}
 	writeJSON(w, out)
@@ -677,6 +895,14 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 				projectPath: ts.Path,
 			}
 			s.seen[ts.Name] = t
+			s.events.Publish(daemon.SessionEvent{
+				At:   time.Now(),
+				Kind: "created",
+				Session: daemon.SessionState{
+					Name: ts.Name, Host: "local", State: string(agent.StateUnknown),
+					Path: ts.Path,
+				},
+			})
 		}
 		pane, err := s.capture(ctx, ts.Name, 60)
 		if err != nil {
@@ -710,7 +936,22 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 			}
 			t.promptCount++
 		}
+		prevState := t.state
 		t.state = newState
+		if newState != prevState {
+			kind := "state_change"
+			if newState == agent.StateNeedsInput {
+				kind = "needs_input"
+			}
+			s.events.Publish(daemon.SessionEvent{
+				At:   time.Now(),
+				Kind: kind,
+				Session: daemon.SessionState{
+					Name: ts.Name, Host: "local", State: string(newState),
+					Path: ts.Path, KeepAwake: t.keepAwake,
+				},
+			})
+		}
 		if newState == agent.StateActive {
 			anyActive = true
 		}
