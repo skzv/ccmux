@@ -165,6 +165,10 @@ type DaemonConfig struct {
 
 	// TailnetPort — port for the tailnet HTTP listener. Default 7474.
 	TailnetPort int `toml:"tailnet_port"`
+
+	// SSHUser is the username embedded in the ccmux:// pairing deep-link.
+	// Defaults to $USER at runtime if empty.
+	SSHUser string `toml:"ssh_user"`
 }
 
 type NotesConfig struct {
