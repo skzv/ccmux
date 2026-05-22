@@ -1,4 +1,4 @@
-.PHONY: build install setup uninstall run test test-e2e lint clean fmt vet daemon tui check-go bootstrap fuzz fuzz-quick tapes tapes-check
+.PHONY: build install setup uninstall run test test-e2e lint clean fmt vet daemon tui check-go bootstrap fuzz fuzz-quick tapes tapes-check release-check release-snapshot
 
 BIN_DIR    := bin
 INSTALL_DIR := $(HOME)/.local/bin
@@ -165,6 +165,21 @@ lint: fmt vet
 
 clean:
 	rm -rf $(BIN_DIR) dist
+
+# --- Release ----------------------------------------------------------
+# The real release runs in CI when a v* tag is pushed (see
+# .github/workflows/release.yml). These targets are for validating the
+# pipeline locally — neither publishes anything.
+#
+#   release-check    — lint .goreleaser.yaml
+#   release-snapshot — full cross-platform build into dist/, no publish
+release-check:
+	@command -v goreleaser >/dev/null 2>&1 || { echo "release: goreleaser not installed — brew install goreleaser"; exit 1; }
+	goreleaser check
+
+release-snapshot: check-go
+	@command -v goreleaser >/dev/null 2>&1 || { echo "release: goreleaser not installed — brew install goreleaser"; exit 1; }
+	goreleaser release --snapshot --clean
 
 # --- Demo tapes -------------------------------------------------------
 # Renders every CUJ tape to docs/vhs/out/. Requires: make build, vhs, ffmpeg.

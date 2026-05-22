@@ -1,0 +1,92 @@
+# .goreleaser.yaml — cross-platform release builds for ccmux + ccmuxd.
+#
+#   Validate config:  make release-check     (goreleaser check)
+#   Local dry run:     make release-snapshot  (builds dist/, publishes nothing)
+#   Real release:      push a git tag like v0.1.0 — .github/workflows/
+#                      release.yml runs `goreleaser release`, which cuts
+#                      the GitHub Release and updates the Homebrew tap.
+version: 2
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  - id: ccmux
+    main: ./cmd/ccmux
+    binary: ccmux
+    env:
+      - CGO_ENABLED=0
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+  - id: ccmuxd
+    main: ./cmd/ccmuxd
+    binary: ccmuxd
+    env:
+      - CGO_ENABLED=0
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+# One archive per OS/arch carrying both binaries. The name matches what
+# scripts/install.sh downloads: ccmux_<os>_<arch>.tar.gz.
+archives:
+  - id: ccmux
+    name_template: "ccmux_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+
+checksum:
+  name_template: "checksums.txt"
+
+# macOS code signing + notarization is intentionally NOT configured yet —
+# it needs an Apple Developer account (pending approval). Until then,
+# release binaries are unsigned, and that is handled downstream:
+#   - `brew install` strips the com.apple.quarantine xattr, so the tap
+#     install path is unaffected by Gatekeeper.
+#   - scripts/install.sh runs `xattr -d com.apple.quarantine` itself.
+# When the account is approved, add a `notarize:` block here so the raw
+# release tarballs are trusted too.
+
+brews:
+  - name: ccmux
+    repository:
+      owner: skzv
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    homepage: "https://github.com/skzv/ccmux"
+    description: "One TUI for every AI coding session — Claude Code, Codex, Antigravity"
+    license: "FSL-1.1-MIT"
+    # Runtime tools ccmux shells out to. Tailscale (a cask) and the agents
+    # (claude / codex / agy) are not formula deps — `ccmux setup` wires
+    # those, since they aren't cleanly brew-installable here.
+    dependencies:
+      - name: tmux
+      - name: mosh
+      - name: ripgrep
+    install: |
+      bin.install "ccmux"
+      bin.install "ccmuxd"
+    caveats: |
+      Finish setup — Tailscale, agents, and the ccmuxd background
+      service — with the interactive wizard:
+
+        ccmux setup
+    test: |
+      system "#{bin}/ccmux", "--help"
+
+release:
+  draft: false
+  prerelease: auto
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
