@@ -44,23 +44,32 @@ Sleep 300ms
 Tab
 Sleep 400ms
 
-# Change agent from Claude to Codex with the right-arrow.
+# Briefly show Codex is available, then return to Claude.
 Right
-Sleep 400ms
-
-# Change again to show cycling — land back on Claude.
-Right
-Sleep 400ms
+Sleep 600ms
 Left
-Sleep 300ms
+Sleep 400ms
 
-# Submit the form — creates the directory and starts the session.
+# Submit the form with Claude — creates the dir and boots the session.
 Enter
 Sleep 3500ms
 
-# Navigate back to the Home screen to see the new session in the list.
+# Back to the Home screen to see the new session in the list.
 Type "1"
 Sleep 2s
+
+# Attach to the new api-service session to see Claude running.
+Enter
+Sleep 3000ms
+
+# Detach back to ccmux.
+Ctrl+b
+Sleep 300ms
+Type "d"
+Sleep 1500ms
+
+# ccmux resumes with the session list.
+Sleep 1s
 
 # Quit.
 Type "q"

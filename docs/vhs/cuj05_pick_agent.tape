@@ -67,6 +67,19 @@ Sleep 3500ms
 Type "1"
 Sleep 2s
 
+# Attach to the new data-pipeline session to see Codex running.
+Enter
+Sleep 3000ms
+
+# Detach back to ccmux.
+Ctrl+b
+Sleep 300ms
+Type "d"
+Sleep 1500ms
+
+# ccmux resumes.
+Sleep 1s
+
 # Quit.
 Type "q"
 Sleep 800ms
