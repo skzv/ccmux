@@ -30,9 +30,11 @@ Thumbs.db
 
 # Agent / editor tooling state — local, never committed.
 .agent/
+.antigravitycli/
 .claude/
 .codex/
 .obsidian/
+.playwright-mcp/
 
 # Maintainer scratchpad — never published.
 MAINTAINER_NOTES.md
