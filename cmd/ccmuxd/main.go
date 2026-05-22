@@ -12,6 +12,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -24,6 +25,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"golang.org/x/crypto/ssh"
 
 	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/clipboard"
@@ -117,8 +120,10 @@ func run() error {
 		return err
 	}
 
+	// Unix-socket mux: full surface (tailnet-safe routes + local-only).
 	mux := http.NewServeMux()
 	srv.routes(mux)
+	srv.localOnlyRoutes(mux)
 	httpSrv := &http.Server{Handler: mux}
 
 	go func() {
@@ -127,12 +132,16 @@ func run() error {
 		}
 	}()
 
-	// Optional tailnet listener.
+	// Optional tailnet listener. Its mux is *separate* and intentionally
+	// excludes localOnlyRoutes — a tailnet peer must not be able to mint
+	// pair tokens for itself.
 	if cfg.Daemon.ListenTailnet {
 		if addr, err := tailscaleAddr(cfg.Daemon.TailnetPort); err == nil {
+			tailnetMux := http.NewServeMux()
+			srv.routes(tailnetMux)
 			go func() {
 				log.Printf("ccmuxd: tailnet listening on %s", addr)
-				_ = http.ListenAndServe(addr, mux)
+				_ = http.ListenAndServe(addr, tailnetMux)
 			}()
 		} else {
 			log.Printf("ccmuxd: tailnet listener disabled: %v", err)
@@ -221,6 +230,10 @@ func newServer(cfg config.Config) *server {
 	}
 }
 
+// routes registers every tailnet-safe endpoint. Anything that an
+// unauthenticated tailnet peer is allowed to hit goes here. The Unix
+// socket additionally registers localOnlyRoutes; the tailnet listener
+// does not.
 func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/v1/health", s.handleHealth)
 	mux.HandleFunc("/v1/sessions", s.handleSessions)
@@ -231,9 +244,18 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/v1/sessions/bare", s.createBareSession)
 	mux.HandleFunc("/v1/sessions/", s.handleSessionsItem)
 	mux.HandleFunc("/v1/projects", s.handleProjects)
-	mux.HandleFunc("/v1/pair-token", s.handlePairToken)
 	mux.HandleFunc("/v1/pair", s.handlePair)
 	mux.HandleFunc("/v1/events", s.handleEvents)
+}
+
+// localOnlyRoutes registers endpoints that must never be reachable from
+// the tailnet. /v1/pair-token mints a one-time pairing token, so a
+// tailnet peer that could hit it would just issue itself a token and
+// then redeem it on /v1/pair — defeating the whole point of pairing.
+// The function exists separately so the tailnet HTTP listener stays
+// structurally unable to register these.
+func (s *server) localOnlyRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("/v1/pair-token", s.handlePairToken)
 }
 
 func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -712,11 +734,20 @@ func (s *server) handlePair(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "decode: "+err.Error(), http.StatusBadRequest)
 		return
 	}
+	// Validate the public key BEFORE consuming the token so a malformed
+	// key doesn't burn the user's single-use pair token. Returns a
+	// canonical single-line authorized_keys entry (any pre-key options
+	// the client tried to smuggle in are stripped during re-serialize).
+	authLine, err := validatePairKey(req.PublicKey)
+	if err != nil {
+		http.Error(w, "invalid public key: "+err.Error(), http.StatusBadRequest)
+		return
+	}
 	if !s.tokens.Consume(req.Token) {
 		http.Error(w, "invalid or expired token", http.StatusUnauthorized)
 		return
 	}
-	if err := appendAuthorizedKey(req.PublicKey); err != nil {
+	if err := appendAuthorizedKey(authLine); err != nil {
 		http.Error(w, "write authorized_keys: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -750,6 +781,36 @@ func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 		}
 	}
+}
+
+// validatePairKey parses the wire-format public key into a canonical
+// authorized_keys line. Rejects:
+//   - empty / whitespace-only input
+//   - anything that isn't a parseable SSH public key
+//   - extra data on the line (pre-key options like `command="rm -rf /"`,
+//     `from="…"`, `no-pty`, etc.) — these would otherwise let a paired
+//     peer install an unconstrained backdoor as a side effect of pairing
+//   - extra lines (a peer that smuggles `<valid-key>\n<malicious-key>\n`)
+//
+// Re-serialize via MarshalAuthorizedKey to produce a canonical
+// `<type> <base64>` line, dropping any comment and any options the
+// caller may have prepended.
+func validatePairKey(s string) (string, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "", errors.New("empty")
+	}
+	pub, _, options, rest, err := ssh.ParseAuthorizedKey([]byte(s))
+	if err != nil {
+		return "", err
+	}
+	if len(options) > 0 {
+		return "", errors.New("pre-key options are not allowed")
+	}
+	if strings.TrimSpace(string(rest)) != "" {
+		return "", errors.New("multi-line input is not allowed")
+	}
+	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(pub))), nil
 }
 
 func appendAuthorizedKey(pubKey string) error {

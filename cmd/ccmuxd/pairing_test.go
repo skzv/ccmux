@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
@@ -12,9 +14,27 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/crypto/ssh"
+
 	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/daemon"
 )
+
+// testEd25519AuthorizedKey returns a real authorized_keys line backed
+// by a freshly-generated ed25519 keypair. Real keys are required since
+// validatePairKey rejects anything ssh.ParseAuthorizedKey can't parse.
+func testEd25519AuthorizedKey(t *testing.T) string {
+	t.Helper()
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sshPub, err := ssh.NewPublicKey(pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(sshPub)))
+}
 
 // pairTestServer builds the minimal server the pairing handlers touch:
 // just a token store and the daemon config they read host/user/port from.
@@ -81,7 +101,7 @@ func TestHandlePair_InvalidToken(t *testing.T) {
 	s := pairTestServer()
 	body, _ := json.Marshal(daemon.PairRequest{
 		Token:     "bogus",
-		PublicKey: "ssh-ed25519 AAAATEST pair@ccmux",
+		PublicKey: testEd25519AuthorizedKey(t),
 	})
 	rec := httptest.NewRecorder()
 	s.handlePair(rec, httptest.NewRequest(http.MethodPost, "/v1/pair", bytes.NewReader(body)))
@@ -102,7 +122,7 @@ func TestHandlePair_ValidTokenAppendsKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create token: %v", err)
 	}
-	const pubKey = "ssh-ed25519 AAAATESTKEY pair@ccmux"
+	pubKey := testEd25519AuthorizedKey(t)
 	reqBody, _ := json.Marshal(daemon.PairRequest{Token: tok, PublicKey: pubKey})
 
 	rec := httptest.NewRecorder()
@@ -125,5 +145,99 @@ func TestHandlePair_ValidTokenAppendsKey(t *testing.T) {
 	s.handlePair(rec2, httptest.NewRequest(http.MethodPost, "/v1/pair", bytes.NewReader(replay)))
 	if rec2.Code != http.StatusUnauthorized {
 		t.Errorf("token replay status = %d, want 401", rec2.Code)
+	}
+}
+
+// TestHandlePair_RejectsMalformedKey — every malformed public-key shape
+// must be rejected with 400 *before* the token is consumed. Otherwise
+// a malicious or buggy client burns the user's single-use pair token
+// without actually pairing.
+func TestHandlePair_RejectsMalformedKey(t *testing.T) {
+	validKey := testEd25519AuthorizedKey(t)
+
+	// A real second key, used to build a multi-line attack payload.
+	secondKey := testEd25519AuthorizedKey(t)
+
+	cases := []struct {
+		name string
+		key  string
+	}{
+		{"empty", ""},
+		{"whitespace", "   \n\t  "},
+		{"not-a-key", "this is not an ssh key"},
+		{"truncated", "ssh-ed25519 AAAATEST"},
+		{
+			// `command="…"` would otherwise execute on every SSH login.
+			"smuggled command option",
+			`command="rm -rf /" ` + validKey,
+		},
+		{
+			// `from="…"` would constrain the key to a peer-chosen origin.
+			"smuggled from option",
+			`from="evil.example.com" ` + validKey,
+		},
+		{
+			// A second line would install a second, attacker-controlled key.
+			"multi-line injection",
+			validKey + "\n" + secondKey + "\n",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			s := pairTestServer()
+			tok, err := s.tokens.Create(time.Minute)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, _ := json.Marshal(daemon.PairRequest{Token: tok, PublicKey: tc.key})
+			rec := httptest.NewRecorder()
+			s.handlePair(rec, httptest.NewRequest(http.MethodPost, "/v1/pair", bytes.NewReader(body)))
+			if rec.Code != http.StatusBadRequest {
+				t.Errorf("status = %d, want 400; body=%s", rec.Code, rec.Body)
+			}
+			// The token must NOT have been consumed by a rejected request.
+			if !s.tokens.Consume(tok) {
+				t.Error("token was burned even though pairing was rejected")
+			}
+		})
+	}
+}
+
+// TestRoutes_PairTokenIsLocalOnly — the tailnet mux registers only
+// routes(), not localOnlyRoutes(). /v1/pair-token must therefore return
+// 404 on the tailnet listener — a peer can't issue pair tokens for
+// itself.
+func TestRoutes_PairTokenIsLocalOnly(t *testing.T) {
+	s := pairTestServer()
+
+	localMux := http.NewServeMux()
+	s.routes(localMux)
+	s.localOnlyRoutes(localMux)
+
+	tailnetMux := http.NewServeMux()
+	s.routes(tailnetMux)
+
+	// Local mux: POST /v1/pair-token succeeds (200).
+	rec := httptest.NewRecorder()
+	localMux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/pair-token", nil))
+	if rec.Code != http.StatusOK {
+		t.Errorf("local /v1/pair-token = %d, want 200", rec.Code)
+	}
+
+	// Tailnet mux: POST /v1/pair-token must 404 — the route isn't there.
+	rec = httptest.NewRecorder()
+	tailnetMux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/pair-token", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("tailnet /v1/pair-token = %d, want 404 (route must not exist)", rec.Code)
+	}
+
+	// Sanity: /v1/pair (the consume-token endpoint) IS on both — the
+	// mobile app needs to reach it.
+	rec = httptest.NewRecorder()
+	tailnetMux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/pair", bytes.NewReader([]byte("{}"))))
+	if rec.Code == http.StatusNotFound {
+		t.Error("tailnet /v1/pair is unexpectedly missing")
 	}
 }
