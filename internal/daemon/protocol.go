@@ -69,6 +69,14 @@ type NewSessionRequest struct {
 	Continue   bool   `json:"continue"`    // start Claude with --continue
 	KeepAwake  bool   `json:"keep_awake"`  // pin this session immediately
 	FirstInput string `json:"first_input"` // initial prompt to feed Claude
+	// Name overrides the tmux session name. Empty falls back to the
+	// derived c-<project> from tmux.SessionNameForPath.
+	Name string `json:"name,omitempty"`
+	// Agent picks which AI agent to launch. When set, the daemon writes
+	// it to the project's .ccmux/agent sidecar before launching so
+	// subsequent attaches pick the same agent. One of "claude" /
+	// "codex" / "antigravity" (or the legacy alias "gemini").
+	Agent string `json:"agent,omitempty"`
 }
 
 // NewBareSessionRequest is the body of POST /v1/sessions/bare. A
