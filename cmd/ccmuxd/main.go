@@ -199,6 +199,11 @@ type server struct {
 	// pane content; bell signals a needs-input transition.
 	capture func(ctx context.Context, name string, lines int) (string, error)
 	bell    func(ctx context.Context, name string) error
+	// captureANSI reads pane content with escape sequences intact (-e),
+	// used only by the mobile output endpoint so clients can render
+	// real terminal colors. Kept separate from capture so the poll-loop
+	// classifier keeps seeing plain text.
+	captureANSI func(ctx context.Context, name string, lines int) (string, error)
 }
 
 // newServer builds a server with its default (real, tmux-backed)
@@ -214,8 +219,9 @@ func newServer(cfg config.Config) *server {
 		cfg:       cfg,
 		seen:      map[string]*tracked{},
 		startedAt: time.Now(),
-		capture:   tmux.CapturePane,
-		bell:      func(ctx context.Context, name string) error { return tmux.SendKeys(ctx, name, "\a") },
+		capture:     tmux.CapturePane,
+		captureANSI: tmux.CapturePaneANSI,
+		bell:        func(ctx context.Context, name string) error { return tmux.SendKeys(ctx, name, "\a") },
 		tokens:    daemon.NewTokenStore(),
 		events:    daemon.NewEventBus(),
 		sshUser:   sshUser,
@@ -664,7 +670,7 @@ func (s *server) handleOutput(w http.ResponseWriter, r *http.Request, name strin
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	content, err := s.capture(ctx, name, lines)
+	content, err := s.captureANSI(ctx, name, lines)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

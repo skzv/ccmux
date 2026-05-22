@@ -177,6 +177,22 @@ func CapturePane(ctx context.Context, name string, lines int) (string, error) {
 	return string(out), nil
 }
 
+// CapturePaneANSI is like CapturePane but preserves escape sequences
+// (colors and text attributes) via -e, so a client can render the
+// pane with real terminal colors. Used by the mobile output endpoint.
+func CapturePaneANSI(ctx context.Context, name string, lines int) (string, error) {
+	args := []string{"capture-pane", "-e", "-p", "-t", name}
+	if lines > 0 {
+		args = append(args, "-S", fmt.Sprintf("-%d", lines))
+	}
+	cmd := command(ctx, "tmux", args...)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("tmux capture-pane: %w", err)
+	}
+	return string(out), nil
+}
+
 // SendKeys sends a literal key sequence to the named session.
 // Use this to inject a BEL byte for notification triggers (`SendKeys(ctx, name, "\a")`).
 func SendKeys(ctx context.Context, name, keys string) error {
