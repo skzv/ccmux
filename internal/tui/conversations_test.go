@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -437,5 +438,35 @@ func TestConversations_NarrowLayout(t *testing.T) {
 	}
 	if strings.Contains(out, "enter resume") {
 		t.Errorf("narrow conversations still shows the inline hint (T2):\n%s", out)
+	}
+}
+
+// TestConversations_CursorVisibleWhenScrolledPastWindow — regression
+// for the "scroll down far enough and the cursor row disappears" bug.
+// renderList used to walk from index 0 and break at len(rows) >= height,
+// so when the cursor was past the row budget the highlighted row was
+// never emitted. Windowing should keep the cursor in frame.
+func TestConversations_CursorVisibleWhenScrolledPastWindow(t *testing.T) {
+	m := newConversations(styles.Default(), DefaultKeymap())
+	many := make([]conversations.Conversation, 30)
+	for i := range many {
+		many[i] = conversations.Conversation{
+			ID:           fmt.Sprintf("conv-%02d", i),
+			Agent:        agent.IDClaude,
+			Project:      "/p",
+			LastActivity: time.Now(),
+			Preview:      fmt.Sprintf("preview-%02d", i),
+		}
+	}
+	m.SetList(many)
+	m.cursor = 28
+
+	out := m.View(120, 15)
+	if !strings.Contains(out, "preview-28") {
+		t.Errorf("cursor row preview-28 missing from rendered view (clipped at bottom?):\n%s", out)
+	}
+	// Top-of-list rows should have scrolled out of frame.
+	if strings.Contains(out, "preview-00") {
+		t.Errorf("preview-00 still visible when cursor is at row 28 — windowing didn't shift")
 	}
 }
