@@ -175,16 +175,11 @@ func New(cfg config.Config, version string) App {
 	st := styles.Default()
 	km := DefaultKeymap()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	if authStat, err := claudeauth.Get(ctx); err == nil {
-		detected := authStat.Tier()
-		// Only adopt a detected tier when the user hasn't explicitly
-		// declared one. "api" is the default-empty marker.
-		if (cfg.Subscription.Tier == "" || cfg.Subscription.Tier == "api") && detected != "api" {
-			cfg.Subscription.Tier = detected
-		}
-	}
+	// Subscription-tier auto-detection deliberately does NOT run here.
+	// It shells out to `claude auth status` (a Node CLI, ~0.9s) and
+	// claudeauth's cache is per-process, so doing it synchronously in
+	// New() blocked the very first frame on every single launch. It now
+	// runs as detectTierCmd, fired async from Init() — see tierDetectedMsg.
 
 	a := App{
 		cfg:            cfg,
@@ -218,6 +213,8 @@ func (a App) Init() tea.Cmd {
 		a.refreshSessionsCmd(),
 		a.refreshProjectsCmd(),
 		a.refreshUsageCmd(),
+		detectTierCmd(),
+		detectMoshiCmd(),
 		tickEvery(2 * time.Second),
 		usageTick(),
 	}
@@ -242,6 +239,44 @@ func checkForUpdateCmd() tea.Cmd {
 		defer cancel()
 		res, err := selfupdate.Check(ctx)
 		return updateCheckMsg{Result: res, Err: err}
+	}
+}
+
+// tierDetectedMsg carries the result of the async `claude auth status`
+// probe. Tier is the normalized ccmux tier, or "api" when undetectable.
+type tierDetectedMsg struct{ Tier string }
+
+// detectTierCmd runs the subscription-tier probe off the UI goroutine.
+// It used to run synchronously in New(), which stalled the first frame
+// for ~0.9s on every launch while the `claude` Node CLI booted —
+// claudeauth's cache is per-process, so a fresh ccmux never hits it.
+// Deferring it lets the TUI paint immediately; the quota bar's plan
+// limit fills in a beat later when tierDetectedMsg lands.
+func detectTierCmd() tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		st, err := claudeauth.Get(ctx)
+		if err != nil {
+			return tierDetectedMsg{Tier: "api"}
+		}
+		return tierDetectedMsg{Tier: st.Tier()}
+	}
+}
+
+// moshiDetectedMsg carries the result of an async moshi.Detect probe.
+type moshiDetectedMsg struct{ State moshi.Status }
+
+// detectMoshiCmd runs the moshi/moshi-hook status probe off the UI
+// goroutine. moshi.Detect shells out (launchctl/brew on macOS) and used
+// to run synchronously in newSettings — a 2s startup stall on every
+// launch — and again inline in settingsModel.Update every 30s, which
+// froze the TUI mid-session. Both paths now go through this command.
+func detectMoshiCmd() tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		return moshiDetectedMsg{State: moshi.Detect(ctx)}
 	}
 }
 
@@ -312,7 +347,14 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, cmd
 
 	case tickMsg:
-		return a, tea.Batch(a.refreshSessionsCmd(), tickEvery(2*time.Second))
+		cmds := []tea.Cmd{a.refreshSessionsCmd(), tickEvery(2 * time.Second)}
+		// Keep the Settings screen's moshi status fresh while it's
+		// focused — async, so the 30s refresh never blocks the UI
+		// goroutine the way the old inline moshi.Detect did.
+		if a.screen == ScreenSettings && a.settings.MoshiStale() {
+			cmds = append(cmds, detectMoshiCmd())
+		}
+		return a, tea.Batch(cmds...)
 
 	case usageTickMsg:
 		return a, tea.Batch(a.refreshUsageCmd(), usageTick())
@@ -338,6 +380,24 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Err == nil && msg.Result.Available() {
 			a.dashboard.SetUpdateAvailable(msg.Result)
 		}
+		return a, nil
+
+	case tierDetectedMsg:
+		// Async result of detectTierCmd. Only adopt a detected tier when
+		// the user hasn't explicitly declared one ("api" is the
+		// default-empty marker) — a hand-set tier in config.toml always
+		// wins. Push the updated config into the screens that render it.
+		if (a.cfg.Subscription.Tier == "" || a.cfg.Subscription.Tier == "api") && msg.Tier != "api" {
+			a.cfg.Subscription.Tier = msg.Tier
+			a.dashboard.SetConfig(a.cfg)
+			a.settings.SetConfig(a.cfg)
+		}
+		return a, nil
+
+	case moshiDetectedMsg:
+		// Async result of detectMoshiCmd — push it into the Settings
+		// screen, which renders the moshi/moshi-hook status block.
+		a.settings.SetMoshiState(msg.State)
 		return a, nil
 
 	case conversationDeletedMsg:
