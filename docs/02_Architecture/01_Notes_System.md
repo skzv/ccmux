@@ -38,7 +38,13 @@ The structure (`01_Specs`, `02_Architecture`, `03_Agent_Logs`) is *convention*, 
 
 ## Primary: ccmux Notes Tab
 
-A "Notes" tab in the TUI, scoped to the currently focused project. Two-pane layout:
+A "Notes" tab in the TUI, scoped to the currently focused project. The
+list surfaces *every* markdown file in the project — `README.md`,
+`CLAUDE.md`, `openspec/`, anything — grouped by the folder it lives in,
+not just the `docs/` subtree. Version-control, dependency, and
+build-output directories (`.git`, `node_modules`, `vendor`, `dist`,
+`build`, `target`) are pruned. New notes created from the tab still
+land under `docs/` (the canonical home). Two-pane layout:
 
 ```
 ┌───── docs/ ──────────────┐  ┌──── 01_Specs/00_Initial_Concept.md ─────┐
@@ -56,7 +62,7 @@ A "Notes" tab in the TUI, scoped to the currently focused project. Two-pane layo
                                                        * if installed on host
 ```
 
-Rendering: Glamour with the active theme. Wikilinks (`[[foo]]`) and markdown links resolve within the project's `docs/` tree. The renderer caches output keyed by `(path, mtime)` so re-opening a note is instant.
+Rendering: Glamour with the active theme. Wikilinks (`[[foo]]`) and markdown links resolve within the project tree. The renderer caches output keyed by `(path, mtime)` so re-opening a note is instant.
 
 ## Quick-Actions
 
@@ -66,7 +72,7 @@ Rendering: Glamour with the active theme. Wikilinks (`[[foo]]`) and markdown lin
 | `n` then `s` | New Spec → prompts for title; creates `docs/01_Specs/NN_<title>.md` (NN auto-incremented). |
 | `n` then `d` | New ADR → same flow for `docs/02_Architecture/`. |
 | `e` | Edit selected file in `$EDITOR` (nvim, vim, helix, code). |
-| `/` | Full-text search across the project's `docs/`. Ripgrep when available. |
+| `/` | Full-text search across every markdown file in the project. Ripgrep when available. |
 | `o` | Open in Obsidian via `obsidian://` URI (macOS only; hidden if Obsidian not installed). |
 
 ## Templated Frontmatter

@@ -66,7 +66,7 @@ ccmux update         # pull latest, rebuild, reload daemon
 
 ![ccmux dashboard](docs/screenshots/dashboard.png)
 
-**Notes** — per-project `docs/` tree on the left, Glamour-rendered markdown on the right. Ripgrep-backed `/` search.
+**Notes** — every markdown file in the project, grouped by folder, on the left; Glamour-rendered markdown on the right. Ripgrep-backed `/` search.
 
 ![ccmux notes screen](docs/screenshots/notes.png)
 
@@ -139,7 +139,7 @@ Attaching to an auto-discovered peer execs `ssh -t <host> -- tmux attach -t <nam
 - View & edit global and per-project `CLAUDE.md` from the TUI
 
 ### 📝 Notes, terminal-native
-- Per-project Notes tab — tree view of `docs/` with inline markdown rendered by [Glamour](https://github.com/charmbracelet/glamour)
+- Per-project Notes tab — every markdown file in the project, grouped by folder, with inline markdown rendered by [Glamour](https://github.com/charmbracelet/glamour)
 - Quick-actions: new Agent Log (today's, auto-templated), new Spec, new ADR
 - Ripgrep-backed search; plain markdown on disk is the source of truth (no required cloud)
 

@@ -1,7 +1,10 @@
 // Package notes is the on-disk operations layer for the TUI's Notes tab.
-// One project's notes vault == its docs/ tree. No global vault, no
-// required sync service — plain markdown on the filesystem is the
-// source of truth.
+// One project's notes vault == every markdown file under the project
+// root, grouped by the folder it lives in. No global vault, no required
+// sync service — plain markdown on the filesystem is the source of
+// truth. New notes created from the TUI still land under docs/ (the
+// canonical home), but the listing surfaces README.md, CLAUDE.md,
+// openspec/, and anything else, not just docs/.
 package notes
 
 import (
@@ -14,20 +17,23 @@ import (
 	"time"
 )
 
-// Vault is the docs/ tree for one project.
+// Vault is the markdown tree for one project — rooted at the project
+// directory itself, so List() and Search() see every .md file, not
+// just the docs/ subtree.
 type Vault struct {
-	Root string // absolute path to <project>/docs
+	Root string // absolute path to the project directory
 }
 
-// Open returns a Vault rooted at <projectPath>/docs. The directory does
-// not need to exist yet — New* methods create it on first write.
+// Open returns a Vault rooted at the project directory. The New*
+// methods create docs/ on first write; the directory tree does not
+// need to exist yet.
 func Open(projectPath string) Vault {
-	return Vault{Root: filepath.Join(projectPath, "docs")}
+	return Vault{Root: projectPath}
 }
 
-// Section identifies which of the three canonical subdirectories a note
-// lives in. Notes elsewhere in docs/ are still listed (under "Other")
-// but the quick-actions only create in these three.
+// Section identifies one of the three canonical docs/ subdirectories
+// the New* quick-actions create into. It no longer drives the listing
+// (which groups by actual folder) — only note creation.
 type Section int
 
 const (
@@ -61,19 +67,21 @@ func (s Section) Label() string {
 	return "Other"
 }
 
-// Entry is one item in the vault listing.
+// Entry is one markdown file in the vault listing.
 type Entry struct {
 	Path     string    // absolute path on disk
-	Rel      string    // path relative to Vault.Root (e.g. "01_Specs/00_Vision.md")
-	Section  Section   // which canonical section this entry belongs to
+	Rel      string    // slash-separated path relative to the project root (e.g. "docs/01_Specs/00_Vision.md")
+	Dir      string    // slash-separated directory portion of Rel ("" for a root-level file)
 	Display  string    // short, human-readable label for the TUI
 	Modified time.Time // mtime, for sorting
 }
 
-// List returns every markdown file under the vault, grouped (in the
-// returned slice) so SectionSpecs entries come first, then Architecture,
-// Agent Logs, then Other. Within a section: 01_Specs sort lexically;
-// Agent Logs sort newest-first by filename (which is the date).
+// List returns every markdown file under the project, sorted by
+// containing directory (root-level files first, then folders
+// lexically) and then by filename. Agent-log folders sort newest-first
+// since the filename is the date. Version-control, dependency, and
+// build-output directories are pruned so the listing reflects the
+// project's own notes, not vendored README noise.
 func (v Vault) List() ([]Entry, error) {
 	if _, err := os.Stat(v.Root); err != nil {
 		if os.IsNotExist(err) {
@@ -87,8 +95,7 @@ func (v Vault) List() ([]Entry, error) {
 			return err
 		}
 		if d.IsDir() {
-			// Skip hidden directories (.obsidian, .git stray copies).
-			if strings.HasPrefix(d.Name(), ".") && path != v.Root {
+			if path != v.Root && skipDir(d.Name()) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -96,14 +103,22 @@ func (v Vault) List() ([]Entry, error) {
 		if !strings.EqualFold(filepath.Ext(d.Name()), ".md") {
 			return nil
 		}
-		rel, _ := filepath.Rel(v.Root, path)
+		rel, relErr := filepath.Rel(v.Root, path)
+		if relErr != nil {
+			return nil
+		}
+		rel = filepath.ToSlash(rel)
 		info, _ := d.Info()
+		var mod time.Time
+		if info != nil {
+			mod = info.ModTime()
+		}
 		out = append(out, Entry{
 			Path:     path,
 			Rel:      rel,
-			Section:  sectionForRel(rel),
+			Dir:      dirOf(rel),
 			Display:  displayFor(rel),
-			Modified: info.ModTime(),
+			Modified: mod,
 		})
 		return nil
 	})
@@ -111,11 +126,11 @@ func (v Vault) List() ([]Entry, error) {
 		return nil, err
 	}
 	sort.Slice(out, func(i, j int) bool {
-		if out[i].Section != out[j].Section {
-			return out[i].Section < out[j].Section
+		if out[i].Dir != out[j].Dir {
+			return out[i].Dir < out[j].Dir
 		}
-		// Inside Agent Logs, newest-first is friendlier.
-		if out[i].Section == SectionAgentLogs {
+		// Inside an Agent Logs folder, newest-first is friendlier.
+		if filepath.Base(out[i].Dir) == SectionAgentLogs.Dir() {
 			return out[i].Rel > out[j].Rel
 		}
 		return out[i].Rel < out[j].Rel
@@ -123,10 +138,10 @@ func (v Vault) List() ([]Entry, error) {
 	return out, nil
 }
 
-// Read returns the bytes of the file at `rel` (a path relative to the
-// vault root). Wraps the canonical filesystem error.
+// Read returns the bytes of the file at `rel` (a slash-separated path
+// relative to the project root). Wraps the canonical filesystem error.
 func (v Vault) Read(rel string) ([]byte, error) {
-	return os.ReadFile(filepath.Join(v.Root, rel))
+	return os.ReadFile(filepath.Join(v.Root, filepath.FromSlash(rel)))
 }
 
 // NewAgentLog returns the path to today's agent log, creating it from a
@@ -134,7 +149,7 @@ func (v Vault) Read(rel string) ([]byte, error) {
 // appends a session-start entry to the log immediately after the header
 // (used by ccmux when a new Claude session is launched for this project).
 func (v Vault) NewAgentLog(extraSession string) (string, bool, error) {
-	dir := filepath.Join(v.Root, SectionAgentLogs.Dir())
+	dir := filepath.Join(v.Root, "docs", SectionAgentLogs.Dir())
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", false, err
 	}
@@ -150,7 +165,7 @@ sessions: []
 
 # Agent Log — %s
 
-`, today, projectNameFor(v.Root), today)
+`, today, filepath.Base(v.Root), today)
 		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 			return "", false, err
 		}
@@ -188,7 +203,7 @@ func (v Vault) newNumberedNote(sec Section, title string, tmpl func(id int, titl
 	if strings.TrimSpace(title) == "" {
 		return "", fmt.Errorf("title required")
 	}
-	dir := filepath.Join(v.Root, sec.Dir())
+	dir := filepath.Join(v.Root, "docs", sec.Dir())
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
@@ -268,26 +283,33 @@ func nextNumberedID(dir string) int {
 	return max + 1
 }
 
-// sectionForRel decides which canonical Section a vault-relative path
-// belongs to based on its top-level directory.
-func sectionForRel(rel string) Section {
-	parts := strings.SplitN(filepath.ToSlash(rel), "/", 2)
-	if len(parts) == 0 {
-		return SectionOther
+// skipDir reports whether a directory should be pruned from the vault
+// walk. Hidden directories (.git, .obsidian, .ccmux) plus the usual
+// dependency and build-output trees hold vendored markdown that would
+// bury the project's own notes.
+func skipDir(name string) bool {
+	if strings.HasPrefix(name, ".") {
+		return true
 	}
-	switch parts[0] {
-	case "01_Specs":
-		return SectionSpecs
-	case "02_Architecture":
-		return SectionArchitecture
-	case "03_Agent_Logs":
-		return SectionAgentLogs
+	switch name {
+	case "node_modules", "vendor", "dist", "build", "target":
+		return true
 	}
-	return SectionOther
+	return false
 }
 
-// displayFor strips the section prefix and (where helpful) the leading
-// NN_ from a filename so the TUI list reads cleanly.
+// dirOf returns the slash-separated directory portion of a
+// vault-relative path, or "" when the file sits at the project root.
+func dirOf(rel string) string {
+	d := filepath.ToSlash(filepath.Dir(rel))
+	if d == "." {
+		return ""
+	}
+	return d
+}
+
+// displayFor strips the directory and (where helpful) the leading NN_
+// from a filename so the TUI list reads cleanly.
 func displayFor(rel string) string {
 	base := filepath.Base(rel)
 	base = strings.TrimSuffix(base, ".md")
@@ -296,12 +318,6 @@ func displayFor(rel string) string {
 	base = rx.ReplaceAllString(base, "")
 	base = strings.ReplaceAll(base, "_", " ")
 	return base
-}
-
-// projectNameFor extracts the project basename from a vault root path
-// (which always ends in "/docs").
-func projectNameFor(vaultRoot string) string {
-	return filepath.Base(filepath.Dir(vaultRoot))
 }
 
 // slugify turns "Auth Flow!" into "auth_flow". Used for note filenames.

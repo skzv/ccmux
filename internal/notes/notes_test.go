@@ -54,20 +54,31 @@ func TestSlugify(t *testing.T) {
 	}
 }
 
-func TestSectionForRel(t *testing.T) {
-	cases := []struct {
-		in   string
-		want Section
-	}{
-		{"01_Specs/00_Vision.md", SectionSpecs},
-		{"02_Architecture/00_System.md", SectionArchitecture},
-		{"03_Agent_Logs/2026-05-11.md", SectionAgentLogs},
-		{"something_else.md", SectionOther},
-		{"README.md", SectionOther},
+func TestDirOf(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"README.md", ""},
+		{"CLAUDE.md", ""},
+		{"docs/01_Specs/00_Vision.md", "docs/01_Specs"},
+		{"openspec/specs/spec.md", "openspec/specs"},
 	}
 	for _, tc := range cases {
-		if got := sectionForRel(tc.in); got != tc.want {
-			t.Errorf("sectionForRel(%q) = %v, want %v", tc.in, got, tc.want)
+		if got := dirOf(tc.in); got != tc.want {
+			t.Errorf("dirOf(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestSkipDir(t *testing.T) {
+	// Pruned: version control, dependency, and build-output trees.
+	for _, d := range []string{".git", ".obsidian", ".ccmux", "node_modules", "vendor", "dist", "build", "target"} {
+		if !skipDir(d) {
+			t.Errorf("skipDir(%q) = false, want true", d)
+		}
+	}
+	// Kept: the project's own source and docs directories.
+	for _, d := range []string{"docs", "openspec", "internal", "src", "cmd"} {
+		if skipDir(d) {
+			t.Errorf("skipDir(%q) = true, want false", d)
 		}
 	}
 }
@@ -84,13 +95,6 @@ func TestDisplayFor(t *testing.T) {
 		if got := displayFor(tc.in); got != tc.want {
 			t.Errorf("displayFor(%q) = %q, want %q", tc.in, got, tc.want)
 		}
-	}
-}
-
-func TestProjectNameFor(t *testing.T) {
-	got := projectNameFor("/Users/skz/Projects/ccmux/docs")
-	if got != "ccmux" {
-		t.Errorf("projectNameFor = %q, want ccmux", got)
 	}
 }
 
@@ -120,20 +124,24 @@ func TestList_EmptyVault(t *testing.T) {
 	}
 }
 
-func TestList_GroupsBySection(t *testing.T) {
+func TestList_GroupsByFolder(t *testing.T) {
 	project, v := makeProject(t)
-	docs := filepath.Join(project, "docs")
+	// Markdown spread across the project — root level, docs/, openspec/
+	// — plus noise (a hidden dir, a dependency tree, a non-md file)
+	// that List must prune.
 	files := map[string]string{
-		"01_Specs/00_Vision.md":        "# v",
-		"02_Architecture/00_System.md": "# s",
-		"03_Agent_Logs/2026-05-11.md":  "# log",
-		"03_Agent_Logs/2026-05-10.md":  "# older log",
-		"misc/scratchpad.md":           "# misc",
-		".obsidian/workspace.json":     "{}", // hidden dir should be skipped
-		"README.md":                    "# r",
+		"README.md":                        "# r",
+		"CLAUDE.md":                        "# c",
+		"docs/01_Specs/00_Vision.md":       "# v",
+		"docs/03_Agent_Logs/2026-05-11.md": "# log",
+		"docs/03_Agent_Logs/2026-05-10.md": "# older log",
+		"openspec/specs/spec.md":           "# s",
+		"node_modules/dep/README.md":       "# vendored",
+		".obsidian/workspace.md":           "# hidden",
+		"docs/notes.txt":                   "not markdown",
 	}
 	for rel, body := range files {
-		full := filepath.Join(docs, rel)
+		full := filepath.Join(project, filepath.FromSlash(rel))
 		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -147,45 +155,63 @@ func TestList_GroupsBySection(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// .obsidian/* should never appear.
+	// Pruned trees and non-markdown files never appear.
 	for _, e := range got {
+		if strings.Contains(e.Rel, "node_modules") {
+			t.Errorf("dependency dir leaked: %s", e.Rel)
+		}
 		if strings.Contains(e.Rel, ".obsidian") {
-			t.Errorf("hidden dir entry leaked: %s", e.Rel)
+			t.Errorf("hidden dir leaked: %s", e.Rel)
 		}
-		if strings.HasSuffix(e.Rel, ".json") {
-			t.Errorf("non-md entry leaked: %s", e.Rel)
+		if !strings.HasSuffix(e.Rel, ".md") {
+			t.Errorf("non-markdown leaked: %s", e.Rel)
 		}
 	}
 
-	// Sections must come in order: Specs < Architecture < AgentLogs < Other.
+	// 6 markdown files survive the prune (README, CLAUDE, Vision, 2 logs, spec).
+	if len(got) != 6 {
+		t.Fatalf("List() = %d entries, want 6:\n%+v", len(got), got)
+	}
+
+	// Root-level files (Dir == "") sort first.
+	if got[0].Dir != "" || got[1].Dir != "" {
+		t.Errorf("root-level files should sort first, got dirs %q, %q", got[0].Dir, got[1].Dir)
+	}
+
+	// Entries are ordered by containing directory.
 	for i := 1; i < len(got); i++ {
-		if got[i].Section < got[i-1].Section {
-			t.Errorf("section ordering broken at %d: %v vs %v", i, got[i-1].Section, got[i].Section)
+		if got[i].Dir < got[i-1].Dir {
+			t.Errorf("folder ordering broken at %d: %q before %q", i, got[i-1].Dir, got[i].Dir)
 		}
 	}
 
-	// Within Agent Logs, newest-first.
+	// Within an Agent Logs folder, newest-first (filename is the date).
 	var logs []Entry
 	for _, e := range got {
-		if e.Section == SectionAgentLogs {
+		if e.Dir == "docs/03_Agent_Logs" {
 			logs = append(logs, e)
 		}
 	}
-	if len(logs) != 2 || logs[0].Rel < logs[1].Rel {
-		t.Fatalf("Agent Logs not newest-first: %v", logs)
+	if len(logs) != 2 {
+		t.Fatalf("expected 2 agent logs, got %d", len(logs))
+	}
+	if logs[0].Rel < logs[1].Rel {
+		t.Errorf("agent logs not newest-first: %v", logs)
 	}
 }
 
 func TestRead(t *testing.T) {
 	project, v := makeProject(t)
-	dir := filepath.Join(project, "docs")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	// A nested path exercises the slash → filepath conversion: the TUI
+	// passes vault-relative paths like "docs/01_Specs/00_Vision.md".
+	nested := filepath.Join(project, "docs", "01_Specs", "x.md")
+	if err := os.MkdirAll(filepath.Dir(nested), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "x.md"), []byte("hello"), 0o644); err != nil {
+	if err := os.WriteFile(nested, []byte("hello"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	body, err := v.Read("x.md")
+	body, err := v.Read("docs/01_Specs/x.md")
 	if err != nil {
 		t.Fatal(err)
 	}
