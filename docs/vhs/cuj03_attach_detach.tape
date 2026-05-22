@@ -4,8 +4,8 @@ Output docs/vhs/out/cuj03_attach_detach.gif
 
 Set Theme "Catppuccin Mocha"
 Set FontSize 16
-Set Width 1280
-Set Height 760
+Set Width 1600
+Set Height 1000
 Set Padding 20
 Set TypingSpeed 80ms
 
@@ -32,20 +32,5 @@ Sleep 300ms
 Enter
 Sleep 2500ms
 
-# The stub agent's "waiting for input" screen is now visible.
-# Simulate a user reading context before typing a prompt.
+# Claude's session is now visible — a real agent, waiting for the next prompt.
 Sleep 2s
-
-# Detach via the tmux prefix (Ctrl-b) then d.
-# Bubble Tea resumes once tmux exits.
-Ctrl+b
-Sleep 300ms
-Type "d"
-Sleep 1500ms
-
-# Back in ccmux — the sessions list refreshes automatically.
-Sleep 2s
-
-# Quit.
-Type "q"
-Sleep 800ms

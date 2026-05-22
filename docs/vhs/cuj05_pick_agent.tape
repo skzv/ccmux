@@ -4,8 +4,8 @@ Output docs/vhs/out/cuj05_pick_agent.gif
 
 Set Theme "Catppuccin Mocha"
 Set FontSize 16
-Set Width 1280
-Set Height 760
+Set Width 1600
+Set Height 1000
 Set Padding 20
 Set TypingSpeed 80ms
 
@@ -30,8 +30,8 @@ Sleep 600ms
 Type "n"
 Sleep 800ms
 
-# Type a project name.
-Type "data-pipeline"
+# Type a project name (unique — not one of the pre-seeded fixtures).
+Type "inference-api"
 Sleep 400ms
 
 # Tab past host picker.
@@ -42,44 +42,34 @@ Sleep 300ms
 Tab
 Sleep 500ms
 
-# Cycle through all three agents so the viewer can see each option.
+# Cycle: briefly pause on Codex, then land on Antigravity (agy).
 Right
 Sleep 600ms
 
-# Now on Codex.
+# Now on Codex — keep moving.
 Right
-Sleep 600ms
+Sleep 800ms
 
-# Now on Antigravity.
-Right
-Sleep 600ms
-
-# Back to Claude — the default for this project.
-# Settle on Codex for the demo (shows the per-project choice).
-Left
-Sleep 500ms
-
-# Submit with Codex selected.
+# Now on Antigravity — this is the agent for this project.
 Enter
 Sleep 3500ms
 
-# Return to Home to see the new Codex session in the list.
+# Return to Home to see the new agy session in the list.
 Type "1"
 Sleep 2s
 
-# Attach to the new data-pipeline session to see Codex running.
-Enter
-Sleep 3000ms
-
-# Detach back to ccmux.
-Ctrl+b
+# Navigate to inference-api (3rd alphabetically: auth-service, ccmux, inference-api).
+Type "j"
 Sleep 300ms
-Type "d"
-Sleep 1500ms
+Type "j"
+Sleep 300ms
 
-# ccmux resumes.
-Sleep 1s
-
-# Quit.
-Type "q"
-Sleep 800ms
+# Attach to the new inference-api session — agy is running.
+Enter
+Sleep 3s
+# "Accessing workspace" appears first, then the trust prompt — wait for it.
+Enter
+Sleep 2s
+# Second pass in case trust prompt needed extra time to appear.
+Enter
+Sleep 3s

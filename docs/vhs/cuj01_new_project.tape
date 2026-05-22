@@ -4,8 +4,8 @@ Output docs/vhs/out/cuj01_new_project.gif
 
 Set Theme "Catppuccin Mocha"
 Set FontSize 16
-Set Width 1280
-Set Height 760
+Set Width 1600
+Set Height 1000
 Set Padding 20
 Set TypingSpeed 80ms
 
@@ -62,15 +62,3 @@ Sleep 2s
 Enter
 Sleep 3000ms
 
-# Detach back to ccmux.
-Ctrl+b
-Sleep 300ms
-Type "d"
-Sleep 1500ms
-
-# ccmux resumes with the session list.
-Sleep 1s
-
-# Quit.
-Type "q"
-Sleep 800ms
