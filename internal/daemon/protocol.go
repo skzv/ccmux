@@ -187,10 +187,3 @@ type KeepAwakeRequest struct {
 type SendKeysRequest struct {
 	Keys string `json:"keys"`
 }
-
-// ResizeRequest is the body of POST /v1/sessions/{name}/resize. Lets a
-// mobile client reflow a session's pane to a phone-friendly width.
-type ResizeRequest struct {
-	Cols int `json:"cols"`
-	Rows int `json:"rows"`
-}
