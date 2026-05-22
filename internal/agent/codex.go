@@ -25,9 +25,10 @@ func (Codex) Binary() string      { return "codex" }
 func (Codex) LaunchCmd(continueFlag bool) string {
 	if continueFlag {
 		// Codex's --continue flag re-attaches the last session in the
-		// cwd; zsh fallback covers the "Codex is broken" case for
-		// symmetry with Claude.
-		return "codex --continue || codex || zsh"
+		// cwd; the zsh→bash→sh fallback keeps the pane alive when codex
+		// is missing. sh is the POSIX guarantee — minimal Linux hosts
+		// without zsh would otherwise drop a dead pane.
+		return "codex --continue || codex || zsh || bash || sh"
 	}
 	return "codex"
 }

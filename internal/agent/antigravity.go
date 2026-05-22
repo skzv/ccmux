@@ -27,9 +27,10 @@ func (Antigravity) Binary() string      { return "agy" }
 func (Antigravity) LaunchCmd(continueFlag bool) string {
 	if continueFlag {
 		// `agy --continue` picks the most recent conversation for the
-		// cwd. The zsh fallback mirrors the other two agents so the UX
-		// is uniform when the underlying agent breaks.
-		return "agy --continue || agy || zsh"
+		// cwd. The zsh→bash→sh fallback mirrors the other two agents so
+		// the UX is uniform when the underlying agent breaks, and sh
+		// (POSIX guarantee) keeps the pane alive on zsh-less hosts.
+		return "agy --continue || agy || zsh || bash || sh"
 	}
 	return "agy"
 }
