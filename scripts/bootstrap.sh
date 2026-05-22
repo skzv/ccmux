@@ -112,7 +112,7 @@ check_dep() {
 step "Build prerequisites"
 check_dep git  git  git  "needed to clone + pull updates"
 check_dep make make make "drives the build (you already have it if you got this far via 'make bootstrap')"
-check_dep go   go   golang "Go 1.22+ — ccmux is written in Go"
+check_dep go   go   golang "Go 1.26+ — ccmux is written in Go"
 
 if (( ${#MISSING_DEPS[@]} > 0 )); then
   echo
@@ -134,14 +134,21 @@ if (( ${#MISSING_DEPS[@]} > 0 )); then
   fi
 fi
 
-# Re-verify Go specifically — version matters for ccmux.
-GO_MIN_VERSION="1.22"
+# Re-verify Go specifically — version matters for ccmux. Must stay in
+# sync with go.mod's `go N.N` directive.
+GO_MIN_VERSION="1.26"
 if command -v go >/dev/null 2>&1; then
   GO_VERSION="$(go env GOVERSION 2>/dev/null | sed 's/^go//')"
   if [[ -n "$GO_VERSION" ]]; then
-    # Lexicographic compare is wrong for "1.10" vs "1.9" but Go's
-    # version scheme is consistently 1.NN so it's fine in practice.
-    if [[ "$GO_VERSION" < "$GO_MIN_VERSION" ]]; then
+    # Compare major.minor numerically — a lex compare silently fails
+    # the moment Go hits a two-digit minor (e.g. "1.30" < "1.4" as text).
+    gv_major="${GO_VERSION%%.*}"
+    gv_rest="${GO_VERSION#*.}"
+    gv_minor="${gv_rest%%.*}"
+    min_major="${GO_MIN_VERSION%%.*}"
+    min_rest="${GO_MIN_VERSION#*.}"
+    min_minor="${min_rest%%.*}"
+    if (( gv_major < min_major || (gv_major == min_major && gv_minor < min_minor) )); then
       warn "go $GO_VERSION installed; ccmux wants ≥ $GO_MIN_VERSION"
       dim  "upgrade via your package manager and re-run."
       exit 1

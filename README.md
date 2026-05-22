@@ -5,7 +5,7 @@
 **One TUI for every AI coding session — Claude Code, Codex, Antigravity CLI — on your Mac, on your phone, anywhere.**
 
 [![CI](https://github.com/skzv/ccmux/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/skzv/ccmux/actions/workflows/ci.yml)
-[![Go Version](https://img.shields.io/badge/go-1.22+-00ADD8.svg)](https://go.dev/)
+[![Go Version](https://img.shields.io/badge/go-1.26+-00ADD8.svg)](https://go.dev/)
 [![License: FSL-1.1-MIT](https://img.shields.io/badge/license-FSL--1.1--MIT-blue.svg)](LICENSE)
 [![Status: alpha](https://img.shields.io/badge/status-alpha-orange.svg)](#status)
 [![Made with Charm](https://img.shields.io/badge/made_with-Charm-FF66CC.svg)](https://charm.sh/)
@@ -322,7 +322,7 @@ make setup
 `make setup` builds, installs `ccmux` + `ccmuxd` into `~/.local/bin/`, then runs the wizard. Idempotent — re-run any time.
 
 Requirements:
-- Go 1.22+ (build only)
+- Go 1.26+ (build only)
 - macOS, Linux, or Windows via WSL2 (see [Windows guide](docs/04_Guides/Windows.md) — native Windows tracks as an open TODO)
 - `~/.local/bin` on your PATH
 
