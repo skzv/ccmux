@@ -48,60 +48,6 @@ func TestNotesBrowseAndPreview(t *testing.T) {
 	}
 }
 
-// TestNotesCreate covers the templated-note CUJ: Spec / ADR / Agent Log
-// quick-actions create files at the right path, with frontmatter, and
-// auto-numbered or date-stamped filenames.
-func TestNotesCreate(t *testing.T) {
-	proj := t.TempDir()
-	v := notes.Open(proj)
-
-	spec, err := v.NewSpec("My First Spec")
-	if err != nil {
-		t.Fatalf("NewSpec: %v", err)
-	}
-	if d := filepath.Base(filepath.Dir(spec)); d != "01_Specs" {
-		t.Errorf("spec parent dir = %q, want 01_Specs", d)
-	}
-	if base := filepath.Base(spec); !strings.HasPrefix(base, "00_") {
-		t.Errorf("first spec filename = %q, want a 00_ prefix", base)
-	}
-	if body := readFile(t, spec); !strings.Contains(body, "title: My First Spec") {
-		t.Errorf("spec frontmatter missing title: %q", body)
-	}
-
-	// A second spec auto-increments the numeric prefix.
-	spec2, err := v.NewSpec("Second Spec")
-	if err != nil {
-		t.Fatalf("NewSpec (2): %v", err)
-	}
-	if base := filepath.Base(spec2); !strings.HasPrefix(base, "01_") {
-		t.Errorf("second spec filename = %q, want a 01_ prefix", base)
-	}
-
-	adr, err := v.NewADR("Some Decision")
-	if err != nil {
-		t.Fatalf("NewADR: %v", err)
-	}
-	if d := filepath.Base(filepath.Dir(adr)); d != "02_Architecture" {
-		t.Errorf("ADR parent dir = %q, want 02_Architecture", d)
-	}
-
-	logPath, created, err := v.NewAgentLog("c-demo")
-	if err != nil {
-		t.Fatalf("NewAgentLog: %v", err)
-	}
-	if !created {
-		t.Errorf("NewAgentLog reported created=false for a fresh log")
-	}
-	today := time.Now().Format("2006-01-02")
-	if base := filepath.Base(logPath); base != today+".md" {
-		t.Errorf("agent log filename = %q, want %s.md", base, today)
-	}
-	if body := readFile(t, logPath); !strings.Contains(body, "c-demo") {
-		t.Errorf("agent log missing the session-start entry: %q", body)
-	}
-}
-
 // TestNotesSearch covers the search CUJ: a query returns the notes
 // containing it and excludes notes that do not.
 func TestNotesSearch(t *testing.T) {

@@ -3,8 +3,6 @@ package tui
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -184,9 +182,9 @@ func (m projectsModel) Update(msg tea.Msg) (projectsModel, tea.Cmd) {
 			m.form = nil
 			return m, nil
 		case newProjectSubmitMsg:
-			// Drop the form, kick off scaffold+session start as a tea.Cmd.
+			// Drop the form, kick off create+session start as a tea.Cmd.
 			m.form = nil
-			return m, scaffoldAndStartCmd(msg)
+			return m, createProjectCmd(msg)
 		}
 		f, cmd := m.form.Update(msg)
 		m.form = &f
@@ -238,9 +236,6 @@ func (m projectsModel) Update(msg tea.Msg) (projectsModel, tea.Cmd) {
 			f := newNewProjectForm(m.st, m.hosts, m.defaultAgent)
 			m.form = &f
 			return m, tea.Batch(textInputBlink())
-		case km.String() == "u":
-			// Upgrade current working directory (non-destructive).
-			return m, upgradeCwdCmd()
 		case km.String() == "a":
 			// Switch the selected project's agent. Cycles through
 			// agent.All() in canonical order. Local-host projects
@@ -352,7 +347,7 @@ func (m projectsModel) View(width, height int) string {
 func (m projectsModel) renderList(width, height int, narrow bool) string {
 	header := m.st.Emphasis.Render("Projects")
 	if !narrow {
-		header += "  " + m.st.Muted.Render("(/: filter   n: new   u: upgrade cwd   enter: attach)")
+		header += "  " + m.st.Muted.Render("(/: filter   n: new   enter: attach)")
 	}
 	if len(m.projects) == 0 {
 		body := lipgloss.JoinVertical(lipgloss.Left,
@@ -444,7 +439,6 @@ func (m projectsModel) renderDetail(width, height int) string {
 		m.st.Subtitle.Render("Keys"),
 		m.st.Key.Render("enter") + "  " + enterDesc,
 		m.st.Key.Render("n") + "      new project (modal form)",
-		m.st.Key.Render("u") + "      upgrade cwd (current shell, not selected)",
 		m.st.Key.Render("a") + "      switch agent for this project (cycles claude→codex→antigravity; local only)",
 		m.st.Key.Render("c") + "      show conversations for this project",
 		m.st.Key.Render("5") + "      open Notes for this project (local only)",
@@ -462,15 +456,16 @@ func projectHost(p project.Project) string {
 	return p.Host
 }
 
-// scaffoldAndStartCmd runs scaffold + StartSession and returns a
-// projectSessionReadyMsg with the session name so app.go can dispatch the
-// tmux-attach via tea.ExecProcess.
+// createProjectCmd creates a new project — its directory plus an agent
+// session — and returns a projectSessionReadyMsg so app.go can dispatch
+// the tmux-attach via tea.ExecProcess. It does NOT scaffold the project
+// (no CLAUDE.md / docs/ / git init); ccmux only makes the directory and
+// launches the agent.
 //
 // For a remote host pick, ccmux POSTs /v1/projects to that host's
-// ccmuxd (so the scaffold + tmux + initial-prompt all run natively on
-// the remote, no SSH-through-git-init kludge) and then fires
-// remoteSessionStartedMsg so the app exec's into ssh-attach.
-func scaffoldAndStartCmd(submit newProjectSubmitMsg) tea.Cmd {
+// ccmuxd so the directory + session are created natively on the remote,
+// then fires remoteSessionStartedMsg so the app exec's into ssh-attach.
+func createProjectCmd(submit newProjectSubmitMsg) tea.Cmd {
 	return func() tea.Msg {
 		// Remote case: hand off to the remote daemon.
 		if submit.Host != "" && submit.Host != "local" && submit.Address != "" {
@@ -478,9 +473,8 @@ func scaffoldAndStartCmd(submit newProjectSubmitMsg) tea.Cmd {
 			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 			defer cancel()
 			res, err := cli.NewProject(ctx, daemon.NewProjectRequest{
-				Name:        submit.Name,
-				Description: submit.Description,
-				Agent:       string(submit.Agent),
+				Name:  submit.Name,
+				Agent: string(submit.Agent),
 			})
 			if err != nil {
 				return toastMsg{
@@ -498,41 +492,17 @@ func scaffoldAndStartCmd(submit newProjectSubmitMsg) tea.Cmd {
 				DialHost:    dial,
 			}
 		}
-		// Local case: pass the picker's chosen agent through to
-		// scaffold so the sidecar gets written and the launch command
-		// matches the agent.
+		// Local case: pass the picker's chosen agent through so the
+		// sidecar gets written and the launch command matches.
 		opts := scaffold.Options{
-			Name:        submit.Name,
-			Description: submit.Description,
-			Agent:       submit.Agent,
+			Name:  submit.Name,
+			Agent: submit.Agent,
 		}
 		session, err := scaffold.StartSession(context.Background(), opts)
 		if err != nil {
 			return toastMsg{Text: "new project: " + err.Error(), Kind: toastError, Until: time.Now().Add(6 * time.Second)}
 		}
 		return projectSessionReadyMsg{Session: session, Project: submit.Name}
-	}
-}
-
-// upgradeCwdCmd injects the ccmux structure into the cwd (no .git changes,
-// no Claude session started). The toast surfaces what actually changed
-// — without that, "upgrade" on an already-scaffolded project looked
-// identical to a no-op bug.
-func upgradeCwdCmd() tea.Cmd {
-	return func() tea.Msg {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return toastMsg{Text: "upgrade: " + err.Error(), Kind: toastError, Until: time.Now().Add(5 * time.Second)}
-		}
-		opts := scaffold.Options{Name: filepath.Base(cwd), Dir: cwd, SkipGit: true}
-		res, err := scaffold.Scaffold(&opts)
-		if err != nil {
-			return toastMsg{Text: "upgrade: " + err.Error(), Kind: toastError, Until: time.Now().Add(5 * time.Second)}
-		}
-		if !res.Changed() {
-			return toastMsg{Text: cwd + ": already up to date", Kind: toastInfo, Until: time.Now().Add(4 * time.Second)}
-		}
-		return toastMsg{Text: "upgraded " + cwd + " — " + res.Summary(), Kind: toastSuccess, Until: time.Now().Add(5 * time.Second)}
 	}
 }
 

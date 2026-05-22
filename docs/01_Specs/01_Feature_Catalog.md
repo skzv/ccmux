@@ -28,25 +28,20 @@ Legend: `[P1]` Phase 1, `[P2]` Phase 2, `[P3]` Phase 3, `[L]` Long-term / native
 | Feature | Phase | Notes |
 |---|---|---|
 | Discover projects under `~/Projects` (configurable) | P1 | Any dir with `CLAUDE.md` or `.git`. |
-| New project wizard: name, template, GitHub privacy, first prompt for Claude | P1 | Replaces `mkproj`. Huh form. |
-| Upgrade existing project: inject `CLAUDE.md`, vault structure, `.gitignore` rules | P1 | Replaces `upgrade-proj`. Non-destructive. |
-| Templates: blank, Python (uv), Go, Next.js, Rust (cargo) | P2 | Templates live in `internal/templates/` as embedded FS. |
+| New project: name + host + agent. Creates the directory, starts the agent session — nothing else (no `CLAUDE.md`, no `docs/`, no `git init`). | P1 | Bootstrapping (`/init`, `openspec`) is the user's job, run inside the session. |
 | Recently opened projects pinned to top of project list | P2 | Last-opened time in config. |
 | `/` on Projects screen filters the visible list by name (case-insensitive substring) | P1 | Type-to-filter via bubbles `textinput`. Esc clears, enter attaches to the highlighted match. |
 | Quick-jump: `Ctrl-P` opens fuzzy finder over all projects | P1 | Global hotkey form of the above, scoped to "from any screen". Not yet shipped. |
 | Per-project `.ccmux.toml` overrides (auto-attach behavior, default branch) | P2 | Optional, merged over user config. |
 
-## Notes System (plain markdown in `docs/`)
+## Notes System (plain markdown on disk)
 
 | Feature | Phase | Notes |
 |---|---|---|
-| Notes tab per project: tree view of `docs/` | P1 | |
+| Notes tab per project: every `.md` file, grouped by folder | P1 | Whole project tree, not just `docs/`; VCS/dependency dirs pruned. |
 | Inline markdown preview rendered with Glamour | P1 | Right-pane viewport. |
-| Quick-action: new Agent Log → `docs/03_Agent_Logs/YYYY-MM-DD.md` with templated frontmatter | P1 | Opens in `$EDITOR`. |
-| Quick-action: new Spec → `docs/01_Specs/NN_<title>.md` (auto-numbered) | P1 | Prompts for title. |
-| Quick-action: new ADR → `docs/02_Architecture/NN_<title>.md` | P1 | |
-| Auto-append session-start line to today's Agent Log when starting a Claude session | P1 | Format: `- 14:32 — Started session "auth-fix" in foo/. Initial prompt: …` |
-| Per-project notes search (ripgrep-backed) | P1 | `/` opens fuzzy text search. |
+| Edit a note in `$EDITOR` (`e`) | P1 | ccmux browses + searches notes; creating/writing them is the user's (or agent's) job. |
+| Per-project notes search (ripgrep-backed) | P1 | `/` opens fuzzy text search across the whole project. |
 | Recent notes panel on dashboard: notes edited in last 24h across all projects | P2 | Reads mtimes. |
 | Tailnet web viewer: ccmuxd serves rendered markdown on `tailscale_ip:7474` | P2 | Bound to tailnet only, no auth (tailnet *is* auth). |
 | Cross-project notes search | P2 | |
@@ -159,8 +154,7 @@ A "Claude" screen in the TUI that surfaces and edits the settings Claude Code it
 |---|---|---|
 | `ccmux` | P1 | Launch TUI. |
 | `ccmux attach [project]` | P1 | Attach to session for project (default: cwd). Direct shim for `cc`. |
-| `ccmux new <name>` | P1 | New project + session. Direct shim for `mkproj`. |
-| `ccmux upgrade` | P1 | Upgrade cwd. Direct shim for `upgrade-proj`. |
+| `ccmux new <name> [--agent <id>]` | P1 | Create the project directory + start an agent session. No scaffolding. |
 | `ccmux list [--json]` | P1 | List sessions. JSON for scripting. |
 | `ccmux kill <project>` | P1 | Kill a session. |
 | `ccmux setup` | P1 | First-run wizard. |

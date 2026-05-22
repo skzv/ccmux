@@ -45,56 +45,32 @@ func TestProjectDiscovery(t *testing.T) {
 	}
 }
 
-// TestProjectScaffold_New covers `ccmux new`: it scaffolds the project
-// directory (docs tree, README, .gitignore, agent sidecar) and starts
-// a tmux session. `ccmux new` execs `tmux attach` last, which fails
-// without a tty — tolerated; the scaffold + session happen first.
-func TestProjectScaffold_New(t *testing.T) {
+// TestProjectNew covers `ccmux new`: it creates the project directory
+// and starts a tmux session — and creates NOTHING else. No docs/ tree,
+// no CLAUDE.md, no README.md, no .gitignore, no git repo: project
+// scaffolding has been removed. `ccmux new` execs `tmux attach` last,
+// which fails without a tty — tolerated; the directory + session
+// happen first.
+func TestProjectNew(t *testing.T) {
 	e := newEnv(t)
 	_, _, _ = e.ccmuxIn(e.Root, "new", "freshproj")
 
 	dir := filepath.Join(e.Root, "freshproj")
-	for _, sub := range []string{"docs/01_Specs", "docs/02_Architecture", "docs/03_Agent_Logs"} {
-		if fi, err := os.Stat(filepath.Join(dir, sub)); err != nil || !fi.IsDir() {
-			t.Errorf("scaffold directory %q is missing", sub)
-		}
+	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+		t.Fatalf("`ccmux new` did not create the project directory: %v", err)
 	}
-	for _, f := range []string{"README.md", ".gitignore", ".ccmux/agent"} {
-		if !exists(filepath.Join(dir, f)) {
-			t.Errorf("scaffold file %q is missing", f)
+	// Scaffolding is removed — none of these may exist.
+	for _, forbidden := range []string{
+		"docs", filepath.Join("docs", "01_Specs"),
+		filepath.Join("docs", "02_Architecture"), filepath.Join("docs", "03_Agent_Logs"),
+		"README.md", ".gitignore", "CLAUDE.md", ".git",
+	} {
+		if exists(filepath.Join(dir, forbidden)) {
+			t.Errorf("`ccmux new` created %q — project scaffolding should be gone", forbidden)
 		}
 	}
 	if !e.hasSession("c-freshproj") {
 		t.Errorf("`ccmux new` did not start session c-freshproj")
-	}
-}
-
-// TestProjectUpgrade_Idempotent covers `ccmux upgrade`: it injects the
-// ccmux structure non-destructively (existing files untouched) and is
-// idempotent (a second run reports no changes).
-func TestProjectUpgrade_Idempotent(t *testing.T) {
-	e := newEnv(t)
-	dir := filepath.Join(e.Root, "legacy")
-	mkdirAll(t, filepath.Join(dir, ".git"))
-	writeFile(t, filepath.Join(dir, "README.md"), "# legacy — keep me\n")
-
-	out1, stderr1, err := e.ccmuxIn(dir, "upgrade")
-	if err != nil {
-		t.Fatalf("ccmux upgrade (run 1): %v\nstderr: %s", err, stderr1)
-	}
-	if !strings.Contains(out1, "docs/01_Specs") {
-		t.Errorf("first upgrade did not report creating the docs tree:\n%s", out1)
-	}
-	if body := readFile(t, filepath.Join(dir, "README.md")); !strings.Contains(body, "keep me") {
-		t.Errorf("upgrade overwrote the pre-existing README.md (got %q)", body)
-	}
-
-	out2, stderr2, err := e.ccmuxIn(dir, "upgrade")
-	if err != nil {
-		t.Fatalf("ccmux upgrade (run 2): %v\nstderr: %s", err, stderr2)
-	}
-	if !strings.Contains(out2, "Already up to date") {
-		t.Errorf("second upgrade was not a clean no-op:\n%s", out2)
 	}
 }
 

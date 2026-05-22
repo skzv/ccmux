@@ -81,9 +81,6 @@ func TestSaveLoad_RoundTrip(t *testing.T) {
 		{Name: "mac-mini", Address: "100.64.0.5", User: "skz", Port: 22, Mosh: true},
 		{Name: "laptop", Address: "100.64.0.6", User: "skz"},
 	}
-	in.Scaffold.Dirs = []string{"src", "docs"}
-	in.Scaffold.InitialPrompt = "hello {{name}}"
-
 	if err := Save(in); err != nil {
 		t.Fatalf("Save: %v", err)
 	}

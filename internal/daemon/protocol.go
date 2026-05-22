@@ -117,11 +117,11 @@ type NewBareSessionResponse struct {
 //
 // Used by the Projects screen's "n" flow when the user picks a remote
 // host: the local TUI calls this over the tailnet, the remote daemon
-// does the scaffold + tmux dance natively (no SSH round-trips for
-// `git init` etc), and the TUI then attaches over ssh.
+// creates the directory + starts the session natively, and the TUI
+// then attaches over ssh. The daemon creates only the directory — no
+// CLAUDE.md, no docs/ tree, no git init.
 type NewProjectRequest struct {
-	Name        string `json:"name"`
-	Description string `json:"description"` // becomes the first prompt to the agent
+	Name string `json:"name"`
 	// Agent picks which AI agent the remote daemon launches inside
 	// the new session. One of "claude" / "codex" / "antigravity" (the
 	// legacy alias "gemini" is also accepted); empty (omitted by older
@@ -130,7 +130,7 @@ type NewProjectRequest struct {
 }
 
 // NewProjectResponse is what POST /v1/projects returns once the daemon
-// finished scaffolding + starting the session. Session is the tmux
+// created the directory + started the session. Session is the tmux
 // session name to attach to; Path is the absolute directory on the
 // daemon's host; Host is the daemon's hostname (so the client can show
 // "created on <host>" feedback).
