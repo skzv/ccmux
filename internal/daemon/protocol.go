@@ -151,5 +151,39 @@ type ProjectInfo struct {
 	HasGit   bool      `json:"has_git"`
 	HasCM    bool      `json:"has_cm"`
 	HasDocs  bool      `json:"has_docs"`
+	Agent    string    `json:"agent,omitempty"`
 	Modified time.Time `json:"modified"`
+}
+
+// PairRequest is the body of POST /v1/pair (mobile → daemon).
+type PairRequest struct {
+	Token     string `json:"token"`
+	PublicKey string `json:"public_key"`
+}
+
+// PairResponse is what POST /v1/pair returns on success.
+type PairResponse struct {
+	Hostname string `json:"hostname"`
+	Version  string `json:"version"`
+}
+
+// PairTokenResponse is what POST /v1/pair-token returns (unix-socket only).
+type PairTokenResponse struct {
+	Token string `json:"token"`
+	URL   string `json:"url"` // ccmux://pair?host=…&user=…&port=…&token=…
+}
+
+// RenameRequest is the body of POST /v1/sessions/{name}/rename.
+type RenameRequest struct {
+	Name string `json:"name"`
+}
+
+// KeepAwakeRequest is the body of POST /v1/sessions/{name}/keep-awake.
+type KeepAwakeRequest struct {
+	Enabled bool `json:"enabled"`
+}
+
+// SendKeysRequest is the body of POST /v1/sessions/{name}/send-keys.
+type SendKeysRequest struct {
+	Keys string `json:"keys"`
 }

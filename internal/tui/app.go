@@ -771,6 +771,17 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, cmd
 		}
 
+		// Notes search mode: the search textinput owns every keystroke so
+		// global bindings like "r" (refresh) don't swallow characters mid-query.
+		if a.screen == ScreenNotes && a.notes.searching {
+			if msg.String() == "ctrl+c" {
+				return a, tea.Quit
+			}
+			var cmd tea.Cmd
+			a.notes, cmd = a.notes.Update(msg)
+			return a, cmd
+		}
+
 		switch {
 		case keyMatches(msg, a.keys.Quit):
 			return a, tea.Quit
