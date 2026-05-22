@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -191,40 +190,6 @@ func CapturePane(ctx context.Context, name string, lines int) (string, error) {
 		return "", fmt.Errorf("tmux capture-pane: %w", err)
 	}
 	return string(out), nil
-}
-
-// CapturePaneANSI is like CapturePane but preserves escape sequences
-// (colors and text attributes) via -e, so a client can render the
-// pane with real terminal colors. Used by the mobile output endpoint.
-func CapturePaneANSI(ctx context.Context, name string, lines int) (string, error) {
-	args := []string{"capture-pane", "-e", "-p", "-t", exactPane(name)}
-	if lines > 0 {
-		args = append(args, "-S", fmt.Sprintf("-%d", lines))
-	}
-	cmd := command(ctx, "tmux", args...)
-	out, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("tmux capture-pane: %w", err)
-	}
-	return string(out), nil
-}
-
-// ResizeWindow resizes the named session's window to cols×rows, then
-// relatches window-size to "latest" so the window tracks real clients
-// again. resize-window pins window-size=manual as a side effect; the
-// relatch means a tmux client (e.g. the user's Mac) re-attaching will
-// resize the window back to its own size. A detached session keeps the
-// requested size until a client attaches — letting a mobile viewer
-// reflow it to a phone-friendly width without permanently pinning it.
-func ResizeWindow(ctx context.Context, name string, cols, rows int) error {
-	resize := command(ctx, "tmux", "resize-window", "-t", exactPane(name),
-		"-x", strconv.Itoa(cols), "-y", strconv.Itoa(rows))
-	if out, err := resize.CombinedOutput(); err != nil {
-		return fmt.Errorf("tmux resize-window: %w (%s)", err, strings.TrimSpace(string(out)))
-	}
-	relatch := command(ctx, "tmux", "set-window-option", "-t", exactPane(name), "window-size", "latest")
-	_ = relatch.Run() // best-effort: the resize already took effect
-	return nil
 }
 
 // SendKeys sends a literal key sequence to the named session.
