@@ -20,7 +20,7 @@ Then inside your WSL distro (Ubuntu by default):
 sudo apt update
 sudo apt install -y tmux mosh git ripgrep build-essential
 
-# Go 1.22+
+# Go 1.26+
 sudo apt install -y golang-go        # if your distro is recent enough
 # or grab from https://go.dev/dl/
 

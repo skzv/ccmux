@@ -27,7 +27,7 @@ endif
 check-go:
 	@command -v go >/dev/null 2>&1 || { \
 		printf "\n\033[1;31m✗\033[0m \`go\` not found on PATH.\n\n"; \
-		echo   "ccmux is built from source — Go 1.22+ is required."; \
+		echo   "ccmux is built from source — Go 1.26+ is required."; \
 		echo   "Install it with:"; \
 		echo   "  $(GO_INSTALL_HINT)"; \
 		echo   ""; \
