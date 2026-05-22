@@ -2,6 +2,8 @@ package tui
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -132,5 +134,61 @@ func TestScrollHintText(t *testing.T) {
 	}
 	if got := scrollHintText(3, 5); !strings.Contains(got, "↑ 3") || !strings.Contains(got, "↓ 5") {
 		t.Errorf("both-sides hint = %q", got)
+	}
+}
+
+// TestApp_NotesSearch_FindsTerm drives the full search flow through the
+// App router: open search with "/", type a query whose first character
+// collides with the global "r" (refresh) binding, run it, and confirm
+// the query reached the backend intact and produced hits. Regression
+// guard for the bug where "r" was swallowed by keys.Refresh before the
+// notes search textinput ever saw it.
+func TestApp_NotesSearch_FindsTerm(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	md := "# api\n\nThe old refresh token is immediately invalidated.\n"
+	if err := os.WriteFile(filepath.Join(dir, "docs", "api.md"), []byte(md), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	a := newAppForTest(t)
+	a.screen = ScreenNotes
+	a.notes.SetProject(&project.Project{Name: "auth-service", Path: dir})
+
+	// Open the search box.
+	m, _ := a.Update(keyMsg("/"))
+	a = m.(App)
+	if !a.notes.searching {
+		t.Fatal("'/' did not open the notes search input")
+	}
+
+	// Type the query one rune at a time — "r" first, which is the
+	// global Refresh keybinding and used to be swallowed here.
+	for _, r := range "refresh token" {
+		m, _ = a.Update(keyMsg(string(r)))
+		a = m.(App)
+	}
+	if got := a.notes.searchInput.Value(); got != "refresh token" {
+		t.Fatalf("search input = %q, want %q (first char swallowed?)", got, "refresh token")
+	}
+
+	// Enter runs the search; execute the returned cmd to harvest the msg.
+	m, cmd := a.Update(keyMsg("enter"))
+	a = m.(App)
+	if cmd == nil {
+		t.Fatal("enter did not produce a search command")
+	}
+	msg := cmd()
+	res, ok := msg.(notesSearchResultMsg)
+	if !ok {
+		t.Fatalf("search cmd produced %T, want notesSearchResultMsg", msg)
+	}
+	if res.Query != "refresh token" {
+		t.Fatalf("search ran for %q, want %q", res.Query, "refresh token")
+	}
+	if len(res.Hits) == 0 {
+		t.Fatal("search for 'refresh token' found 0 hits — feature broken")
 	}
 }
