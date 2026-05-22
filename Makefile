@@ -1,4 +1,4 @@
-.PHONY: build install setup uninstall run test test-e2e lint clean fmt vet daemon tui check-go bootstrap fuzz fuzz-quick
+.PHONY: build install setup uninstall run test test-e2e lint clean fmt vet daemon tui check-go bootstrap fuzz fuzz-quick tapes tapes-check
 
 BIN_DIR    := bin
 INSTALL_DIR := $(HOME)/.local/bin
@@ -165,3 +165,36 @@ lint: fmt vet
 
 clean:
 	rm -rf $(BIN_DIR) dist
+
+# --- Demo tapes -------------------------------------------------------
+# Renders every CUJ tape to docs/vhs/out/. Requires: make build, vhs, ffmpeg.
+TAPES := \
+	docs/vhs/cuj01_new_project.tape \
+	docs/vhs/cuj02_dashboard.tape \
+	docs/vhs/cuj03_attach_detach.tape \
+	docs/vhs/cuj04_resume.tape \
+	docs/vhs/cuj05_pick_agent.tape \
+	docs/vhs/cuj06_notes.tape \
+	docs/vhs/cuj07_multi_machine.tape \
+	docs/vhs/cuj08_phone.tape \
+	docs/vhs/cuj09_agents.tape \
+	docs/vhs/cuj10_setup_doctor.tape
+
+tapes: build
+	@command -v vhs >/dev/null || { echo "tapes: vhs not installed — brew install vhs"; exit 1; }
+	@for t in $(TAPES); do \
+		echo "tapes: rendering $$t"; \
+		bash docs/vhs/render.sh "$$t"; \
+	done
+	@echo "tapes: rendering docs/vhs/cuj11_update.tape (update demo)"
+	@CCMUX_UPDATE_DEMO=true bash docs/vhs/render.sh docs/vhs/cuj11_update.tape
+
+# Checks that every CUJ in the catalog has a corresponding tape file.
+# Runs cheaply in CI — no VHS needed.
+tapes-check:
+	@missing=0; \
+	for t in $(TAPES) docs/vhs/cuj11_update.tape; do \
+		[ -f "$$t" ] || { echo "tapes-check: missing $$t"; missing=$$((missing+1)); }; \
+	done; \
+	[ $$missing -eq 0 ] || exit $$missing
+	@echo "tapes-check: all tapes present"
