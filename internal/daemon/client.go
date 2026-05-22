@@ -129,6 +129,16 @@ func (c *Client) NewProject(ctx context.Context, req NewProjectRequest) (NewProj
 	return out, nil
 }
 
+// CreatePairToken asks the daemon to generate a one-time pairing token.
+// Only succeeds over the Unix socket (unix-socket-only endpoint).
+func (c *Client) CreatePairToken(ctx context.Context) (PairTokenResponse, error) {
+	var out PairTokenResponse
+	if err := c.post(ctx, "/v1/pair-token", nil, &out); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
 // Addr returns a human description of this client's target.
 func (c *Client) Addr() string { return c.scheme + "://" + c.addr }
 
