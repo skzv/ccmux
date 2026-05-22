@@ -137,6 +137,71 @@ func TestScrollHintText(t *testing.T) {
 	}
 }
 
+// TestNotes_AsyncLoad_CachesAndDiscardsStale verifies the Vault.List
+// walk runs off the UI goroutine, that the per-project cache short-
+// circuits repeat visits, and that a late-arriving notesEntriesLoadedMsg
+// for a project the user has already navigated away from is dropped.
+func TestNotes_AsyncLoad_CachesAndDiscardsStale(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# r"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "docs", "api.md"), []byte("# api"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	m := newNotes(styles.Default(), DefaultKeymap())
+
+	cmd := m.SetProject(&project.Project{Name: "p1", Path: dir})
+	if cmd == nil {
+		t.Fatal("first SetProject returned no Cmd — should be async")
+	}
+	if !m.loading {
+		t.Error("expected loading=true while the walk is in flight")
+	}
+	if len(m.entries) != 0 {
+		t.Errorf("entries=%d before the walk completes, want 0", len(m.entries))
+	}
+
+	loaded, ok := cmd().(notesEntriesLoadedMsg)
+	if !ok {
+		t.Fatalf("Cmd produced unexpected message type")
+	}
+	if loaded.Path != dir {
+		t.Errorf("loaded.Path = %q, want %q", loaded.Path, dir)
+	}
+	if len(loaded.Entries) != 2 {
+		t.Errorf("walk found %d entries, want 2 (README + docs/api)", len(loaded.Entries))
+	}
+
+	m2, _ := m.Update(loaded)
+	if m2.loading {
+		t.Error("loading should be false after notesEntriesLoadedMsg")
+	}
+	if len(m2.entries) != 2 {
+		t.Errorf("post-load entries=%d, want 2", len(m2.entries))
+	}
+
+	// Cache hit: revisiting the same project must not spawn another walk.
+	if cmd := m2.SetProject(&project.Project{Name: "p1", Path: dir}); cmd != nil {
+		t.Error("cache hit should return nil Cmd")
+	}
+
+	// Stale-result safety: switch projects, then receive a late msg for
+	// the old project — it must be discarded.
+	other := t.TempDir()
+	m2.SetProject(&project.Project{Name: "p2", Path: other})
+	stale := notesEntriesLoadedMsg{Path: dir, Entries: loaded.Entries}
+	m3, _ := m2.Update(stale)
+	if len(m3.entries) > 0 {
+		t.Errorf("stale msg for %q leaked into m.entries (now project %q): %d items",
+			dir, other, len(m3.entries))
+	}
+}
+
 // TestApp_NotesSearch_FindsTerm drives the full search flow through the
 // App router: open search with "/", type a query whose first character
 // collides with the global "r" (refresh) binding, run it, and confirm

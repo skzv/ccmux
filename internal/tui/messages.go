@@ -244,6 +244,14 @@ type openEditorMsg struct {
 // file was created/edited externally.
 type notesReloadMsg struct{}
 
+// notesEntriesLoadedMsg carries the result of an async Vault.List walk.
+// The path is echoed so the handler can discard stale results when the
+// user has already switched projects while the walk was in flight.
+type notesEntriesLoadedMsg struct {
+	Path    string
+	Entries []notes.Entry
+}
+
 // configReloadMsg asks the App to re-read ~/.config/ccmux/config.toml
 // and push the new shape into every screen that holds a cached copy.
 // Emitted after the Settings screen's "edit in $EDITOR" flow returns.

@@ -114,7 +114,7 @@ func skipDir(name string) bool {
 		return true
 	}
 	switch name {
-	case "node_modules", "vendor", "dist", "build", "target":
+	case "node_modules", "vendor", "dist", "build", "target", "__pycache__":
 		return true
 	}
 	return false
