@@ -36,15 +36,16 @@ mkdir -p "$HOME/Projects" "$root/bin" "$HOME/.config/ccmux" \
          "$HOME/.local/state/ccmux" "$HOME/.local/bin"
 export PATH="$root/bin:$HOME/.local/bin:$PATH"
 
-# Copy agent credentials so real claude/codex/agy authenticate in the fake HOME.
+# Copy agent config from real HOME so agents authenticate in the fake HOME.
+# Files are copied on disk only — no credentials are placed in env vars.
 mkdir -p "$HOME/.claude"
 cp "$REAL_HOME/.claude/api_key"       "$HOME/.claude/" 2>/dev/null || true
 cp "$REAL_HOME/.claude/settings.json" "$HOME/.claude/" 2>/dev/null || true
 mkdir -p "$HOME/.codex"
 cp "$REAL_HOME/.codex/auth.json"   "$HOME/.codex/" 2>/dev/null || true
 cp "$REAL_HOME/.codex/config.toml" "$HOME/.codex/" 2>/dev/null || true
-# agy is an Anthropic CLI; export the key so it can auth without its own config dir.
-export ANTHROPIC_API_KEY="$(cat "$REAL_HOME/.claude/api_key" 2>/dev/null || true)"
+# agy stores its config under ~/.antigravity; mirror the directory.
+[ -d "$REAL_HOME/.antigravity" ] && cp -r "$REAL_HOME/.antigravity" "$HOME/" 2>/dev/null || true
 
 # Break out of any parent tmux session so subprocesses don't inherit its socket.
 unset TMUX
