@@ -802,11 +802,14 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.screen = ScreenNotes
 			// Propagate the currently-focused project from Projects,
 			// honoring any active filter so the Notes pane opens on
-			// what the user just highlighted.
+			// what the user just highlighted. SetProject returns a Cmd
+			// that runs Vault.List off the UI goroutine — chain it so
+			// the screen doesn't freeze on projects with deep trees.
+			var cmd tea.Cmd
 			if sel := a.projectsM.Selected(); sel != nil {
-				a.notes.SetProject(sel)
+				cmd = a.notes.SetProject(sel)
 			}
-			return a, nil
+			return a, cmd
 		case keyMatches(msg, a.keys.Claude):
 			a.screen = ScreenAgents
 			return a, nil

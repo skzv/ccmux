@@ -34,16 +34,18 @@ import (
 //     returning to the Projects tab. The list is the full set of
 //     discovered projects, kept in sync via SetProjects from the App.
 type notesModel struct {
-	st       styles.Styles
-	km       Keymap
-	project  *project.Project
-	projects []project.Project
-	entries  []notes.Entry
-	cursor   int
-	focus    notesFocus
-	preview  viewport.Model
-	rendered string
-	editor   string
+	st           styles.Styles
+	km           Keymap
+	project      *project.Project
+	projects     []project.Project
+	entries      []notes.Entry
+	entriesCache map[string][]notes.Entry // per-project, session-long; bypassed by notesReloadMsg
+	loading      bool                     // true while a Vault.List walk is in flight
+	cursor       int
+	focus        notesFocus
+	preview      viewport.Model
+	rendered     string
+	editor       string
 
 	// project picker
 	pickingProject bool
@@ -74,31 +76,45 @@ func newNotes(st styles.Styles, km Keymap) notesModel {
 	ti.Placeholder = "search this project's notes…"
 	ti.CharLimit = 200
 	return notesModel{
-		st:          st,
-		km:          km,
-		preview:     vp,
-		editor:      pickEditor(),
-		searchInput: ti,
+		st:           st,
+		km:           km,
+		preview:      vp,
+		editor:       pickEditor(),
+		searchInput:  ti,
+		entriesCache: make(map[string][]notes.Entry),
 	}
 }
 
-// SetProject is called by the App when the user changes the focused
-// project (via the Projects screen cursor). Triggers a re-listing.
-func (m *notesModel) SetProject(p *project.Project) {
+// SetProject is called by the App when the focused project changes.
+// The file listing is loaded asynchronously: SetProject returns a
+// tea.Cmd that runs Vault.List off the UI goroutine, and the caller
+// dispatches it. Repeat visits to the same project hit a per-session
+// cache and return nil (no work). Nil is also returned when there's
+// nothing to load.
+func (m *notesModel) SetProject(p *project.Project) tea.Cmd {
 	if p == nil {
 		m.project = nil
 		m.entries = nil
 		m.rendered = ""
-		return
+		m.loading = false
+		return nil
 	}
 	if m.project != nil && m.project.Path == p.Path {
-		return
+		return nil
 	}
 	m.project = p
 	m.cursor = 0
 	m.focus = focusList
-	m.loadEntries()
+	if cached, ok := m.entriesCache[p.Path]; ok {
+		m.entries = cached
+		m.loading = false
+		m.refreshPreview()
+		return nil
+	}
+	m.entries = nil
+	m.loading = true
 	m.refreshPreview()
+	return m.loadEntriesCmd(p.Path)
 }
 
 // SetProjects pushes the full discovered-projects list to the screen so
@@ -111,20 +127,17 @@ func (m *notesModel) SetProjects(ps []project.Project) {
 	}
 }
 
-func (m *notesModel) loadEntries() {
-	if m.project == nil {
-		m.entries = nil
-		return
-	}
-	vault := notes.Open(m.project.Path)
-	entries, err := vault.List()
-	if err != nil {
-		m.entries = nil
-		return
-	}
-	m.entries = entries
-	if m.cursor >= len(entries) {
-		m.cursor = max0(len(entries) - 1)
+// loadEntriesCmd walks the project tree off the UI goroutine and posts
+// notesEntriesLoadedMsg. The path is echoed so the Update handler can
+// discard stale results when the user has already switched projects.
+func (m notesModel) loadEntriesCmd(path string) tea.Cmd {
+	return func() tea.Msg {
+		vault := notes.Open(path)
+		entries, err := vault.List()
+		if err != nil {
+			entries = nil
+		}
+		return notesEntriesLoadedMsg{Path: path, Entries: entries}
 	}
 }
 
@@ -181,6 +194,7 @@ func (m *notesModel) refreshPreview() {
 func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
 	// Project picker modal.
 	if m.pickingProject {
+		var cmd tea.Cmd
 		if km, ok := msg.(tea.KeyMsg); ok {
 			switch km.String() {
 			case "esc":
@@ -196,12 +210,12 @@ func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
 			case "enter":
 				if m.projCursor >= 0 && m.projCursor < len(m.projects) {
 					p := m.projects[m.projCursor]
-					m.SetProject(&p)
+					cmd = m.SetProject(&p)
 				}
 				m.pickingProject = false
 			}
 		}
-		return m, nil
+		return m, cmd
 	}
 
 	// Active search-input mode: every key goes to the textinput
@@ -235,7 +249,24 @@ func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case notesReloadMsg:
-		m.loadEntries()
+		if m.project == nil {
+			return m, nil
+		}
+		delete(m.entriesCache, m.project.Path)
+		m.loading = true
+		return m, m.loadEntriesCmd(m.project.Path)
+	case notesEntriesLoadedMsg:
+		// Discard stale results — the user may have switched projects
+		// between the Cmd dispatching and the walk returning.
+		if m.project == nil || msg.Path != m.project.Path {
+			return m, nil
+		}
+		m.entries = msg.Entries
+		m.entriesCache[msg.Path] = msg.Entries
+		m.loading = false
+		if m.cursor >= len(m.entries) {
+			m.cursor = max0(len(m.entries) - 1)
+		}
 		m.refreshPreview()
 		return m, nil
 	case notesSearchResultMsg:
@@ -436,9 +467,14 @@ func (m notesModel) renderList(width, height int, narrow bool) string {
 
 	rows, cursorRow := m.noteRows(width)
 	if len(rows) == 0 {
-		empty := "(empty — press n to create a note)"
-		if m.hasActiveSearch() {
+		var empty string
+		switch {
+		case m.loading:
+			empty = "Loading notes…"
+		case m.hasActiveSearch():
 			empty = "(no matches)"
+		default:
+			empty = "(empty — press n to create a note)"
 		}
 		lines = append(lines, m.st.Muted.Render(empty))
 		return m.st.PaneFocused.Width(width - 2).Height(height - 2).Render(strings.Join(lines, "\n"))
