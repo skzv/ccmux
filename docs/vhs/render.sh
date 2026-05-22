@@ -25,6 +25,7 @@ command -v vhs >/dev/null 2>&1 || { echo "render: vhs not installed — 'brew in
 [ -x "$repo/bin/ccmux" ] && [ -x "$repo/bin/ccmuxd" ] || { echo "render: build first — 'make build'"; exit 1; }
 
 REAL_TMUX="$(command -v tmux)"
+REAL_HOME="$HOME"
 root="$(mktemp -d "${TMPDIR:-/tmp}/ccmux-vhs.XXXXXX")"
 TMUX_SOCK="$root/tmux.sock"
 
@@ -34,6 +35,16 @@ export XDG_STATE_HOME="$HOME/.local/state"
 mkdir -p "$HOME/Projects" "$root/bin" "$HOME/.config/ccmux" \
          "$HOME/.local/state/ccmux" "$HOME/.local/bin"
 export PATH="$root/bin:$HOME/.local/bin:$PATH"
+
+# Copy agent credentials so real claude/codex/agy authenticate in the fake HOME.
+mkdir -p "$HOME/.claude"
+cp "$REAL_HOME/.claude/api_key"       "$HOME/.claude/" 2>/dev/null || true
+cp "$REAL_HOME/.claude/settings.json" "$HOME/.claude/" 2>/dev/null || true
+mkdir -p "$HOME/.codex"
+cp "$REAL_HOME/.codex/auth.json"   "$HOME/.codex/" 2>/dev/null || true
+cp "$REAL_HOME/.codex/config.toml" "$HOME/.codex/" 2>/dev/null || true
+# agy is an Anthropic CLI; export the key so it can auth without its own config dir.
+export ANTHROPIC_API_KEY="$(cat "$REAL_HOME/.claude/api_key" 2>/dev/null || true)"
 
 # Break out of any parent tmux session so subprocesses don't inherit its socket.
 unset TMUX
@@ -56,23 +67,8 @@ chmod +x "$root/bin/tmux"
 # Shorthand for tmux calls within this script (real binary + socket).
 T() { "$REAL_TMUX" -S "$TMUX_SOCK" "$@"; }
 
-# --- Stub agents -----------------------------------------------------
-for a in claude codex agy; do
-  cat > "$root/bin/$a" <<STUB
-#!/bin/sh
-printf '\033[2J\033[H'
-printf '\n'
-printf '   %s  —  demo session\n' "$a"
-printf '   \342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\n'
-printf '\n'
-printf '   \342\225\255\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\225\256\n'
-printf '   \342\224\202  > waiting for input                  \342\224\202\n'
-printf '   \342\225\260\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\225\257\n'
-printf '\n'
-exec sleep 86400
-STUB
-  chmod +x "$root/bin/$a"
-done
+# No stub agents — real claude, codex, and agy binaries are on PATH.
+# Auth credentials were copied to $HOME above so they authenticate cleanly.
 cp "$repo/bin/ccmux" "$repo/bin/ccmuxd" "$root/bin/"
 
 # Add ccmux to .local/bin so 'ccmux doctor' PATH check passes.
