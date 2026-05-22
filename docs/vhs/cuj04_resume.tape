@@ -4,8 +4,8 @@ Output docs/vhs/out/cuj04_resume.gif
 
 Set Theme "Catppuccin Mocha"
 Set FontSize 16
-Set Width 1280
-Set Height 760
+Set Width 1600
+Set Height 1000
 Set Padding 20
 Set TypingSpeed 80ms
 
@@ -42,19 +42,5 @@ Sleep 500ms
 Enter
 Sleep 3s
 
-# Resuming lands us in the stub agent's session (Bubble Tea suspends).
-# In a real run, Claude picks up the prior conversation thread.
+# Claude resumes — picks up the prior conversation thread exactly where it left off.
 Sleep 2s
-
-# Detach back to ccmux.
-Ctrl+b
-Sleep 300ms
-Type "d"
-Sleep 1500ms
-
-# ccmux resumes and the home screen shows the resumed session.
-Sleep 1500ms
-
-# Quit.
-Type "q"
-Sleep 800ms

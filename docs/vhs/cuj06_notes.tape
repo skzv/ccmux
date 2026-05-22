@@ -4,8 +4,8 @@ Output docs/vhs/out/cuj06_notes.gif
 
 Set Theme "Catppuccin Mocha"
 Set FontSize 16
-Set Width 1280
-Set Height 760
+Set Width 1600
+Set Height 1000
 Set Padding 20
 Set TypingSpeed 80ms
 
@@ -27,17 +27,25 @@ Type "4"
 Sleep 1s
 
 # Notes loads the first project's markdown tree automatically.
-# Navigate down to read docs/architecture.md.
+# Navigate to auth-service/docs/security-model.md (5 items down):
+# 0:README  1:docs/api  2:docs/architecture  3:docs/decisions  4:docs/runbook
+# 5:docs/security-model — has ASCII trust-boundary diagram and attack-mitigations table.
 Type "j"
-Sleep 400ms
+Sleep 350ms
 Type "j"
-Sleep 400ms
+Sleep 350ms
+Type "j"
+Sleep 350ms
+Type "j"
+Sleep 350ms
+Type "j"
+Sleep 700ms
 
-# Tab to move focus into the preview pane.
+# Tab to move focus into the preview pane — Glamour renders the diagram.
 Tab
 Sleep 500ms
 
-# Scroll the preview down to show more content.
+# Scroll the preview down to show the attack-mitigations table.
 Type "j"
 Sleep 300ms
 Type "j"
