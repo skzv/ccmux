@@ -1,0 +1,39 @@
+name: release
+
+# Cuts a release whenever a SemVer tag is pushed. GoReleaser cross-builds
+# ccmux + ccmuxd, uploads archives + checksums to a GitHub Release, and
+# updates the Homebrew formula in skzv/homebrew-tap.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write # GoReleaser creates the GitHub Release
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # GoReleaser needs full history + tags
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          # Auto-provided — lets GoReleaser create the Release on this repo.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # A separate PAT with write access to skzv/homebrew-tap. The
+          # default GITHUB_TOKEN can't push to another repo. Create this
+          # secret before the first release (see README / handoff notes).
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
