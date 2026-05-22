@@ -13,10 +13,11 @@ import (
 )
 
 // TestNotesBrowseAndPreview covers the browse + preview CUJ: the vault
-// lists every markdown file under docs/, grouped by section, and a
-// selected note's content reads back.
+// lists every markdown file in the project — not just docs/ — grouped
+// by folder, and a selected note's content reads back.
 func TestNotesBrowseAndPreview(t *testing.T) {
 	proj := t.TempDir()
+	writeFile(t, filepath.Join(proj, "README.md"), "# Readme\n")
 	writeFile(t, filepath.Join(proj, "docs", "01_Specs", "00_Vision.md"), "# Vision\n\nthe vision text\n")
 	writeFile(t, filepath.Join(proj, "docs", "02_Architecture", "00_System.md"), "# System\n")
 	writeFile(t, filepath.Join(proj, "docs", "03_Agent_Logs", "2026-05-20.md"), "# Log\n")
@@ -26,16 +27,21 @@ func TestNotesBrowseAndPreview(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	if len(entries) != 3 {
-		t.Fatalf("List returned %d entries, want 3", len(entries))
+	// All four files, including the project-root README, are listed.
+	if len(entries) != 4 {
+		t.Fatalf("List returned %d entries, want 4", len(entries))
 	}
-	// Specs sort ahead of Architecture and Agent Logs.
-	if entries[0].Section != notes.SectionSpecs {
-		t.Errorf("first entry section = %v, want Specs", entries[0].Section)
+	// Root-level files sort first (Dir == ""), then the docs/ tree
+	// ordered by folder.
+	if entries[0].Dir != "" || filepath.Base(entries[0].Rel) != "README.md" {
+		t.Errorf("first entry = %+v, want the project-root README", entries[0])
 	}
-	body, err := v.Read(entries[0].Rel)
+	if entries[1].Dir != "docs/01_Specs" {
+		t.Errorf("entry[1] dir = %q, want docs/01_Specs", entries[1].Dir)
+	}
+	body, err := v.Read(entries[1].Rel)
 	if err != nil {
-		t.Fatalf("Read(%q): %v", entries[0].Rel, err)
+		t.Fatalf("Read(%q): %v", entries[1].Rel, err)
 	}
 	if !strings.Contains(string(body), "the vision text") {
 		t.Errorf("preview body missing expected content: %q", body)

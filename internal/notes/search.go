@@ -111,7 +111,7 @@ func (v Vault) searchFallback(ctx context.Context, query string, limit int) ([]S
 			return nil
 		}
 		if d.IsDir() {
-			if strings.HasPrefix(d.Name(), ".") && path != v.Root {
+			if path != v.Root && skipDir(d.Name()) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -147,13 +147,9 @@ func (v Vault) searchFallback(ctx context.Context, query string, limit int) ([]S
 	if err != nil {
 		return nil, err
 	}
-	// Sort fallback hits by section + rel so the TUI list reads
-	// consistently across rg and non-rg paths.
+	// Sort fallback hits by rel + line so the TUI list reads
+	// consistently across the rg and non-rg paths.
 	sort.Slice(hits, func(i, j int) bool {
-		si, sj := sectionForRel(hits[i].Rel), sectionForRel(hits[j].Rel)
-		if si != sj {
-			return si < sj
-		}
 		if hits[i].Rel != hits[j].Rel {
 			return hits[i].Rel < hits[j].Rel
 		}

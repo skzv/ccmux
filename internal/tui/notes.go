@@ -19,8 +19,9 @@ import (
 	"github.com/skzv/ccmux/internal/tui/styles"
 )
 
-// notesModel is the Notes tab — a per-project docs/ browser with a
-// Glamour-rendered preview pane. Two key UX moves:
+// notesModel is the Notes tab — a per-project markdown browser with a
+// Glamour-rendered preview pane. It lists every .md file under the
+// project (grouped by folder), not just docs/. Two key UX moves:
 //
 //   - Tab toggles `focus` between the file list and the preview.
 //     j/k/arrows navigate WITHIN the focused pane: file rows when the
@@ -73,7 +74,7 @@ func newNotes(st styles.Styles, km Keymap) notesModel {
 	vp := viewport.New(80, 20)
 	ti := textinput.New()
 	ti.Prompt = "/ "
-	ti.Placeholder = "search this project's docs/…"
+	ti.Placeholder = "search this project's notes…"
 	ti.CharLimit = 200
 	return notesModel{
 		st:          st,
@@ -448,7 +449,7 @@ func (m notesModel) renderList(width, height int, narrow bool) string {
 	if m.focus == focusList {
 		focusMark = m.st.Emphasis.Render(" ◀")
 	}
-	header := m.st.Emphasis.Render(m.project.Name+" / docs") + focusMark
+	header := m.st.Emphasis.Render(m.project.Name) + focusMark
 	lines := []string{header}
 	if !narrow {
 		lines = append(lines, m.st.Muted.Render("p: switch project   /: search   tab: focus preview   n: new   e: edit"))
@@ -465,38 +466,115 @@ func (m notesModel) renderList(width, height int, narrow bool) string {
 	}
 	lines = append(lines, "")
 
-	if m.hasActiveSearch() {
-		if len(m.searchResults) == 0 {
-			lines = append(lines, m.st.Muted.Render("(no matches)"))
-		} else {
-			for i, h := range m.searchResults {
-				label := fmt.Sprintf("%s:%d  %s", h.Rel, h.LineNum, truncateSearchSnippet(h.Snippet, width-12))
-				if i == m.cursor {
-					label = m.st.ListItemSelected.Render(label)
-				}
-				lines = append(lines, "  "+label)
-			}
+	rows, cursorRow := m.noteRows(width)
+	if len(rows) == 0 {
+		empty := "(empty — press n to create a note)"
+		if m.hasActiveSearch() {
+			empty = "(no matches)"
 		}
-	} else if len(m.entries) == 0 {
-		lines = append(lines, m.st.Muted.Render("(empty — press n to create a note)"))
-	} else {
-		current := notes.SectionOther + 1 // sentinel "no section printed yet"
-		for i, e := range m.entries {
-			if e.Section != current {
-				if i > 0 {
-					lines = append(lines, "")
-				}
-				lines = append(lines, m.st.Subtitle.Render(e.Section.Label()))
-				current = e.Section
-			}
-			row := "  " + e.Display
-			if i == m.cursor {
-				row = m.st.ListItemSelected.Render(row)
-			}
-			lines = append(lines, row)
-		}
+		lines = append(lines, m.st.Muted.Render(empty))
+		return m.st.PaneFocused.Width(width - 2).Height(height - 2).Render(strings.Join(lines, "\n"))
+	}
+
+	// Window the (potentially long) file list to whatever vertical room
+	// is left, keeping the cursor row on screen. -1 reserves the line
+	// the "N more" hint occupies.
+	budget := height - 2 - len(lines) - 1
+	if budget < 1 {
+		budget = 1
+	}
+	visible, above, below := windowLines(rows, cursorRow, budget)
+	lines = append(lines, visible...)
+	if above > 0 || below > 0 {
+		lines = append(lines, m.st.Muted.Render(scrollHintText(above, below)))
 	}
 	return m.st.PaneFocused.Width(width - 2).Height(height - 2).Render(strings.Join(lines, "\n"))
+}
+
+// noteRows builds the scrollable region of the Notes list — the
+// folder-grouped file list, or the flat search-hit list when a query
+// is active. It returns the rendered rows and the index of the row
+// under the cursor (-1 when the region is empty), so renderList can
+// window the rows around it.
+func (m notesModel) noteRows(width int) (rows []string, cursorRow int) {
+	cursorRow = -1
+	if m.hasActiveSearch() {
+		for i, h := range m.searchResults {
+			label := fmt.Sprintf("%s:%d  %s", h.Rel, h.LineNum, truncateSearchSnippet(h.Snippet, width-12))
+			if i == m.cursor {
+				cursorRow = len(rows)
+				label = m.st.ListItemSelected.Render(label)
+			}
+			rows = append(rows, "  "+label)
+		}
+		return rows, cursorRow
+	}
+	lastDir := "\x00" // sentinel: no real Dir equals this
+	for i, e := range m.entries {
+		if e.Dir != lastDir {
+			if len(rows) > 0 {
+				rows = append(rows, "")
+			}
+			rows = append(rows, m.st.Subtitle.Render(folderHeader(e.Dir)))
+			lastDir = e.Dir
+		}
+		row := "  " + e.Display
+		if i == m.cursor {
+			cursorRow = len(rows)
+			row = m.st.ListItemSelected.Render(row)
+		}
+		rows = append(rows, row)
+	}
+	return rows, cursorRow
+}
+
+// folderHeader renders the group header for a folder of notes. The
+// project root (Dir == "") is labelled explicitly so root-level files
+// like README.md don't sit under a blank heading.
+func folderHeader(dir string) string {
+	if dir == "" {
+		return "(project root)"
+	}
+	return dir + "/"
+}
+
+// windowLines returns the slice of `rows` to display given a vertical
+// `budget`, keeping the `cursor` row visible, plus the count of rows
+// hidden above and below the window. When everything fits it returns
+// the full slice with zero hidden counts.
+func windowLines(rows []string, cursor, budget int) (visible []string, above, below int) {
+	n := len(rows)
+	if budget < 1 {
+		budget = 1
+	}
+	if n <= budget {
+		return rows, 0, 0
+	}
+	start := 0
+	if cursor >= 0 {
+		start = cursor - budget/2
+	}
+	if start < 0 {
+		start = 0
+	}
+	if start+budget > n {
+		start = n - budget
+	}
+	end := start + budget
+	return rows[start:end], start, n - end
+}
+
+// scrollHintText is the one-line "N more" affordance shown below a
+// windowed list when rows are hidden above and/or below.
+func scrollHintText(above, below int) string {
+	switch {
+	case above > 0 && below > 0:
+		return fmt.Sprintf("↑ %d more   ↓ %d more", above, below)
+	case above > 0:
+		return fmt.Sprintf("↑ %d more", above)
+	default:
+		return fmt.Sprintf("↓ %d more", below)
+	}
 }
 
 // truncateSearchSnippet keeps result lines from blowing the column
