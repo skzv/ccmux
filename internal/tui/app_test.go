@@ -7,7 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/daemon"
+	"github.com/skzv/ccmux/internal/moshi"
 	"github.com/skzv/ccmux/internal/project"
 	"github.com/skzv/ccmux/internal/tui/styles"
 )
@@ -541,5 +543,82 @@ func TestFooter_TruncationKeepsHelpOverActionHints(t *testing.T) {
 	tiny := App{styles: styles.Default(), width: 10}
 	if f := tiny.renderFooter(); !strings.Contains(f, "? help") {
 		t.Errorf("at width 10 the footer must still show `? help`:\n%s", f)
+	}
+}
+
+// TestNew_DoesNotBlockOnProbes pins the startup-latency fix: New() must
+// not shell out. It used to run `claude auth status` (~0.9s) and
+// moshi.Detect (up to 2s) synchronously, stalling the first frame by
+// ~3s on every launch. Both moved to async commands (detectTierCmd,
+// detectMoshiCmd) fired from Init(); a fresh App carries the unresolved
+// tier default until tierDetectedMsg lands.
+func TestNew_DoesNotBlockOnProbes(t *testing.T) {
+	cfg := config.Config{}
+	cfg.Subscription.Tier = "api"
+
+	start := time.Now()
+	a := New(cfg, "test")
+	elapsed := time.Since(start)
+
+	// New() does only in-memory wiring now; even a slow CI box clears
+	// this comfortably. A regression that re-adds either synchronous
+	// probe would blow past it (~0.9s for auth, up to 2s for moshi).
+	if elapsed > 250*time.Millisecond {
+		t.Errorf("New() took %v — it must not block on the auth/moshi probes", elapsed)
+	}
+	if a.cfg.Subscription.Tier != "api" {
+		t.Errorf("New() resolved tier to %q synchronously; detection must be deferred to detectTierCmd",
+			a.cfg.Subscription.Tier)
+	}
+}
+
+// TestTierDetectedMsg_AdoptsDetectedTier — when the user has not
+// declared a tier, the async probe result is adopted and pushed into
+// the dashboard config.
+func TestTierDetectedMsg_AdoptsDetectedTier(t *testing.T) {
+	cfg := config.Config{}
+	cfg.Subscription.Tier = "api" // default-empty marker
+	a := New(cfg, "test")
+
+	next, _ := a.Update(tierDetectedMsg{Tier: "max20x"})
+	got := next.(App)
+	if got.cfg.Subscription.Tier != "max20x" {
+		t.Errorf("tier = %q, want max20x (detected tier adopted over the api default)",
+			got.cfg.Subscription.Tier)
+	}
+}
+
+// TestTierDetectedMsg_RespectsExplicitTier — a tier the user hand-set
+// in config.toml always wins; a later probe result must not clobber it.
+func TestTierDetectedMsg_RespectsExplicitTier(t *testing.T) {
+	cfg := config.Config{}
+	cfg.Subscription.Tier = "pro" // explicitly declared
+	a := New(cfg, "test")
+
+	next, _ := a.Update(tierDetectedMsg{Tier: "max20x"})
+	got := next.(App)
+	if got.cfg.Subscription.Tier != "pro" {
+		t.Errorf("tier = %q, want pro (an explicit config tier must not be overridden)",
+			got.cfg.Subscription.Tier)
+	}
+}
+
+// TestMoshiDetectedMsg_UpdatesSettings — the async moshi probe result
+// is pushed into the Settings model and clears its staleness flag. A
+// freshly built model must read as stale (never probed) so the first
+// poll always detects.
+func TestMoshiDetectedMsg_UpdatesSettings(t *testing.T) {
+	a := New(config.Config{}, "test")
+	if !a.settings.MoshiStale() {
+		t.Fatal("a freshly built settings model should report moshi state as stale (never probed)")
+	}
+
+	next, _ := a.Update(moshiDetectedMsg{State: moshi.Status{HooksInstalled: true}})
+	got := next.(App)
+	if got.settings.MoshiStale() {
+		t.Error("after moshiDetectedMsg the cached moshi state should be fresh")
+	}
+	if !got.settings.moshiState.HooksInstalled {
+		t.Error("moshiDetectedMsg should have written the probed state into settings")
 	}
 }

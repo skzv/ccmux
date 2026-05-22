@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -233,27 +232,31 @@ func editableFields() []editableField {
 }
 
 func newSettings(st styles.Styles, km Keymap, cfg config.Config, version string) settingsModel {
-	// One-shot detect at construction so the first render of this screen
-	// shows real status. Subsequent refreshes happen in Update() at a
-	// 30-second cadence.
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	return settingsModel{
-		st: st, km: km, cfg: cfg, version: version,
-		moshiState: moshi.Detect(ctx),
-		moshiCheck: time.Now(),
-	}
+	// moshi/moshi-hook status is detected asynchronously — App fires
+	// detectMoshiCmd at startup and again every 30s while this screen is
+	// focused, delivering the result via SetMoshiState. Detecting it here
+	// would shell out (launchctl/brew) and stall the first frame by up
+	// to 2s on every launch.
+	return settingsModel{st: st, km: km, cfg: cfg, version: version}
+}
+
+// SetMoshiState records the result of an async moshi probe (see
+// detectMoshiCmd) and resets the staleness clock.
+func (m *settingsModel) SetMoshiState(s moshi.Status) {
+	m.moshiState = s
+	m.moshiCheck = time.Now()
+}
+
+// MoshiStale reports whether the cached moshi status is older than 30s
+// and due for a refresh. App polls this while the Settings screen is
+// focused and fires detectMoshiCmd when it returns true. The zero
+// moshiCheck (fresh model, never probed) reads as stale, so the first
+// poll always detects.
+func (m settingsModel) MoshiStale() bool {
+	return time.Since(m.moshiCheck) > 30*time.Second
 }
 
 func (m settingsModel) Update(msg tea.Msg) (settingsModel, tea.Cmd) {
-	// Refresh the cached moshi state at most every 30s while this screen
-	// is visible, so the user sees a current picture without us shelling
-	// out on every keystroke.
-	if time.Since(m.moshiCheck) > 30*time.Second {
-		m.moshiState = moshi.Detect(context.Background())
-		m.moshiCheck = time.Now()
-	}
-
 	// Editor mode owns the keyboard: enter to commit, esc to cancel.
 	if m.editing {
 		switch km := msg.(type) {
