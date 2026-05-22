@@ -572,6 +572,8 @@ func (s *server) handleSessionsItem(w http.ResponseWriter, r *http.Request) {
 		s.handleSendKeys(w, r, name)
 	case "output":
 		s.handleOutput(w, r, name)
+	case "resize":
+		s.handleResize(w, r, name)
 	default:
 		http.Error(w, "unknown subaction", http.StatusNotFound)
 	}
@@ -638,6 +640,29 @@ func (s *server) handleKeepAwake(w http.ResponseWriter, r *http.Request, name st
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (s *server) handleResize(w http.ResponseWriter, r *http.Request, name string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req daemon.ResizeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "decode: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Cols < 20 || req.Cols > 500 || req.Rows < 10 || req.Rows > 300 {
+		http.Error(w, "cols/rows out of range", http.StatusBadRequest)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	if err := tmux.ResizeWindow(ctx, name, req.Cols, req.Rows); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *server) handleSendKeys(w http.ResponseWriter, r *http.Request, name string) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -662,9 +687,12 @@ func (s *server) handleOutput(w http.ResponseWriter, r *http.Request, name strin
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	// lines=0 means just the visible pane (no scrollback) — the right
+	// default for a phone viewing an agent TUI, and it avoids showing
+	// stale wider-width scrollback right after a resize.
 	lines := 80
 	if v := r.URL.Query().Get("lines"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 500 {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 && n <= 500 {
 			lines = n
 		}
 	}

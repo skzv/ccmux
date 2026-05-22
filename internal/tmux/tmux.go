@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -52,6 +53,21 @@ func withLocale(env []string) []string {
 	return append(env, "LC_ALL=C.UTF-8")
 }
 
+// exactSession wraps a session name as a tmux target-session that
+// requires an exact match. Without the "=" prefix tmux falls back to
+// prefix and fnmatch matching, so `has-session -t c-foo` silently
+// matches an existing `c-foo-app`. Every caller below targets one
+// specific session by its full name, so prefix matching is never
+// what we want.
+func exactSession(name string) string { return "=" + name }
+
+// exactPane targets a session's active pane with an exact session
+// match. capture-pane / send-keys / resize-window take a target-PANE,
+// not a target-session, and a bare "=name" is rejected for those —
+// the trailing ":" makes tmux parse it as session:window.pane with
+// the session component exact-matched.
+func exactPane(name string) string { return "=" + name + ":" }
+
 // Session is the static metadata about a tmux session.
 type Session struct {
 	Name       string    // tmux session name, e.g. "c-foo"
@@ -64,7 +80,7 @@ type Session struct {
 
 // Has reports whether a session by the given name exists on the default tmux server.
 func Has(ctx context.Context, name string) (bool, error) {
-	cmd := exec.CommandContext(ctx, "tmux", "has-session", "-t", name)
+	cmd := exec.CommandContext(ctx, "tmux", "has-session", "-t", exactSession(name))
 	if err := cmd.Run(); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			// tmux exits 1 when the session doesn't exist; that's not a "real" error.
@@ -145,7 +161,7 @@ func New(ctx context.Context, name, dir, cmdline string) error {
 
 // Kill terminates the named session.
 func Kill(ctx context.Context, name string) error {
-	cmd := exec.CommandContext(ctx, "tmux", "kill-session", "-t", name)
+	cmd := exec.CommandContext(ctx, "tmux", "kill-session", "-t", exactSession(name))
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("tmux kill-session: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
@@ -154,7 +170,7 @@ func Kill(ctx context.Context, name string) error {
 
 // Rename renames a session.
 func Rename(ctx context.Context, oldName, newName string) error {
-	cmd := exec.CommandContext(ctx, "tmux", "rename-session", "-t", oldName, newName)
+	cmd := exec.CommandContext(ctx, "tmux", "rename-session", "-t", exactSession(oldName), newName)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("tmux rename-session: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
@@ -165,7 +181,7 @@ func Rename(ctx context.Context, oldName, newName string) error {
 // Used both for the live-preview pane in the TUI and for "needs input" detection
 // by ccmuxd.
 func CapturePane(ctx context.Context, name string, lines int) (string, error) {
-	args := []string{"capture-pane", "-p", "-t", name}
+	args := []string{"capture-pane", "-p", "-t", exactPane(name)}
 	if lines > 0 {
 		args = append(args, "-S", fmt.Sprintf("-%d", lines))
 	}
@@ -181,7 +197,7 @@ func CapturePane(ctx context.Context, name string, lines int) (string, error) {
 // (colors and text attributes) via -e, so a client can render the
 // pane with real terminal colors. Used by the mobile output endpoint.
 func CapturePaneANSI(ctx context.Context, name string, lines int) (string, error) {
-	args := []string{"capture-pane", "-e", "-p", "-t", name}
+	args := []string{"capture-pane", "-e", "-p", "-t", exactPane(name)}
 	if lines > 0 {
 		args = append(args, "-S", fmt.Sprintf("-%d", lines))
 	}
@@ -193,10 +209,28 @@ func CapturePaneANSI(ctx context.Context, name string, lines int) (string, error
 	return string(out), nil
 }
 
+// ResizeWindow resizes the named session's window to cols×rows, then
+// relatches window-size to "latest" so the window tracks real clients
+// again. resize-window pins window-size=manual as a side effect; the
+// relatch means a tmux client (e.g. the user's Mac) re-attaching will
+// resize the window back to its own size. A detached session keeps the
+// requested size until a client attaches — letting a mobile viewer
+// reflow it to a phone-friendly width without permanently pinning it.
+func ResizeWindow(ctx context.Context, name string, cols, rows int) error {
+	resize := command(ctx, "tmux", "resize-window", "-t", exactPane(name),
+		"-x", strconv.Itoa(cols), "-y", strconv.Itoa(rows))
+	if out, err := resize.CombinedOutput(); err != nil {
+		return fmt.Errorf("tmux resize-window: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	relatch := command(ctx, "tmux", "set-window-option", "-t", exactPane(name), "window-size", "latest")
+	_ = relatch.Run() // best-effort: the resize already took effect
+	return nil
+}
+
 // SendKeys sends a literal key sequence to the named session.
 // Use this to inject a BEL byte for notification triggers (`SendKeys(ctx, name, "\a")`).
 func SendKeys(ctx context.Context, name, keys string) error {
-	cmd := exec.CommandContext(ctx, "tmux", "send-keys", "-t", name, keys)
+	cmd := exec.CommandContext(ctx, "tmux", "send-keys", "-t", exactPane(name), keys)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("tmux send-keys: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
