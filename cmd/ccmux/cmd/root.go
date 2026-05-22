@@ -53,7 +53,6 @@ func init() {
 		newAttachCmd(),
 		newNewCmd(),
 		newShellCmd(),
-		newUpgradeCmd(),
 		newUpdateCmd(),
 		newListCmd(),
 		newProjectCmd(),

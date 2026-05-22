@@ -45,9 +45,6 @@ type notesModel struct {
 	rendered string
 	editor   string
 
-	// new-note picker
-	picking bool
-
 	// project picker
 	pickingProject bool
 	projCursor     int
@@ -182,27 +179,6 @@ func (m *notesModel) refreshPreview() {
 }
 
 func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
-	// New-note action picker.
-	if m.picking {
-		if km, ok := msg.(tea.KeyMsg); ok {
-			switch km.String() {
-			case "esc":
-				m.picking = false
-				return m, nil
-			case "a":
-				m.picking = false
-				return m, m.newAgentLogCmd()
-			case "s":
-				m.picking = false
-				return m, m.promptForSpecCmd()
-			case "d":
-				m.picking = false
-				return m, m.promptForADRCmd()
-			}
-		}
-		return m, nil
-	}
-
 	// Project picker modal.
 	if m.pickingProject {
 		if km, ok := msg.(tea.KeyMsg); ok {
@@ -333,11 +309,6 @@ func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
 					m.refreshPreview()
 				}
 				return m, nil
-			case keyMatches(msg, m.km.NewItem):
-				if m.project != nil {
-					m.picking = true
-				}
-				return m, nil
 			case keyMatches(msg, m.km.EditInEd):
 				if path := m.selectedPath(); path != "" {
 					return m, openInEditor(m.editor, path)
@@ -423,9 +394,6 @@ func (m notesModel) View(width, height int) string {
 		}, "\n")
 		return m.st.Pane.Width(width - 2).Height(height - 2).Render(body)
 	}
-	if m.picking {
-		return m.renderActionPicker(width, height)
-	}
 	if m.pickingProject {
 		return m.renderProjectPicker(width, height)
 	}
@@ -452,7 +420,7 @@ func (m notesModel) renderList(width, height int, narrow bool) string {
 	header := m.st.Emphasis.Render(m.project.Name) + focusMark
 	lines := []string{header}
 	if !narrow {
-		lines = append(lines, m.st.Muted.Render("p: switch project   /: search   tab: focus preview   n: new   e: edit"))
+		lines = append(lines, m.st.Muted.Render("p: switch project   /: search   tab: focus preview   e: edit"))
 	}
 
 	// Search box / search-results banner.
@@ -635,21 +603,6 @@ func (m notesModel) renderListOnly(width, height int) string {
 	return m.renderList(width, height, true)
 }
 
-// renderActionPicker is the "new note" sub-modal (a/s/d).
-func (m notesModel) renderActionPicker(width, height int) string {
-	body := strings.Join([]string{
-		m.st.Emphasis.Render("New note in " + m.project.Name),
-		"",
-		"  " + m.st.Key.Render("a") + "  Agent Log    " + m.st.Muted.Render("docs/03_Agent_Logs/YYYY-MM-DD.md"),
-		"  " + m.st.Key.Render("s") + "  Spec         " + m.st.Muted.Render("docs/01_Specs/NN_<slug>.md"),
-		"  " + m.st.Key.Render("d") + "  ADR          " + m.st.Muted.Render("docs/02_Architecture/NN_<slug>.md"),
-		"",
-		m.st.Muted.Render("esc: cancel"),
-	}, "\n")
-	modal := m.st.PaneFocused.Width(60).Render(body)
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, modal)
-}
-
 // renderProjectPicker is the project-switcher modal — list of every
 // discovered project, with a cursor.
 func (m notesModel) renderProjectPicker(width, height int) string {
@@ -684,60 +637,6 @@ func (m notesModel) renderProjectPicker(width, height int) string {
 	lines = append(lines, "", m.st.Muted.Render("↑↓ or j/k: navigate   enter: open   esc: cancel"))
 	modal := m.st.PaneFocused.Width(minInt(70, width-4)).Render(strings.Join(lines, "\n"))
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, modal)
-}
-
-// newAgentLogCmd creates today's Agent Log file (or opens the existing
-// one) and exec's $EDITOR on it. Returns to TUI on exit.
-func (m notesModel) newAgentLogCmd() tea.Cmd {
-	if m.project == nil {
-		return nil
-	}
-	editor := m.editor
-	projPath := m.project.Path
-	return func() tea.Msg {
-		v := notes.Open(projPath)
-		path, _, err := v.NewAgentLog("")
-		if err != nil {
-			return toastMsg{Text: "agent log: " + err.Error(), Kind: toastError, Until: nowPlus(5)}
-		}
-		return openEditorMsg{Editor: editor, Path: path}
-	}
-}
-
-// promptForSpecCmd/promptForADRCmd: v0.1 punts on an inline title
-// prompt by creating a placeholder file named "untitled_<timestamp>"
-// and opening it in $EDITOR. The user renames in the editor. A proper
-// title prompt would need another modal level which we'll add later.
-func (m notesModel) promptForSpecCmd() tea.Cmd {
-	if m.project == nil {
-		return nil
-	}
-	editor := m.editor
-	projPath := m.project.Path
-	return func() tea.Msg {
-		v := notes.Open(projPath)
-		path, err := v.NewSpec("untitled")
-		if err != nil {
-			return toastMsg{Text: "new spec: " + err.Error(), Kind: toastError, Until: nowPlus(5)}
-		}
-		return openEditorMsg{Editor: editor, Path: path}
-	}
-}
-
-func (m notesModel) promptForADRCmd() tea.Cmd {
-	if m.project == nil {
-		return nil
-	}
-	editor := m.editor
-	projPath := m.project.Path
-	return func() tea.Msg {
-		v := notes.Open(projPath)
-		path, err := v.NewADR("untitled")
-		if err != nil {
-			return toastMsg{Text: "new ADR: " + err.Error(), Kind: toastError, Until: nowPlus(5)}
-		}
-		return openEditorMsg{Editor: editor, Path: path}
-	}
 }
 
 // openInEditor returns a tea.Cmd that opens `path` in `editor` via

@@ -390,8 +390,7 @@ func TestClient_NewProject_RoundTrip(t *testing.T) {
 	c := spawnFakeDaemon(t, mux)
 
 	got, err := c.NewProject(context.Background(), NewProjectRequest{
-		Name:        "alpha",
-		Description: "build the alpha",
+		Name: "alpha",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -438,7 +437,7 @@ func TestNewProjectResponse_JSONRoundTrip(t *testing.T) {
 // would default to claude regardless of the picker.
 func TestNewProjectRequest_AgentField_RoundTrip(t *testing.T) {
 	for _, id := range []string{"claude", "codex", "antigravity", "gemini", ""} {
-		in := NewProjectRequest{Name: "p", Description: "d", Agent: id}
+		in := NewProjectRequest{Name: "p", Agent: id}
 		b, _ := json.Marshal(in)
 		var out NewProjectRequest
 		if err := json.Unmarshal(b, &out); err != nil {
@@ -513,7 +512,7 @@ func TestClient_NewProject_ForwardsAgent(t *testing.T) {
 	})
 	c := spawnFakeDaemon(t, mux)
 	if _, err := c.NewProject(context.Background(), NewProjectRequest{
-		Name: "x", Description: "y", Agent: "codex",
+		Name: "x", Agent: "codex",
 	}); err != nil {
 		t.Fatal(err)
 	}

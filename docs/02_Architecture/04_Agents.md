@@ -32,27 +32,19 @@ The package exports six things callers reach for:
 Each project carries a one-line sidecar identifying its agent. Read at
 inspect-time by `internal/project.ReadAgent(path)`, written by
 `internal/project.SetAgent(path, id)` and (transitively) by
-`internal/scaffold.Scaffold` on new-project. Missing file or unparseable
-contents resolve to `agent.IDClaude` so every project that existed
-before this sidecar keeps working.
+`internal/scaffold.PrepareDir` when a new project is created. Missing
+file or unparseable contents resolve to `agent.IDClaude` so every
+project that existed before this sidecar keeps working.
 
 `SetAgent` writes through `agent.ParseID` so a typo'd caller surfaces
 as an error rather than persisting garbage that `ReadAgent` would
 silently coerce.
 
 The new-project form's `Agent` field carries the user's pick through to
-Scaffold (local) or to `daemon.NewProjectRequest.Agent` (remote);
-`Scaffold` then writes the sidecar according to a four-case policy:
-
-| Caller's `Options.Agent` | Sidecar before | Sidecar after |
-|---|---|---|
-| valid id, e.g. `codex` | anything | `codex` (overwrite) |
-| invalid id, e.g. `imaginary` | anything | `claude` (coerce + overwrite) |
-| empty | doesn't exist | `claude` (seed) |
-| empty | exists | preserved (don't clobber user's prior choice on upgrade) |
-
-The fourth row is the one that bit during development — without it, a
-no-Agent upgrade pass would silently flip a Codex project back to Claude.
+`scaffold.PrepareDir` (local) or `daemon.NewProjectRequest.Agent`
+(remote). `PrepareDir` writes the sidecar only when the caller named a
+valid agent: a valid id is persisted, while an empty or unrecognized id
+writes nothing and leaves `ReadAgent` to fall back to Claude.
 
 ## How the daemon dispatches
 

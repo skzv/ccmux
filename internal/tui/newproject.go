@@ -12,22 +12,25 @@ import (
 )
 
 // newProjectFormModel is the modal form rendered over the Projects screen
-// when the user presses `n` to create a new project. Four fields:
-// Name (required), Description (optional but recommended — the agent
-// sees it as its first prompt), Host (where to scaffold — local or
-// any reachable peer running ccmuxd), and Agent (which AI to launch
-// in the new session — claude / codex / antigravity).
+// when the user presses `n` to create a new project. Three fields:
+// Name (required), Host (where to create it — local or any reachable
+// peer running ccmuxd), and Agent (which AI to launch — claude / codex
+// / antigravity).
 //
-// Tab cycles Name → Description → Host → Agent. On the Host and
-// Agent rows, ←/→ cycle their selections. The submitted message
-// carries enough addressing info (Host display name, Address for
-// ccmuxd POST, DialHost for ssh-attach) plus the chosen Agent that
-// the dispatcher can route without re-resolving.
+// Creating a project is just that: ccmux makes the directory and starts
+// the agent session. It does NOT scaffold — no CLAUDE.md, no docs/
+// tree, no git init. The user runs `/init` or `openspec` themselves
+// inside the session.
+//
+// Tab cycles Name → Host → Agent. On the Host and Agent rows, ←/→
+// cycle their selections. The submitted message carries enough
+// addressing info (Host display name, Address for ccmuxd POST,
+// DialHost for ssh-attach) plus the chosen Agent that the dispatcher
+// can route without re-resolving.
 type newProjectFormModel struct {
 	st    styles.Styles
 	name  textinput.Model
-	desc  textinput.Model
-	focus int // 0 = name, 1 = desc, 2 = host, 3 = agent
+	focus int // 0 = name, 1 = host, 2 = agent
 	err   string
 
 	// hosts is the device picker model. Always at least one entry
@@ -39,8 +42,7 @@ type newProjectFormModel struct {
 
 	// agents is the agent picker model. Always at least one entry
 	// (claude) so the form is always submittable, even on a machine
-	// with no agent binaries installed (the daemon-side scaffold
-	// will surface the install error). Order follows agent.All()'s
+	// with no agent binaries installed. Order follows agent.All()'s
 	// canonical claude→codex→antigravity sequence; the default cursor
 	// position is index 0 (claude) for back-compat continuity.
 	agents   []agent.Agent
@@ -54,7 +56,7 @@ type hostChoice struct {
 	Label    string // shown to the user
 	Local    bool
 	Address  string // ccmuxd http "host:port" for remote daemon
-	DialHost string // bare hostname/IP for ssh/mosh attach after scaffold
+	DialHost string // bare hostname/IP for ssh/mosh attach after create
 	User     string // login user; empty → client's own username
 	Mosh     bool   // prefer mosh over ssh for this host
 }
@@ -63,8 +65,7 @@ type hostChoice struct {
 // the App (reachable peers). If empty, the picker still shows "local"
 // so the form is always submittable. The agent picker is populated
 // with everything that's installed; if none is detected we fall back
-// to agent.All() so the form is still usable (the submit will surface
-// the missing-binary error from the daemon side).
+// to agent.All() so the form is still usable.
 func newNewProjectForm(st styles.Styles, hosts []hostStatus, defaultAgent string) newProjectFormModel {
 	n := textinput.New()
 	n.Placeholder = "my-project"
@@ -72,12 +73,6 @@ func newNewProjectForm(st styles.Styles, hosts []hostStatus, defaultAgent string
 	n.Width = 40
 	n.Prompt = ""
 	n.Focus()
-
-	d := textinput.New()
-	d.Placeholder = "what are you building? (one sentence; the agent sees this as your first message)"
-	d.CharLimit = 240
-	d.Width = 70
-	d.Prompt = ""
 
 	agents := agent.AllInstalled(context.Background())
 	if len(agents) == 0 {
@@ -87,7 +82,6 @@ func newNewProjectForm(st styles.Styles, hosts []hostStatus, defaultAgent string
 	return newProjectFormModel{
 		st:       st,
 		name:     n,
-		desc:     d,
 		focus:    0,
 		hosts:    hostChoicesFrom(hosts),
 		hostIdx:  0,
@@ -100,11 +94,6 @@ func newNewProjectForm(st styles.Styles, hosts []hostStatus, defaultAgent string
 // matches the user's configured default. Falls back to row 0 (first
 // installed agent) when the default is empty, unrecognized, or names
 // an agent that isn't installed.
-//
-// Differs from newsession.go's indexOfDefaultAgent in that the
-// project form doesn't carry a "shell" option (projects always run an
-// agent) — so the matching surface is just agent.ID, no sentinel
-// empty value to thread through.
 func indexOfDefaultProjectAgent(agents []agent.Agent, configDefault string) int {
 	def := strings.TrimSpace(configDefault)
 	if def == "" || strings.EqualFold(def, "shell") {
@@ -125,7 +114,7 @@ func indexOfDefaultProjectAgent(agents []agent.Agent, configDefault string) int 
 // hostChoicesFrom flattens the App's hostStatus list into picker rows.
 // Order: local first, then each reachable peer running ccmuxd, sorted
 // by display name for stability. Mobile/NeedsInstall rows are dropped —
-// scaffolding requires a working ccmuxd on the target.
+// creating a project requires a working ccmuxd on the target.
 func hostChoicesFrom(hosts []hostStatus) []hostChoice {
 	out := []hostChoice{{Label: "local", Local: true}}
 	for _, h := range hosts {
@@ -149,9 +138,9 @@ func hostChoicesFrom(hosts []hostStatus) []hostChoice {
 	return out
 }
 
-// focusCount enumerates rows: name (0), desc (1), host (2), agent (3).
-// Cycling math uses this so adding a future row only touches one spot.
-const focusCount = 4
+// focusCount enumerates rows: name (0), host (1), agent (2). Cycling
+// math uses this so adding a future row only touches one spot.
+const focusCount = 3
 
 func (m newProjectFormModel) Update(msg tea.Msg) (newProjectFormModel, tea.Cmd) {
 	if km, ok := msg.(tea.KeyMsg); ok {
@@ -168,19 +157,19 @@ func (m newProjectFormModel) Update(msg tea.Msg) (newProjectFormModel, tea.Cmd) 
 			return m, textinput.Blink
 		case "left":
 			switch {
-			case m.focus == 2 && len(m.hosts) > 0:
+			case m.focus == 1 && len(m.hosts) > 0:
 				m.hostIdx = (m.hostIdx - 1 + len(m.hosts)) % len(m.hosts)
 				return m, nil
-			case m.focus == 3 && len(m.agents) > 0:
+			case m.focus == 2 && len(m.agents) > 0:
 				m.agentIdx = (m.agentIdx - 1 + len(m.agents)) % len(m.agents)
 				return m, nil
 			}
 		case "right":
 			switch {
-			case m.focus == 2 && len(m.hosts) > 0:
+			case m.focus == 1 && len(m.hosts) > 0:
 				m.hostIdx = (m.hostIdx + 1) % len(m.hosts)
 				return m, nil
-			case m.focus == 3 && len(m.agents) > 0:
+			case m.focus == 2 && len(m.agents) > 0:
 				m.agentIdx = (m.agentIdx + 1) % len(m.agents)
 				return m, nil
 			}
@@ -194,10 +183,9 @@ func (m newProjectFormModel) Update(msg tea.Msg) (newProjectFormModel, tea.Cmd) 
 			a := m.currentAgent()
 			return m, func() tea.Msg {
 				out := newProjectSubmitMsg{
-					Name:        name,
-					Description: strings.TrimSpace(m.desc.Value()),
-					Host:        h.Label,
-					Agent:       a.ID(),
+					Name:  name,
+					Host:  h.Label,
+					Agent: a.ID(),
 				}
 				if !h.Local {
 					out.Address = h.Address
@@ -211,28 +199,19 @@ func (m newProjectFormModel) Update(msg tea.Msg) (newProjectFormModel, tea.Cmd) 
 	// rows (host, agent) don't type-into anything, so we skip the
 	// textinput Update when focus is on either to keep them pristine.
 	var cmd tea.Cmd
-	switch m.focus {
-	case 0:
+	if m.focus == 0 {
 		m.name, cmd = m.name.Update(msg)
-	case 1:
-		m.desc, cmd = m.desc.Update(msg)
 	}
 	return m, cmd
 }
 
-// applyFocus syncs Focus()/Blur() across the two text inputs based on
-// the current focus index. Picker rows (host, agent) have no input so
-// both blur when focus lands on them.
+// applyFocus syncs Focus()/Blur() on the name input based on the
+// current focus index. Picker rows (host, agent) have no input.
 func (m *newProjectFormModel) applyFocus() {
 	if m.focus == 0 {
 		m.name.Focus()
-		m.desc.Blur()
-	} else if m.focus == 1 {
-		m.name.Blur()
-		m.desc.Focus()
 	} else {
 		m.name.Blur()
-		m.desc.Blur()
 	}
 }
 
@@ -262,22 +241,19 @@ func (m newProjectFormModel) currentAgent() agent.Agent {
 func (m newProjectFormModel) View(width int) string {
 	st := m.st
 	title := st.Emphasis.Render("New project")
-	hint := st.Subtitle.Render("ccmux scaffolds the dirs, starts your AI agent, and sends your description as the first prompt.")
+	hint := st.Subtitle.Render("ccmux creates the directory and starts your agent — nothing else. Run /init or openspec yourself.")
 
-	nameLabel := st.Muted.Render("name        ")
-	descLabel := st.Muted.Render("description ")
-	hostLabel := st.Muted.Render("device      ")
-	agentLabel := st.Muted.Render("agent       ")
+	nameLabel := st.Muted.Render("name    ")
+	hostLabel := st.Muted.Render("device  ")
+	agentLabel := st.Muted.Render("agent   ")
 	nameField := m.name.View()
-	descField := m.desc.View()
 	hostField := m.renderHostPicker()
 	agentField := m.renderAgentPicker()
 
-	// Four-state focus marker. Each row gets either the ▌ cursor
+	// Three-state focus marker. Each row gets either the ▌ cursor
 	// (when focused) or two spaces of padding so the columns stay
-	// aligned. Switch is cheap and obviously correct; a "for-loop
-	// over labels" version would be denser but harder to read.
-	rows := []*string{&nameField, &descField, &hostField, &agentField}
+	// aligned.
+	rows := []*string{&nameField, &hostField, &agentField}
 	for i, r := range rows {
 		if i == m.focus {
 			*r = st.Emphasis.Render("▌ ") + *r
@@ -293,7 +269,6 @@ func (m newProjectFormModel) View(width int) string {
 		hint,
 		"",
 		nameLabel + nameField,
-		descLabel + descField,
 		hostLabel + hostField,
 		agentLabel + agentField,
 		"",
@@ -314,7 +289,7 @@ func (m newProjectFormModel) renderHostPicker() string {
 	if len(m.hosts) <= 1 {
 		return m.st.Muted.Render(cur + "  (only host available)")
 	}
-	if m.focus == 2 {
+	if m.focus == 1 {
 		return "‹ " + m.st.Emphasis.Render(cur) + " ›   " +
 			m.st.Muted.Render("("+m.hostCountHint()+")")
 	}
@@ -338,7 +313,7 @@ func (m newProjectFormModel) renderAgentPicker() string {
 	if len(m.agents) <= 1 {
 		return m.st.Muted.Render(cur + "  (only agent available)")
 	}
-	if m.focus == 3 {
+	if m.focus == 2 {
 		return "‹ " + m.st.Emphasis.Render(cur) + " ›   " +
 			m.st.Muted.Render("("+m.agentCountHint()+")")
 	}

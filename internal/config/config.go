@@ -21,7 +21,6 @@ type Config struct {
 	Daemon        DaemonConfig        `toml:"daemon"`
 	Notes         NotesConfig         `toml:"notes"`
 	Notifications NotificationsConfig `toml:"notifications"`
-	Scaffold      ScaffoldConfig      `toml:"scaffold"`
 	Sessions      SessionsConfig      `toml:"sessions"`
 	Agents        AgentsConfig        `toml:"agents"`
 	Update        UpdateConfig        `toml:"update"`
@@ -188,30 +187,6 @@ type NotificationsConfig struct {
 	Bell bool `toml:"bell"`
 }
 
-// ScaffoldConfig customizes what a "new project" creates and what Claude
-// hears as its first message. Empty fields fall back to the baked-in
-// defaults in internal/scaffold, so the user can override one piece
-// without redefining the whole thing.
-type ScaffoldConfig struct {
-	// Dirs is the relative directory tree created in every new project.
-	// Example: ["src", "tests", "docs/01_Specs", "docs/02_Architecture",
-	// "docs/03_Agent_Logs"].
-	Dirs []string `toml:"dirs"`
-
-	// GitignoreBody is written verbatim into .gitignore when scaffolding
-	// a new project (only when .gitignore doesn't already exist).
-	GitignoreBody string `toml:"gitignore_body"`
-
-	// InitialPrompt is the message ccmux sends to Claude after the
-	// session boots. Supports {{name}} and {{description}} substitutions.
-	// Multi-line OK. The default is in scaffold.DefaultInitialPrompt.
-	InitialPrompt string `toml:"initial_prompt"`
-
-	// CreateInitialCommit — run `git init && git add . && git commit`
-	// after scaffolding. Default true.
-	CreateInitialCommit bool `toml:"create_initial_commit"`
-}
-
 // SubscriptionConfig declares which Claude subscription tier the user is
 // on so the dashboard can show "X of Y messages used in the 5h window."
 // Set to "" or "api" if you're on API/pay-as-you-go rather than a
@@ -255,11 +230,6 @@ func Defaults() Config {
 		},
 		Notifications: NotificationsConfig{
 			Bell: true,
-		},
-		Scaffold: ScaffoldConfig{
-			// All scaffold fields default to "" / nil; internal/scaffold
-			// falls back to its baked-in templates when these are empty.
-			CreateInitialCommit: true,
 		},
 		Sessions: SessionsConfig{
 			// Empty = resolve to $HOME on the daemon host at session-

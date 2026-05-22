@@ -435,16 +435,14 @@ all against a real, isolated tmux server.
 | CUJ | Entry point | End state |
 |---|---|---|
 | Discover projects | `GET /v1/projects` / TUI Projects screen | every dir under the projects root with `CLAUDE.md` or `.git` is listed |
-| Scaffold a new project | `ccmux new <name>` / TUI new-project wizard / `POST /v1/projects` | the project dir exists with the docs structure + a running session |
-| Upgrade an existing project | `ccmux upgrade` / TUI `u` | ccmux scaffolding is injected non-destructively and idempotently |
+| Create a new project | `ccmux new <name>` / TUI new-project form / `POST /v1/projects` | the project directory exists and an agent session is running — and nothing else is created (no `CLAUDE.md`, no `docs/`, no `git init`) |
 | Attach-or-create for a project | TUI Projects Enter | rejoin the running session or create a distinctly-named new one |
 
 ### Notes
 
 | CUJ | Entry point | End state |
 |---|---|---|
-| Browse + preview notes | TUI Notes screen | the `docs/` tree is listed by section; the selected note renders |
-| Create a templated note | TUI Notes `n` (Agent Log / Spec / ADR) | a markdown file is created with templated frontmatter at the right path |
+| Browse + preview notes | TUI Notes screen | every markdown file in the project is listed grouped by folder; the selected note renders |
 | Search notes | TUI Notes `/` | matching notes are returned; non-matching excluded |
 
 ### Conversations

@@ -111,11 +111,10 @@ const (
 // pick, the form fills them from the App's hostStatus slice and the
 // dispatcher routes via daemon.Client.NewProject().
 type newProjectSubmitMsg struct {
-	Name        string
-	Description string
+	Name string
 
 	// Host is the display name of the target device ("local",
-	// "mac-mini", …). Empty / "local" means scaffold on this machine.
+	// "mac-mini", …). Empty / "local" means create on this machine.
 	Host string
 
 	// Address is the http "host:port" of the remote ccmuxd (used to
@@ -123,14 +122,13 @@ type newProjectSubmitMsg struct {
 	Address string
 
 	// DialHost is the bare hostname for the ssh-attach step after the
-	// remote scaffolds. Typically the MagicDNS short name so
+	// remote creates the project. Typically the MagicDNS short name so
 	// known_hosts matches. Empty for local.
 	DialHost string
 
 	// Agent is the AI agent the user picked in the form's agent row
 	// (claude / codex / antigravity). Empty defaults to claude downstream.
-	// Carried through daemon.NewProjectRequest so remote scaffolds
-	// honor the choice.
+	// Carried through daemon.NewProjectRequest so the remote honors it.
 	Agent agent.ID
 }
 
@@ -146,10 +144,11 @@ type projectAgentSwitchedMsg struct {
 // newProjectCancelMsg is emitted by the modal form when the user hits Esc.
 type newProjectCancelMsg struct{}
 
-// projectSessionReadyMsg is emitted after scaffold + StartSession finishes;
-// triggers the actual tmux-attach via tea.ExecProcess. Project is the
-// human-readable label passed to tmuxchrome.Apply so the attached
-// status bar reads "ccmux | <project>" rather than the raw session name.
+// projectSessionReadyMsg is emitted after a new project's directory is
+// created and its session started; triggers the actual tmux-attach via
+// tea.ExecProcess. Project is the human-readable label passed to
+// tmuxchrome.Apply so the attached status bar reads "ccmux | <project>"
+// rather than the raw session name.
 type projectSessionReadyMsg struct {
 	Session string
 	Project string

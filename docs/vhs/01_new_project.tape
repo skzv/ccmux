@@ -1,4 +1,5 @@
-# Tutorial 1: scaffold a new project with one command.
+# Tutorial 1: create a new project with one command.
+# `ccmux new` makes the directory and starts the agent — no scaffolding.
 # Render with: `vhs docs/vhs/01_new_project.tape`
 # Output:    out/01_new_project.gif
 
@@ -19,15 +20,12 @@ Enter
 Sleep 600ms
 
 # The headline command.
-Type "ccmux new auth-demo -d "
-Type `"`
-Type "rebuild the login flow with passkeys"
-Type `"`
+Type "ccmux new auth-demo"
 Sleep 400ms
 Enter
 
-# Give scaffold + git init + Claude boot time. In real life this is
-# 3-4 seconds; we don't want a 30-second GIF.
+# Give the directory create + agent boot time. In real life this is
+# a couple of seconds; we don't want a 30-second GIF.
 Sleep 4500ms
 
 # Show the result with `ccmux list`.

@@ -535,12 +535,12 @@ func (s *server) handleSessionsItem(w http.ResponseWriter, r *http.Request) {
 // handleProjects routes /v1/projects:
 //
 //	GET — list discovered projects under the daemon's Projects.Root
-//	POST — scaffold a new project on this host and start a session inside
-//	       it (body: daemon.NewProjectRequest)
+//	POST — create a new project on this host (its directory + an agent
+//	       session); body is daemon.NewProjectRequest
 //
 // POST exists so the laptop's Projects screen can ask `mac-mini` to
-// create a project natively, instead of trying to ssh + git init +
-// tmux new over the wire.
+// create a project natively, instead of trying to ssh + tmux new over
+// the wire. It creates only the directory — no CLAUDE.md / docs/ / git.
 func (s *server) handleProjects(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet, "":
@@ -571,10 +571,11 @@ func (s *server) listProjects(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, out)
 }
 
-// createProject scaffolds + starts a session for a new project. The
-// directory is placed under the daemon's Projects.Root and the session
-// is named via tmux.SessionNameForPath so the client can ssh-attach
-// directly.
+// createProject creates a new project — its directory plus an agent
+// session — on this host. The directory is placed under the daemon's
+// Projects.Root and the session is named via tmux.SessionNameForPath
+// so the client can ssh-attach directly. It creates only the
+// directory; no CLAUDE.md, no docs/ tree, no git init.
 func (s *server) createProject(w http.ResponseWriter, r *http.Request) {
 	var req daemon.NewProjectRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -588,8 +589,8 @@ func (s *server) createProject(w http.ResponseWriter, r *http.Request) {
 	}
 	// Reject anything that would escape the Projects.Root: no slashes,
 	// no `..`, no leading dots. The daemon is the security boundary
-	// here — a malicious tailnet peer could otherwise scaffold into
-	// arbitrary paths.
+	// here — a malicious tailnet peer could otherwise create
+	// directories at arbitrary paths.
 	if strings.ContainsAny(name, "/\\") || strings.HasPrefix(name, ".") {
 		http.Error(w, "name must be a single non-hidden path segment", http.StatusBadRequest)
 		return
@@ -604,17 +605,14 @@ func (s *server) createProject(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
 
-	// ParseID is the safe path — it returns ok=false on empty + unknown
-	// strings, which we treat the same: empty Agent in the request
-	// body just defers to the scaffold layer's claude-default. A
-	// future client that ships a typo'd value still gets corrected at
-	// scaffold time rather than being persisted as garbage.
+	// ParseID returns ok=false on empty + unknown strings, which we
+	// treat the same: an empty/typo'd Agent just defers to the
+	// claude-default on read via project.ReadAgent.
 	chosenAgent, _ := agent.ParseID(req.Agent)
 	session, err := scaffold.StartSession(ctx, scaffold.Options{
-		Name:        name,
-		Description: req.Description,
-		Dir:         dir,
-		Agent:       chosenAgent,
+		Name:  name,
+		Dir:   dir,
+		Agent: chosenAgent,
 	})
 	if err != nil {
 		http.Error(w, "start: "+err.Error(), http.StatusInternalServerError)

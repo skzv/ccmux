@@ -64,68 +64,21 @@ land under `docs/` (the canonical home). Two-pane layout:
 
 Rendering: Glamour with the active theme. Wikilinks (`[[foo]]`) and markdown links resolve within the project tree. The renderer caches output keyed by `(path, mtime)` so re-opening a note is instant.
 
-## Quick-Actions
+## Actions
 
 | Action | Result |
 |---|---|
-| `n` then `a` | New Agent Log → `docs/03_Agent_Logs/YYYY-MM-DD.md` (today's, created if missing) with templated header. Opens in `$EDITOR`. |
-| `n` then `s` | New Spec → prompts for title; creates `docs/01_Specs/NN_<title>.md` (NN auto-incremented). |
-| `n` then `d` | New ADR → same flow for `docs/02_Architecture/`. |
-| `e` | Edit selected file in `$EDITOR` (nvim, vim, helix, code). |
+| `e` | Edit the selected file in `$EDITOR` (nvim, vim, helix, code). |
 | `/` | Full-text search across every markdown file in the project. Ripgrep when available. |
 | `o` | Open in Obsidian via `obsidian://` URI (macOS only; hidden if Obsidian not installed). |
 
-## Templated Frontmatter
-
-**Agent Log (`docs/03_Agent_Logs/YYYY-MM-DD.md`):**
-
-```markdown
----
-date: 2026-05-10
-project: foo
-sessions: []
----
-
-# Agent Log — 2026-05-10
-```
-
-**Spec (`docs/01_Specs/NN_<title>.md`):**
-
-```markdown
----
-id: NN
-title: <title>
-status: draft
-created: 2026-05-10
-owner: skz
----
-
-# <title>
-
-## Problem
-
-## Approach
-
-## Open Questions
-```
-
-**ADR (`docs/02_Architecture/NN_<title>.md`):** standard `Status / Context / Decision / Consequences` block.
-
-## Auto-Logged Session Starts
-
-When you start a Claude session via ccmux, ccmux appends a single line to today's Agent Log:
-
-```markdown
-## 21:14 — Started session `c-foo`
-**Initial prompt:** "Refactor the auth middleware to use the new token format"
-```
-
-Daily journal builds itself. Disabled per-project via `.ccmux.toml`:
-
-```toml
-[notes]
-auto_log_sessions = false
-```
+ccmux **browses, renders, and searches** notes — it does not create or
+template them. Earlier versions had `n`-then-`a/s/d` quick-actions that
+scaffolded `docs/01_Specs/`, `docs/02_Architecture/`, and
+`docs/03_Agent_Logs/` files; those were removed along with project
+scaffolding. Writing notes — whatever shape and convention you want —
+is the user's (or their agent's) job. The `docs/` convention is still
+honored by the listing if you use it; it's just no longer imposed.
 
 ## Optional: Tailnet Web Viewer (P2)
 

@@ -26,7 +26,7 @@ Three things, mostly:
 
 🎛️ **One dashboard for every agent.** Live view of every Claude Code / Codex / Antigravity CLI session across every project — *active*, *idle*, **waiting for your input** — color-coded, one key to attach. No more remembering tmux session names.
 
-🤖 **Three agents, one workflow.** Pick per project which AI runs it — [Claude Code](https://claude.ai/code), [Codex](https://github.com/openai/codex), or [Antigravity CLI](https://antigravity.google/download) — and ccmux scaffolds, attaches, supervises identically. Switch agents on an existing project with one keystroke.
+🤖 **Three agents, one workflow.** Pick per project which AI runs it — [Claude Code](https://claude.ai/code), [Codex](https://github.com/openai/codex), or [Antigravity CLI](https://antigravity.google/download) — and ccmux starts, attaches, and supervises them identically. Switch agents on an existing project with one keystroke.
 
 ☕ **Your laptop won't sleep while the agent is working.** A small background daemon holds a `caffeinate` lock while sessions are active and releases it when they go quiet. Close the lid; the agent keeps thinking.
 
@@ -55,7 +55,7 @@ Then:
 ```bash
 ccmux                # launch the TUI (first-run tour included)
 ccmux ~/code         # one-shot: scope this session to ~/code instead of ~/Projects
-ccmux new my-app     # scaffold a project + start its agent session
+ccmux new my-app     # create a project directory + start its agent session
 ccmux list           # what's running, everywhere
 ccmux update         # pull latest, rebuild, reload daemon
 ```
@@ -115,16 +115,14 @@ Attaching to an auto-discovered peer execs `ssh -t <host> -- tmux attach -t <nam
 - Per-session "keep awake" pin — the daemon holds a sleep-prevention lock while any pinned or active session is alive, and releases it when they all go idle
 - **Three sleep-prevention modes** — `safe` (AC only — the macOS default; auto on Linux), `dangerous` (works on battery too, opt-in, auto-releases below a configurable low-battery threshold), `very_dangerous` (system-wide override that survives lid-close; sudo-gated and reverted on daemon exit)
 
-### 🏗️ Project bootstrapping
-- `ccmux new <name>` — scaffolds a project, creates the `docs/` notes vault, runs `git init`, opens an agent session with your description as the first prompt; the "n" form picker lets you choose Claude / Codex / Antigravity per project
-- `ccmux upgrade` — retrofits the same structure into an existing directory; prints what changed, idempotent on re-runs
+### 🏗️ New projects
+- `ccmux new <name>` — creates the project directory and starts an agent session in it. That's all it does: **no `CLAUDE.md`, no `docs/` tree, no `git init`.** Run `/init`, `openspec`, or `git init` yourself inside the session — bootstrapping is the agent's job, not ccmux's. The "n" form picker lets you choose Claude / Codex / Antigravity, and `ccmux new --agent <id>` is the CLI equivalent.
 - **Open a project = see its history.** Pressing Enter on a project in the Projects tab opens a menu listing its running sessions *and* its past agent conversations, so you can attach, resume an earlier conversation, or start fresh in one place. `ccmux project <name>` prints the same from the CLI.
-- **Create on any device.** In the Projects tab, press `n` and pick which device should host the new project (local or any reachable peer running `ccmuxd`). The remote daemon scaffolds + starts the session natively, and ccmux ssh-attaches you in. No SSH config, no manual `git init`.
-- Local-only by default — push to GitHub when you're ready with `gh repo create`
+- **Create on any device.** In the Projects tab, press `n` and pick which device should host the new project (local or any reachable peer running `ccmuxd`). The remote daemon creates the directory + starts the session natively, and ccmux ssh-attaches you in.
 
 ### 🤝 Multi-agent (Claude, Codex, Antigravity)
 - Per-project agent stored in `<project>/.ccmux/agent` — sticky, survives across sessions
-- New-project form's agent row (←/→ to cycle) picks Claude Code / Codex / Antigravity CLI when scaffolding
+- New-project form's agent row (←/→ to cycle) picks Claude Code / Codex / Antigravity CLI for the new session
 - Press `a` in the Projects tab to switch the selected project's agent (cycles claude → codex → antigravity)
 - Dashboard rows on non-default agents get a small `[codex]` / `[antigravity]` tag so a single glance tells you what's running where
 - Daemon's state-detection (active / idle / needs_input) dispatches per agent so each gets the right heuristic
@@ -140,8 +138,8 @@ Attaching to an auto-discovered peer execs `ssh -t <host> -- tmux attach -t <nam
 
 ### 📝 Notes, terminal-native
 - Per-project Notes tab — every markdown file in the project, grouped by folder, with inline markdown rendered by [Glamour](https://github.com/charmbracelet/glamour)
-- Quick-actions: new Agent Log (today's, auto-templated), new Spec, new ADR
-- Ripgrep-backed search; plain markdown on disk is the source of truth (no required cloud)
+- Ripgrep-backed `/` search; plain markdown on disk is the source of truth (no required cloud)
+- Browse, preview, and edit-in-`$EDITOR` — ccmux reads your notes; writing them is the agent's job
 
 ### 📲 Mobile workflow (Moshi / iOS / Android)
 - **Easy Pair via QR code** — `ccmux moshi-setup` runs `moshi-hook host setup`; scan the QR code with the Moshi app, you're paired. No token paste.
@@ -177,24 +175,17 @@ Six hands-on walkthroughs. Each is self-contained — pick whichever maps to wha
 
 ### 1. Your first project, end-to-end (≈3 min)
 
-The core loop: scaffold → talk to Claude → take notes → commit.
+The core loop: create → talk to your agent → take notes.
 
 ```bash
-ccmux new auth-redesign -d "rebuild the login flow with passkeys"
+ccmux new auth-redesign            # or: ccmux new auth-redesign --agent codex
 ```
 
-That single command:
-1. Creates `~/Projects/auth-redesign/` with `docs/01_Specs/`, `docs/02_Architecture/`, `docs/03_Agent_Logs/` — just the documentation vault. The source-code layout (cmd+internal? src? a Python package dir?) is chosen by Claude during `/init` based on the language you pick.
-2. Writes a starter `README.md` + `.gitignore`, runs `git init`, makes the first commit.
-3. Opens a tmux session named `c-auth-redesign`, starts Claude inside it.
-4. After Claude boots, types your description as the first prompt — Claude reads it, asks 2-3 clarifying questions, and writes `docs/01_Specs/00_Initial_Concept.md` from your answers.
+That command does two things, and **only** two things:
+1. Creates `~/Projects/auth-redesign/` — an empty directory.
+2. Opens a tmux session named `c-auth-redesign` and starts your agent inside it (Claude by default).
 
-Everything stays local. When you're ready to push to GitHub:
-
-```bash
-cd ~/Projects/auth-redesign
-gh repo create --private --source=. --remote=origin --push
-```
+ccmux does **not** scaffold the project — no `CLAUDE.md`, no `docs/` tree, no `git init`, no GitHub repo. Bootstrapping is the agent's job, done inside the session: run `/init` to have the agent write `CLAUDE.md`, `openspec` to set up specs, `git init` whenever you want version control. ccmux opens the door; what the project becomes is up to you and your agent.
 
 To check on the session without joining the conversation: `ccmux list`. To attach: `ccmux attach auth-redesign`.
 
@@ -237,28 +228,13 @@ After pairing, the Moshi app lists every tmux session on the Mac. Whenever Claud
 
 For a non-Moshi setup, the BEL fallback still produces a generic notification — categories disappear, everything else works.
 
-### 4. Customize the scaffold (≈2 min)
+### 4. Configure ccmux (≈2 min)
 
 `~/.config/ccmux/config.toml` — the knobs that matter:
 
 ```toml
 [projects]
 root = "~/Projects"                  # where ccmux looks for projects
-
-[scaffold]
-# Default below — just the docs vault, because the source-code shape is
-# language-specific and /init handles it better. Want to enforce src/+tests/?
-# Set them here.
-dirs = ["docs/01_Specs", "docs/02_Architecture", "docs/03_Agent_Logs"]
-
-# What `ccmux new` sends to Claude as the first message. {{name}} and
-# {{description}} are substituted. Empty falls back to the built-in default.
-initial_prompt = """
-We're starting "{{name}}". {{description}}
-…
-"""
-
-create_initial_commit = true         # auto-commit on scaffold
 
 [daemon]
 poll_interval_seconds = 2
@@ -290,7 +266,7 @@ bell = true                          # ring local terminal BEL on needs_input
 > %sudo ALL=(ALL) NOPASSWD: /bin/systemctl mask *, /bin/systemctl unmask *
 > ```
 
-`projects.root`, `scaffold.dirs`, and `subscription.tier` are also editable inline from the Settings screen — `↑/↓` to move, `Enter` to edit, `e` to open `$EDITOR` for the prose-heavy fields.
+`projects.root` and `subscription.tier` are also editable inline from the Settings screen — `↑/↓` to move, `Enter` to edit, `e` to open `$EDITOR` for the prose-heavy fields.
 
 After editing, run `ccmux update` to reload the daemon with the new config.
 

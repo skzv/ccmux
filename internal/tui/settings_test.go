@@ -53,47 +53,6 @@ func TestEditableFields_ProjectsRoot(t *testing.T) {
 	}
 }
 
-func TestEditableFields_ScaffoldDirs(t *testing.T) {
-	fields := byLabel(editableFields(), "scaffold.dirs")
-	cfg := config.Defaults()
-	cfg.Scaffold.Dirs = nil // start blank
-
-	// Empty input clears any override.
-	if err := fields.set(&cfg, ""); err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Scaffold.Dirs != nil {
-		t.Errorf("empty input should leave Dirs nil, got %v", cfg.Scaffold.Dirs)
-	}
-
-	// Valid comma-separated list.
-	if err := fields.set(&cfg, " src , tests, docs/01_Specs "); err != nil {
-		t.Fatal(err)
-	}
-	if len(cfg.Scaffold.Dirs) != 3 || cfg.Scaffold.Dirs[0] != "src" {
-		t.Errorf("Dirs not parsed: %v", cfg.Scaffold.Dirs)
-	}
-
-	// Reject absolute paths — those would land scaffolded files outside
-	// the project dir.
-	if err := fields.set(&cfg, "/tmp/foo"); err == nil {
-		t.Error("absolute path should error")
-	}
-
-	// Empty entries get squeezed out.
-	if err := fields.set(&cfg, "src,,,tests,,"); err != nil {
-		t.Fatal(err)
-	}
-	if len(cfg.Scaffold.Dirs) != 2 {
-		t.Errorf("empty entries should be squeezed: %v", cfg.Scaffold.Dirs)
-	}
-
-	// All-empty after squeeze → error.
-	if err := fields.set(&cfg, ",, ,,"); err == nil {
-		t.Error("all-empty input should error")
-	}
-}
-
 func TestEditableFields_SubscriptionTier(t *testing.T) {
 	fields := byLabel(editableFields(), "subscription.tier")
 	cfg := config.Defaults()

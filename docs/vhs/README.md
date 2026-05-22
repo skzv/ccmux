@@ -14,7 +14,7 @@ Then drop the GIF into the README (replace the `<!-- DEMO_GIF -->` placeholder) 
 
 Tapes provided:
 
-- `01_new_project.tape` — `ccmux new auth-demo -d "…"` scaffolds + starts a Claude session. Matches README Tutorial 1.
+- `01_new_project.tape` — `ccmux new auth-demo` creates the project directory + starts an agent session (no scaffolding). Matches README Tutorial 1.
 - `02_dashboard.tape` — Launch ccmux, show the dashboard with multiple sessions, attach + detach. Matches Tutorial 2.
 - `03_update.tape` — `ccmux update --dry-run` showing the auto-detected checkout and the steps it would run. Matches Tutorial 6.
 

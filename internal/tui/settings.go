@@ -20,7 +20,7 @@ import (
 // glance whether the mobile push pipeline is set up.
 //
 // Editing model (added in v0.1.x): a cursor moves over the editable
-// fields (projects.root, scaffold.dirs, subscription.tier). Enter
+// fields (projects.root, subscription.tier, agents.default). Enter
 // opens an inline textinput; Enter again commits, Esc cancels.
 // Multi-line fields (initial_prompt, gitignore_body) launch $EDITOR
 // against ~/.config/ccmux/config.toml so the user gets a real editor
@@ -42,8 +42,8 @@ type settingsModel struct {
 }
 
 // editableField is one row the user can move the cursor onto. The
-// get/set closures let us model both plain strings (projects.root) and
-// derived shapes (scaffold.dirs serialized as comma-separated text).
+// get/set closures let us model plain strings (projects.root), enum
+// cycle-pickers (agents.default), and read-only rows uniformly.
 type editableField struct {
 	label string
 
@@ -94,40 +94,6 @@ func editableFields() []editableField {
 					return fmt.Errorf("not a directory: %s", raw)
 				}
 				c.Projects.Root = raw
-				return nil
-			},
-		},
-		{
-			label: "scaffold.dirs",
-			hint:  "Comma-separated. Empty = default (docs/01_Specs, docs/02_Architecture, docs/03_Agent_Logs).",
-			get: func(c *config.Config) string {
-				if len(c.Scaffold.Dirs) == 0 {
-					return ""
-				}
-				return strings.Join(c.Scaffold.Dirs, ", ")
-			},
-			set: func(c *config.Config, raw string) error {
-				raw = strings.TrimSpace(raw)
-				if raw == "" {
-					c.Scaffold.Dirs = nil
-					return nil
-				}
-				parts := strings.Split(raw, ",")
-				var out []string
-				for _, p := range parts {
-					p = strings.TrimSpace(p)
-					if p == "" {
-						continue
-					}
-					if strings.HasPrefix(p, "/") {
-						return fmt.Errorf("paths must be relative, got %q", p)
-					}
-					out = append(out, p)
-				}
-				if len(out) == 0 {
-					return fmt.Errorf("no valid entries (separate with commas)")
-				}
-				c.Scaffold.Dirs = out
 				return nil
 			},
 		},

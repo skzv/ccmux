@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -83,19 +82,28 @@ func attachDetachOthers() bool {
 	return cfg.Sessions.DetachOthersOnAttach()
 }
 
-// newNewCmd: `ccmux new <name> [-d description]` — successor to mkproj.
-// Scaffolds the project, starts Claude in tmux, sends a single composite
-// prompt that asks Claude to /init (cleanly — CLAUDE.md doesn't exist yet)
-// and engage the user about the concept. No second consent for "overwrite
-// CLAUDE.md."
+// newNewCmd: `ccmux new <name> [--agent <id>]` — create a project
+// directory and start its agent session.
+//
+// It deliberately does NOT scaffold the project: no CLAUDE.md, no
+// docs/ tree, no .gitignore, no git init. ccmux just makes the
+// directory and launches the agent; run `/init`, `openspec`, or
+// `git init` yourself inside the session.
 func newNewCmd() *cobra.Command {
-	var description string
+	var agentFlag string
 	c := &cobra.Command{
 		Use:   "new <name>",
-		Short: "Scaffold a new project + start its Claude session",
+		Short: "Create a project directory and start its agent session",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			opts := scaffold.Options{Name: args[0], Description: description}
+			opts := scaffold.Options{Name: args[0]}
+			if agentFlag != "" {
+				id, ok := agent.ParseID(agentFlag)
+				if !ok {
+					return fmt.Errorf("unknown agent %q (want claude, codex, or antigravity)", agentFlag)
+				}
+				opts.Agent = id
+			}
 			session, err := scaffold.StartSession(context.Background(), opts)
 			if err != nil {
 				return err
@@ -103,67 +111,9 @@ func newNewCmd() *cobra.Command {
 			return attachWithChrome(session, args[0])
 		},
 	}
-	c.Flags().StringVarP(&description, "description", "d", "",
-		"one-line description of what you're building (sent to Claude as the first prompt)")
+	c.Flags().StringVar(&agentFlag, "agent", "",
+		"agent to launch: claude, codex, or antigravity (default claude)")
 	return c
-}
-
-// newUpgradeCmd: `ccmux upgrade` — inject the ccmux project structure into
-// the current directory non-destructively. Prints a per-action summary
-// so the user can see what (if anything) changed; previously this was
-// silent and looked like a no-op on already-scaffolded projects.
-func newUpgradeCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "upgrade",
-		Short: "Inject the ccmux project structure into the current directory",
-		RunE: func(_ *cobra.Command, _ []string) error {
-			cwd, err := os.Getwd()
-			if err != nil {
-				return err
-			}
-			opts := scaffold.Options{
-				Name:    filepath.Base(cwd),
-				Dir:     cwd,
-				SkipGit: true, // existing repo: don't reinit
-			}
-			res, err := scaffold.Scaffold(&opts)
-			if err != nil {
-				return err
-			}
-			printScaffoldReport(os.Stdout, res)
-			return nil
-		},
-	}
-}
-
-// printScaffoldReport writes a short per-action upgrade report so the
-// user can tell idempotent no-op runs apart from real work. Kept inline
-// (not in the scaffold package) because formatting is a CLI concern.
-func printScaffoldReport(w io.Writer, res *scaffold.Result) {
-	if res == nil {
-		return
-	}
-	fmt.Fprintf(w, "Upgrading %s:\n", res.Dir)
-	for _, d := range res.CreatedDirs {
-		fmt.Fprintf(w, "  + %s/\n", d)
-	}
-	for _, d := range res.SkippedDirs {
-		fmt.Fprintf(w, "  · %s/ (exists)\n", d)
-	}
-	for _, f := range res.CreatedFiles {
-		fmt.Fprintf(w, "  + %s\n", f)
-	}
-	for _, f := range res.SkippedFiles {
-		fmt.Fprintf(w, "  · %s (exists)\n", f)
-	}
-	if res.GitInit {
-		fmt.Fprintln(w, "  + git init")
-	}
-	if res.Changed() {
-		fmt.Fprintln(w, res.Summary())
-	} else {
-		fmt.Fprintln(w, "Already up to date.")
-	}
 }
 
 // newListCmd: `ccmux list [--json]` — list sessions.
@@ -341,11 +291,11 @@ func runDoctor() error {
 		fmt.Println("  ✓ ccmux resolves on $PATH")
 	}
 
-	// gh CLI block — recommended but not required. ccmux new asks Claude
-	// to make a private GitHub repo as the last scaffolding step; that
-	// works much better when gh is authed.
+	// gh CLI block — recommended but not required. ccmux itself doesn't
+	// touch GitHub, but agents lean on `gh` to create and push repos,
+	// so an authed gh makes that smoother.
 	fmt.Println()
-	fmt.Println("GitHub CLI (recommended for `ccmux new` repo creation):")
+	fmt.Println("GitHub CLI (recommended — agents use it to create/push repos):")
 	gh := ghauth.Detect(context.Background())
 	switch gh.State {
 	case ghauth.StateAuthed:
@@ -637,6 +587,3 @@ func newHostCmd() *cobra.Command {
 	)
 	return c
 }
-
-// Scaffolding logic now lives in internal/scaffold so the TUI and the CLI
-// share one implementation.

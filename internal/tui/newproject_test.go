@@ -94,8 +94,8 @@ func TestNewProjectForm_NameRequired(t *testing.T) {
 
 // TestNewProjectForm_HostPickerCycle — with two hosts available the
 // picker should cycle on right/left, and submit picks the current one.
-// We also verify that Tab moves focus from name → desc → host (3
-// stops) so the picker is reachable without the mouse.
+// We also verify that Tab moves focus from name → host → agent so the
+// picker is reachable without the mouse.
 func TestNewProjectForm_HostPickerCycle(t *testing.T) {
 	st := styles.Default()
 	hosts := []hostStatus{
@@ -112,11 +112,11 @@ func TestNewProjectForm_HostPickerCycle(t *testing.T) {
 			f.hosts[0].Label, f.hosts[1].Label, f.hosts[2].Label)
 	}
 
-	// Type a name, then tab twice to land on the host picker.
+	// Type a name, then tab once to land on the host picker.
 	f, _ = runMsgs(t, f, keyMsg("a"), keyMsg("l"), keyMsg("p"), keyMsg("h"), keyMsg("a"))
-	f, _ = runMsgs(t, f, keyMsg("tab"), keyMsg("tab"))
-	if f.focus != 2 {
-		t.Fatalf("focus = %d after 2 tabs, want 2 (host row)", f.focus)
+	f, _ = runMsgs(t, f, keyMsg("tab"))
+	if f.focus != 1 {
+		t.Fatalf("focus = %d after 1 tab, want 1 (host row)", f.focus)
 	}
 
 	// → twice to land on raspi (local → mac-mini → raspi).
@@ -158,7 +158,7 @@ func TestNewProjectForm_HostPickerWraps(t *testing.T) {
 		{Name: "mac-mini", OK: true, Address: "x:7474", DialHost: "mac-mini"},
 	}
 	f := newNewProjectForm(st, hosts, "")
-	f, _ = runMsgs(t, f, keyMsg("tab"), keyMsg("tab")) // → host row
+	f, _ = runMsgs(t, f, keyMsg("tab")) // → host row
 
 	// Wrap backwards from local → mac-mini (last entry).
 	f, _ = runMsgs(t, f, keyMsg("left"))
@@ -202,10 +202,10 @@ func TestNewProjectForm_Cancel(t *testing.T) {
 	}
 }
 
-// TestNewProjectForm_HasAgentRow — Phase 3 adds a 4th row (agent
-// picker). focus cycling must hit 4 stops and the form must initialize
-// with at least one agent so submit is always reachable. This pins
-// that contract.
+// TestNewProjectForm_HasAgentRow — the form's third row is the agent
+// picker. focus cycling must hit 3 stops (name → host → agent) and the
+// form must initialize with at least one agent so submit is always
+// reachable. This pins that contract.
 func TestNewProjectForm_HasAgentRow(t *testing.T) {
 	st := styles.Default()
 	f := newNewProjectForm(st, nil, "")
@@ -216,15 +216,15 @@ func TestNewProjectForm_HasAgentRow(t *testing.T) {
 	if f.focus != 0 {
 		t.Fatalf("initial focus = %d, want 0 (name)", f.focus)
 	}
-	// 3 tabs lands on the agent row.
-	f, _ = runMsgs(t, f, keyMsg("tab"), keyMsg("tab"), keyMsg("tab"))
-	if f.focus != 3 {
-		t.Errorf("after 3 tabs focus = %d, want 3 (agent row)", f.focus)
+	// 2 tabs lands on the agent row.
+	f, _ = runMsgs(t, f, keyMsg("tab"), keyMsg("tab"))
+	if f.focus != 2 {
+		t.Errorf("after 2 tabs focus = %d, want 2 (agent row)", f.focus)
 	}
-	// 4th tab wraps back to name.
+	// 3rd tab wraps back to name.
 	f, _ = runMsgs(t, f, keyMsg("tab"))
 	if f.focus != 0 {
-		t.Errorf("after 4 tabs focus = %d, want 0 (wrap to name)", f.focus)
+		t.Errorf("after 3 tabs focus = %d, want 0 (wrap to name)", f.focus)
 	}
 }
 
@@ -240,9 +240,9 @@ func TestNewProjectForm_AgentPickerCycle(t *testing.T) {
 	f.agentIdx = 0
 
 	// Tab to agent row.
-	f, _ = runMsgs(t, f, keyMsg("tab"), keyMsg("tab"), keyMsg("tab"))
-	if f.focus != 3 {
-		t.Fatalf("focus = %d, want 3 (agent row)", f.focus)
+	f, _ = runMsgs(t, f, keyMsg("tab"), keyMsg("tab"))
+	if f.focus != 2 {
+		t.Fatalf("focus = %d, want 2 (agent row)", f.focus)
 	}
 
 	// → twice → antigravity (index 2).
@@ -265,8 +265,8 @@ func TestNewProjectForm_AgentPickerCycle(t *testing.T) {
 }
 
 // TestNewProjectForm_SubmitCarriesAgent — the picker's selection must
-// land in newProjectSubmitMsg.Agent so the downstream
-// scaffoldAndStartCmd hands the right id to Scaffold (local) or to
+// land in newProjectSubmitMsg.Agent so the downstream createProjectCmd
+// hands the right id to scaffold.StartSession (local) or to
 // daemon.NewProjectRequest (remote). Without this every project would
 // quietly land on the first-listed agent regardless of what the user
 // picked.
@@ -277,7 +277,7 @@ func TestNewProjectForm_SubmitCarriesAgent(t *testing.T) {
 
 	// Type a name, tab to agent row, → twice to land on antigravity.
 	f, _ = runMsgs(t, f, keyMsg("p"), keyMsg("r"), keyMsg("o"), keyMsg("j"))
-	f, _ = runMsgs(t, f, keyMsg("tab"), keyMsg("tab"), keyMsg("tab"))
+	f, _ = runMsgs(t, f, keyMsg("tab"), keyMsg("tab"))
 	f, _ = runMsgs(t, f, keyMsg("right"), keyMsg("right"))
 
 	_, msg := runMsgs(t, f, keyMsg("enter"))
@@ -300,7 +300,7 @@ func TestNewProjectForm_PickerRowsDontConsumeTypedChars(t *testing.T) {
 	f.agents = []agent.Agent{agent.Claude{}, agent.Codex{}}
 
 	// Tab to agent row, then type "x" — should be ignored.
-	f, _ = runMsgs(t, f, keyMsg("tab"), keyMsg("tab"), keyMsg("tab"))
+	f, _ = runMsgs(t, f, keyMsg("tab"), keyMsg("tab"))
 	beforeIdx := f.agentIdx
 	f, _ = runMsgs(t, f, keyMsg("x"))
 	if f.agentIdx != beforeIdx {

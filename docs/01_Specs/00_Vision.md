@@ -25,7 +25,7 @@ A few zsh functions (`cc`, `mkproj`, `upgrade-proj`) glue them together. That's 
 
 On your phone, the experience is the same TUI rendered into a Mosh-backed Blink Shell pane. When Claude needs input on a session you're not watching, the daemon rings the terminal bell — the iOS terminal client fires a push notification — and you tap it to jump straight to that session.
 
-When you start a new project, ccmux scaffolds the directory, writes the CLAUDE.md guardrails, initializes the Obsidian vault structure, creates the GitHub repo, and starts the Claude session — in a single command, with a TUI flow that walks you through the optional bits.
+When you start a new project, ccmux creates the directory and starts the agent session — and stops there. It does not scaffold: no CLAUDE.md, no docs/ tree, no git init. Bootstrapping is the agent's job, run inside the session (`/init`, `openspec`); ccmux just opens the door.
 
 It's the workflow you have today, made *legible*. And then it grows: cost tracking, session snapshots, multi-machine view, a native iOS client.
 
@@ -35,7 +35,7 @@ It's the workflow you have today, made *legible*. And then it grows: cost tracki
 >
 > A clean Charm-styled TUI loads. The dashboard shows three active Claude sessions across three projects. One has a yellow "waiting for input" marker — the bell I heard fifteen minutes ago was that session asking me a question. I press `Enter`, attached. I answer Claude, hit detach (`Ctrl-b d`), back to the dashboard.
 >
-> I navigate to the Notes tab. ccmux shows the docs/ tree for the project I was just in, with markdown rendered inline. I tap `n` and pick "New Agent Log" — it creates `docs/03_Agent_Logs/2026-05-10-evening.md` with a templated header and opens it in `nvim`. I jot two lines. Close the editor. The files are on the Mac; my iPad picks them up over the tailnet when I open the ccmux web viewer in Safari tomorrow.
+> I navigate to the Notes tab. ccmux shows every markdown file in the project I was just in, grouped by folder, with content rendered inline. I open today's agent log, press `e` to edit it in `nvim`, jot two lines, close the editor. The files are on the Mac; my iPad picks them up over the tailnet when I open the ccmux web viewer in Safari tomorrow.
 >
 > I quit ccmux and lock the phone.
 >
