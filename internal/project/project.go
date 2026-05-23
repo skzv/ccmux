@@ -1,6 +1,14 @@
 // Package project discovers and represents projects on disk.
-// A "project" is any directory containing either a CLAUDE.md or a .git directory
-// under the configured projects root (~/Projects by default).
+//
+// A "project" is any (non-hidden) directory one level under the
+// configured projects root (~/Projects by default). There is no marker
+// requirement — we used to gate on `.git` / `CLAUDE.md` / `.ccmux/`,
+// but that left directories like a worktree without `CLAUDE.md` or a
+// freshly-cloned repo invisible, with no in-app fix. The simpler rule
+// matches what users actually mean by "everything in my projects
+// folder," and the HasGit/HasCM/HasDocs flags still surface as visual
+// tags on the Projects screen for the eye to tell apart "real
+// software project" vs "scratch directory I happened to put here."
 package project
 
 import (
@@ -136,9 +144,6 @@ func inspect(path string) (Project, bool) {
 	}
 	if fi, err := os.Stat(filepath.Join(path, "docs")); err == nil && fi.IsDir() {
 		p.HasDocs = true
-	}
-	if !p.HasGit && !p.HasCM {
-		return Project{}, false
 	}
 	p.Agent = ReadAgent(path)
 	return p, true

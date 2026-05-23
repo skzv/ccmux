@@ -11,15 +11,19 @@ import (
 	"time"
 )
 
-// TestProjectDiscovery covers the discovery CUJ: a directory is a
-// project iff it has a CLAUDE.md or a .git; hidden directories and
-// directories with neither marker are excluded.
+// TestProjectDiscovery covers the discovery CUJ: every non-hidden
+// directory under the projects root surfaces as a project (no marker
+// required). Hidden directories and regular files are still excluded.
+// The HasGit/HasCM flags are populated when those markers are present
+// so the TUI can render them as visual tags.
 func TestProjectDiscovery(t *testing.T) {
 	e := newEnv(t)
 	writeFile(t, filepath.Join(e.Root, "withcm", "CLAUDE.md"), "# withcm\n")
 	mkdirAll(t, filepath.Join(e.Root, "withgit", ".git"))
-	writeFile(t, filepath.Join(e.Root, "plaindir", "notes.txt"), "not a project")
+	mkdirAll(t, filepath.Join(e.Root, "plaindir"))
+	writeFile(t, filepath.Join(e.Root, "plaindir", "notes.txt"), "not a marker file")
 	writeFile(t, filepath.Join(e.Root, ".hidden", "CLAUDE.md"), "# hidden\n")
+	writeFile(t, filepath.Join(e.Root, "loose.txt"), "not a directory")
 
 	e.startDaemon()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -30,18 +34,29 @@ func TestProjectDiscovery(t *testing.T) {
 	}
 
 	got := map[string]bool{}
+	flags := map[string]struct{ git, cm bool }{}
 	for _, p := range projects {
 		got[p.Name] = true
+		flags[p.Name] = struct{ git, cm bool }{p.HasGit, p.HasCM}
 	}
-	for _, want := range []string{"withcm", "withgit"} {
+	for _, want := range []string{"withcm", "withgit", "plaindir"} {
 		if !got[want] {
-			t.Errorf("project %q was not discovered", want)
+			t.Errorf("directory %q was not surfaced", want)
 		}
 	}
-	for _, notWant := range []string{"plaindir", ".hidden"} {
+	for _, notWant := range []string{".hidden", "loose.txt"} {
 		if got[notWant] {
-			t.Errorf("non-project %q was wrongly discovered", notWant)
+			t.Errorf("%q should not appear in the project list", notWant)
 		}
+	}
+	if f := flags["withcm"]; !f.cm || f.git {
+		t.Errorf("withcm flags: %+v, want cm=true git=false", f)
+	}
+	if f := flags["withgit"]; !f.git || f.cm {
+		t.Errorf("withgit flags: %+v, want git=true cm=false", f)
+	}
+	if f := flags["plaindir"]; f.cm || f.git {
+		t.Errorf("plaindir flags: %+v, want both false", f)
 	}
 }
 

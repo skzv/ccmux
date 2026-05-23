@@ -119,6 +119,7 @@ Attaching to an auto-discovered peer execs `ssh -t <host> -- tmux attach -t <nam
 - `ccmux new <name>` — creates the project directory and starts an agent session in it. That's all it does: **no `CLAUDE.md`, no `docs/` tree, no `git init`.** Run `/init`, `openspec`, or `git init` yourself inside the session — bootstrapping is the agent's job, not ccmux's. The "n" form picker lets you choose Claude / Codex / Antigravity, and `ccmux new --agent <id>` is the CLI equivalent.
 - **Open a project = see its history.** Pressing Enter on a project in the Projects tab opens a menu listing its running sessions *and* its past agent conversations, so you can attach, resume an earlier conversation, or start fresh in one place. `ccmux project <name>` prints the same from the CLI.
 - **Create on any device.** In the Projects tab, press `n` and pick which device should host the new project (local or any reachable peer running `ccmuxd`). The remote daemon creates the directory + starts the session natively, and ccmux ssh-attaches you in.
+- **Every subdirectory of your projects root shows up automatically.** No `.git` / `CLAUDE.md` / marker file required — if it's a directory under `~/Projects/` (or whatever you've configured), it appears. The `git · CLAUDE · docs/` tags on each row still tell you at a glance which directories are real software projects vs scratch dirs.
 
 ### 🤝 Multi-agent (Claude, Codex, Antigravity)
 - Per-project agent stored in `<project>/.ccmux/agent` — sticky, survives across sessions

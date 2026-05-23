@@ -51,7 +51,16 @@ func TestSessionName(t *testing.T) {
 	}
 }
 
-func TestInspect_AcceptsAndRejects(t *testing.T) {
+// TestInspect_AcceptsEveryDirAndSurfacesFlags pins both halves of the
+// post-marker-rule contract:
+//   - Any directory passes (empty, marker-less, "CLAUDE.md is itself a
+//     directory" — all surface as projects).
+//   - HasGit / HasCM / HasDocs still populate when the markers are
+//     present, because the Projects screen renders them as visual tags
+//     so the user can tell "real software project" from "scratch dir."
+//
+// Only a non-directory or missing path is rejected.
+func TestInspect_AcceptsEveryDirAndSurfacesFlags(t *testing.T) {
 	root := t.TempDir()
 
 	// has-git: only .git
@@ -65,11 +74,16 @@ func TestInspect_AcceptsAndRejects(t *testing.T) {
 	writeFile(t, filepath.Join(root, "has-both", "CLAUDE.md"), "# hi\n")
 	mkdir(t, filepath.Join(root, "has-both", "docs"))
 
-	// empty: neither — should be rejected
+	// empty: no markers — still a project.
 	mkdir(t, filepath.Join(root, "empty"))
 
-	// not-a-dir-claude: CLAUDE.md is a directory, not a file — rejected
+	// not-a-dir-claude: CLAUDE.md is a directory, not a file. Still
+	// a project (the parent qualifies as a directory), but HasCM
+	// must NOT be true — a directory isn't the CLAUDE.md memory file.
 	mkdir(t, filepath.Join(root, "weird", "CLAUDE.md"))
+
+	// not-a-dir: a regular file under the root is not a project.
+	writeFile(t, filepath.Join(root, "loose.txt"), "x")
 
 	cases := []struct {
 		path                      string
@@ -79,8 +93,9 @@ func TestInspect_AcceptsAndRejects(t *testing.T) {
 		{filepath.Join(root, "has-git"), true, true, false, false},
 		{filepath.Join(root, "has-cm"), true, false, true, false},
 		{filepath.Join(root, "has-both"), true, true, true, true},
-		{filepath.Join(root, "empty"), false, false, false, false},
-		{filepath.Join(root, "weird"), false, false, false, false},
+		{filepath.Join(root, "empty"), true, false, false, false},
+		{filepath.Join(root, "weird"), true, false, false, false},
+		{filepath.Join(root, "loose.txt"), false, false, false, false},
 		{filepath.Join(root, "missing"), false, false, false, false},
 	}
 	for _, tc := range cases {
@@ -103,13 +118,13 @@ func TestInspect_AcceptsAndRejects(t *testing.T) {
 	}
 }
 
-func TestDiscover_SkipsHiddenAndNonProjects(t *testing.T) {
+func TestDiscover_SkipsHiddenAndNonDirs(t *testing.T) {
 	root := t.TempDir()
 	mkdir(t, filepath.Join(root, "a", ".git"))
 	writeFile(t, filepath.Join(root, "b", "CLAUDE.md"), "# b\n")
-	mkdir(t, filepath.Join(root, "not-a-project"))         // no markers
-	mkdir(t, filepath.Join(root, ".hidden", ".git"))       // hidden dir
-	writeFile(t, filepath.Join(root, "loose.txt"), "junk") // not a dir
+	mkdir(t, filepath.Join(root, "c-no-markers"))          // surfaces too
+	mkdir(t, filepath.Join(root, ".hidden", ".git"))       // hidden dir — skipped
+	writeFile(t, filepath.Join(root, "loose.txt"), "junk") // not a dir — skipped
 
 	got, err := Discover(root)
 	if err != nil {
@@ -120,8 +135,14 @@ func TestDiscover_SkipsHiddenAndNonProjects(t *testing.T) {
 		names[i] = p.Name
 	}
 	sort.Strings(names)
-	if len(names) != 2 || names[0] != "a" || names[1] != "b" {
-		t.Fatalf("Discover returned %v, want [a b]", names)
+	want := []string{"a", "b", "c-no-markers"}
+	if len(names) != len(want) {
+		t.Fatalf("Discover returned %v, want %v", names, want)
+	}
+	for i, n := range want {
+		if names[i] != n {
+			t.Errorf("Discover[%d] = %q, want %q (full: %v)", i, names[i], n, names)
+		}
 	}
 }
 
