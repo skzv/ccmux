@@ -312,7 +312,25 @@ ccmux uninstall       # clean removal
 
 ## Install
 
-**From source (Homebrew tap coming with v0.1 release):**
+**Homebrew (macOS, Linuxbrew on Linux):**
+
+```bash
+brew install skzv/tap/ccmux
+ccmux setup
+```
+
+`brew install` pulls cross-compiled binaries from the [GitHub Release](https://github.com/skzv/ccmux/releases/latest) and wires the runtime deps (`tmux`, `mosh`, `ripgrep`). `ccmux setup` then runs the interactive wizard for the things brew can't cover (Tailscale, the agent CLIs, the ccmuxd background service).
+
+**One-line install script (no Homebrew):**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/skzv/ccmux/main/scripts/install.sh | sh
+ccmux setup
+```
+
+Downloads the latest release tarball into `~/.local/bin/`, strips the macOS quarantine attribute automatically, then drops you at the wizard.
+
+**From source:**
 
 ```bash
 git clone https://github.com/skzv/ccmux.git
@@ -323,9 +341,9 @@ make setup
 `make setup` builds, installs `ccmux` + `ccmuxd` into `~/.local/bin/`, then runs the wizard. Idempotent — re-run any time.
 
 Requirements:
-- Go 1.26+ (build only)
+- Go 1.26+ (source builds only — `brew install` and `install.sh` don't need it)
 - macOS, Linux, or Windows via WSL2 (see [Windows guide](docs/04_Guides/Windows.md) — native Windows tracks as an open TODO)
-- `~/.local/bin` on your PATH
+- `~/.local/bin` on your PATH (for source / install-script paths)
 
 ```bash
 ccmux          # launch the TUI
@@ -333,13 +351,13 @@ ccmux setup    # re-run the wizard
 ccmux doctor   # health check
 ```
 
-> **macOS, raw release tarballs:** if you grab a binary tarball directly from [Releases](https://github.com/skzv/ccmux/releases) instead of going through `make setup` or the install script, macOS may refuse to open it (*"cannot verify the developer"*). Strip the quarantine attribute once and you're done:
+> **macOS, raw release tarballs:** if you grab a binary tarball directly from [Releases](https://github.com/skzv/ccmux/releases) instead of going through `brew install` / `make setup` / `scripts/install.sh`, macOS may refuse to open it (*"cannot verify the developer"*). Strip the quarantine attribute once and you're done:
 >
 > ```bash
 > xattr -d com.apple.quarantine ./ccmux ./ccmuxd
 > ```
 >
-> Brew installs (when the tap is public) and `scripts/install.sh` already handle this for you. Apple code-signing + notarization will land here once the project's Apple Developer account is approved.
+> All three supported install paths above handle this for you. Apple code-signing + notarization will land here once the project's Apple Developer account is approved.
 
 ## Uninstall
 
