@@ -65,14 +65,14 @@ type conversationsModel struct {
 	// delete they armed minutes ago on a different row.
 	pendingDelete string
 
-	// showHeadless includes headless / SDK conversations in the list
-	// (anything Conversation.IsHeadless reports true for: `claude -p`,
-	// the SDK, automation wrappers). Seeded from config.Conversations.
-	// ShowHeadless; toggled live with H. Default false hides them
-	// because automation runs accumulate fast and drown out
-	// interactive sessions in the list. Apply path: this flag flips
-	// to inverted ExcludeHeadless on conversations.Options at refresh
-	// time — see App.refreshConversationsCmd.
+	// showHeadless includes headless agent runs in the list (anything
+	// Conversation.IsHeadless reports true for: Claude `claude -p` /
+	// SDK / automation wrappers, Codex `codex exec`). Seeded from
+	// config.Conversations.ShowHeadless; toggled live with H. Default
+	// false hides them because automation runs accumulate fast and
+	// drown out interactive sessions in the list. Apply path: this
+	// flag flips to inverted ExcludeHeadless on conversations.Options
+	// at refresh time — see App.refreshConversationsCmd.
 	showHeadless bool
 }
 
@@ -379,7 +379,18 @@ func (m conversationsModel) renderDetail(c conversations.Conversation, width, he
 		st.Muted.Render("Last active") + "  " + c.LastActivity.Format("2006-01-02 15:04"),
 	}
 	if c.IsHeadless() {
-		lines = append(lines, st.Muted.Render("Mode       ")+st.StatusError.Render("headless / SDK"))
+		// Show *which* headless mode the row is — "SDK" for Claude
+		// `sdk-cli`, "exec" for Codex `codex_exec`. A user who
+		// opted-in to seeing headless rows shouldn't have to guess
+		// which automation flavour they're about to resume.
+		label := "headless"
+		switch c.Entrypoint {
+		case "sdk-cli":
+			label = "headless / SDK"
+		case "codex_exec":
+			label = "headless / exec"
+		}
+		lines = append(lines, st.Muted.Render("Mode       ")+st.StatusError.Render(label))
 	}
 	if c.Preview != "" {
 		lines = append(lines, "", st.Muted.Render("Preview"), wrap(c.Preview, width-2))

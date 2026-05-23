@@ -88,16 +88,26 @@ into automation (shell wrappers, the SDK, `claude -p` one-shots) the
 list is dominated by single-turn rows that swamp the actual interactive
 work — sometimes 20%+ of every transcript on disk.
 
-Claude tags every user event in the JSONL transcript with an
-`entrypoint` field:
+Each agent records a launch-mode tag on its transcript; `Conversation.Entrypoint`
+holds the raw value and `IsHeadless()` is the per-agent predicate that
+collapses it to a yes/no:
 
-- `"cli"` — interactive `claude` session in a terminal.
-- `"sdk-cli"` — headless run via `claude -p`, the SDK, or anything
-  that calls Claude non-interactively.
+- **Claude** — `entrypoint` field on every user event in the JSONL
+  transcript:
+  - `"cli"` — interactive `claude` session in a terminal.
+  - `"sdk-cli"` — headless run via `claude -p`, the SDK, or any
+    automation wrapper.
+- **Codex** — `payload.originator` on the first `session_meta` event
+  in each rollout:
+  - `"codex-tui"` — interactive `codex` session.
+  - `"codex_exec"` — headless `codex exec` run.
+- **Antigravity** — transcripts are opaque protobuf (encrypted on
+  disk), so no signal is available. `Entrypoint` is always empty and
+  `IsHeadless()` always returns false; rows are never filtered by this
+  toggle.
 
-`Conversation.IsHeadless()` returns true for the `sdk-cli` case, and
-`conversations.All(Options{ExcludeHeadless: true})` filters those rows
-out after the sort. The package itself stays policy-neutral
+`conversations.All(Options{ExcludeHeadless: true})` filters headless
+rows out after the sort. The package itself stays policy-neutral
 (zero-value Options preserves the old "show everything" behavior so
 external callers don't silently lose rows); the policy lives in the
 TUI and CLI layers, both of which exclude headless rows by default:
@@ -105,20 +115,22 @@ TUI and CLI layers, both of which exclude headless rows by default:
 - **TUI** — `internal/tui/conversations.go` carries a `showHeadless`
   flag seeded from `config.Conversations.ShowHeadless`. The H keybind
   flips it live, the bottom-of-screen hint surfaces the current state,
-  and the detail pane marks headless rows as `headless / SDK` so a
-  user who's opted them in knows what they're resuming. The
-  per-project menu (Enter on a project row) honors the same default.
+  and the detail pane marks headless rows with a mode-specific badge
+  (`headless / SDK` for Claude `sdk-cli`, `headless / exec` for Codex
+  `codex_exec`) so a user who's opted them in knows what they're
+  resuming. The per-project menu (Enter on a project row) honors the
+  same default.
 - **CLI** — `ccmux list-conversations` and `ccmux project <name>`
   read the same config, plus `list-conversations --include-headless`
   for a one-shot override. `ccmux resume` without an ID also skips
   headless rows when picking the most-recent fallback (a bare
-  `ccmux resume` shouldn't drop the user into a `claude -p` replay);
-  resuming by explicit ID always works.
+  `ccmux resume` shouldn't drop the user into a `claude -p` or
+  `codex exec` replay); resuming by explicit ID always works.
 
-Codex and Antigravity don't carry an entrypoint field, so their rows
-always report `IsHeadless()=false` and are never filtered by this
-toggle. If those agents later add their own headless markers,
-`IsHeadless()` is the one place to teach them.
+Adding a new agent (or a new headless mode for an existing one) is a
+two-line change: parse the launch-mode tag into `Conversation.Entrypoint`
+in the agent's `read…Transcript` walker, then add a `case` to
+`IsHeadless()`. Every TUI/CLI surface routes through that predicate.
 
 ## What's deliberately not abstracted (v1)
 

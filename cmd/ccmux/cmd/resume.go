@@ -66,10 +66,11 @@ Use ` + "`ccmux list-conversations`" + ` to discover IDs.`,
 				}
 			} else {
 				// Bare `ccmux resume` shouldn't drop the user into a
-				// `claude -p` automation run. Filter headless rows out
-				// of the most-recent picker unless the user opted them
-				// back in via config — they can always target a
-				// specific headless run by ID.
+				// headless automation run (`claude -p`, the SDK, or
+				// `codex exec`). Filter headless rows out of the
+				// most-recent picker unless the user opted them back
+				// in via config — they can always target a specific
+				// headless run by ID.
 				showHeadless := false
 				if cfg, err := config.Load(); err == nil {
 					showHeadless = cfg.Conversations.ShowHeadless
@@ -83,7 +84,7 @@ Use ` + "`ccmux list-conversations`" + ` to discover IDs.`,
 					}
 					list = interactive
 					if len(list) == 0 {
-						return fmt.Errorf("no past interactive conversations found — only headless / SDK runs. Pass an ID, or set conversations.show_headless=true")
+						return fmt.Errorf("no past interactive conversations found — only headless runs (claude -p / SDK, codex exec). Pass an ID, or set conversations.show_headless=true")
 					}
 				}
 				// No explicit id: pick most-recent, optionally filtered by agent.

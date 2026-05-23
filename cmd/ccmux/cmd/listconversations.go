@@ -40,9 +40,11 @@ whether ccmux launched them. Sources:
 Antigravity transcripts are opaque protobuf, so the preview column is
 empty for those rows. ID and last-activity are always populated.
 
-Headless / SDK Claude runs (entrypoint=sdk-cli — i.e. ` + "`claude -p`" + `, the SDK,
-automation wrappers) are hidden by default. Pass --include-headless to
-see them, or set conversations.show_headless=true in config.
+Headless runs are hidden by default — that's Claude ` + "`claude -p`" + ` / SDK
+invocations (entrypoint=sdk-cli) and Codex ` + "`codex exec`" + ` runs
+(originator=codex_exec). Antigravity transcripts carry no headless tag
+so those rows are always shown. Pass --include-headless to see them,
+or set conversations.show_headless=true in config.
 
 Default ordering is most-recent first.`,
 		RunE: func(_ *cobra.Command, _ []string) error {
@@ -74,7 +76,7 @@ Default ordering is most-recent first.`,
 	cmd.Flags().IntVar(&limit, "limit", 0, "cap the output to N rows (default: no limit)")
 	cmd.Flags().DurationVar(&since, "since", 0, "only conversations active within this duration (e.g. 24h, 7d)")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit one JSON object per conversation on stdout (for scripting)")
-	cmd.Flags().BoolVar(&includeHeadless, "include-headless", false, "include headless / SDK Claude runs (claude -p, automation); hidden by default")
+	cmd.Flags().BoolVar(&includeHeadless, "include-headless", false, "include headless runs (claude -p / SDK, codex exec); hidden by default")
 	return cmd
 }
 

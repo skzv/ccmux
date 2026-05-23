@@ -72,18 +72,27 @@ type Conversation struct {
 	// Useful for "open in editor" actions and diagnostic output.
 	Path string
 
-	// Entrypoint is Claude's own tag for how the session was launched.
-	// Sourced from the `entrypoint` field on the first user event in
-	// the transcript:
+	// Entrypoint is the agent's own tag for how the session was
+	// launched. Per-agent semantics — IsHeadless interprets the value
+	// in the context of c.Agent:
 	//
-	//   "cli"      — interactive `claude` session.
-	//   "sdk-cli"  — headless / SDK invocation (`claude -p`, the SDK,
-	//                automation wrappers that wire Claude into scripts).
-	//   ""         — no user event carried the tag. Typically a
-	//                metadata-only stub (ai-title, permission-mode)
-	//                Claude writes for title indexing, or a Codex /
-	//                Antigravity row (those agents don't use this
-	//                field).
+	//   Claude (sourced from the `entrypoint` field on the first user
+	//   event):
+	//     "cli"        — interactive `claude` session.
+	//     "sdk-cli"    — headless / SDK (`claude -p`, the SDK,
+	//                    automation wrappers).
+	//
+	//   Codex (sourced from `payload.originator` on the first
+	//   `session_meta` event):
+	//     "codex-tui"  — interactive `codex` session.
+	//     "codex_exec" — headless `codex exec` run.
+	//
+	//   Antigravity:
+	//     ""           — always. Transcripts are opaque protobuf so
+	//                    we can't read a launch-mode tag.
+	//
+	//   "" on Claude/Codex means the parser didn't find the tag
+	//   (e.g. a metadata-only stub, an older transcript format).
 	//
 	// Drives the default "hide automation noise" filter on the
 	// conversations list. See Options.ExcludeHeadless and IsHeadless.
@@ -91,11 +100,24 @@ type Conversation struct {
 }
 
 // IsHeadless reports whether this conversation was a headless agent
-// invocation (e.g. `claude -p`, the SDK) rather than an interactive
-// terminal session. Currently only Claude tags transcripts with this
-// information; Codex and Antigravity rows always report false.
+// invocation (`claude -p`, the SDK, `codex exec`, …) rather than an
+// interactive terminal session. The mapping is per-agent because each
+// agent uses a different tag:
+//
+//   - Claude    → entrypoint == "sdk-cli"
+//   - Codex     → originator == "codex_exec"
+//   - Antigravity → never (opaque .pb transcripts carry no signal)
+//
+// Adding a new headless mode to an existing agent only needs an extra
+// case here — every TUI/CLI surface routes through this predicate.
 func (c Conversation) IsHeadless() bool {
-	return c.Entrypoint == "sdk-cli"
+	switch c.Agent {
+	case agent.IDClaude:
+		return c.Entrypoint == "sdk-cli"
+	case agent.IDCodex:
+		return c.Entrypoint == "codex_exec"
+	}
+	return false
 }
 
 // ResumeArgs returns the argv vector to launch the agent that owns
@@ -549,14 +571,22 @@ func readCodexTranscript(path string) Conversation {
 		if err := json.Unmarshal(sc.Bytes(), &ev); err != nil {
 			continue
 		}
+		// session_meta is always the first event in a Codex rollout
+		// and carries the launch-mode tag in payload.originator
+		// ("codex_exec" for headless `codex exec`, "codex-tui" for an
+		// interactive session). Capture once; subsequent events don't
+		// re-state it.
+		if ev.Type == "session_meta" && c.Entrypoint == "" && ev.Payload.Originator != "" {
+			c.Entrypoint = ev.Payload.Originator
+		}
 		if ev.Cwd != "" && c.Project == "" {
 			c.Project = ev.Cwd
 		}
 		if ev.Type == "user_message" && c.Preview == "" {
 			c.Preview = truncatedPreview(ev.Text)
 		}
-		// Stop scanning once we have both project and preview.
-		if c.Project != "" && c.Preview != "" {
+		// Stop scanning once we have entrypoint, project, and preview.
+		if c.Entrypoint != "" && c.Project != "" && c.Preview != "" {
 			break
 		}
 	}
@@ -566,9 +596,21 @@ func readCodexTranscript(path string) Conversation {
 // codexEvent — permissive view over Codex's rollout-event shape.
 // Only the fields we need for the conversation row.
 type codexEvent struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
-	Cwd  string `json:"cwd"`
+	Type    string            `json:"type"`
+	Text    string            `json:"text"`
+	Cwd     string            `json:"cwd"`
+	Payload codexEventPayload `json:"payload"`
+}
+
+// codexEventPayload — the nested payload Codex wraps every event in.
+// session_meta's payload carries the originator + source fields that
+// distinguish headless `codex exec` from interactive `codex` runs.
+type codexEventPayload struct {
+	// Originator is Codex's launch-mode tag on the session_meta event:
+	// "codex_exec" for headless `codex exec`, "codex-tui" for the
+	// interactive TUI. Mirrors Claude's `entrypoint` field; surfaces
+	// on Conversation.Entrypoint and drives IsHeadless.
+	Originator string `json:"originator"`
 }
 
 // ListAntigravity walks ~/.gemini/antigravity-cli/conversations/<uuid>.pb.

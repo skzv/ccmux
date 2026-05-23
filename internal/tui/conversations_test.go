@@ -522,26 +522,40 @@ func TestConversationsModel_View_HintShowsToggleStatus(t *testing.T) {
 
 // TestConversationsModel_View_DetailMarksHeadlessRow — when a headless
 // row IS visible (user has flipped the toggle to inspect their
-// automation), the detail pane has to call it out. Otherwise an
-// `sdk-cli` resume that boots `claude --resume <uuid>` into a tmux
-// pane comes as a surprise.
+// automation), the detail pane has to call it out with a mode-specific
+// label so the user knows which automation flavour they're about to
+// resume. Otherwise a `sdk-cli` or `codex exec` resume comes as a
+// surprise.
 func TestConversationsModel_View_DetailMarksHeadlessRow(t *testing.T) {
-	m := newConversations(styles.Default(), DefaultKeymap())
-	m.SetList([]conversations.Conversation{
-		{
-			ID:           "headless-1",
-			Agent:        agent.IDClaude,
-			Project:      "/p",
-			LastActivity: time.Now(),
-			Preview:      "automated prompt",
-			Entrypoint:   "sdk-cli",
-		},
-	})
-	m.SetShowHeadless(true) // so the row is visible
+	cases := []struct {
+		name      string
+		agent     agent.ID
+		ep        string
+		wantLabel string
+	}{
+		{"claude sdk-cli", agent.IDClaude, "sdk-cli", "headless / SDK"},
+		{"codex codex_exec", agent.IDCodex, "codex_exec", "headless / exec"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newConversations(styles.Default(), DefaultKeymap())
+			m.SetList([]conversations.Conversation{
+				{
+					ID:           "headless-1",
+					Agent:        tc.agent,
+					Project:      "/p",
+					LastActivity: time.Now(),
+					Preview:      "automated prompt",
+					Entrypoint:   tc.ep,
+				},
+			})
+			m.SetShowHeadless(true) // so the row is visible
 
-	out := m.View(120, 40)
-	if !strings.Contains(out, "headless / SDK") {
-		t.Errorf("detail pane should flag headless rows, got:\n%s", out)
+			out := m.View(120, 40)
+			if !strings.Contains(out, tc.wantLabel) {
+				t.Errorf("detail pane should flag headless rows with %q, got:\n%s", tc.wantLabel, out)
+			}
+		})
 	}
 }
 
