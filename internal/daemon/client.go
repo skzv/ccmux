@@ -10,7 +10,27 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
+)
+
+// Tunables for the cached transports built by LocalClient / RemoteClient.
+// The motivating bug: a fresh *http.Client (and *http.Transport) was being
+// constructed per refresh tick (every 2s on the TUI's dashboard refresh).
+// Each Transport defaults to IdleConnTimeout=0 ("no timeout"), so its
+// keep-alive Unix-socket conns sat in the idle pool forever, holding fds
+// on BOTH the client process AND the ccmuxd server process. Over hours
+// this exhausted kern.maxfiles and the daemon's accept loop spammed
+// "too many open files in system" to ccmuxd.stderr.log.
+//
+// The fix is two-layered: (1) memoize so callers reuse one Client per
+// target, and (2) cap idle conns + idle-conn lifetime as defense in
+// depth in case a future caller bypasses the cache.
+const (
+	idleConnTimeout     = 30 * time.Second
+	maxIdleConns        = 4
+	maxIdleConnsPerHost = 2
+	requestTimeout      = 5 * time.Second
 )
 
 // Client speaks the ccmuxd JSON protocol. One Client = one ccmuxd, whether
@@ -22,34 +42,108 @@ type Client struct {
 	addr   string // for diagnostics
 }
 
-// LocalClient connects to the local ccmuxd via the canonical Unix socket
-// at ~/.local/state/ccmux/ccmuxd.sock.
+// localClientCache memoizes the singleton LocalClient. One ccmuxd socket
+// per user means one Client per process is the right cardinality. sync.Once
+// gives us race-free lazy init without locking on the hot path.
+var (
+	localClientOnce sync.Once
+	localClientVal  *Client
+	localClientErr  error
+)
+
+// remoteClientCache memoizes RemoteClient(addr) by addr. sync.Map is
+// the right shape for a read-heavy "look up by addr, occasionally insert"
+// pattern — every refresh tick reads, only first-touch writes.
+var remoteClientCache sync.Map // map[string]*Client
+
+// LocalClient returns a process-wide Client targeting the local ccmuxd's
+// Unix socket at ~/.local/state/ccmux/ccmuxd.sock. The Client (and its
+// underlying *http.Transport) is constructed exactly once per process and
+// reused on every subsequent call — see the package-level fd-leak comment
+// above for why per-call construction is the wrong default here.
+//
+// The socket path is resolved INSIDE DialContext on every dial, not
+// captured once at construction. In production this is a no-op (HOME
+// doesn't change after process start), but it makes the singleton
+// robust to `t.Setenv("HOME", ...)` between e2e tests — each test
+// spawns its own daemon in a per-test temp HOME, and the cached client
+// must follow. The Transport's keep-alive logic evicts the previous
+// test's now-dead idle conn on first reuse and dials fresh against the
+// new HOME's socket.
 func LocalClient() (*Client, error) {
-	path, err := localSocketPath()
-	if err != nil {
-		return nil, err
-	}
-	hc := &http.Client{
-		Transport: &http.Transport{
-			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-				var d net.Dialer
-				return d.DialContext(ctx, "unix", path)
+	localClientOnce.Do(func() {
+		// Resolve once eagerly too, so a misconfigured environment
+		// (no HOME) surfaces as an error from LocalClient() the same
+		// way the pre-fix code did, instead of deferring to first dial.
+		path, err := localSocketPath()
+		if err != nil {
+			localClientErr = err
+			return
+		}
+		hc := &http.Client{
+			Transport: &http.Transport{
+				DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+					// Re-resolve per dial. localSocketPath is a cheap
+					// os.UserHomeDir + filepath.Join; the alternative
+					// (capturing `path` from the outer scope) pins the
+					// singleton to whichever HOME was set at first call,
+					// which breaks the e2e harness's per-test sandbox.
+					p, err := localSocketPath()
+					if err != nil {
+						return nil, err
+					}
+					var d net.Dialer
+					return d.DialContext(ctx, "unix", p)
+				},
+				IdleConnTimeout:     idleConnTimeout,
+				MaxIdleConns:        maxIdleConns,
+				MaxIdleConnsPerHost: maxIdleConnsPerHost,
 			},
-		},
-		Timeout: 5 * time.Second,
-	}
-	return &Client{hc: hc, base: "http://unix", scheme: "unix", addr: path}, nil
+			Timeout: requestTimeout,
+		}
+		localClientVal = &Client{hc: hc, base: "http://unix", scheme: "unix", addr: path}
+	})
+	return localClientVal, localClientErr
 }
 
-// RemoteClient connects to a ccmuxd over plain HTTP on a tailnet address.
-// `addr` is "host:port" (e.g. "mini.tail-xxxxx.ts.net:7474").
+// RemoteClient returns a process-wide Client for the given tailnet
+// `addr` ("host:port", e.g. "mini.tail-xxxxx.ts.net:7474"). Successive
+// calls with the same addr return the same *Client; different addrs
+// each get their own.
 func RemoteClient(addr string) *Client {
-	return &Client{
-		hc:     &http.Client{Timeout: 5 * time.Second},
+	if v, ok := remoteClientCache.Load(addr); ok {
+		return v.(*Client)
+	}
+	cli := &Client{
+		hc: &http.Client{
+			Transport: &http.Transport{
+				IdleConnTimeout:     idleConnTimeout,
+				MaxIdleConns:        maxIdleConns,
+				MaxIdleConnsPerHost: maxIdleConnsPerHost,
+			},
+			Timeout: requestTimeout,
+		},
 		base:   "http://" + addr,
 		scheme: "http",
 		addr:   addr,
 	}
+	// LoadOrStore handles the rare race where two goroutines miss the
+	// initial Load and both construct: only one wins, the other is GC'd
+	// without ever holding a connection.
+	actual, _ := remoteClientCache.LoadOrStore(addr, cli)
+	return actual.(*Client)
+}
+
+// resetClientCacheForTest clears the process-wide LocalClient/RemoteClient
+// caches. Test-only; production code should never need this. Exposed at
+// package scope (not in a _test.go file) so test helpers in other packages
+// can use it if they ever need to, but kept unexported to keep the
+// production surface clean.
+func resetClientCacheForTest() {
+	localClientOnce = sync.Once{}
+	localClientVal = nil
+	localClientErr = nil
+	remoteClientCache = sync.Map{}
 }
 
 // localSocketPath returns the canonical Unix-socket path for ccmuxd.
