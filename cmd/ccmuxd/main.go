@@ -393,6 +393,41 @@ func (s *server) createSession(w http.ResponseWriter, r *http.Request) {
 	// — re-running set-option just overwrites the same string.
 	s.applyChrome(ctx, session, req.Project)
 
+	// Pin immediately if requested. The poll loop would otherwise need
+	// to see the session first before /v1/sessions/{name}/keep-awake
+	// could find it in s.seen; eagerly registering here closes that
+	// race for the mobile UX where "create + pin" is one tap.
+	if req.KeepAwake {
+		s.mu.Lock()
+		t, ok := s.seen[session]
+		if !ok {
+			t = &tracked{
+				created:     time.Now(),
+				lastChange:  time.Now(),
+				state:       agent.StateUnknown,
+				agentID:     project.ReadAgent(path),
+				projectPath: path,
+			}
+			s.seen[session] = t
+		}
+		t.keepAwake = true
+		s.mu.Unlock()
+	}
+
+	// Type the optional initial prompt into the new session. Used by the
+	// mobile "New session with first message" flow so the agent starts
+	// the conversation immediately, without the user having to attach
+	// and type. SendText is literal (`-l`) so a prompt containing a key
+	// name like "Enter" or "Up" is typed as characters; the explicit
+	// SendKeys("Enter") afterward submits the input to the agent.
+	if input := strings.TrimSpace(req.FirstInput); input != "" {
+		if err := tmux.SendText(ctx, session, input); err != nil {
+			log.Printf("ccmuxd: send first input to %s: %v", session, err)
+		} else if err := tmux.SendKeys(ctx, session, "Enter"); err != nil {
+			log.Printf("ccmuxd: submit first input on %s: %v", session, err)
+		}
+	}
+
 	writeJSON(w, daemon.SessionState{
 		Name: session, Host: "local", Project: req.Project, Path: path,
 		State: string(agent.StateUnknown), Created: time.Now(),
