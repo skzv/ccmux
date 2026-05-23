@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"text/template"
+
+	"github.com/skzv/ccmux/internal/config"
 )
 
 // probeDarwin fills in plist + launchctl-load state.
@@ -37,6 +39,7 @@ func installDarwin() (Status, error) {
 		return s, err
 	}
 
+	cfg, _ := config.Load()
 	var buf strings.Builder
 	if err := plistTemplate.Execute(&buf, plistData{
 		Label:      Label,
@@ -45,6 +48,7 @@ func installDarwin() (Status, error) {
 		StderrPath: filepath.Join(logsDir, "ccmuxd.stderr.log"),
 		HomeDir:    home,
 		WorkingDir: home,
+		Path:       managedPath(home, cfg.AgentCommands(), "/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin", "/usr/bin", "/bin"),
 	}); err != nil {
 		return s, err
 	}
@@ -109,6 +113,7 @@ type plistData struct {
 	StderrPath string
 	HomeDir    string
 	WorkingDir string
+	Path       string
 }
 
 var plistTemplate = template.Must(template.New("plist").Parse(`<?xml version="1.0" encoding="UTF-8"?>
@@ -132,7 +137,7 @@ var plistTemplate = template.Must(template.New("plist").Parse(`<?xml version="1.
     <key>HOME</key>
     <string>{{.HomeDir}}</string>
     <key>PATH</key>
-    <string>{{.HomeDir}}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <string>{{.Path}}</string>
   </dict>
   <key>StandardOutPath</key>
   <string>{{.StdoutPath}}</string>

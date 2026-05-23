@@ -79,6 +79,7 @@ func TestJoinArgs_ShapeMatchesSpaceSeparation(t *testing.T) {
 		{[]string{"claude", "--resume", "abc"}, "claude --resume abc"},
 		{[]string{"codex", "resume", "uuid"}, "codex resume uuid"},
 		{[]string{"agy", "--conversation", "x"}, "agy --conversation x"},
+		{[]string{"/Users/me/Tools With Spaces/claude", "--resume", "abc"}, "'/Users/me/Tools With Spaces/claude' --resume abc"},
 		{[]string{"single"}, "single"},
 		{nil, ""},
 		{[]string{}, ""},

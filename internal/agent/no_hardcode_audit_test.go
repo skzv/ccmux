@@ -17,7 +17,7 @@ import (
 // Sessions-tab picker selection. That meant Codex / Antigravity were
 // effectively impossible to actually run from ccmux.
 //
-// All those sites now route through agent.ByID(...).LaunchCmd(...).
+// All those sites now route through agent.LaunchCmd(...).
 // To keep them honest this test walks the repo's production .go
 // files and asserts that no source line contains a hardcoded Claude
 // launch string in a `tmux.New(` argument position. Adding a new
@@ -118,7 +118,7 @@ func TestNoHardcodedAgentLaunchCommands(t *testing.T) {
 		t.Fatalf("walk: %v", err)
 	}
 	if len(violations) > 0 {
-		t.Errorf("hardcoded claude launch command detected — every session-spawn site must go through agent.ByID(id).LaunchCmd(...) so the user's agent choice is honored. Offending lines:\n  %s",
+		t.Errorf("hardcoded claude launch command detected — every session-spawn site must go through agent.LaunchCmd(...) so the user's agent choice is honored. Offending lines:\n  %s",
 			strings.Join(violations, "\n  "))
 	}
 }

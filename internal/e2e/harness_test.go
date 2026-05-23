@@ -160,10 +160,12 @@ func newEnv(t *testing.T) *Env {
 	home := shortTempDir(t)
 	// HOME isolates config (~/.config/ccmux) and the daemon socket
 	// (~/.local/state/ccmux). TMUX_TMPDIR isolates the tmux server so
-	// every test gets its own — no collisions with the user's real
-	// sessions or with other tests.
+	// every test gets its own. TMUX must be cleared because an inherited
+	// live-client TMUX variable overrides TMUX_TMPDIR and would point
+	// tmux commands at the developer's production server.
 	t.Setenv("HOME", home)
 	t.Setenv("TMUX_TMPDIR", home)
+	t.Setenv("TMUX", "")
 	// Resolve `claude`/`codex` to the sleeping stub (installStubAgents).
 	// Prepend so the stub wins over any real agent on the dev's PATH;
 	// the rest of PATH (tmux, sh, the go toolchain) still resolves.

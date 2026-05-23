@@ -77,6 +77,9 @@ func TestSaveLoad_RoundTrip(t *testing.T) {
 	in.Daemon.TailnetPort = 8888
 	in.Notes.AutoLogSessions = false
 	in.Subscription.Tier = "max20x"
+	in.Agents.Claude.Command = "/tmp/claude"
+	in.Agents.Codex.Command = "/tmp/codex"
+	in.Agents.Antigravity.Command = "/tmp/agy"
 	in.Hosts = []Host{
 		{Name: "mac-mini", Address: "100.64.0.5", User: "skz", Port: 22, Mosh: true},
 		{Name: "laptop", Address: "100.64.0.6", User: "skz"},
@@ -90,6 +93,22 @@ func TestSaveLoad_RoundTrip(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, in) {
 		t.Fatalf("round-trip mismatch:\ngot=%+v\nwant=%+v", got, in)
+	}
+}
+
+func TestAgentCommands_CommandOverrides(t *testing.T) {
+	cfg := Defaults()
+	cfg.Agents.Claude.Command = "  /tmp/claude  "
+	cfg.Agents.Codex.Command = "  /tmp/codex  "
+	cfg.Agents.Antigravity.Command = "  /tmp/agy  "
+	if got := cfg.AgentCommands().Claude; got != "/tmp/claude" {
+		t.Errorf("AgentCommands().Claude = %q, want /tmp/claude", got)
+	}
+	if got := cfg.AgentCommands().Codex; got != "/tmp/codex" {
+		t.Errorf("AgentCommands().Codex = %q, want /tmp/codex", got)
+	}
+	if got := cfg.AgentCommands().Antigravity; got != "/tmp/agy" {
+		t.Errorf("AgentCommands().Antigravity = %q, want /tmp/agy", got)
 	}
 }
 

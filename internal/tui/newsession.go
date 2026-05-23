@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/skzv/ccmux/internal/agent"
+	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/tmux"
 	"github.com/skzv/ccmux/internal/tui/styles"
@@ -355,7 +356,8 @@ func spawnBareSessionCmd(submit newBareSessionSubmitMsg) tea.Cmd {
 		if name == "" {
 			name = tmux.AutoSessionName("c-shell")
 		}
-		launch := launchCmdForBareSession(submit.Agent)
+		cfg, _ := config.Load()
+		launch := launchCmdForBareSessionWithCommands(submit.Agent, cfg.AgentCommands())
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := tmux.New(ctx, name, path, launch); err != nil {
@@ -376,9 +378,13 @@ func spawnBareSessionCmd(submit newBareSessionSubmitMsg) tea.Cmd {
 // Exposed for tests that pin the shape of the command for a given
 // agent picker selection.
 func launchCmdForBareSession(id agent.ID) string {
+	return launchCmdForBareSessionWithCommands(id, agent.Commands{})
+}
+
+func launchCmdForBareSessionWithCommands(id agent.ID, commands agent.Commands) string {
 	if id != "" {
 		if parsed, ok := agent.ParseID(string(id)); ok {
-			return agent.ByID(parsed).LaunchCmd(false)
+			return agent.LaunchCmd(parsed, false, commands)
 		}
 	}
 	shell := os.Getenv("SHELL")

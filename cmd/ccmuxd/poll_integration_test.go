@@ -32,8 +32,12 @@ func pollSandbox(t *testing.T) string {
 	}
 	// Setenv first so the kill-server cleanup (registered after) still
 	// sees TMUX_TMPDIR — t.Cleanup runs LIFO before env restoration.
+	// Clear TMUX too: when tests are launched from inside tmux, the
+	// inherited client variable takes precedence and targets the live
+	// server even if TMUX_TMPDIR points at this sandbox.
 	t.Setenv("HOME", dir)
 	t.Setenv("TMUX_TMPDIR", dir)
+	t.Setenv("TMUX", "")
 	t.Cleanup(func() {
 		_ = exec.Command("tmux", "kill-server").Run()
 		_ = os.RemoveAll(dir)

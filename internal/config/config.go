@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+	"github.com/skzv/ccmux/internal/agent"
 )
 
 // Config is the root user-configurable state.
@@ -125,6 +126,31 @@ type AgentsConfig struct {
 	// agent. Empty falls back to "claude" so a fresh install gets
 	// an agent by default — the multi-agent refactor's intent.
 	Default string `toml:"default"`
+
+	// Per-agent command selections. Nested under [agents.<id>] so
+	// command pinning stays close to the agent it affects without
+	// crowding the top-level agent defaults.
+	Claude      AgentCommandConfig `toml:"claude"`
+	Codex       AgentCommandConfig `toml:"codex"`
+	Antigravity AgentCommandConfig `toml:"antigravity"`
+}
+
+// AgentCommandConfig stores an optional explicit executable path for
+// an agent. Empty Command preserves the existing "resolve binary on
+// PATH" behavior.
+type AgentCommandConfig struct {
+	Command string `toml:"command,omitempty"`
+}
+
+// AgentCommands converts config's persisted shape into the runtime
+// command override shape used by internal/agent. Keeping the conversion
+// here prevents launch sites from knowing the TOML layout.
+func (c Config) AgentCommands() agent.Commands {
+	return agent.Commands{
+		Claude:      strings.TrimSpace(c.Agents.Claude.Command),
+		Codex:       strings.TrimSpace(c.Agents.Codex.Command),
+		Antigravity: strings.TrimSpace(c.Agents.Antigravity.Command),
+	}
 }
 
 // UpdateConfig holds the auto-update preference. ccmux installs from a

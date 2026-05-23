@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -283,10 +285,110 @@ func TestAllInstalled_RespectsHook(t *testing.T) {
 	}
 }
 
+func TestExecutableCandidates_PathOrderAndDedup(t *testing.T) {
+	dir1 := t.TempDir()
+	dir2 := t.TempDir()
+	writeExecutable(t, filepath.Join(dir1, "claude"))
+	writeExecutable(t, filepath.Join(dir2, "claude"))
+	pathEnv := strings.Join([]string{dir1, dir2, dir1}, string(os.PathListSeparator))
+
+	got := ExecutableCandidates("claude", pathEnv)
+	want := []string{filepath.Join(dir1, "claude"), filepath.Join(dir2, "claude")}
+	if len(got) != len(want) {
+		t.Fatalf("len = %d, want %d: %#v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("candidate[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestLaunchCmd_ConfiguredCommands(t *testing.T) {
+	commands := Commands{
+		Claude:      "/Users/me/.nvm/versions/node/bin/claude",
+		Codex:       "/Users/me/.nvm/versions/node/bin/codex",
+		Antigravity: "/Users/me/.nvm/versions/node/bin/agy",
+	}
+	tests := []struct {
+		name string
+		id   ID
+		want string
+	}{
+		{
+			name: "claude",
+			id:   IDClaude,
+			want: "/Users/me/.nvm/versions/node/bin/claude --continue || /Users/me/.nvm/versions/node/bin/claude || zsh || bash || sh",
+		},
+		{
+			name: "codex",
+			id:   IDCodex,
+			want: "/Users/me/.nvm/versions/node/bin/codex --continue || /Users/me/.nvm/versions/node/bin/codex || zsh || bash || sh",
+		},
+		{
+			name: "antigravity",
+			id:   IDAntigravity,
+			want: "/Users/me/.nvm/versions/node/bin/agy --continue || /Users/me/.nvm/versions/node/bin/agy || zsh || bash || sh",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := LaunchCmd(tt.id, true, commands); got != tt.want {
+				t.Errorf("LaunchCmd configured = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLaunchCmd_ConfiguredCommandWithSpacesIsQuoted(t *testing.T) {
+	cmd := LaunchCmd(IDClaude, false, Commands{Claude: "/Users/me/Tools With Spaces/claude"})
+	want := "'/Users/me/Tools With Spaces/claude'"
+	if cmd != want {
+		t.Errorf("LaunchCmd quoted = %q, want %q", cmd, want)
+	}
+}
+
+func TestResumeArgs_ConfiguredCommands(t *testing.T) {
+	commands := Commands{
+		Claude:      "/tmp/claude",
+		Codex:       "/tmp/codex",
+		Antigravity: "/tmp/agy",
+	}
+	tests := []struct {
+		name string
+		id   ID
+		want []string
+	}{
+		{name: "claude", id: IDClaude, want: []string{"/tmp/claude", "--resume", "abc-123"}},
+		{name: "codex", id: IDCodex, want: []string{"/tmp/codex", "resume", "abc-123"}},
+		{name: "antigravity", id: IDAntigravity, want: []string{"/tmp/agy", "--conversation", "abc-123"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ResumeArgs(tt.id, "abc-123", commands)
+			if len(got) != len(tt.want) {
+				t.Fatalf("len = %d, want %d", len(got), len(tt.want))
+			}
+			for i := range tt.want {
+				if got[i] != tt.want[i] {
+					t.Errorf("arg[%d] = %q, want %q", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
 func agentIDs(as []Agent) []ID {
 	out := make([]ID, len(as))
 	for i, a := range as {
 		out[i] = a.ID()
 	}
 	return out
+}
+
+func writeExecutable(t *testing.T, path string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 }

@@ -138,7 +138,8 @@ func pickMostRecentByAgent(list []conversations.Conversation, id agent.ID) conve
 // in-foreground so the caller's shell hands off cleanly — same pattern
 // the existing `ccmux attach` and `ccmux new` commands use.
 func resumeNow(target conversations.Conversation) error {
-	argv := target.ResumeArgs()
+	cfg, _ := config.Load()
+	argv := target.ResumeArgsWithCommands(cfg.AgentCommands())
 	if len(argv) == 0 {
 		return fmt.Errorf("unknown agent %q — cannot resume", target.Agent)
 	}
@@ -172,16 +173,15 @@ func resumeNow(target conversations.Conversation) error {
 	return attachWithChrome(sessionName, label)
 }
 
-// joinArgs glues an argv slice with spaces. Local helper to avoid the
-// strings import for a one-liner — the agent argv elements are static
-// (binary name + flag + UUID), so trivial concatenation is correct.
+// joinArgs glues an argv slice into a shell command, quoting each
+// element so configured executable paths with spaces stay one token.
 func joinArgs(argv []string) string {
 	var b []byte
 	for i, a := range argv {
 		if i > 0 {
 			b = append(b, ' ')
 		}
-		b = append(b, a...)
+		b = append(b, agent.ShellQuote(a)...)
 	}
 	return string(b)
 }

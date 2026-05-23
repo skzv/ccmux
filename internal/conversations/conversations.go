@@ -128,13 +128,20 @@ func (c Conversation) IsHeadless() bool {
 // know each agent's flag dialect — it just passes the picked
 // Conversation through.
 func (c Conversation) ResumeArgs() []string {
+	return c.ResumeArgsWithCommands(agent.Commands{})
+}
+
+// ResumeArgsWithCommands is ResumeArgs with configured executable path
+// substitution. This keeps the flag dialect owned here while allowing
+// ccmux's setup-time command choice to propagate to resume flows.
+func (c Conversation) ResumeArgsWithCommands(commands agent.Commands) []string {
 	switch c.Agent {
 	case agent.IDClaude:
-		return []string{"claude", "--resume", c.ID}
+		return agent.ResumeArgs(agent.IDClaude, c.ID, commands)
 	case agent.IDCodex:
-		return []string{"codex", "resume", c.ID}
+		return agent.ResumeArgs(agent.IDCodex, c.ID, commands)
 	case agent.IDAntigravity:
-		return []string{"agy", "--conversation", c.ID}
+		return agent.ResumeArgs(agent.IDAntigravity, c.ID, commands)
 	}
 	// Unknown agent — empty argv; caller should treat as "can't
 	// resume" rather than spawn something bogus.

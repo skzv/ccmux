@@ -25,10 +25,10 @@ import (
 func TestBareSessionLaunchCmd_RequestWins(t *testing.T) {
 	for _, a := range agent.All() {
 		t.Run(string(a.ID()), func(t *testing.T) {
-			got := bareSessionLaunchCmd(string(a.ID()), "claude")
+			got := bareSessionLaunchCmd(string(a.ID()), "claude", agent.Commands{})
 			want := a.LaunchCmd(false)
 			if got != want {
-				t.Errorf("bareSessionLaunchCmd(req=%q, def=claude) = %q, want %q",
+				t.Errorf("bareSessionLaunchCmd(req=%q, def=claude, agent.Commands{}) = %q, want %q",
 					a.ID(), got, want)
 			}
 		})
@@ -41,10 +41,10 @@ func TestBareSessionLaunchCmd_RequestWins(t *testing.T) {
 func TestBareSessionLaunchCmd_ConfigDefault(t *testing.T) {
 	for _, a := range agent.All() {
 		t.Run(string(a.ID()), func(t *testing.T) {
-			got := bareSessionLaunchCmd("", string(a.ID()))
+			got := bareSessionLaunchCmd("", string(a.ID()), agent.Commands{})
 			want := a.LaunchCmd(false)
 			if got != want {
-				t.Errorf("bareSessionLaunchCmd(req=\"\", def=%q) = %q, want %q",
+				t.Errorf("bareSessionLaunchCmd(req=\"\", def=%q, agent.Commands{}) = %q, want %q",
 					a.ID(), got, want)
 			}
 		})
@@ -58,11 +58,11 @@ func TestBareSessionLaunchCmd_ConfigDefault(t *testing.T) {
 func TestBareSessionLaunchCmd_ShellExplicit(t *testing.T) {
 	t.Setenv("SHELL", "/usr/bin/zsh")
 	// Request says shell, even though config default is an agent.
-	if got := bareSessionLaunchCmd("shell", "claude"); got != "/usr/bin/zsh" {
+	if got := bareSessionLaunchCmd("shell", "claude", agent.Commands{}); got != "/usr/bin/zsh" {
 		t.Errorf("explicit shell req with claude default = %q, want /usr/bin/zsh", got)
 	}
 	// Config default is shell, request empty.
-	if got := bareSessionLaunchCmd("", "shell"); got != "/usr/bin/zsh" {
+	if got := bareSessionLaunchCmd("", "shell", agent.Commands{}); got != "/usr/bin/zsh" {
 		t.Errorf("empty req, shell default = %q, want /usr/bin/zsh", got)
 	}
 }
@@ -71,10 +71,10 @@ func TestBareSessionLaunchCmd_ShellExplicit(t *testing.T) {
 // still resolve to Antigravity. Removing the alias would silently
 // break any project's saved settings.toml that still says "gemini".
 func TestBareSessionLaunchCmd_GeminiAlias(t *testing.T) {
-	got := bareSessionLaunchCmd("gemini", "")
+	got := bareSessionLaunchCmd("gemini", "", agent.Commands{})
 	want := agent.Antigravity{}.LaunchCmd(false)
 	if got != want {
-		t.Errorf("bareSessionLaunchCmd(\"gemini\", \"\") = %q, want %q (antigravity)", got, want)
+		t.Errorf("bareSessionLaunchCmd(\"gemini\", \"\", agent.Commands{}) = %q, want %q (antigravity)", got, want)
 	}
 }
 
@@ -83,7 +83,7 @@ func TestBareSessionLaunchCmd_GeminiAlias(t *testing.T) {
 // $SHELL so the user sees a working pane and a recognizable prompt.
 func TestBareSessionLaunchCmd_UnknownFallsToShell(t *testing.T) {
 	t.Setenv("SHELL", "/bin/zsh")
-	if got := bareSessionLaunchCmd("gpt-7", "also-bogus"); got != "/bin/zsh" {
+	if got := bareSessionLaunchCmd("gpt-7", "also-bogus", agent.Commands{}); got != "/bin/zsh" {
 		t.Errorf("unknown agent fallthrough = %q, want /bin/zsh", got)
 	}
 }
@@ -102,7 +102,7 @@ func TestProjectLaunchCmd_HonorsSidecar(t *testing.T) {
 			if err := project.SetAgent(dir, a.ID()); err != nil {
 				t.Fatal(err)
 			}
-			got := projectLaunchCmd(dir, true)
+			got := projectLaunchCmd(dir, true, agent.Commands{})
 			want := a.LaunchCmd(true)
 			if got != want {
 				t.Errorf("projectLaunchCmd(%q sidecar=%q) = %q, want %q",
@@ -126,9 +126,61 @@ func TestProjectLaunchCmd_HonorsSidecar(t *testing.T) {
 // follows.
 func TestProjectLaunchCmd_MissingSidecarFallsBackToClaude(t *testing.T) {
 	dir := t.TempDir() // no .ccmux written
-	got := projectLaunchCmd(dir, true)
+	got := projectLaunchCmd(dir, true, agent.Commands{})
 	want := agent.Claude{}.LaunchCmd(true)
 	if got != want {
 		t.Errorf("projectLaunchCmd(no sidecar) = %q, want %q", got, want)
+	}
+}
+
+func TestProjectLaunchCmd_ConfiguredCommands(t *testing.T) {
+	commands := agent.Commands{
+		Claude:      "/tmp/claude",
+		Codex:       "/tmp/codex",
+		Antigravity: "/tmp/agy",
+	}
+	tests := []struct {
+		name string
+		id   agent.ID
+		want string
+	}{
+		{name: "claude", id: agent.IDClaude, want: "/tmp/claude --continue || /tmp/claude || zsh || bash || sh"},
+		{name: "codex", id: agent.IDCodex, want: "/tmp/codex --continue || /tmp/codex || zsh || bash || sh"},
+		{name: "antigravity", id: agent.IDAntigravity, want: "/tmp/agy --continue || /tmp/agy || zsh || bash || sh"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := project.SetAgent(dir, tt.id); err != nil {
+				t.Fatal(err)
+			}
+			if got := projectLaunchCmd(dir, true, commands); got != tt.want {
+				t.Errorf("configured launch = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBareSessionLaunchCmd_ConfiguredCommands(t *testing.T) {
+	commands := agent.Commands{
+		Claude:      "/tmp/claude",
+		Codex:       "/tmp/codex",
+		Antigravity: "/tmp/agy",
+	}
+	tests := []struct {
+		name string
+		id   string
+		want string
+	}{
+		{name: "claude", id: "claude", want: "/tmp/claude"},
+		{name: "codex", id: "codex", want: "/tmp/codex"},
+		{name: "antigravity", id: "antigravity", want: "/tmp/agy"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := bareSessionLaunchCmd(tt.id, "", commands); got != tt.want {
+				t.Errorf("configured bare launch = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }

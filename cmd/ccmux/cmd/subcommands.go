@@ -57,7 +57,8 @@ func newAttachCmd() *cobra.Command {
 				// Resolve the launch command from the project's
 				// sidecar so an Antigravity-tagged project doesn't
 				// silently boot into claude.
-				launch := agent.ByID(project.ReadAgent(abs)).LaunchCmd(true)
+				cfg, _ := config.Load()
+				launch := agent.LaunchCmd(project.ReadAgent(abs), true, cfg.AgentCommands())
 				if err := tmux.New(ctx, session, abs, launch); err != nil {
 					return err
 				}
@@ -97,6 +98,8 @@ func newNewCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			opts := scaffold.Options{Name: args[0]}
+			cfg, _ := config.Load()
+			opts.Commands = cfg.AgentCommands()
 			if agentFlag != "" {
 				id, ok := agent.ParseID(agentFlag)
 				if !ok {
@@ -216,6 +219,50 @@ func newDoctorCmd() *cobra.Command {
 	}
 }
 
+func configuredDoctorCommand(cfg config.Config, id agent.ID) string {
+	switch id {
+	case agent.IDClaude:
+		return strings.TrimSpace(cfg.Agents.Claude.Command)
+	case agent.IDCodex:
+		return strings.TrimSpace(cfg.Agents.Codex.Command)
+	case agent.IDAntigravity:
+		return strings.TrimSpace(cfg.Agents.Antigravity.Command)
+	default:
+		return ""
+	}
+}
+
+func printAgentCommandDoctor(cfg config.Config, a agent.Agent, candidates []string) {
+	configured := configuredDoctorCommand(cfg, a.ID())
+	if configured != "" {
+		fmt.Printf("      configured: %s\n", configured)
+	}
+	if len(candidates) > 0 {
+		fmt.Printf("      PATH first:  %s\n", candidates[0])
+	}
+	if len(candidates) > 1 {
+		fmt.Printf("      all %s commands:\n", a.DisplayName())
+		for _, p := range candidates {
+			fmt.Println("        - " + p)
+		}
+		if configured == "" {
+			fmt.Printf("      ⚠ multiple %s installs found; run `ccmux setup` to pin one\n", a.DisplayName())
+		}
+	}
+	if configured != "" {
+		found := false
+		for _, p := range candidates {
+			if p == configured {
+				found = true
+				break
+			}
+		}
+		if !found {
+			fmt.Printf("      ⚠ configured %s command is not on this process PATH\n", a.DisplayName())
+		}
+	}
+}
+
 func runDoctor() error {
 	// Windows runs ccmux inside WSL2 today (native tmux doesn't exist;
 	// see docs/04_Guides/Windows.md). When the user runs `ccmux doctor`
@@ -261,13 +308,18 @@ func runDoctor() error {
 	// the same with a different agent.
 	fmt.Println()
 	fmt.Println("AI agents (need at least one):")
+	cfg, _ := config.Load()
 	installedCount := 0
 	for _, a := range agent.All() {
-		if _, err := exec.LookPath(a.Binary()); err != nil {
+		candidates := agent.Candidates(a)
+		configured := configuredDoctorCommand(cfg, a.ID())
+		configuredExists := configured != "" && agent.Executable(configured)
+		if len(candidates) == 0 && !configuredExists {
 			fmt.Printf("  · %s (binary `%s` not on PATH) — %s\n",
 				a.DisplayName(), a.Binary(), agentInstallHint(a.ID()))
 		} else {
 			fmt.Printf("  ✓ %s (%s)\n", a.DisplayName(), a.Binary())
+			printAgentCommandDoctor(cfg, a, candidates)
 			installedCount++
 		}
 	}

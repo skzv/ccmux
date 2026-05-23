@@ -19,6 +19,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
+
+	"github.com/skzv/ccmux/internal/agent"
 )
 
 // Label is the service identifier — used as the launchd Label and as
@@ -125,6 +128,10 @@ func ServicePathOrEmpty() string {
 // UnitFile returns the printable systemd-user unit for users who'd
 // rather install manually. Same content the linux Install() writes.
 func UnitFile(binary string) string {
+	return UnitFileWithPath(binary, "%h/.local/bin:/usr/local/bin:/usr/bin:/bin")
+}
+
+func UnitFileWithPath(binary, pathEnv string) string {
 	return fmt.Sprintf(`[Unit]
 Description=ccmux daemon (Claude Code session supervisor)
 After=default.target
@@ -133,11 +140,37 @@ After=default.target
 ExecStart=%s
 Restart=on-failure
 RestartSec=3
-Environment=PATH=%%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PATH=%s
 
 [Install]
 WantedBy=default.target
-`, binary)
+`, binary, pathEnv)
+}
+
+func managedPath(home string, commands agent.Commands, defaults ...string) string {
+	parts := []string{}
+	add := func(p string) {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			return
+		}
+		for _, existing := range parts {
+			if existing == p {
+				return
+			}
+		}
+		parts = append(parts, p)
+	}
+	add(filepath.Join(home, ".local", "bin"))
+	for _, cmd := range []string{commands.Claude, commands.Codex, commands.Antigravity} {
+		if cmd = strings.TrimSpace(cmd); cmd != "" {
+			add(filepath.Dir(cmd))
+		}
+	}
+	for _, p := range defaults {
+		add(p)
+	}
+	return strings.Join(parts, ":")
 }
 
 // requireBinary fails fast if ccmuxd isn't where the service config

@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/skzv/ccmux/internal/agent"
+	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/project"
 	"github.com/skzv/ccmux/internal/scaffold"
@@ -508,6 +509,8 @@ func createProjectCmd(submit newProjectSubmitMsg) tea.Cmd {
 			Name:  submit.Name,
 			Agent: submit.Agent,
 		}
+		cfg, _ := config.Load()
+		opts.Commands = cfg.AgentCommands()
 		session, err := scaffold.StartSession(context.Background(), opts)
 		if err != nil {
 			return toastMsg{Text: "new project: " + err.Error(), Kind: toastError, Until: time.Now().Add(6 * time.Second)}

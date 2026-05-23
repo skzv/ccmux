@@ -558,7 +558,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Antigravity/Codex project doesn't silently boot claude.
 			projectPath := msg.ProjectPath
 			projectLabel := msg.Project
-			launch := launchCmdForProjectPath(projectPath)
+			launch := launchCmdForProjectPathWithCommands(projectPath, a.cfg.AgentCommands())
 			tick := a.startAttaching(attachKindNew, projectLabel)
 			return a, tea.Batch(tick, func() tea.Msg {
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -1761,9 +1761,17 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
 
+func joinShellArgs(argv []string) string {
+	parts := make([]string, len(argv))
+	for i, arg := range argv {
+		parts[i] = agent.ShellQuote(arg)
+	}
+	return strings.Join(parts, " ")
+}
+
 // launchCmdForProject and launchCmdForProjectPath are the canonical
 // places to resolve the tmux launch command for a project session.
-// Both go through agent.ByID(...).LaunchCmd(true) — `true` because
+// Both go through agent.LaunchCmd(..., true, ...) — `true` because
 // every project-attach path is "resume the existing conversation"
 // from the user's POV; `--continue` is what makes the resume real.
 //
@@ -1772,11 +1780,19 @@ func shellQuote(s string) string {
 // says Antigravity launches `agy --continue || agy || zsh` no matter
 // which code path the user took.
 func launchCmdForProject(p project.Project) string {
-	return agent.ByID(p.Agent).LaunchCmd(true)
+	return launchCmdForProjectWithCommands(p, agent.Commands{})
+}
+
+func launchCmdForProjectWithCommands(p project.Project, commands agent.Commands) string {
+	return agent.LaunchCmd(p.Agent, true, commands)
 }
 
 func launchCmdForProjectPath(projectPath string) string {
-	return agent.ByID(project.ReadAgent(projectPath)).LaunchCmd(true)
+	return launchCmdForProjectPathWithCommands(projectPath, agent.Commands{})
+}
+
+func launchCmdForProjectPathWithCommands(projectPath string, commands agent.Commands) string {
+	return agent.LaunchCmd(project.ReadAgent(projectPath), true, commands)
 }
 
 // remoteTmuxAttach builds the single-string command we hand to ssh
@@ -1849,7 +1865,7 @@ func (a App) attachOrCreateLocal(p project.Project) tea.Cmd {
 	// Resolve the launch command from the project's sidecar (.ccmux/
 	// agent) up front — this used to hardcode the Claude command,
 	// which silently overrode Codex / Antigravity projects.
-	launch := launchCmdForProject(p)
+	launch := launchCmdForProjectWithCommands(p, a.cfg.AgentCommands())
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
@@ -2000,14 +2016,14 @@ func (a App) resumeSelectedConversation() tea.Cmd {
 // rationale.
 func (a App) resumeConversationCmd(c conversations.Conversation) tea.Cmd {
 	return func() tea.Msg {
-		argv := c.ResumeArgs()
+		argv := c.ResumeArgsWithCommands(a.cfg.AgentCommands())
 		if len(argv) == 0 {
 			return conversationResumedMsg{Err: fmt.Errorf("don't know how to resume agent %q", c.Agent)}
 		}
 		sessionName := "c-resume-" + shortConversationID(c.ID)
 		// Build the shell command tmux runs in the new pane. zsh
 		// fallback keeps the pane alive if the agent binary is missing.
-		cmdline := strings.Join(argv, " ") + " || zsh"
+		cmdline := joinShellArgs(argv) + " || zsh"
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := tmux.New(ctx, sessionName, c.Project, cmdline); err != nil {

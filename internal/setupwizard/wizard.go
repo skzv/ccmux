@@ -151,9 +151,12 @@ func stepDeps(ctx context.Context, out io.Writer) error {
 	// user's npm config); we just point at the right command.
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, stEmphasis.Render("  AI agents (need at least one)"))
+	cfg, _ := config.Load()
 	anyAgent := false
 	for _, a := range agent.All() {
-		if _, err := exec.LookPath(a.Binary()); err != nil {
+		configured := configuredAgentCommand(cfg, a.ID())
+		configuredExists := configured != "" && agent.Executable(configured)
+		if _, err := exec.LookPath(a.Binary()); err != nil && !configuredExists {
 			fmt.Fprintf(out, "  %-7s %s   %s\n",
 				a.Binary(),
 				stWarn.Render("· not installed"),
@@ -169,11 +172,108 @@ func stepDeps(ctx context.Context, out io.Writer) error {
 	if !anyAgent {
 		fmt.Fprintln(out, stWarn.Render("  ⚠ no agent installed — install one of the above before using ccmux."))
 	}
+	if changed, err := configureAgentCommands(out, &cfg); err != nil {
+		return err
+	} else if changed {
+		if err := config.Save(cfg); err != nil {
+			return err
+		}
+		p, _ := config.Path()
+		fmt.Fprintf(out, "  %s  wrote agent command selection to %s\n", stOK.Render("✓"), p)
+	}
 
 	if err := installRequired(ctx, out, missing); err != nil {
 		return err
 	}
 	return installPromptable(ctx, out, promptable)
+}
+
+func configureAgentCommands(out io.Writer, cfg *config.Config) (bool, error) {
+	changed := false
+	for _, a := range agent.All() {
+		if agentChanged, err := configureAgentCommand(out, cfg, a); err != nil {
+			return false, err
+		} else if agentChanged {
+			changed = true
+		}
+	}
+	return changed, nil
+}
+
+func configureAgentCommand(out io.Writer, cfg *config.Config, a agent.Agent) (bool, error) {
+	agentCommand, shouldPrompt := defaultAgentCommandSelection(configuredAgentCommand(*cfg, a.ID()), agent.Candidates(a))
+	if configuredAgentCommand(*cfg, a.ID()) != "" {
+		fmt.Fprintf(out, "  %-7s %s   %s\n",
+			a.Binary(),
+			stOK.Render("configured"),
+			stMuted.Render(configuredAgentCommand(*cfg, a.ID())))
+		return false, nil
+	}
+	if agentCommand == "" {
+		return false, nil
+	}
+	if shouldPrompt {
+		candidates := agent.Candidates(a)
+		opts := make([]huh.Option[string], 0, len(candidates))
+		for i, p := range candidates {
+			label := p
+			if i == 0 {
+				label += " (PATH first)"
+			}
+			opts = append(opts, huh.NewOption(label, p))
+		}
+		if err := huh.NewSelect[string]().
+			Title(a.DisplayName() + " command").
+			Description("Multiple installations are on PATH. Pick the one ccmux should use for daemon and tmux sessions.").
+			Options(opts...).
+			Value(&agentCommand).
+			Run(); err != nil {
+			return false, err
+		}
+	} else {
+		fmt.Fprintf(out, "  using %s command: %s\n", a.DisplayName(), stEmphasis.Render(agentCommand))
+	}
+	setConfiguredAgentCommand(cfg, a.ID(), agentCommand)
+	return true, nil
+}
+
+func defaultAgentCommandSelection(current string, candidates []string) (selection string, shouldPrompt bool) {
+	if strings.TrimSpace(current) != "" {
+		return strings.TrimSpace(current), false
+	}
+	switch len(candidates) {
+	case 0:
+		return "", false
+	case 1:
+		return candidates[0], false
+	default:
+		return candidates[0], true
+	}
+}
+
+func configuredAgentCommand(cfg config.Config, id agent.ID) string {
+	switch id {
+	case agent.IDClaude:
+		return strings.TrimSpace(cfg.Agents.Claude.Command)
+	case agent.IDCodex:
+		return strings.TrimSpace(cfg.Agents.Codex.Command)
+	case agent.IDAntigravity:
+		return strings.TrimSpace(cfg.Agents.Antigravity.Command)
+	default:
+		return ""
+	}
+}
+
+func setConfiguredAgentCommand(cfg *config.Config, id agent.ID, command string) {
+	command = strings.TrimSpace(command)
+	switch id {
+	case agent.IDClaude:
+		cfg.Agents.Claude.Command = command
+	case agent.IDCodex:
+		cfg.Agents.Codex.Command = command
+	case agent.IDAntigravity:
+		cfg.Agents.Antigravity.Command = command
+	}
 }
 
 // installHintFor mirrors agentInstallHint in cmd/ccmux/cmd/subcommands.go.
