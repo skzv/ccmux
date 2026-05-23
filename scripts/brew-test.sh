@@ -55,6 +55,9 @@ unset TMUX TMUX_TMPDIR
 cleanup() {
   if [ "$keep" = false ]; then
     brew uninstall --ignore-dependencies ccmux >/dev/null 2>&1 || true
+    # Untap unconditionally — leaves the user's other taps alone, only
+    # removes the skzv/homebrew-tap registration this run created.
+    brew untap skzv/homebrew-tap >/dev/null 2>&1 || true
   fi
   rm -rf "$root"
 }
@@ -67,8 +70,20 @@ case "$mode" in
     gh repo clone skzv/homebrew-tap "$tap_dir" -- --depth=1 -q
     formula="$tap_dir/Formula/ccmux.rb"
     [ -f "$formula" ] || { echo "brew-test: no Formula/ccmux.rb in tap (still at repo root?)" >&2; exit 1; }
-    echo "== brew install $formula"
-    brew install "$formula"
+    # Modern Homebrew (15+) rejects `brew install <path>` outright —
+    # formulae must come through a registered tap. Register the local
+    # clone as the tap source by passing the path as the URL; brew
+    # re-clones it to $(brew --repository)/Library/Taps/skzv/homebrew-tap/
+    # and operates there. The user's `gh` clone is only the source for
+    # that re-clone, which is why this still works against a private tap.
+    echo "== brew tap skzv/homebrew-tap $tap_dir"
+    # Untap first so a stale registration (from a previous run that
+    # didn't reach cleanup, or a real user-installed tap) doesn't make
+    # `brew tap` a no-op pointing at the wrong URL.
+    brew untap skzv/homebrew-tap >/dev/null 2>&1 || true
+    brew tap skzv/homebrew-tap "$tap_dir"
+    echo "== brew install skzv/homebrew-tap/ccmux"
+    brew install skzv/homebrew-tap/ccmux
     ;;
   tap)
     echo "== brew tap skzv/homebrew-tap"
