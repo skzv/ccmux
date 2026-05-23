@@ -144,16 +144,11 @@ func TestParsePeers_MalformedJSON(t *testing.T) {
 	}
 }
 
-// TestDiscover_ProbesEachOnlinePeer puts up a real HTTP server on
-// loopback, points two "fake peers" at it (one configured as Online
-// and one as the local Self) via a temporary HTTPClient swap, and
-// confirms Discover returns the online one.
-//
-// Because tailscale.Peers() shells out, we test the slice-of-Peer →
-// slice-of-Discovered path directly via discoverFromPeers (added for
-// testability below).
+// TestDiscover_FiltersAndProbes covers the three peer filters: Self
+// peers are skipped, offline peers are skipped, and online non-Self
+// peers get probed and surfaced. The slice-input discoverFromPeers
+// helper bypasses tailscale.Peers() (which would shell out).
 func TestDiscover_FiltersAndProbes(t *testing.T) {
-	// Fake ccmuxd HTTP server.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasPrefix(r.URL.Path, "/v1/health") {
 			http.NotFound(w, r)
@@ -172,21 +167,41 @@ func TestDiscover_FiltersAndProbes(t *testing.T) {
 		{HostName: "Self Box", Addr: "1.2.3.4", Online: true, Self: true}, // skipped (Self)
 		{HostName: "Sleeping", Addr: "5.6.7.8", Online: false},            // skipped (offline)
 		{HostName: "ccmuxd peer", Addr: host, Online: true},               // probed → found
-		{HostName: "wrong-port", Addr: host, Online: true},                // probed at different port → fails silently
 	}
-	// Probe at `port` for first set, then `port+1` won't respond for last.
 	got := discoverFromPeers(context.Background(), peers, port)
-	if len(got) < 1 {
-		t.Fatalf("expected at least one discovered host, got %v", got)
+	if len(got) != 1 {
+		t.Fatalf("expected exactly 1 discovered host (only the online non-Self peer), got %d: %v",
+			len(got), got)
 	}
-	foundCcmuxd := false
-	for _, d := range got {
-		if d.Name == "ccmuxd-peer" {
-			foundCcmuxd = true
-		}
+	if got[0].Name != "ccmuxd-peer" {
+		t.Errorf("discovered name = %q, want ccmuxd-peer", got[0].Name)
 	}
-	if !foundCcmuxd {
-		t.Errorf("ccmuxd peer not in results: %v", got)
+}
+
+// TestDiscover_ProbeFailureIsSilent covers the other half of discover's
+// contract: an online peer with no ccmuxd at the configured port is
+// silently dropped, not surfaced as an error or a half-populated row.
+// Start an httptest server, capture its port, shut it down, then use
+// that now-dead port for the probe — connections refuse and the peer
+// should fall out.
+func TestDiscover_ProbeFailureIsSilent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(daemon.HealthInfo{OK: true})
+	}))
+	host, portStr, err := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, _ := strconv.Atoi(portStr)
+	srv.Close() // tear the listener down — host:port now refuses connections.
+
+	peers := []Peer{
+		{HostName: "dead peer", Addr: host, Online: true},
+	}
+	got := discoverFromPeers(context.Background(), peers, port)
+	if len(got) != 0 {
+		t.Errorf("expected 0 discovered hosts (probe must fail silently), got %d: %v",
+			len(got), got)
 	}
 }
 

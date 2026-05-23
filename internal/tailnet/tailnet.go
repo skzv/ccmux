@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"os/exec"
 	"strings"
 	"sync"
@@ -324,8 +323,3 @@ func shortName(s string) string {
 	}
 	return string(out)
 }
-
-// HTTPClient is the http.Client used for the health probe. Exposed so a
-// test can swap it for an in-process server without touching the real
-// network. Unused outside tests today.
-var HTTPClient = &http.Client{Timeout: 1 * time.Second}
