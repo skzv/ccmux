@@ -61,8 +61,20 @@ var remoteClientCache sync.Map // map[string]*Client
 // underlying *http.Transport) is constructed exactly once per process and
 // reused on every subsequent call — see the package-level fd-leak comment
 // above for why per-call construction is the wrong default here.
+//
+// The socket path is resolved INSIDE DialContext on every dial, not
+// captured once at construction. In production this is a no-op (HOME
+// doesn't change after process start), but it makes the singleton
+// robust to `t.Setenv("HOME", ...)` between e2e tests — each test
+// spawns its own daemon in a per-test temp HOME, and the cached client
+// must follow. The Transport's keep-alive logic evicts the previous
+// test's now-dead idle conn on first reuse and dials fresh against the
+// new HOME's socket.
 func LocalClient() (*Client, error) {
 	localClientOnce.Do(func() {
+		// Resolve once eagerly too, so a misconfigured environment
+		// (no HOME) surfaces as an error from LocalClient() the same
+		// way the pre-fix code did, instead of deferring to first dial.
 		path, err := localSocketPath()
 		if err != nil {
 			localClientErr = err
@@ -71,8 +83,17 @@ func LocalClient() (*Client, error) {
 		hc := &http.Client{
 			Transport: &http.Transport{
 				DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+					// Re-resolve per dial. localSocketPath is a cheap
+					// os.UserHomeDir + filepath.Join; the alternative
+					// (capturing `path` from the outer scope) pins the
+					// singleton to whichever HOME was set at first call,
+					// which breaks the e2e harness's per-test sandbox.
+					p, err := localSocketPath()
+					if err != nil {
+						return nil, err
+					}
 					var d net.Dialer
-					return d.DialContext(ctx, "unix", path)
+					return d.DialContext(ctx, "unix", p)
 				},
 				IdleConnTimeout:     idleConnTimeout,
 				MaxIdleConns:        maxIdleConns,
