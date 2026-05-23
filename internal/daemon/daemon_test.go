@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -520,4 +521,167 @@ func TestClient_NewProject_ForwardsAgent(t *testing.T) {
 	if got.Agent != "codex" {
 		t.Errorf("server received Agent=%q, want codex", got.Agent)
 	}
+}
+
+// TestLocalClient_IsProcessSingleton pins the fix for the fd leak that
+// motivated the LocalClient memoization: callers got a fresh *http.Client
+// (and *http.Transport) per call, each with its own idle-conn pool that
+// the Go runtime only reaped via GC + finalizers — which on a low-allocation
+// TUI almost never ran promptly. After the fix, every LocalClient() must
+// return the SAME *Client pointer.
+func TestLocalClient_IsProcessSingleton(t *testing.T) {
+	resetClientCacheForTest()
+	t.Cleanup(resetClientCacheForTest)
+
+	a, err := LocalClient()
+	if err != nil {
+		t.Fatalf("first LocalClient: %v", err)
+	}
+	b, err := LocalClient()
+	if err != nil {
+		t.Fatalf("second LocalClient: %v", err)
+	}
+	if a != b {
+		t.Fatalf("LocalClient returned different pointers across calls: %p vs %p", a, b)
+	}
+	if a.hc != b.hc {
+		t.Fatalf("LocalClient returned different http.Client across calls")
+	}
+}
+
+// TestRemoteClient_MemoizesByAddr pins the matching guarantee for
+// RemoteClient: same addr re-uses the cached Client, different addrs
+// each get their own.
+func TestRemoteClient_MemoizesByAddr(t *testing.T) {
+	resetClientCacheForTest()
+	t.Cleanup(resetClientCacheForTest)
+
+	a1 := RemoteClient("host-a:7474")
+	a2 := RemoteClient("host-a:7474")
+	b1 := RemoteClient("host-b:7474")
+	if a1 != a2 {
+		t.Errorf("same addr returned different *Client: %p vs %p", a1, a2)
+	}
+	if a1 == b1 {
+		t.Errorf("different addrs returned the same *Client: %p", a1)
+	}
+}
+
+// TestLocalClient_TransportHasIdleTuning checks the defense-in-depth
+// layer: even if a future refactor accidentally bypasses the singleton
+// cache, every Transport must carry a finite IdleConnTimeout so leaked
+// conns get reaped within ~30s instead of "never" (the zero-value
+// behavior of http.Transport).
+func TestLocalClient_TransportHasIdleTuning(t *testing.T) {
+	resetClientCacheForTest()
+	t.Cleanup(resetClientCacheForTest)
+
+	c, err := LocalClient()
+	if err != nil {
+		t.Fatalf("LocalClient: %v", err)
+	}
+	tr, ok := c.hc.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("LocalClient Transport not *http.Transport: %T", c.hc.Transport)
+	}
+	if tr.IdleConnTimeout <= 0 {
+		t.Errorf("IdleConnTimeout=%v, want >0 (zero-value lets idle conns linger forever)", tr.IdleConnTimeout)
+	}
+	if tr.MaxIdleConnsPerHost <= 0 {
+		t.Errorf("MaxIdleConnsPerHost=%d, want >0", tr.MaxIdleConnsPerHost)
+	}
+}
+
+// TestRemoteClient_TransportHasIdleTuning mirrors the above for
+// RemoteClient — both factories need to pin the same guarantee since
+// they share the leak surface.
+func TestRemoteClient_TransportHasIdleTuning(t *testing.T) {
+	resetClientCacheForTest()
+	t.Cleanup(resetClientCacheForTest)
+
+	c := RemoteClient("example:7474")
+	tr, ok := c.hc.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("RemoteClient Transport not *http.Transport: %T", c.hc.Transport)
+	}
+	if tr.IdleConnTimeout <= 0 {
+		t.Errorf("IdleConnTimeout=%v, want >0", tr.IdleConnTimeout)
+	}
+	if tr.MaxIdleConnsPerHost <= 0 {
+		t.Errorf("MaxIdleConnsPerHost=%d, want >0", tr.MaxIdleConnsPerHost)
+	}
+}
+
+// TestRemoteClient_ReusesConnectionsAcrossManyRequests is the
+// end-to-end behavioral test. It wraps the test server's listener with
+// an accept-counter, fires N sequential requests through one cached
+// RemoteClient, and asserts the server saw FAR fewer accepts than
+// requests — proving keep-alive + idle-conn reuse is working as
+// intended. Before the fix, every refresh tick built a fresh Transport,
+// so each request opened a new conn; this test would fail with
+// accepts == requests (or worse).
+func TestRemoteClient_ReusesConnectionsAcrossManyRequests(t *testing.T) {
+	resetClientCacheForTest()
+	t.Cleanup(resetClientCacheForTest)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/health", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(HealthInfo{OK: true, Hostname: "x", Version: "v"})
+	})
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var accepts int64
+	cl := &countingListener{Listener: ln, accepts: &accepts}
+	srv := &http.Server{Handler: mux}
+	go func() { _ = srv.Serve(cl) }()
+	t.Cleanup(func() { _ = srv.Close() })
+
+	addr := ln.Addr().String()
+	c1 := RemoteClient(addr)
+
+	const N = 50
+	for i := 0; i < N; i++ {
+		if _, err := c1.Health(context.Background()); err != nil {
+			t.Fatalf("request %d: %v", i, err)
+		}
+	}
+
+	// Second lookup must hit the cache.
+	c2 := RemoteClient(addr)
+	if c1 != c2 {
+		t.Fatalf("RemoteClient(%q) returned different pointers across calls", addr)
+	}
+
+	for i := 0; i < N; i++ {
+		if _, err := c2.Health(context.Background()); err != nil {
+			t.Fatalf("second-batch request %d: %v", i, err)
+		}
+	}
+
+	got := atomic.LoadInt64(&accepts)
+	// Sequential requests over keep-alive should reuse a single conn.
+	// We allow a small slack (≤4) to absorb transient pool churn — the
+	// real assertion is "nowhere near 2*N=100". Pre-fix this would be 100.
+	if got > 4 {
+		t.Errorf("server accepted %d conns for %d requests; expected ≤4 (keep-alive reuse not working)", got, 2*N)
+	}
+}
+
+// countingListener wraps a net.Listener and increments a counter on
+// every Accept. Used by TestRemoteClient_ReusesConnectionsAcrossManyRequests
+// to assert keep-alive is reusing conns rather than dialing fresh.
+type countingListener struct {
+	net.Listener
+	accepts *int64
+}
+
+func (c *countingListener) Accept() (net.Conn, error) {
+	conn, err := c.Listener.Accept()
+	if err == nil {
+		atomic.AddInt64(c.accepts, 1)
+	}
+	return conn, err
 }
