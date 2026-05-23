@@ -57,6 +57,11 @@ brews:
       owner: skzv
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    # Modern Homebrew tap layout — formulae live under Formula/ rather
+    # than at the repo root. GoReleaser's legacy default is the root;
+    # without this line the v0.0.1-alpha smoke release dropped the
+    # file as `ccmux.rb` next to README.md.
+    directory: Formula
     homepage: "https://github.com/skzv/ccmux"
     description: "One TUI for every AI coding session — Claude Code, Codex, Antigravity"
     license: "FSL-1.1-MIT"

@@ -37,3 +37,29 @@ jobs:
           # default GITHUB_TOKEN can't push to another repo. Create this
           # secret before the first release (see README / handoff notes).
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+
+  # Post-release sanity check: actually install the freshly-published
+  # formula via Homebrew on a real macOS runner. Catches "release
+  # uploaded but install fails" regressions (wrong sha256, missing
+  # binary in the tarball, broken dep declaration, etc.) before any
+  # user notices. Runs against the live tap, NOT a snapshot, so the
+  # signal is "the thing I just released actually installs".
+  #
+  # Linuxbrew isn't covered here — bottle availability for our deps
+  # (tmux, mosh, ripgrep) is patchier on Linuxbrew, runner times balloon,
+  # and the bulk of ccmux users on Linux install via the install script
+  # rather than brew. Add a linux-latest job here if that changes.
+  brew-test:
+    needs: goreleaser
+    runs-on: macos-latest
+    steps:
+      - name: Checkout (for scripts/brew-test.sh)
+        uses: actions/checkout@v4
+
+      - name: brew-test
+        run: bash scripts/brew-test.sh
+        env:
+          # gh inside the script needs write-irrelevant *read* access
+          # to clone the private tap. Same PAT goreleaser uses for the
+          # push side; works for clone too.
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
