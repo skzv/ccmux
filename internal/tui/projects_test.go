@@ -2,8 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -12,33 +10,6 @@ import (
 	"github.com/skzv/ccmux/internal/project"
 	"github.com/skzv/ccmux/internal/tui/styles"
 )
-
-// mkdirAll is a thin t.Fatal-on-error helper so the adopt tests stay
-// readable.
-func mkdirAll(t *testing.T, path string) {
-	t.Helper()
-	if err := os.MkdirAll(path, 0o755); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// updateKey routes a single key press through App.Update. Returns the
-// new App + any tea.Cmd the Update produced — caller can run() it to
-// drive the next message.
-func updateKey(t *testing.T, a App, key string) (App, tea.Cmd) {
-	t.Helper()
-	var msg tea.KeyMsg
-	switch key {
-	case "enter":
-		msg = tea.KeyMsg{Type: tea.KeyEnter}
-	case "esc":
-		msg = tea.KeyMsg{Type: tea.KeyEsc}
-	default:
-		msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)}
-	}
-	m, cmd := a.Update(msg)
-	return m.(App), cmd
-}
 
 // sampleProjects returns a fixture used across the filter tests. The
 // names are chosen to give substring overlaps (every "ccmux*" name
@@ -356,117 +327,5 @@ func TestProjects_CursorVisibleWhenScrolledPastWindow(t *testing.T) {
 	// windowing — otherwise the window isn't actually doing its job.
 	if strings.Contains(out, "project-00") {
 		t.Errorf("project-00 still visible when cursor is at row 28 — windowing didn't shift")
-	}
-}
-
-// TestAdoptModal_OpenedByCapitalA — pressing `A` on the Projects
-// screen scans the projects root for orphans and installs the modal.
-// We assert via projectsM.adopt (the model field App routes keys to).
-func TestAdoptModal_OpenedByCapitalA(t *testing.T) {
-	root := t.TempDir()
-	mkdirAll(t, root+"/scratch")
-	mkdirAll(t, root+"/notes")
-
-	a := newFilterApp(t, nil)
-	a.cfg.Projects.Root = root
-	a.projectsM.SetProjectsRoot(root)
-
-	// Press A.
-	a, cmd := updateKey(t, a, "A")
-	if cmd == nil {
-		t.Fatal("A on Projects produced no cmd (expected scanOrphansCmd)")
-	}
-	// Run the cmd, feed its message back through App.Update.
-	msg := cmd()
-	if _, ok := msg.(adoptProjectOpenedMsg); !ok {
-		t.Fatalf("scan cmd returned %T, want adoptProjectOpenedMsg", msg)
-	}
-	m, _ := a.Update(msg)
-	a = m.(App)
-
-	if a.projectsM.adopt == nil {
-		t.Fatal("adopt modal not installed after adoptProjectOpenedMsg")
-	}
-	if len(a.projectsM.adopt.orphans) != 2 {
-		t.Errorf("modal orphan count = %d, want 2 (orphans=%v)",
-			len(a.projectsM.adopt.orphans), a.projectsM.adopt.orphans)
-	}
-}
-
-// TestAdoptModal_EnterEmitsPickThenAdopts — drives the full keyboard
-// path: A → Enter → adoption applies, modal closes, marker exists.
-func TestAdoptModal_EnterEmitsPickThenAdopts(t *testing.T) {
-	root := t.TempDir()
-	mkdirAll(t, root+"/scratch")
-
-	a := newFilterApp(t, nil)
-	a.cfg.Projects.Root = root
-	a.projectsM.SetProjectsRoot(root)
-
-	// Open the modal (A, then deliver the scan result).
-	a, cmd := updateKey(t, a, "A")
-	m, _ := a.Update(cmd())
-	a = m.(App)
-
-	// Enter inside the modal: modal emits adoptProjectPickMsg, which
-	// projectsModel.Update forwards up so App sees it and runs Adopt.
-	a, cmd = updateKey(t, a, "enter")
-	if cmd == nil {
-		t.Fatal("Enter in adopt modal produced no cmd")
-	}
-	pick := cmd()
-	if _, ok := pick.(adoptProjectPickMsg); !ok {
-		t.Fatalf("Enter cmd returned %T, want adoptProjectPickMsg", pick)
-	}
-	m, cmd = a.Update(pick)
-	a = m.(App)
-	// App should have cleared the modal.
-	if a.projectsM.adopt != nil {
-		t.Error("adopt modal still open after pick — App should have nil'd it")
-	}
-	// And kicked off adoptProjectCmd.
-	if cmd == nil {
-		t.Fatal("App produced no cmd in response to adoptProjectPickMsg")
-	}
-	adopted := cmd()
-	apm, ok := adopted.(projectAdoptedMsg)
-	if !ok {
-		t.Fatalf("adopt cmd returned %T, want projectAdoptedMsg", adopted)
-	}
-	if apm.Err != nil {
-		t.Fatalf("adoption failed: %v", apm.Err)
-	}
-	if _, err := os.Stat(filepath.Join(root, "scratch", ".ccmux")); err != nil {
-		t.Errorf(".ccmux marker not written: %v", err)
-	}
-}
-
-// TestAdoptModal_EscCloses — Esc cancels the modal without adopting.
-func TestAdoptModal_EscCloses(t *testing.T) {
-	root := t.TempDir()
-	mkdirAll(t, root+"/scratch")
-
-	a := newFilterApp(t, nil)
-	a.cfg.Projects.Root = root
-	a.projectsM.SetProjectsRoot(root)
-	a, cmd := updateKey(t, a, "A")
-	m, _ := a.Update(cmd())
-	a = m.(App)
-
-	a, cmd = updateKey(t, a, "esc")
-	if cmd == nil {
-		t.Fatal("Esc in modal produced no cmd")
-	}
-	if _, ok := cmd().(adoptProjectCancelMsg); !ok {
-		t.Fatalf("Esc cmd returned %T, want adoptProjectCancelMsg", cmd())
-	}
-	// Deliver the cancel; App should clear the modal.
-	m, _ = a.Update(adoptProjectCancelMsg{})
-	a = m.(App)
-	if a.projectsM.adopt != nil {
-		t.Error("adopt modal still open after Esc cancel")
-	}
-	if _, err := os.Stat(filepath.Join(root, "scratch", ".ccmux")); err == nil {
-		t.Error(".ccmux marker created by Esc — should be cancel-only")
 	}
 }

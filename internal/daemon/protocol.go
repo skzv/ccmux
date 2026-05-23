@@ -153,16 +153,12 @@ type NewProjectResponse struct {
 // merging projects from multiple ccmuxds can tag each row with its
 // origin. The remaining fields mirror internal/project.Project.
 type ProjectInfo struct {
-	Name    string `json:"name"`
-	Host    string `json:"host"`
-	Path    string `json:"path"` // absolute path on the daemon's host
-	HasGit  bool   `json:"has_git"`
-	HasCM   bool   `json:"has_cm"`
-	HasDocs bool   `json:"has_docs"`
-	// Adopted is true when the project directory was registered with
-	// ccmux via project.Adopt (the `.ccmux/` marker is present). Older
-	// daemons omit the field; clients should treat absence as false.
-	Adopted  bool      `json:"adopted,omitempty"`
+	Name     string    `json:"name"`
+	Host     string    `json:"host"`
+	Path     string    `json:"path"` // absolute path on the daemon's host
+	HasGit   bool      `json:"has_git"`
+	HasCM    bool      `json:"has_cm"`
+	HasDocs  bool      `json:"has_docs"`
 	Agent    string    `json:"agent,omitempty"`
 	Modified time.Time `json:"modified"`
 }

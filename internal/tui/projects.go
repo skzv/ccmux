@@ -3,8 +3,6 @@ package tui
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -30,13 +28,6 @@ type projectsModel struct {
 	cursor   int
 	form     *newProjectFormModel
 	menu     *projectMenuModel
-	adopt    *adoptProjectModel
-
-	// projectsRoot is the configured root (cfg.Projects.Root, defaulted).
-	// Cached here because the "A" key needs it to scan for orphans
-	// without reaching back into App. Pushed from App on every projects
-	// load — see App.refreshProjectsCmd.
-	projectsRoot string
 
 	// hosts is the live reachable-peer list, fed in from App on every
 	// sessionsLoadedMsg. Snapshot into the form at "n"-press time so
@@ -69,13 +60,6 @@ func newProjects(st styles.Styles, km Keymap) projectsModel {
 func (m *projectsModel) SetProjects(p []project.Project) {
 	m.projects = p
 	m.clampCursor()
-}
-
-// SetProjectsRoot caches the configured projects root so the `A`
-// (adopt) key can scan it for orphan directories without reaching
-// back into App. Pushed from App on every projects refresh.
-func (m *projectsModel) SetProjectsRoot(root string) {
-	m.projectsRoot = root
 }
 
 // SetDefaultAgent is the App-side hook that pushes cfg.Agents.Default
@@ -177,39 +161,6 @@ func (m *projectsModel) SetHosts(h []hostStatus) {
 }
 
 func (m projectsModel) Update(msg tea.Msg) (projectsModel, tea.Cmd) {
-	// Adopt-orphan modal: lives alongside the menu/form modals. App
-	// intercepts the pick/cancel messages before they reach here so it
-	// can run project.Adopt and refresh; we forward unrecognized
-	// messages to the modal so navigation keys still work.
-	if m.adopt != nil {
-		switch msg.(type) {
-		case adoptProjectPickMsg, adoptProjectCancelMsg:
-			return m, func() tea.Msg { return msg }
-		}
-		am, cmd := m.adopt.Update(msg)
-		m.adopt = &am
-		return m, cmd
-	}
-
-	// adoptProjectOpenedMsg arrives async from the disk-scan command
-	// fired by the `A` key. Install the modal once orphans are in
-	// hand. An error means the scan failed (missing root, perms) —
-	// surface a toast instead of opening an empty modal.
-	if op, ok := msg.(adoptProjectOpenedMsg); ok {
-		if op.Err != nil {
-			return m, func() tea.Msg {
-				return toastMsg{
-					Text:  "scan for orphans: " + op.Err.Error(),
-					Kind:  toastError,
-					Until: time.Now().Add(5 * time.Second),
-				}
-			}
-		}
-		am := newAdoptProject(m.st, op.Root, op.Orphans)
-		m.adopt = &am
-		return m, nil
-	}
-
 	// Menu modal: lists the project's sessions + conversations. App
 	// intercepts the pick/cancel messages before they reach here, so we
 	// only forward unrecognized messages to the menu's own Update.
@@ -285,14 +236,6 @@ func (m projectsModel) Update(msg tea.Msg) (projectsModel, tea.Cmd) {
 			f := newNewProjectForm(m.st, m.hosts, m.defaultAgent)
 			m.form = &f
 			return m, tea.Batch(textInputBlink())
-		case km.String() == "A":
-			// Adopt: scan the projects root for orphan directories
-			// (no .git/.ccmux/CLAUDE.md) and open the picker so the
-			// user can register one. Disk scan is one-level-deep and
-			// fast, but we hand it to a tea.Cmd anyway so a slow disk
-			// or networked home dir can't freeze the UI.
-			root := m.projectsRoot
-			return m, scanOrphansCmd(root)
 		case km.String() == "a":
 			// Switch the selected project's agent. Cycles through
 			// agent.All() in canonical order. Local-host projects
@@ -348,25 +291,6 @@ func nextAgent(cur agent.ID) agent.ID {
 	return all[0].ID()
 }
 
-// scanOrphansCmd runs project.DiscoverOrphans off the UI goroutine and
-// returns an adoptProjectOpenedMsg. Errors flow through the message so
-// the screen can toast them instead of silently doing nothing. An empty
-// root falls back to ~/Projects to mirror the rest of the codebase
-// (config.Load + scaffold both resolve the same way).
-func scanOrphansCmd(root string) tea.Cmd {
-	return func() tea.Msg {
-		if root == "" {
-			home, err := os.UserHomeDir()
-			if err != nil {
-				return adoptProjectOpenedMsg{Err: err}
-			}
-			root = filepath.Join(home, "Projects")
-		}
-		orphans, err := project.DiscoverOrphans(root)
-		return adoptProjectOpenedMsg{Root: root, Orphans: orphans, Err: err}
-	}
-}
-
 // switchAgentCmd is the projects-detail-pane "a" action. Writes the
 // sidecar, emits a toast, and signals the in-memory list to update.
 // Local-only — remote agent switching would need a daemon endpoint
@@ -396,10 +320,6 @@ func switchAgentCmd(p project.Project) tea.Cmd {
 }
 
 func (m projectsModel) View(width, height int) string {
-	if m.adopt != nil {
-		modalW := minInt(80, width-4)
-		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, m.adopt.View(modalW))
-	}
 	if m.menu != nil {
 		menuW := minInt(80, width-4)
 		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, m.menu.View(menuW))
@@ -490,12 +410,6 @@ func (m projectsModel) renderList(width, height int, narrow bool) string {
 		if p.HasDocs {
 			marks = append(marks, "docs/")
 		}
-		if p.Adopted && !p.HasGit && !p.HasCM {
-			// Only surface "adopted" for directories that ONLY qualify
-			// via the .ccmux/ marker; on a normal project (.git or
-			// CLAUDE.md present) the mark would just be noise.
-			marks = append(marks, "adopted")
-		}
 		tail := ""
 		if len(marks) > 0 {
 			tail = "   " + m.st.Muted.Render(strings.Join(marks, " · "))
@@ -535,7 +449,6 @@ func (m projectsModel) renderDetail(width, height int) string {
 		m.st.Subtitle.Render("Keys"),
 		m.st.Key.Render("enter") + "  " + enterDesc,
 		m.st.Key.Render("n") + "      new project (modal form)",
-		m.st.Key.Render("A") + "      adopt an existing directory under your projects root",
 		m.st.Key.Render("a") + "      switch agent for this project (cycles claude→codex→antigravity; local only)",
 		m.st.Key.Render("c") + "      show conversations for this project",
 		m.st.Key.Render("5") + "      open Notes for this project (local only)",

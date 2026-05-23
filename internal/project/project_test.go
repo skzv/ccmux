@@ -51,7 +51,16 @@ func TestSessionName(t *testing.T) {
 	}
 }
 
-func TestInspect_AcceptsAndRejects(t *testing.T) {
+// TestInspect_AcceptsEveryDirAndSurfacesFlags pins both halves of the
+// post-marker-rule contract:
+//   - Any directory passes (empty, marker-less, "CLAUDE.md is itself a
+//     directory" — all surface as projects).
+//   - HasGit / HasCM / HasDocs still populate when the markers are
+//     present, because the Projects screen renders them as visual tags
+//     so the user can tell "real software project" from "scratch dir."
+//
+// Only a non-directory or missing path is rejected.
+func TestInspect_AcceptsEveryDirAndSurfacesFlags(t *testing.T) {
 	root := t.TempDir()
 
 	// has-git: only .git
@@ -65,11 +74,16 @@ func TestInspect_AcceptsAndRejects(t *testing.T) {
 	writeFile(t, filepath.Join(root, "has-both", "CLAUDE.md"), "# hi\n")
 	mkdir(t, filepath.Join(root, "has-both", "docs"))
 
-	// empty: neither — should be rejected
+	// empty: no markers — still a project.
 	mkdir(t, filepath.Join(root, "empty"))
 
-	// not-a-dir-claude: CLAUDE.md is a directory, not a file — rejected
+	// not-a-dir-claude: CLAUDE.md is a directory, not a file. Still
+	// a project (the parent qualifies as a directory), but HasCM
+	// must NOT be true — a directory isn't the CLAUDE.md memory file.
 	mkdir(t, filepath.Join(root, "weird", "CLAUDE.md"))
+
+	// not-a-dir: a regular file under the root is not a project.
+	writeFile(t, filepath.Join(root, "loose.txt"), "x")
 
 	cases := []struct {
 		path                      string
@@ -79,8 +93,9 @@ func TestInspect_AcceptsAndRejects(t *testing.T) {
 		{filepath.Join(root, "has-git"), true, true, false, false},
 		{filepath.Join(root, "has-cm"), true, false, true, false},
 		{filepath.Join(root, "has-both"), true, true, true, true},
-		{filepath.Join(root, "empty"), false, false, false, false},
-		{filepath.Join(root, "weird"), false, false, false, false},
+		{filepath.Join(root, "empty"), true, false, false, false},
+		{filepath.Join(root, "weird"), true, false, false, false},
+		{filepath.Join(root, "loose.txt"), false, false, false, false},
 		{filepath.Join(root, "missing"), false, false, false, false},
 	}
 	for _, tc := range cases {
@@ -103,13 +118,13 @@ func TestInspect_AcceptsAndRejects(t *testing.T) {
 	}
 }
 
-func TestDiscover_SkipsHiddenAndNonProjects(t *testing.T) {
+func TestDiscover_SkipsHiddenAndNonDirs(t *testing.T) {
 	root := t.TempDir()
 	mkdir(t, filepath.Join(root, "a", ".git"))
 	writeFile(t, filepath.Join(root, "b", "CLAUDE.md"), "# b\n")
-	mkdir(t, filepath.Join(root, "not-a-project"))         // no markers
-	mkdir(t, filepath.Join(root, ".hidden", ".git"))       // hidden dir
-	writeFile(t, filepath.Join(root, "loose.txt"), "junk") // not a dir
+	mkdir(t, filepath.Join(root, "c-no-markers"))          // surfaces too
+	mkdir(t, filepath.Join(root, ".hidden", ".git"))       // hidden dir — skipped
+	writeFile(t, filepath.Join(root, "loose.txt"), "junk") // not a dir — skipped
 
 	got, err := Discover(root)
 	if err != nil {
@@ -120,8 +135,14 @@ func TestDiscover_SkipsHiddenAndNonProjects(t *testing.T) {
 		names[i] = p.Name
 	}
 	sort.Strings(names)
-	if len(names) != 2 || names[0] != "a" || names[1] != "b" {
-		t.Fatalf("Discover returned %v, want [a b]", names)
+	want := []string{"a", "b", "c-no-markers"}
+	if len(names) != len(want) {
+		t.Fatalf("Discover returned %v, want %v", names, want)
+	}
+	for i, n := range want {
+		if names[i] != n {
+			t.Errorf("Discover[%d] = %q, want %q (full: %v)", i, names[i], n, names)
+		}
 	}
 }
 
@@ -393,133 +414,5 @@ func TestInspect_MissingSidecarDefaultsToClaude(t *testing.T) {
 	}
 	if p.Agent != agent.IDClaude {
 		t.Errorf("Project.Agent (no sidecar) = %q, want claude", p.Agent)
-	}
-}
-
-// TestInspect_AdoptedDirRecognized is the core of the adoption feature:
-// a directory with only `.ccmux/` (no .git, no CLAUDE.md) must surface
-// as a project. Without this, Adopt would write a marker that Discover
-// then ignores.
-func TestInspect_AdoptedDirRecognized(t *testing.T) {
-	root := t.TempDir()
-	dir := filepath.Join(root, "adopted")
-	mkdir(t, filepath.Join(dir, ".ccmux"))
-
-	p, ok := inspect(dir)
-	if !ok {
-		t.Fatal("expected adopted dir to be recognized")
-	}
-	if !p.Adopted {
-		t.Error("Adopted flag should be true")
-	}
-	if p.HasGit || p.HasCM {
-		t.Errorf("unexpected git/cm flags: %+v", p)
-	}
-}
-
-func TestAdopt_CreatesMarkerAndIsIdempotent(t *testing.T) {
-	root := t.TempDir()
-	dir := filepath.Join(root, "scratch")
-	mkdir(t, dir)
-
-	// Before adoption: Discover skips it.
-	got, err := Discover(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 0 {
-		t.Fatalf("pre-adopt Discover surfaced %d projects, want 0", len(got))
-	}
-
-	if err := Adopt(dir); err != nil {
-		t.Fatalf("Adopt: %v", err)
-	}
-	// Marker present.
-	if fi, err := os.Stat(filepath.Join(dir, ".ccmux")); err != nil || !fi.IsDir() {
-		t.Fatalf(".ccmux/ not created: err=%v", err)
-	}
-	// Discover now surfaces it.
-	got, err = Discover(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 1 || got[0].Name != "scratch" || !got[0].Adopted {
-		t.Fatalf("post-adopt Discover: %+v", got)
-	}
-	// Second call is a no-op (no error).
-	if err := Adopt(dir); err != nil {
-		t.Errorf("second Adopt should be no-op, got: %v", err)
-	}
-}
-
-func TestAdopt_RejectsMissingAndNonDir(t *testing.T) {
-	root := t.TempDir()
-	if err := Adopt(filepath.Join(root, "nope")); err == nil {
-		t.Error("Adopt(missing) should error")
-	}
-	writeFile(t, filepath.Join(root, "afile"), "x")
-	if err := Adopt(filepath.Join(root, "afile")); err == nil {
-		t.Error("Adopt(file) should error")
-	}
-}
-
-// TestAdopt_PreservesExistingSidecar — a directory that already has
-// `.ccmux/agent` (e.g. previously scaffolded then someone removed
-// CLAUDE.md and .git) must not lose the agent choice when re-adopted.
-func TestAdopt_PreservesExistingSidecar(t *testing.T) {
-	root := t.TempDir()
-	dir := filepath.Join(root, "p")
-	mkdir(t, dir)
-	if err := SetAgent(dir, agent.IDCodex); err != nil {
-		t.Fatal(err)
-	}
-	if err := Adopt(dir); err != nil {
-		t.Fatal(err)
-	}
-	if got := ReadAgent(dir); got != agent.IDCodex {
-		t.Errorf("Adopt overwrote sidecar: got %q, want codex", got)
-	}
-}
-
-func TestDiscoverOrphans(t *testing.T) {
-	root := t.TempDir()
-	// Two recognized projects.
-	mkdir(t, filepath.Join(root, "has-git", ".git"))
-	writeFile(t, filepath.Join(root, "has-cm", "CLAUDE.md"), "# x\n")
-	// Two orphans.
-	mkdir(t, filepath.Join(root, "scratch"))
-	mkdir(t, filepath.Join(root, "notes"))
-	// Hidden and files — must be ignored.
-	mkdir(t, filepath.Join(root, ".hidden"))
-	writeFile(t, filepath.Join(root, "loose.txt"), "x")
-	// Already-adopted directory — must NOT appear as an orphan.
-	mkdir(t, filepath.Join(root, "registered", ".ccmux"))
-
-	got, err := DiscoverOrphans(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	names := make([]string, len(got))
-	for i, p := range got {
-		names[i] = filepath.Base(p)
-	}
-	want := []string{"notes", "scratch"}
-	if len(names) != len(want) {
-		t.Fatalf("DiscoverOrphans = %v, want %v", names, want)
-	}
-	for i, n := range want {
-		if names[i] != n {
-			t.Errorf("orphan[%d] = %q, want %q (full: %v)", i, names[i], n, names)
-		}
-	}
-}
-
-func TestDiscoverOrphans_MissingRoot(t *testing.T) {
-	got, err := DiscoverOrphans(filepath.Join(t.TempDir(), "nope"))
-	if err != nil {
-		t.Fatalf("missing root should be nil error: %v", err)
-	}
-	if got != nil {
-		t.Fatalf("missing root should return nil slice, got %v", got)
 	}
 }

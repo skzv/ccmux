@@ -149,7 +149,7 @@ func (a App) modalCapturingText() bool {
 	if a.tour.Active() || a.helpOpen {
 		return true
 	}
-	if a.projectsM.form != nil || a.projectsM.menu != nil || a.projectsM.adopt != nil {
+	if a.projectsM.form != nil || a.projectsM.menu != nil {
 		return true
 	}
 	if a.sessionsM.form != nil || a.sessionsM.renameForm != nil {
@@ -485,34 +485,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Err == nil {
 			a.projects = msg.Projects
 			a.projectsM.SetProjects(a.projects)
-			// Adopt-modal needs to know where to scan; pushed on every
-			// refresh so a Settings edit to projects.root takes effect
-			// without a TUI restart.
-			a.projectsM.SetProjectsRoot(a.cfg.Projects.Root)
 			// Notes screen needs the full list for its project picker.
 			a.notes.SetProjects(a.projects)
 		}
 		return a, nil
-
-	case adoptProjectPickMsg:
-		// Close the modal immediately so the toast (success or
-		// failure) is visible behind it without a stale picker on top.
-		a.projectsM.adopt = nil
-		return a, adoptProjectCmd(msg.Path)
-
-	case adoptProjectCancelMsg:
-		a.projectsM.adopt = nil
-		return a, nil
-
-	case projectAdoptedMsg:
-		if msg.Err != nil {
-			a.setToast(toastError, "adopt: "+msg.Err.Error(), 6*time.Second)
-			return a, nil
-		}
-		a.setToast(toastSuccess, "adopted "+msg.Path, 4*time.Second)
-		// Refresh the project list so the newly-adopted dir shows up
-		// without waiting for a manual refresh.
-		return a, a.refreshProjectsCmd()
 
 	case toastMsg:
 		a.setToast(msg.Kind, msg.Text, time.Until(msg.Until))
@@ -731,7 +707,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Esc dismisses the current toast (when no modal is open). The
 		// projects-screen modal handles esc itself before this code runs.
 		if msg.String() == "esc" && a.toast != "" && time.Now().Before(a.toastUntil) &&
-			!(a.screen == ScreenProjects && (a.projectsM.form != nil || a.projectsM.menu != nil || a.projectsM.adopt != nil)) {
+			!(a.screen == ScreenProjects && (a.projectsM.form != nil || a.projectsM.menu != nil)) {
 			a.toast = ""
 			return a, nil
 		}
@@ -750,10 +726,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 
-		// If projects screen has its modal open (new-project form,
-		// session picker, or adopt picker), route through it. We
-		// intentionally still allow global Quit.
-		if a.screen == ScreenProjects && (a.projectsM.form != nil || a.projectsM.menu != nil || a.projectsM.adopt != nil) {
+		// If projects screen has its modal open (new-project form or session
+		// picker), route through it. We intentionally still allow global Quit.
+		if a.screen == ScreenProjects && (a.projectsM.form != nil || a.projectsM.menu != nil) {
 			if msg.String() == "ctrl+c" {
 				return a, tea.Quit
 			}
@@ -1462,16 +1437,6 @@ func (a App) refreshProjectsCmd() tea.Cmd {
 // friendly name for that host). Failures are silently swallowed —
 // project discovery is best-effort, and a single unreachable peer
 // shouldn't drop the user's local list.
-// adoptProjectCmd writes the `.ccmux/` marker for `path` and returns a
-// projectAdoptedMsg so the App can refresh + toast. Lives here next to
-// the other project-flow commands so the adoption + new-project paths
-// share a clear neighborhood.
-func adoptProjectCmd(path string) tea.Cmd {
-	return func() tea.Msg {
-		return projectAdoptedMsg{Path: path, Err: project.Adopt(path)}
-	}
-}
-
 func appendRemoteProjects(ctx context.Context, into []project.Project, addr, hostLabel string) []project.Project {
 	cli := daemon.RemoteClient(addr)
 	infos, err := cli.Projects(ctx)
@@ -1482,7 +1447,6 @@ func appendRemoteProjects(ctx context.Context, into []project.Project, addr, hos
 		into = append(into, project.Project{
 			Name: p.Name, Host: hostLabel, Path: p.Path,
 			HasGit: p.HasGit, HasCM: p.HasCM, HasDocs: p.HasDocs,
-			Adopted:  p.Adopted,
 			Modified: p.Modified,
 		})
 	}
