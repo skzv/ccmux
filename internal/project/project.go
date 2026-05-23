@@ -1,6 +1,9 @@
 // Package project discovers and represents projects on disk.
-// A "project" is any directory containing either a CLAUDE.md or a .git directory
-// under the configured projects root (~/Projects by default).
+// A "project" is any directory under the configured projects root
+// (~/Projects by default) containing one of:
+//   - a .git directory
+//   - a CLAUDE.md file
+//   - a .ccmux/ directory (the explicit adoption marker — see Adopt)
 package project
 
 import (
@@ -33,6 +36,7 @@ type Project struct {
 	HasGit   bool      // .git exists
 	HasCM    bool      // CLAUDE.md exists
 	HasDocs  bool      // docs/ exists (the notes vault)
+	Adopted  bool      // .ccmux/ exists — directory was explicitly registered with ccmux
 	Modified time.Time // most-recent mtime among CLAUDE.md / README.md / docs/
 
 	// Agent is the AI agent this project runs (claude, codex, antigravity).
@@ -137,11 +141,77 @@ func inspect(path string) (Project, bool) {
 	if fi, err := os.Stat(filepath.Join(path, "docs")); err == nil && fi.IsDir() {
 		p.HasDocs = true
 	}
-	if !p.HasGit && !p.HasCM {
+	if fi, err := os.Stat(filepath.Join(path, ".ccmux")); err == nil && fi.IsDir() {
+		p.Adopted = true
+	}
+	if !p.HasGit && !p.HasCM && !p.Adopted {
 		return Project{}, false
 	}
 	p.Agent = ReadAgent(path)
 	return p, true
+}
+
+// Adopt registers `path` with ccmux by creating its `.ccmux/` directory,
+// so that the next Discover call surfaces the directory as a project
+// even when it has no .git and no CLAUDE.md. Used by the TUI Projects
+// screen's "A" key and the `ccmux project add` CLI for directories that
+// the user wants to manage with ccmux but that lack the usual markers.
+//
+// Idempotent — adopting an already-adopted directory is a no-op and
+// returns nil. The directory itself must already exist; Adopt does not
+// create it (callers reach this through orphan discovery which only
+// surfaces existing directories).
+func Adopt(path string) error {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return fmt.Errorf("project: resolve %q: %w", path, err)
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return fmt.Errorf("project: stat %q: %w", abs, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("project: %q is not a directory", abs)
+	}
+	if err := os.MkdirAll(filepath.Join(abs, ".ccmux"), 0o755); err != nil {
+		return fmt.Errorf("project: create .ccmux in %q: %w", abs, err)
+	}
+	return nil
+}
+
+// DiscoverOrphans walks `root` one level deep and returns every
+// non-hidden subdirectory that is NOT currently recognized as a project
+// (no .git, no CLAUDE.md, no .ccmux/). These are the candidates for
+// Adopt — directories the user has under their projects root but that
+// ccmux's Discover would skip.
+//
+// Returned paths are absolute and sorted by basename for stable
+// rendering in the TUI picker.
+func DiscoverOrphans(root string) ([]string, error) {
+	root, err := expandHome(root)
+	if err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read projects dir %q: %w", root, err)
+	}
+	out := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		p := filepath.Join(root, e.Name())
+		if _, ok := inspect(p); ok {
+			continue
+		}
+		out = append(out, p)
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 // ReadAgent returns the agent ID recorded in `projectPath/.ccmux/agent`.

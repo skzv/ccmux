@@ -395,3 +395,131 @@ func TestInspect_MissingSidecarDefaultsToClaude(t *testing.T) {
 		t.Errorf("Project.Agent (no sidecar) = %q, want claude", p.Agent)
 	}
 }
+
+// TestInspect_AdoptedDirRecognized is the core of the adoption feature:
+// a directory with only `.ccmux/` (no .git, no CLAUDE.md) must surface
+// as a project. Without this, Adopt would write a marker that Discover
+// then ignores.
+func TestInspect_AdoptedDirRecognized(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "adopted")
+	mkdir(t, filepath.Join(dir, ".ccmux"))
+
+	p, ok := inspect(dir)
+	if !ok {
+		t.Fatal("expected adopted dir to be recognized")
+	}
+	if !p.Adopted {
+		t.Error("Adopted flag should be true")
+	}
+	if p.HasGit || p.HasCM {
+		t.Errorf("unexpected git/cm flags: %+v", p)
+	}
+}
+
+func TestAdopt_CreatesMarkerAndIsIdempotent(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "scratch")
+	mkdir(t, dir)
+
+	// Before adoption: Discover skips it.
+	got, err := Discover(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("pre-adopt Discover surfaced %d projects, want 0", len(got))
+	}
+
+	if err := Adopt(dir); err != nil {
+		t.Fatalf("Adopt: %v", err)
+	}
+	// Marker present.
+	if fi, err := os.Stat(filepath.Join(dir, ".ccmux")); err != nil || !fi.IsDir() {
+		t.Fatalf(".ccmux/ not created: err=%v", err)
+	}
+	// Discover now surfaces it.
+	got, err = Discover(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Name != "scratch" || !got[0].Adopted {
+		t.Fatalf("post-adopt Discover: %+v", got)
+	}
+	// Second call is a no-op (no error).
+	if err := Adopt(dir); err != nil {
+		t.Errorf("second Adopt should be no-op, got: %v", err)
+	}
+}
+
+func TestAdopt_RejectsMissingAndNonDir(t *testing.T) {
+	root := t.TempDir()
+	if err := Adopt(filepath.Join(root, "nope")); err == nil {
+		t.Error("Adopt(missing) should error")
+	}
+	writeFile(t, filepath.Join(root, "afile"), "x")
+	if err := Adopt(filepath.Join(root, "afile")); err == nil {
+		t.Error("Adopt(file) should error")
+	}
+}
+
+// TestAdopt_PreservesExistingSidecar — a directory that already has
+// `.ccmux/agent` (e.g. previously scaffolded then someone removed
+// CLAUDE.md and .git) must not lose the agent choice when re-adopted.
+func TestAdopt_PreservesExistingSidecar(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "p")
+	mkdir(t, dir)
+	if err := SetAgent(dir, agent.IDCodex); err != nil {
+		t.Fatal(err)
+	}
+	if err := Adopt(dir); err != nil {
+		t.Fatal(err)
+	}
+	if got := ReadAgent(dir); got != agent.IDCodex {
+		t.Errorf("Adopt overwrote sidecar: got %q, want codex", got)
+	}
+}
+
+func TestDiscoverOrphans(t *testing.T) {
+	root := t.TempDir()
+	// Two recognized projects.
+	mkdir(t, filepath.Join(root, "has-git", ".git"))
+	writeFile(t, filepath.Join(root, "has-cm", "CLAUDE.md"), "# x\n")
+	// Two orphans.
+	mkdir(t, filepath.Join(root, "scratch"))
+	mkdir(t, filepath.Join(root, "notes"))
+	// Hidden and files — must be ignored.
+	mkdir(t, filepath.Join(root, ".hidden"))
+	writeFile(t, filepath.Join(root, "loose.txt"), "x")
+	// Already-adopted directory — must NOT appear as an orphan.
+	mkdir(t, filepath.Join(root, "registered", ".ccmux"))
+
+	got, err := DiscoverOrphans(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := make([]string, len(got))
+	for i, p := range got {
+		names[i] = filepath.Base(p)
+	}
+	want := []string{"notes", "scratch"}
+	if len(names) != len(want) {
+		t.Fatalf("DiscoverOrphans = %v, want %v", names, want)
+	}
+	for i, n := range want {
+		if names[i] != n {
+			t.Errorf("orphan[%d] = %q, want %q (full: %v)", i, names[i], n, names)
+		}
+	}
+}
+
+func TestDiscoverOrphans_MissingRoot(t *testing.T) {
+	got, err := DiscoverOrphans(filepath.Join(t.TempDir(), "nope"))
+	if err != nil {
+		t.Fatalf("missing root should be nil error: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("missing root should return nil slice, got %v", got)
+	}
+}

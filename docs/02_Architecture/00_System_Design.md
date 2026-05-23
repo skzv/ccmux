@@ -228,8 +228,24 @@ Each tracked session is in exactly one of:
 | `~/.local/state/ccmux/ccmuxd.sock` | Daemon Unix socket. |
 | `~/.local/state/ccmux/ccmuxd.log` | Daemon log (rotated by lumberjack). |
 | `~/.local/state/ccmux/ccmuxd.pid` | Daemon PID file. |
+| `<project>/.ccmux/` | Per-project sidecar dir. Holds `agent` (chosen AI agent) and acts as the **adoption marker** — see "Project discovery" below. |
 
 The XDG-ish split (`config` for user-editable, `share` for app data, `state` for runtime) is intentional. On macOS the canonical place would be `~/Library`, but we'd lose Linux portability. XDG paths work on both.
+
+## Project discovery
+
+`project.Discover(root)` walks the projects root one level deep and surfaces a directory as a project if any of these markers is present:
+
+1. `.git/` — every git checkout
+2. `CLAUDE.md` — Claude Code's project memory file
+3. `.ccmux/` — the **adoption marker**
+
+The first two are auto-discovered. The third is written explicitly by `project.Adopt`, reachable from two surfaces:
+
+- **TUI** — press `A` on the Projects screen. The modal lists every directory under the projects root that doesn't qualify under any marker; selecting one writes `<dir>/.ccmux/` and refreshes the list.
+- **CLI** — `ccmux adopt <name-or-path>`. Bare names resolve against the configured projects root; absolute / `.`-prefixed / `~`-prefixed arguments are taken as-is.
+
+Adoption exists because the auto-discovery markers are useful but not exhaustive — a worktree without `CLAUDE.md`, an extracted tarball, or a scratch dir the user wants to start managing all fall through the cracks. Before adoption, the only fix was to drop a marker file manually from the shell. The `.ccmux/` directory is the right home for the marker because it already exists for the agent sidecar (`.ccmux/agent`), so adopting an existing scaffolded project is a no-op rather than introducing a new file.
 
 ## tmux Naming Convention
 

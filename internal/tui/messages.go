@@ -132,6 +132,36 @@ type newProjectSubmitMsg struct {
 	Agent agent.ID
 }
 
+// Adopt-project flow (Projects tab `A` key). Mirrors the new-project
+// modal but registers an existing directory instead of creating one.
+
+// adoptProjectOpenedMsg carries the orphan-directory list back from
+// the disk scan that fires when the user presses `A`. App responds by
+// installing the modal on the Projects screen.
+type adoptProjectOpenedMsg struct {
+	Root    string
+	Orphans []string
+	Err     error
+}
+
+// adoptProjectPickMsg is emitted by the modal on Enter — the user
+// chose a directory to adopt. App dispatches it: project.Adopt(Path),
+// then refresh + toast via projectAdoptedMsg.
+type adoptProjectPickMsg struct {
+	Path string
+}
+
+// adoptProjectCancelMsg is emitted by the modal on Esc.
+type adoptProjectCancelMsg struct{}
+
+// projectAdoptedMsg signals that an Adopt call completed. On success
+// App toasts + refreshes the project list so the newly-adopted dir
+// shows up immediately.
+type projectAdoptedMsg struct {
+	Path string
+	Err  error
+}
+
 // projectAgentSwitchedMsg fires after a successful "a" press on the
 // Projects screen — the in-memory project list needs a refresh so the
 // detail pane reflects the new agent without waiting for the next

@@ -901,7 +901,8 @@ func (s *server) listProjects(w http.ResponseWriter, _ *http.Request) {
 		out = append(out, daemon.ProjectInfo{
 			Name: p.Name, Host: host, Path: p.Path,
 			HasGit: p.HasGit, HasCM: p.HasCM, HasDocs: p.HasDocs,
-			Agent: string(p.Agent), Modified: p.Modified,
+			Adopted: p.Adopted,
+			Agent:   string(p.Agent), Modified: p.Modified,
 		})
 	}
 	writeJSON(w, out)
