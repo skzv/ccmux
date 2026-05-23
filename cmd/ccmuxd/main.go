@@ -29,6 +29,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/skzv/ccmux/internal/agent"
+	"github.com/skzv/ccmux/internal/apns"
 	"github.com/skzv/ccmux/internal/clipboard"
 	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/daemon"
@@ -166,7 +167,6 @@ type tracked struct {
 	last        string    // last captured pane content (for change detection)
 	lastChange  time.Time // when content last changed
 	state       agent.State
-	keepAwake   bool
 	promptCount int
 	created     time.Time
 	// agentID is the AI agent this session is running, sourced from
@@ -193,6 +193,12 @@ type server struct {
 	events  *daemon.EventBus
 	sshUser string
 
+	// devices tracks paired iPhones for push routing. apnsSender
+	// is the APNs HTTP/2 client; both fields stay non-nil even when
+	// push is disabled, so handlers can call them unconditionally.
+	devices    *daemon.DeviceStore
+	apnsSender *apns.Sender
+
 	// moshiState is refreshed periodically (not every poll) so we don't
 	// shell out to moshi-hook every 2 seconds. Used only to drive the
 	// "moshi reachable" badge in the tmux status bar — the bell rings
@@ -218,15 +224,42 @@ func newServer(cfg config.Config) *server {
 	if sshUser == "" {
 		sshUser, _ = os.LookupEnv("USER")
 	}
+	// Device-token + APNs setup is best-effort: failures (no store
+	// dir, bad APNs key) log and disable push but never block the
+	// daemon from coming up.
+	var devices *daemon.DeviceStore
+	if devPath, err := daemon.DefaultDeviceStorePath(); err == nil {
+		if ds, derr := daemon.OpenDeviceStore(devPath); derr == nil {
+			devices = ds
+		} else {
+			log.Printf("ccmuxd: device store unavailable: %v", derr)
+		}
+	}
+	apnsCfg := apns.Config{
+		Enabled:     cfg.APNs.Enabled,
+		KeyPath:     cfg.APNs.KeyPath,
+		KeyID:       cfg.APNs.KeyID,
+		TeamID:      cfg.APNs.TeamID,
+		Topic:       cfg.APNs.Topic,
+		Environment: cfg.APNs.Environment,
+	}
+	sender, err := apns.New(apnsCfg)
+	if err != nil {
+		log.Printf("ccmuxd: APNs disabled: %v", err)
+		sender, _ = apns.New(apns.Config{})
+	}
+
 	return &server{
-		cfg:       cfg,
-		seen:      map[string]*tracked{},
-		startedAt: time.Now(),
-		capture:   tmux.CapturePane,
-		bell:      func(ctx context.Context, name string) error { return tmux.SendKeys(ctx, name, "\a") },
-		tokens:    daemon.NewTokenStore(),
-		events:    daemon.NewEventBus(),
-		sshUser:   sshUser,
+		cfg:        cfg,
+		seen:       map[string]*tracked{},
+		startedAt:  time.Now(),
+		capture:    tmux.CapturePane,
+		bell:       func(ctx context.Context, name string) error { return tmux.SendKeys(ctx, name, "\a") },
+		tokens:     daemon.NewTokenStore(),
+		events:     daemon.NewEventBus(),
+		sshUser:    sshUser,
+		devices:    devices,
+		apnsSender: sender,
 	}
 }
 
@@ -246,6 +279,8 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/v1/projects", s.handleProjects)
 	mux.HandleFunc("/v1/pair", s.handlePair)
 	mux.HandleFunc("/v1/events", s.handleEvents)
+	mux.HandleFunc("/v1/devices", s.handleRegisterDevice)
+	mux.HandleFunc("/v1/devices/test", s.handleTestPush)
 }
 
 // localOnlyRoutes registers endpoints that must never be reachable from
@@ -310,7 +345,7 @@ func (s *server) listSessions(w http.ResponseWriter, r *http.Request) {
 			Name: ts.Name, Host: "local", Path: ts.Path,
 			Attached: ts.Attached, Windows: ts.Windows,
 			Created: ts.Created, LastChange: t.lastChange,
-			State: string(t.state), KeepAwake: t.keepAwake, PromptCount: t.promptCount,
+			State: string(t.state), PromptCount: t.promptCount,
 			Agent: string(agentID),
 		})
 	}
@@ -392,41 +427,6 @@ func (s *server) createSession(w http.ResponseWriter, r *http.Request) {
 	// just created it or it's a known one being re-attached. Idempotent
 	// — re-running set-option just overwrites the same string.
 	s.applyChrome(ctx, session, req.Project)
-
-	// Pin immediately if requested. The poll loop would otherwise need
-	// to see the session first before /v1/sessions/{name}/keep-awake
-	// could find it in s.seen; eagerly registering here closes that
-	// race for the mobile UX where "create + pin" is one tap.
-	if req.KeepAwake {
-		s.mu.Lock()
-		t, ok := s.seen[session]
-		if !ok {
-			t = &tracked{
-				created:     time.Now(),
-				lastChange:  time.Now(),
-				state:       agent.StateUnknown,
-				agentID:     project.ReadAgent(path),
-				projectPath: path,
-			}
-			s.seen[session] = t
-		}
-		t.keepAwake = true
-		s.mu.Unlock()
-	}
-
-	// Type the optional initial prompt into the new session. Used by the
-	// mobile "New session with first message" flow so the agent starts
-	// the conversation immediately, without the user having to attach
-	// and type. SendText is literal (`-l`) so a prompt containing a key
-	// name like "Enter" or "Up" is typed as characters; the explicit
-	// SendKeys("Enter") afterward submits the input to the agent.
-	if input := strings.TrimSpace(req.FirstInput); input != "" {
-		if err := tmux.SendText(ctx, session, input); err != nil {
-			log.Printf("ccmuxd: send first input to %s: %v", session, err)
-		} else if err := tmux.SendKeys(ctx, session, "Enter"); err != nil {
-			log.Printf("ccmuxd: submit first input on %s: %v", session, err)
-		}
-	}
 
 	writeJSON(w, daemon.SessionState{
 		Name: session, Host: "local", Project: req.Project, Path: path,
@@ -638,8 +638,6 @@ func (s *server) handleSessionsItem(w http.ResponseWriter, r *http.Request) {
 		s.handleKill(w, r, name)
 	case "rename":
 		s.handleRename(w, r, name)
-	case "keep-awake":
-		s.handleKeepAwake(w, r, name)
 	case "send-keys":
 		s.handleSendKeys(w, r, name)
 	case "attach":
@@ -690,24 +688,6 @@ func (s *server) handleRename(w http.ResponseWriter, r *http.Request, name strin
 	}
 	s.mu.Unlock()
 	writeJSON(w, daemon.SessionState{Name: req.Name, Host: "local"})
-}
-
-func (s *server) handleKeepAwake(w http.ResponseWriter, r *http.Request, name string) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var req daemon.KeepAwakeRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "decode: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-	s.mu.Lock()
-	if t, ok := s.seen[name]; ok {
-		t.keepAwake = req.Enabled
-	}
-	s.mu.Unlock()
-	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *server) handleSendKeys(w http.ResponseWriter, r *http.Request, name string) {
@@ -786,8 +766,120 @@ func (s *server) handlePair(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "write authorized_keys: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// Optional APNs registration carried with the pair — lets push
+	// work from first pair without a second round trip. Failures
+	// (no device store, bad env) log and continue; pairing itself
+	// has already succeeded.
+	if s.devices != nil && req.DeviceToken != "" {
+		if err := s.devices.Register(authLine, req.DeviceToken, req.APNsEnv); err != nil {
+			log.Printf("ccmuxd: pair-time device register: %v", err)
+		}
+	}
 	host, _ := os.Hostname()
 	writeJSON(w, daemon.PairResponse{Hostname: host, Version: version})
+}
+
+// handleRegisterDevice updates an APNs device token on an already-
+// paired host. The client supplies the public key it paired with so
+// the daemon can scope the update to the right paired identity.
+func (s *server) handleRegisterDevice(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.devices == nil {
+		http.Error(w, "device registry unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	var req daemon.RegisterDeviceRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "decode: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := s.devices.Register(req.PublicKey, req.Token, req.Env); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleTestPush sends a verification push to the device registered
+// for the requesting public key. Returns 204 even when APNs is
+// disabled (the request is well-formed; the user just hasn't flipped
+// the switch yet) so the mobile UI can give an honest "sent"
+// confirmation. The detailed status appears in ccmuxd's log.
+func (s *server) handleTestPush(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.devices == nil {
+		http.Error(w, "device registry unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	var body struct {
+		PublicKey string `json:"public_key"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.PublicKey == "" {
+		http.Error(w, "public_key required", http.StatusBadRequest)
+		return
+	}
+	reg, ok := s.devices.Lookup(body.PublicKey)
+	if !ok {
+		http.Error(w, "no device registered for this key", http.StatusNotFound)
+		return
+	}
+	if !s.apnsSender.Enabled() {
+		log.Printf("ccmuxd: test push requested but APNs disabled")
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	go func() {
+		err := s.apnsSender.Send(reg.Token, reg.Environment, apns.Notification{
+			Title:     "ccmux test push",
+			Body:      "If you see this, push notifications are working.",
+			SessionID: "ccmux-test",
+		})
+		if err != nil {
+			log.Printf("ccmuxd: test push failed: %v", err)
+		}
+	}()
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// maybePushForStateTransition fires an APNs push when a tracked
+// session enters a state the user should know about: needs_input
+// (Y/N from the agent) or active → idle (the agent finished its
+// response and is waiting for the next prompt). No-op when push is
+// disabled or no devices are registered.
+func (s *server) maybePushForStateTransition(sessionName string, prev, next agent.State) {
+	if s.devices == nil || !s.apnsSender.Enabled() {
+		return
+	}
+	var title, body string
+	switch {
+	case next == agent.StateNeedsInput:
+		title = sessionName + " needs input"
+		body = "Tap to reply."
+	case next == agent.StateIdle && prev == agent.StateActive:
+		title = sessionName + " finished"
+		body = "Your agent is waiting for the next prompt."
+	default:
+		return
+	}
+	notif := apns.Notification{
+		Title:     title,
+		Body:      body,
+		SessionID: "local/" + sessionName,
+	}
+	for _, reg := range s.devices.All() {
+		reg := reg
+		go func() {
+			if err := s.apnsSender.Send(reg.Token, reg.Environment, notif); err != nil {
+				log.Printf("ccmuxd: APNs push (%s): %v", sessionName, err)
+			}
+		}()
+	}
 }
 
 func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
@@ -1066,9 +1158,14 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 				Kind: kind,
 				Session: daemon.SessionState{
 					Name: ts.Name, Host: "local", State: string(newState),
-					Path: ts.Path, KeepAwake: t.keepAwake,
+					Path: ts.Path,
 				},
 			})
+			// Push notifications to paired phones — needs_input
+			// (agent paused for Y/N) and active → idle (agent
+			// finished its response). Off when APNs is disabled or
+			// no devices are registered.
+			s.maybePushForStateTransition(ts.Name, prevState, newState)
 		}
 		if newState == agent.StateActive {
 			anyActive = true

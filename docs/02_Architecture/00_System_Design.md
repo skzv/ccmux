@@ -154,7 +154,6 @@ GET    /v1/sessions/{name}                → SessionState
 POST   /v1/sessions                       → SessionState         (create)
 POST   /v1/sessions/{name}/kill           → 204
 POST   /v1/sessions/{name}/snapshot       → SnapshotID
-POST   /v1/sessions/{name}/keep-awake     → 204                  (toggle pin)
 GET    /v1/snapshots                      → []Snapshot
 GET    /v1/metrics?since=…                → AggregatedMetrics
 GET    /v1/health                         → {ok, hostname, version, sessions}
@@ -166,7 +165,7 @@ Same schema on both transports. The client uses the local socket when possible (
 Why the daemon at all (vs. TUI shelling out to tmux every render)?
 
 1. The poll loop runs once per host, not once per TUI render. Cheaper.
-2. State includes daemon-only derived fields (idle duration, last-bell time, prompt count, keep-awake pins).
+2. State includes daemon-only derived fields (idle duration, last-bell time, prompt count).
 3. The sleep-prevention `caffeinate` lock needs a long-lived process to hold it.
 4. Server mode needs a long-lived HTTP listener.
 
@@ -182,7 +181,6 @@ name    = "mini"
 address = "mini.tail-xxxxx.ts.net"
 user    = "skz"
 mosh    = true
-keep_awake_on_remote = false   # honor remote's policy, don't override
 
 [[host]]
 name    = "lambda-a100"

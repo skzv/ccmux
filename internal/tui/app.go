@@ -27,7 +27,6 @@ import (
 	"github.com/skzv/ccmux/internal/selfupdate"
 	"github.com/skzv/ccmux/internal/tailnet"
 	"github.com/skzv/ccmux/internal/tmux"
-	"github.com/skzv/ccmux/internal/tmuxchrome"
 	"github.com/skzv/ccmux/internal/tui/styles"
 	"github.com/skzv/ccmux/internal/usage"
 )
@@ -137,6 +136,11 @@ type App struct {
 	// Easter egg: pressing M (shift-M) opens the Matrix overlay.
 	// Consistent with T which reopens the tour.
 	matrix matrixModel
+
+	// attach is the loading-overlay state shown between the moment
+	// the user picks a session/conversation and the moment Bubble
+	// Tea suspends to run `tmux attach`. See attach_loading.go.
+	attach attachState
 }
 
 // modalCapturingText returns true when the App is in a state where
@@ -426,6 +430,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case conversationResumedMsg:
 		if msg.Err != nil {
+			// Resume failed before we even started attaching — wipe
+			// the overlay (it was switched on the moment the user
+			// pressed Enter so the spawn latency was covered).
+			a.stopAttaching()
 			return a, func() tea.Msg {
 				return toastMsg{
 					Text:  "resume failed: " + msg.Err.Error(),
@@ -436,6 +444,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Spawn was successful; attach to the new tmux session and
 		// refresh Sessions so the row shows up immediately on return.
+		// Re-label the overlay now that we know the destination
+		// session name (the resume cmd builds c-resume-<id>).
+		a.attach.label = msg.Project
+		if a.attach.label == "" {
+			a.attach.label = msg.Session
+		}
 		return a, tea.Batch(
 			a.localAttachCmd(msg.Session, msg.Project),
 			a.refreshSessionsCmd(),
@@ -491,12 +505,23 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case toastMsg:
+		// An error toast arriving while we're attaching almost
+		// always *is* the attach reporting failure (tmux.New
+		// errored, remote daemon rejected, etc.) — clear the
+		// overlay so the user can see the toast underneath
+		// instead of staring at "Opening …" indefinitely.
+		if msg.Kind == toastError && a.attach.active {
+			a.stopAttaching()
+		}
 		a.setToast(msg.Kind, msg.Text, time.Until(msg.Until))
 		return a, nil
 
 	case projectMenuMsg:
 		// A project was opened — show its running sessions and past
 		// conversations so the user can attach, resume, or start new.
+		// Clear the "Opening …" overlay that the Enter-on-Projects
+		// path flipped on, otherwise the modal would render under it.
+		a.stopAttaching()
 		menu := newProjectMenu(a.styles, msg.Project, msg.ProjectPath, msg.Sessions, msg.Conversations)
 		a.projectsM.menu = &menu
 		return a, nil
@@ -506,10 +531,15 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.Entry.kind {
 		case menuSession:
 			// Attach to the chosen running session.
-			return a, a.localAttachCmd(msg.Entry.session.Name, msg.Project)
+			tick := a.startAttaching(attachKindAttach, msg.Project)
+			return a, tea.Batch(tick, a.localAttachCmd(msg.Entry.session.Name, msg.Project))
 		case menuConversation:
 			// Resume the chosen past conversation in a fresh session.
-			return a, a.resumeConversationCmd(msg.Entry.conv)
+			// Flip the overlay now — the resume cmd's tmux.New can
+			// take several seconds while the agent boots, and the
+			// user shouldn't see the regular TUI in the meantime.
+			tick := a.startAttaching(attachKindResume, msg.Project)
+			return a, tea.Batch(tick, a.resumeConversationCmd(msg.Entry.conv))
 		case menuNewSession:
 			// Start a new session for the project. The launch command
 			// comes from the project's .ccmux/agent sidecar so an
@@ -517,7 +547,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			projectPath := msg.ProjectPath
 			projectLabel := msg.Project
 			launch := launchCmdForProjectPath(projectPath)
-			return a, func() tea.Msg {
+			tick := a.startAttaching(attachKindNew, projectLabel)
+			return a, tea.Batch(tick, func() tea.Msg {
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer cancel()
 				// Name it c-<project>, uniquified when that is already
@@ -531,7 +562,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return toastMsg{Text: "start session: " + err.Error(), Kind: toastError, Until: time.Now().Add(5 * time.Second)}
 				}
 				return projectSessionReadyMsg{Session: name, Project: projectLabel}
-			}
+			})
 		}
 		return a, nil
 
@@ -560,6 +591,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// reuse the same ssh-into-peer path the Sessions screen uses
 		// for discovered hosts (PATH prepend + login shell, etc.).
 		if msg.DialHost == "" {
+			a.stopAttaching()
 			a.setToast(toastError, "remote session created but no dial host known", 5*time.Second)
 			return a, nil
 		}
@@ -580,8 +612,17 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				dbg.Printf("remote attach: ssh -t %s %q", target, remoteCmd)
 			}
 		}
+		// Flip the overlay if a producer earlier in the flow didn't
+		// already do it. attachExitedMsg is the centralized cleanup
+		// path (replaces the old direct refreshAfterDetachMsg).
+		if !a.attach.active {
+			tick := a.startAttaching(attachKindRemote, msg.DialHost)
+			return a, tea.Batch(tick, tea.ExecProcess(c, func(err error) tea.Msg {
+				return attachExitedMsg{Err: err}
+			}))
+		}
 		return a, tea.ExecProcess(c, func(err error) tea.Msg {
-			return refreshAfterDetachMsg{}
+			return attachExitedMsg{Err: err}
 		})
 
 	case newBareSessionSubmitMsg:
@@ -599,17 +640,30 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// (running ccmux inside the outer ccmux on mobile) handles
 		// switch-client correctly. projectLabel is the session name
 		// here — bare sessions don't have a richer label.
+		//
+		// If the spawn path didn't already flip the overlay (e.g. a
+		// remote-bare flow that bounced through bareSessionReadyMsg),
+		// flip it now so the user sees the loading screen during the
+		// Moshi-detect + chrome-apply prep.
+		if !a.attach.active {
+			tick := a.startAttaching(attachKindAttach, msg.Session)
+			return a, tea.Batch(tick, a.localAttachCmd(msg.Session, msg.Session))
+		}
+		a.attach.label = msg.Session
 		return a, a.localAttachCmd(msg.Session, msg.Session)
 
 	case projectSessionReadyMsg:
 		// New project is scaffolded and its tmux session is running.
-		// The initial prompt (if any) is typed by the daemon's
-		// createSession path via NewSessionRequest.FirstInput, not by
-		// the TUI. Route through localAttachCmd so the nested-tmux case
-		// (ccmux running inside the outer ccmux session on mobile) uses
+		// Route through localAttachCmd so the nested-tmux case (ccmux
+		// running inside the outer ccmux session on mobile) uses
 		// switch-client instead of attach-session — otherwise tmux
 		// refuses the nested attach and the user just stares at the
 		// Projects screen wondering why nothing happened.
+		if !a.attach.active {
+			tick := a.startAttaching(attachKindNew, msg.Project)
+			return a, tea.Batch(tick, a.localAttachCmd(msg.Session, msg.Project))
+		}
+		a.attach.label = msg.Project
 		return a, a.localAttachCmd(msg.Session, msg.Project)
 
 	case sessionKilledMsg:
@@ -652,8 +706,50 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case refreshAfterDetachMsg:
-		// Returning from tmux attach.
+		// Returning from tmux attach. Also clears the loading overlay
+		// in case the suspend-resume path skipped attachExitedMsg
+		// (older remote paths still emit refreshAfterDetachMsg
+		// directly from their tea.ExecProcess callbacks).
+		a.stopAttaching()
 		return a, tea.Batch(a.refreshSessionsCmd(), a.refreshProjectsCmd())
+
+	case attachReadyMsg:
+		// Prep finished — actually suspend Bubble Tea and exec into
+		// tmux. The overlay stays drawn through the suspend; on the
+		// way back, the callback's attachExitedMsg clears it.
+		if msg.Nested {
+			c := exec.Command("tmux", "switch-client", "-t", msg.Session)
+			return a, tea.ExecProcess(c, func(err error) tea.Msg {
+				return attachExitedMsg{Err: err}
+			})
+		}
+		attachArgs := tmux.AttachArgs(msg.Session, msg.DetachOthers)
+		return a, tea.ExecProcess(
+			exec.Command("tmux", attachArgs...),
+			func(err error) tea.Msg { return attachExitedMsg{Err: err} },
+		)
+
+	case attachExitedMsg:
+		// Tmux exited (user detached, or the exec itself failed).
+		// Clear the overlay, surface an error toast if any, refresh.
+		a.stopAttaching()
+		cmds := []tea.Cmd{a.refreshSessionsCmd(), a.refreshProjectsCmd()}
+		if msg.Err != nil {
+			until := time.Now().Add(5 * time.Second)
+			cmds = append(cmds, func() tea.Msg {
+				return toastMsg{Text: "tmux: " + msg.Err.Error(), Kind: toastError, Until: until}
+			})
+		}
+		return a, tea.Batch(cmds...)
+
+	case attachSpinTickMsg:
+		// Animate the overlay's spinner. Stop ticking once the
+		// overlay is no longer active so we don't leak ticks.
+		if !a.attach.active {
+			return a, nil
+		}
+		a.attach.spinFrame++
+		return a, attachSpinTickCmd()
 
 	case tea.KeyMsg:
 		// Matrix easter egg takes priority — when active, the overlay
@@ -747,7 +843,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if keyMatches(msg, a.keys.Enter) {
 				a.projectsM.commitFilter()
-				return a, a.attachOrCreateForSelectedProject()
+				a2, cmd := a.attachOrCreateForSelectedProject()
+				return a2, cmd
 			}
 			if msg.String() == "esc" {
 				a.projectsM.exitFilter()
@@ -824,11 +921,25 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case keyMatches(msg, a.keys.Refresh):
 			return a, a.refreshSessionsCmd()
 		case keyMatches(msg, a.keys.Enter) && a.screen == ScreenHome:
-			return a, a.attachSelectedSession()
+			a2, cmd := a.attachSelectedSession()
+			return a2, cmd
 		case keyMatches(msg, a.keys.Enter) && a.screen == ScreenProjects:
-			return a, a.attachOrCreateForSelectedProject()
+			a2, cmd := a.attachOrCreateForSelectedProject()
+			return a2, cmd
 		case keyMatches(msg, a.keys.Enter) && a.screen == ScreenConversations:
-			return a, a.resumeSelectedConversation()
+			sel := a.conversationsM.Selected()
+			if sel == nil {
+				return a, nil
+			}
+			// Flip the overlay BEFORE the resume cmd kicks off — its
+			// tmux.New + agent boot can take several seconds, and the
+			// user shouldn't see the Conversations screen during it.
+			label := sel.Project
+			if label == "" {
+				label = string(sel.Agent) + " conversation"
+			}
+			tick := a.startAttaching(attachKindResume, label)
+			return a, tea.Batch(tick, a.resumeConversationCmd(*sel))
 		case keyMatches(msg, a.keys.Enter) && a.screen == ScreenNetwork:
 			if c := a.network.SSHCmd(); c != nil {
 				return a, c
@@ -869,6 +980,14 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (a App) View() string {
 	if a.width == 0 {
 		return "loading…"
+	}
+	// Attach-loading overlay takes the full screen between Enter and
+	// the tmux suspend. Placed before the regular chrome render so
+	// we don't waste work building panels the user won't see, and
+	// before the matrix overlay because attach is task-critical and
+	// shouldn't be hidden by the easter egg.
+	if a.attach.active {
+		return a.renderAttachingOverlay(a.width, a.height)
 	}
 	// Matrix easter egg takes the full screen when active — placed
 	// before the chrome render so we don't waste work building the
@@ -1467,10 +1586,10 @@ func appendRemoteProjects(ctx context.Context, into []project.Project, addr, hos
 // Before any of these, we apply ccmux's chrome (custom status bar) to
 // the target session so the attached view shows project name + detach
 // hint + Moshi reachability indicator.
-func (a App) attachSelectedSession() tea.Cmd {
+func (a App) attachSelectedSession() (App, tea.Cmd) {
 	sel := a.sessionsM.Selected()
 	if sel == nil {
-		return nil
+		return a, nil
 	}
 	if dbg := debugLogger(); dbg != nil {
 		names := make([]string, len(a.sessions))
@@ -1485,7 +1604,12 @@ func (a App) attachSelectedSession() tea.Cmd {
 	// nested-tmux case.
 	for _, ls := range []string{"", "local"} {
 		if sel.Host == ls {
-			return a.localAttachCmd(sel.Name, sel.Project)
+			label := sel.Project
+			if label == "" {
+				label = sel.Name
+			}
+			tick := a.startAttaching(attachKindAttach, label)
+			return a, tea.Batch(tick, a.localAttachCmd(sel.Name, sel.Project))
 		}
 	}
 	// Also resolve to local when the host's name matches THIS
@@ -1493,7 +1617,12 @@ func (a App) attachSelectedSession() tea.Cmd {
 	// "sputnik") instead of the literal "local", so plain string
 	// matching against "local" alone misses that case.
 	if h := a.localHostStatus(); h != nil && h.Name == sel.Host {
-		return a.localAttachCmd(sel.Name, sel.Project)
+		label := sel.Project
+		if label == "" {
+			label = sel.Name
+		}
+		tick := a.startAttaching(attachKindAttach, label)
+		return a, tea.Batch(tick, a.localAttachCmd(sel.Name, sel.Project))
 	}
 
 	// Explicit cfg.Hosts entries carry full SSH/Mosh details.
@@ -1509,10 +1638,11 @@ func (a App) attachSelectedSession() tea.Cmd {
 				bin = "ssh"
 			}
 			remoteArgs := tmux.AttachArgs(sel.Name, a.cfg.Sessions.DetachOthersOnAttach())
-			return tea.ExecProcess(
+			tick := a.startAttaching(attachKindRemote, sel.Host)
+			return a, tea.Batch(tick, tea.ExecProcess(
 				exec.Command(bin, append([]string{target, "--", "tmux"}, remoteArgs...)...),
-				func(err error) tea.Msg { return refreshAfterDetachMsg{} },
-			)
+				func(err error) tea.Msg { return attachExitedMsg{Err: err} },
+			))
 		}
 	}
 
@@ -1545,7 +1675,7 @@ func (a App) attachSelectedSession() tea.Cmd {
 				dial = dialAddrFor(hs)
 			}
 			if dial == "" {
-				return func() tea.Msg {
+				return a, func() tea.Msg {
 					return toastMsg{Text: "no reachable address for " + sel.Host, Kind: toastError, Until: time.Now().Add(5 * time.Second)}
 				}
 			}
@@ -1554,13 +1684,14 @@ func (a App) attachSelectedSession() tea.Cmd {
 			if dbg := debugLogger(); dbg != nil {
 				dbg.Printf("attach discovered: ssh -t %s %q", dial, remoteCmd)
 			}
-			return tea.ExecProcess(cmd, func(err error) tea.Msg {
-				return refreshAfterDetachMsg{}
-			})
+			tick := a.startAttaching(attachKindRemote, sel.Host)
+			return a, tea.Batch(tick, tea.ExecProcess(cmd, func(err error) tea.Msg {
+				return attachExitedMsg{Err: err}
+			}))
 		}
 	}
 
-	return func() tea.Msg {
+	return a, func() tea.Msg {
 		return toastMsg{Text: "no host config for " + sel.Host, Kind: toastError, Until: time.Now().Add(5 * time.Second)}
 	}
 }
@@ -1659,17 +1790,23 @@ func remoteTmuxAttach(session string, detachOthers bool) string {
 //   - remote: POST /v1/sessions to that host's ccmuxd so the tmux
 //     session is created on the remote, then ssh-attach into it
 //     using the same dial path the Sessions screen uses.
-func (a App) attachOrCreateForSelectedProject() tea.Cmd {
+func (a App) attachOrCreateForSelectedProject() (App, tea.Cmd) {
 	sel := a.projectsM.Selected()
 	if sel == nil {
-		return nil
+		return a, nil
 	}
 	p := *sel
 	host := projectHost(p)
+	// Flip the loading overlay up front — both the local and remote
+	// paths run a tmux.List + conversations walk that can take a
+	// noticeable beat (especially when ~/.claude/projects has many
+	// transcripts), and without the overlay the user sees the
+	// Projects screen sitting there unresponsive after Enter.
+	tick := a.startAttaching(attachKindOpening, p.Name)
 	if host == "local" {
-		return a.attachOrCreateLocal(p)
+		return a, tea.Batch(tick, a.attachOrCreateLocal(p))
 	}
-	return a.attachOrCreateRemote(p, host)
+	return a, tea.Batch(tick, a.attachOrCreateRemote(p, host))
 }
 
 // attachOrCreateLocal handles Enter on a local project. It gathers the
@@ -1851,47 +1988,19 @@ func (a App) resumeConversationCmd(c conversations.Conversation) tea.Cmd {
 	}
 }
 
+// localAttachCmd kicks off a local-session attach. It does NOT call
+// tea.ExecProcess directly — instead it returns a prep cmd that runs
+// off-thread (Moshi-detect + tmuxchrome.Apply), emitting
+// attachReadyMsg when finished. The attachReadyMsg handler is the one
+// that suspends Bubble Tea and execs `tmux attach`. This indirection
+// is what lets the attach-loading overlay render in the gap between
+// keypress and suspend — the previous shape blocked Update for up to
+// ~7s and the user just stared at the regular TUI.
+//
+// Callers are expected to have already flipped a.attach via
+// startAttaching so the overlay is visible while the prep runs.
 func (a App) localAttachCmd(session, projectLabel string) tea.Cmd {
-	// moshi.Detect drives only the cosmetic Moshi badge and can be slow
-	// on macOS (it shells out). Give it its own bounded context so it
-	// can't starve the chrome step below.
-	mctx, mcancel := context.WithTimeout(context.Background(), 2*time.Second)
-	mst := moshi.Detect(mctx)
-	mcancel()
-	nested := tmuxchrome.InTmux()
-	// Moshi badge is "reachable" when the whole pipeline is wired AND
-	// running: paired with Moshi cloud, Claude Code hooks installed,
-	// daemon up. Previously this AND'ed Connected, which was always
-	// false because moshi-hook status doesn't expose live websocket
-	// state — so the chrome read "phone: not paired" even on a fully
-	// configured host.
-	reachable := mst.Paired && mst.HooksInstalled && mst.ServiceRunning
-	// Apply chrome on a fresh, independent context — a context shared
-	// with moshi.Detect would let a slow probe cancel the set-option
-	// calls, leaving the session in vanilla tmux styling.
-	cctx, ccancel := context.WithTimeout(context.Background(), 5*time.Second)
-	_ = tmuxchrome.Apply(cctx, session, projectLabel, reachable, nested)
-	ccancel()
-
-	if nested {
-		c := exec.Command("tmux", "switch-client", "-t", session)
-		return tea.ExecProcess(c, func(err error) tea.Msg {
-			if err != nil {
-				return toastMsg{Text: "tmux switch-client: " + err.Error(), Kind: toastError, Until: time.Now().Add(5 * time.Second)}
-			}
-			return refreshAfterDetachMsg{}
-		})
-	}
-	attachArgs := tmux.AttachArgs(session, a.cfg.Sessions.DetachOthersOnAttach())
-	return tea.ExecProcess(
-		exec.Command("tmux", attachArgs...),
-		func(err error) tea.Msg {
-			if err != nil {
-				return toastMsg{Text: "tmux: " + err.Error(), Kind: toastError, Until: time.Now().Add(5 * time.Second)}
-			}
-			return refreshAfterDetachMsg{}
-		},
-	)
+	return prepLocalAttachCmd(session, projectLabel, a.cfg.Sessions.DetachOthersOnAttach())
 }
 
 // uniqueSessionName finds the next unused tmux session name by appending a
