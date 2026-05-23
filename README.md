@@ -332,6 +332,14 @@ ccmux setup    # re-run the wizard
 ccmux doctor   # health check
 ```
 
+> **macOS, raw release tarballs:** if you grab a binary tarball directly from [Releases](https://github.com/skzv/ccmux/releases) instead of going through `make setup` or the install script, macOS may refuse to open it (*"cannot verify the developer"*). Strip the quarantine attribute once and you're done:
+>
+> ```bash
+> xattr -d com.apple.quarantine ./ccmux ./ccmuxd
+> ```
+>
+> Brew installs (when the tap is public) and `scripts/install.sh` already handle this for you. Apple code-signing + notarization will land here once the project's Apple Developer account is approved.
+
 ## Uninstall
 
 ```bash
