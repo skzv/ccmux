@@ -4,6 +4,8 @@ package e2e
 
 import (
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -49,6 +51,41 @@ func TestHarness_Hermetic(t *testing.T) {
 	if !e.hasSession("c-hermetic-check") {
 		t.Fatal("session not found on the isolated tmux server")
 	}
+}
+
+// TestHarness_CcmuxPathUsesTempBuild makes the e2e safety contract
+// explicit: anything that resolves `ccmux` or `ccmuxd` through PATH
+// inside a fixture must get the freshly built temp binaries, never a
+// developer-installed copy.
+func TestHarness_CcmuxPathUsesTempBuild(t *testing.T) {
+	e := newEnv(t)
+
+	ccmuxPath, err := exec.LookPath("ccmux")
+	if err != nil {
+		t.Fatalf("LookPath ccmux: %v", err)
+	}
+	if ccmuxPath != builtCcmux {
+		t.Fatalf("PATH ccmux = %q, want temp build %q", ccmuxPath, builtCcmux)
+	}
+
+	ccmuxdPath, err := exec.LookPath("ccmuxd")
+	if err != nil {
+		t.Fatalf("LookPath ccmuxd: %v", err)
+	}
+	if ccmuxdPath != builtCcmuxd {
+		t.Fatalf("PATH ccmuxd = %q, want temp build %q", ccmuxdPath, builtCcmuxd)
+	}
+
+	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+		if dir == binDir {
+			continue
+		}
+		if executableExists(filepath.Join(dir, "ccmux")) || executableExists(filepath.Join(dir, "ccmuxd")) {
+			t.Fatalf("e2e PATH includes installed ccmux dir %q", dir)
+		}
+	}
+
+	_ = e
 }
 
 // TestHarness_TmuxIsolated confirms two fixtures do not share a tmux

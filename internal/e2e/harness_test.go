@@ -100,6 +100,28 @@ exec sleep 86400
 	return nil
 }
 
+func e2ePath() string {
+	parts := []string{stubBinDir, binDir}
+	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+		if dir == "" || dir == stubBinDir || dir == binDir {
+			continue
+		}
+		if executableExists(filepath.Join(dir, "ccmux")) || executableExists(filepath.Join(dir, "ccmuxd")) {
+			continue
+		}
+		parts = append(parts, dir)
+	}
+	return strings.Join(parts, string(os.PathListSeparator))
+}
+
+func executableExists(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return false
+	}
+	return info.Mode()&0o111 != 0
+}
+
 // requireTmux skips the calling test when tmux is not installed.
 func requireTmux(t *testing.T) {
 	t.Helper()
@@ -166,10 +188,11 @@ func newEnv(t *testing.T) *Env {
 	t.Setenv("HOME", home)
 	t.Setenv("TMUX_TMPDIR", home)
 	t.Setenv("TMUX", "")
-	// Resolve `claude`/`codex` to the sleeping stub (installStubAgents).
-	// Prepend so the stub wins over any real agent on the dev's PATH;
-	// the rest of PATH (tmux, sh, the go toolchain) still resolves.
-	t.Setenv("PATH", stubBinDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	// Resolve `claude`/`codex` to sleeping stubs and `ccmux`/`ccmuxd`
+	// to the freshly built temp binaries. Strip any PATH entries that
+	// contain installed ccmux binaries so e2e tests cannot accidentally
+	// exercise the user's local install.
+	t.Setenv("PATH", e2ePath())
 	root := filepath.Join(home, "Projects")
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatalf("mkdir projects root: %v", err)
@@ -226,6 +249,7 @@ func (e *Env) ccmuxIn(dir string, args ...string) (stdout, stderr string, err er
 	defer cancel()
 	cmd := exec.CommandContext(ctx, builtCcmux, args...)
 	cmd.Dir = dir
+	cmd.Env = os.Environ()
 	var out, errBuf bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errBuf
 	err = cmd.Run()
@@ -307,6 +331,7 @@ func (e *Env) startDaemon() *daemonProc {
 	e.t.Helper()
 	cmd := exec.Command(builtCcmuxd)
 	cmd.Dir = e.Home
+	cmd.Env = os.Environ()
 	logBuf := &safeBuffer{}
 	cmd.Stdout, cmd.Stderr = logBuf, logBuf
 	if err := cmd.Start(); err != nil {

@@ -930,7 +930,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case keyMatches(msg, a.keys.Network):
 			a.screen = ScreenNetwork
 			return a, nil
-		case keyMatches(msg, a.keys.Refresh):
+		case keyMatches(msg, a.keys.Refresh) && a.screen != ScreenAgents:
 			return a, a.refreshSessionsCmd()
 		case keyMatches(msg, a.keys.Enter) && a.screen == ScreenHome:
 			a2, cmd := a.attachSelectedSession()

@@ -60,6 +60,7 @@ func (m codexConfigModel) Update(msg tea.Msg) (codexConfigModel, tea.Cmd) {
 			cur, _ := codexconfig.EffectiveYoloMode()
 			if _, err := codexconfig.SetYoloMode(!cur); err != nil {
 				m.err = "set yolo: " + err.Error()
+				m.saveMsg = ""
 			} else {
 				m.saveMsg = fmt.Sprintf("Codex YOLO → %v", !cur)
 				m.savedAt = time.Now()
@@ -72,6 +73,7 @@ func (m codexConfigModel) Update(msg tea.Msg) (codexConfigModel, tea.Cmd) {
 			next := nextCodexEffort()
 			if _, err := codexconfig.SetEffortLevel(next); err != nil {
 				m.err = "set effort: " + err.Error()
+				m.saveMsg = ""
 			} else {
 				m.saveMsg = "Codex effort → " + next
 				m.savedAt = time.Now()
