@@ -162,7 +162,7 @@ func (c *Client) post(ctx context.Context, path string, body, out any) error {
 	// Important: pass an untyped nil io.Reader when there's no body —
 	// a typed-nil *bytesReader satisfies the interface and trips
 	// net/http's "non-nil body" path, which then nil-dereferences in
-	// Read. (Bare-POST endpoints like keep-awake/kill hit this.)
+	// Read. (Bare-POST endpoints like /kill hit this.)
 	var rdr io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)

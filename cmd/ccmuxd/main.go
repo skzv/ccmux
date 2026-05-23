@@ -166,7 +166,6 @@ type tracked struct {
 	last        string    // last captured pane content (for change detection)
 	lastChange  time.Time // when content last changed
 	state       agent.State
-	keepAwake   bool
 	promptCount int
 	created     time.Time
 	// agentID is the AI agent this session is running, sourced from
@@ -310,7 +309,7 @@ func (s *server) listSessions(w http.ResponseWriter, r *http.Request) {
 			Name: ts.Name, Host: "local", Path: ts.Path,
 			Attached: ts.Attached, Windows: ts.Windows,
 			Created: ts.Created, LastChange: t.lastChange,
-			State: string(t.state), KeepAwake: t.keepAwake, PromptCount: t.promptCount,
+			State: string(t.state), PromptCount: t.promptCount,
 			Agent: string(agentID),
 		})
 	}
@@ -392,41 +391,6 @@ func (s *server) createSession(w http.ResponseWriter, r *http.Request) {
 	// just created it or it's a known one being re-attached. Idempotent
 	// — re-running set-option just overwrites the same string.
 	s.applyChrome(ctx, session, req.Project)
-
-	// Pin immediately if requested. The poll loop would otherwise need
-	// to see the session first before /v1/sessions/{name}/keep-awake
-	// could find it in s.seen; eagerly registering here closes that
-	// race for the mobile UX where "create + pin" is one tap.
-	if req.KeepAwake {
-		s.mu.Lock()
-		t, ok := s.seen[session]
-		if !ok {
-			t = &tracked{
-				created:     time.Now(),
-				lastChange:  time.Now(),
-				state:       agent.StateUnknown,
-				agentID:     project.ReadAgent(path),
-				projectPath: path,
-			}
-			s.seen[session] = t
-		}
-		t.keepAwake = true
-		s.mu.Unlock()
-	}
-
-	// Type the optional initial prompt into the new session. Used by the
-	// mobile "New session with first message" flow so the agent starts
-	// the conversation immediately, without the user having to attach
-	// and type. SendText is literal (`-l`) so a prompt containing a key
-	// name like "Enter" or "Up" is typed as characters; the explicit
-	// SendKeys("Enter") afterward submits the input to the agent.
-	if input := strings.TrimSpace(req.FirstInput); input != "" {
-		if err := tmux.SendText(ctx, session, input); err != nil {
-			log.Printf("ccmuxd: send first input to %s: %v", session, err)
-		} else if err := tmux.SendKeys(ctx, session, "Enter"); err != nil {
-			log.Printf("ccmuxd: submit first input on %s: %v", session, err)
-		}
-	}
 
 	writeJSON(w, daemon.SessionState{
 		Name: session, Host: "local", Project: req.Project, Path: path,
@@ -638,8 +602,6 @@ func (s *server) handleSessionsItem(w http.ResponseWriter, r *http.Request) {
 		s.handleKill(w, r, name)
 	case "rename":
 		s.handleRename(w, r, name)
-	case "keep-awake":
-		s.handleKeepAwake(w, r, name)
 	case "send-keys":
 		s.handleSendKeys(w, r, name)
 	case "attach":
@@ -690,24 +652,6 @@ func (s *server) handleRename(w http.ResponseWriter, r *http.Request, name strin
 	}
 	s.mu.Unlock()
 	writeJSON(w, daemon.SessionState{Name: req.Name, Host: "local"})
-}
-
-func (s *server) handleKeepAwake(w http.ResponseWriter, r *http.Request, name string) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var req daemon.KeepAwakeRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "decode: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-	s.mu.Lock()
-	if t, ok := s.seen[name]; ok {
-		t.keepAwake = req.Enabled
-	}
-	s.mu.Unlock()
-	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *server) handleSendKeys(w http.ResponseWriter, r *http.Request, name string) {
@@ -1066,7 +1010,7 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 				Kind: kind,
 				Session: daemon.SessionState{
 					Name: ts.Name, Host: "local", State: string(newState),
-					Path: ts.Path, KeepAwake: t.keepAwake,
+					Path: ts.Path,
 				},
 			})
 		}

@@ -603,10 +603,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case projectSessionReadyMsg:
 		// New project is scaffolded and its tmux session is running.
-		// The initial prompt (if any) is typed by the daemon's
-		// createSession path via NewSessionRequest.FirstInput, not by
-		// the TUI. Route through localAttachCmd so the nested-tmux case
-		// (ccmux running inside the outer ccmux session on mobile) uses
+		// Route through localAttachCmd so the nested-tmux case (ccmux
+		// running inside the outer ccmux session on mobile) uses
 		// switch-client instead of attach-session — otherwise tmux
 		// refuses the nested attach and the user just stares at the
 		// Projects screen wondering why nothing happened.
