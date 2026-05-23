@@ -211,7 +211,6 @@ Useful keys on the Sessions screen:
 - `Enter` — attach
 - `x` — kill the highlighted session
 - `R` — rename
-- `k` — pin keep-awake (the daemon holds a `caffeinate -s` while pinned)
 - `?` — full keymap
 
 ### 3. Working from your phone (≈3 min, one-time setup)

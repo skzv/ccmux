@@ -259,7 +259,6 @@ func (m sessionsModel) renderDetail(width int, narrow bool) string {
 		m.st.Key.Render("enter") + "  attach (ccmux applies a styled bar to the session)",
 		m.st.Key.Render("x") + "      kill",
 		m.st.Key.Render("R") + "      rename",
-		m.st.Key.Render("k") + "      toggle keep-awake (coming soon)",
 		m.st.Key.Render("s") + "      snapshot (coming soon)",
 		"",
 		m.st.Subtitle.Render("To return after attaching"),
