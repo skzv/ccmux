@@ -151,6 +151,55 @@ func TestCreateSession_InvalidNameRejected(t *testing.T) {
 	}
 }
 
+// TestCreateSession_KeepAwakeOnCreate — the request's `keep_awake: true`
+// must pin the brand-new session immediately, without waiting for the
+// poll loop to discover it. The mobile UX of "create + pin in one tap"
+// depends on this: if the pin only landed once the poll loop got
+// around, a fast network round-trip after create would race against
+// the next pollOnce and the pin would silently no-op.
+func TestCreateSession_KeepAwakeOnCreate(t *testing.T) {
+	dir := pollSandbox(t)
+	if err := os.MkdirAll(filepath.Join(dir, "proj"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := newServer(testDaemonCfg(dir))
+	mux := http.NewServeMux()
+	srv.routes(mux)
+	httpSrv := httptest.NewServer(mux)
+	defer httpSrv.Close()
+
+	body, _ := json.Marshal(daemon.NewSessionRequest{
+		Project:   "proj",
+		Continue:  true,
+		KeepAwake: true,
+	})
+	resp := mustPost(t, httpSrv, "/v1/sessions", body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+
+	srv.mu.Lock()
+	t.Cleanup(srv.mu.Unlock)
+	tr, ok := srv.seen["c-proj"]
+	if !ok {
+		t.Fatal("session 'c-proj' was not eagerly registered in srv.seen")
+	}
+	if !tr.keepAwake {
+		t.Error("c-proj registered but keepAwake = false; want true")
+	}
+}
+
+// FirstInput is wired in createSession (the daemon types it + Enter via
+// tmux.SendText + SendKeys) but isn't covered end-to-end here. A
+// capture-pane probe races the launch chain — the keystrokes arrive
+// before the inner shell starts reading and look "lost" to a viewer
+// even though the PTY buffered them. The mobile path (ccmux-app) now
+// streams the pane via WebSocket PTY attach (cmd/ccmuxd/attach.go) and
+// can send its first message after the connection is up, which is the
+// race-free shape; FirstInput exists as a convenience for non-WebSocket
+// callers.
+
 // TestCreateSession_InvalidAgentIgnored — sending an unrecognized
 // agent string mustn't 500 or panic; the daemon just falls through to
 // the project's default (claude, with no sidecar) for the launch.

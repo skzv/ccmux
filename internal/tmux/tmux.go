@@ -202,6 +202,19 @@ func SendKeys(ctx context.Context, name, keys string) error {
 	return nil
 }
 
+// SendText types `text` into the named session's pane verbatim. The
+// `-l` flag disables key-name lookup, so user-supplied text containing
+// a key name (e.g. an initial prompt of "Press Enter to begin") is
+// typed as characters instead of being interpreted as the Enter key.
+// Call SendKeys(ctx, name, "Enter") separately to submit.
+func SendText(ctx context.Context, name, text string) error {
+	cmd := exec.CommandContext(ctx, "tmux", "send-keys", "-t", exactPane(name), "-l", text)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("tmux send-keys -l: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 // AttachArgs returns the tmux argument vector (everything after the
 // `tmux` binary itself) for attaching to `name`. The single source of
 // truth for the attach command shape — local exec, remote ssh, and the
