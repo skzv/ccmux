@@ -82,8 +82,17 @@ func runProjectCmd(name string) error {
 	}
 
 	// Past conversations recorded against the project folder.
+	// Honor the same headless-visibility default as `ccmux
+	// list-conversations` so automation runs don't clutter the
+	// per-project picker.
 	fmt.Println("\nPast conversations:")
-	convs, _ := conversations.All(conversations.Options{})
+	showHeadless := false
+	if cfg, err := config.Load(); err == nil {
+		showHeadless = cfg.Conversations.ShowHeadless
+	}
+	convs, _ := conversations.All(conversations.Options{
+		ExcludeHeadless: !showHeadless,
+	})
 	ctw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	cfound := 0
 	for _, c := range convs {

@@ -204,6 +204,10 @@ func New(cfg config.Config, version string) App {
 	}
 	a.dashboard.SetConfig(cfg)
 	a.dashboard.SetVersion(version)
+	// Seed the live headless-visibility toggle from config. Users
+	// can flip it at runtime with H; the config value is just the
+	// starting position.
+	a.conversationsM.SetShowHeadless(cfg.Conversations.ShowHeadless)
 	// First-run tour: open automatically if the user hasn't completed it yet.
 	if !cfg.Tour.Shown {
 		a.tour.Open()
@@ -324,9 +328,17 @@ func (a App) refreshUsageCmd() tea.Cmd {
 // is focused. Walks ~/.claude, ~/.codex, ~/.gemini/antigravity-cli —
 // can take a beat on machines with hundreds of transcripts, hence the
 // loading-state placeholder in the screen.
+//
+// Headless / SDK rows are hidden unless the user has toggled them on
+// (live, via H) or set conversations.show_headless=true in config.
+// The live toggle takes priority over the config so a temporary peek
+// at automation runs doesn't require a config edit.
 func (a App) refreshConversationsCmd() tea.Cmd {
+	exclude := !a.conversationsM.showHeadless
 	return func() tea.Msg {
-		list, err := conversations.All(conversations.Options{})
+		list, err := conversations.All(conversations.Options{
+			ExcludeHeadless: exclude,
+		})
 		return conversationsLoadedMsg{List: list, Err: err}
 	}
 }
@@ -940,6 +952,22 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			tick := a.startAttaching(attachKindResume, label)
 			return a, tea.Batch(tick, a.resumeConversationCmd(*sel))
+		case keyMatches(msg, a.keys.ToggleHeadless) && a.screen == ScreenConversations:
+			// Flip the include-headless toggle and re-walk transcripts
+			// so the list reflects the new filter immediately. Refresh
+			// goes through the same path as the Refresh keybind: set
+			// loading state, dispatch refreshConversationsCmd which
+			// reads conversationsM.showHeadless to build Options.
+			now := a.conversationsM.ToggleHeadless()
+			a.conversationsM.SetLoading(true)
+			label := "Headless / SDK conversations: hidden"
+			if now {
+				label = "Headless / SDK conversations: shown"
+			}
+			toast := func() tea.Msg {
+				return toastMsg{Text: label, Kind: toastInfo, Until: time.Now().Add(2 * time.Second)}
+			}
+			return a, tea.Batch(toast, a.refreshConversationsCmd())
 		case keyMatches(msg, a.keys.Enter) && a.screen == ScreenNetwork:
 			if c := a.network.SSHCmd(); c != nil {
 				return a, c
@@ -1834,7 +1862,7 @@ func (a App) attachOrCreateLocal(p project.Project) tea.Cmd {
 				}
 			}
 		}
-		convs := conversationsForProject(path)
+		convs := a.conversationsForProject(path)
 
 		if len(sessions) == 0 && len(convs) == 0 {
 			// Nothing to choose between — create and attach directly.
@@ -1856,8 +1884,13 @@ func (a App) attachOrCreateLocal(p project.Project) tea.Cmd {
 // conversationsForProject returns past conversations whose recorded
 // working directory matches projectPath, newest first (conversations.All
 // already sorts by recency). Drives the project menu's "resume" rows.
-func conversationsForProject(projectPath string) []conversations.Conversation {
-	all, err := conversations.All(conversations.Options{})
+// Honors the same headless-visibility default as the Conversations
+// screen — automation runs would otherwise clutter the per-project
+// resume picker just as much as the global list.
+func (a App) conversationsForProject(projectPath string) []conversations.Conversation {
+	all, err := conversations.All(conversations.Options{
+		ExcludeHeadless: !a.conversationsM.showHeadless,
+	})
 	if err != nil {
 		return nil
 	}

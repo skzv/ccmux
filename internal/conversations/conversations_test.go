@@ -500,3 +500,242 @@ func TestDelete_UnknownAgent(t *testing.T) {
 		t.Errorf("unknown-agent guard failed — file was deleted: %v", err)
 	}
 }
+
+// TestListClaude_CapturesEntrypoint — Claude tags every user event with
+// `entrypoint` ("cli" for interactive, "sdk-cli" for headless / SDK /
+// `claude -p`). readClaudeTranscript must surface that tag on the
+// Conversation so the filter knows what to hide.
+//
+// Three rows pinned: interactive (cli), headless (sdk-cli), and an
+// untagged transcript (e.g. an ai-title-only metadata stub) where
+// the field stays empty.
+func TestListClaude_CapturesEntrypoint(t *testing.T) {
+	home := t.TempDir()
+	writeFile(t,
+		filepath.Join(home, ".claude/projects/-Users-skz-Projects-foo/interactive.jsonl"),
+		`{"type":"user","entrypoint":"cli","message":{"role":"user","content":"hi"},"timestamp":"2026-04-30T10:00:00Z"}`+"\n",
+	)
+	writeFile(t,
+		filepath.Join(home, ".claude/projects/-Users-skz-Projects-foo/headless.jsonl"),
+		`{"type":"user","entrypoint":"sdk-cli","message":{"role":"user","content":"automated"},"timestamp":"2026-04-30T10:00:00Z"}`+"\n",
+	)
+	writeFile(t,
+		filepath.Join(home, ".claude/projects/-Users-skz-Projects-foo/titleonly.jsonl"),
+		// No user event — just an ai-title stub. Entrypoint must stay "".
+		`{"type":"ai-title","aiTitle":"some title","sessionId":"titleonly"}`+"\n",
+	)
+
+	got, err := ListClaude(home)
+	if err != nil {
+		t.Fatalf("ListClaude: %v", err)
+	}
+	byID := map[string]Conversation{}
+	for _, c := range got {
+		byID[c.ID] = c
+	}
+	cases := []struct {
+		id   string
+		want string
+	}{
+		{"interactive", "cli"},
+		{"headless", "sdk-cli"},
+		{"titleonly", ""},
+	}
+	for _, tc := range cases {
+		c, ok := byID[tc.id]
+		if !ok {
+			t.Errorf("missing conversation %q in result", tc.id)
+			continue
+		}
+		if c.Entrypoint != tc.want {
+			t.Errorf("%s: Entrypoint = %q, want %q", tc.id, c.Entrypoint, tc.want)
+		}
+	}
+}
+
+// TestListCodex_CapturesOriginator — Codex tags every rollout's first
+// `session_meta` event with `payload.originator` ("codex-tui" for the
+// interactive TUI, "codex_exec" for the headless `codex exec` run).
+// readCodexTranscript must surface that tag on the Conversation so the
+// filter knows what to hide.
+//
+// Three rows pinned: interactive (codex-tui), headless (codex_exec),
+// and a rollout missing the session_meta header (originator should
+// stay empty so the row defaults to "not headless").
+func TestListCodex_CapturesOriginator(t *testing.T) {
+	home := t.TempDir()
+	// Filenames follow `rollout-<RFC3339-ish>-<uuid>.jsonl`. UUID is
+	// the last 5 dash-segments; the parser stitches that back.
+	day := filepath.Join(home, ".codex/sessions/2026/05/23")
+	writeFile(t,
+		filepath.Join(day, "rollout-2026-05-23T10-00-00-00000000-0000-0000-0000-000000000001.jsonl"),
+		`{"timestamp":"2026-05-23T10:00:00Z","type":"session_meta","payload":{"id":"u1","originator":"codex-tui","source":"cli","cwd":"/p"}}`+"\n",
+	)
+	writeFile(t,
+		filepath.Join(day, "rollout-2026-05-23T10-00-00-00000000-0000-0000-0000-000000000002.jsonl"),
+		`{"timestamp":"2026-05-23T10:00:00Z","type":"session_meta","payload":{"id":"u2","originator":"codex_exec","source":"exec","cwd":"/p"}}`+"\n",
+	)
+	writeFile(t,
+		filepath.Join(day, "rollout-2026-05-23T10-00-00-00000000-0000-0000-0000-000000000003.jsonl"),
+		// No session_meta header — only a downstream event. Older or
+		// truncated rollouts shouldn't crash; entrypoint stays "".
+		`{"timestamp":"2026-05-23T10:00:00Z","type":"event_msg","payload":{"type":"task_started"}}`+"\n",
+	)
+
+	got, err := ListCodex(home)
+	if err != nil {
+		t.Fatalf("ListCodex: %v", err)
+	}
+	byID := map[string]Conversation{}
+	for _, c := range got {
+		byID[c.ID] = c
+	}
+	cases := []struct {
+		id   string
+		want string
+	}{
+		{"00000000-0000-0000-0000-000000000001", "codex-tui"},
+		{"00000000-0000-0000-0000-000000000002", "codex_exec"},
+		{"00000000-0000-0000-0000-000000000003", ""},
+	}
+	for _, tc := range cases {
+		c, ok := byID[tc.id]
+		if !ok {
+			t.Errorf("missing conversation %q in result (got %d rows)", tc.id, len(got))
+			continue
+		}
+		if c.Entrypoint != tc.want {
+			t.Errorf("%s: Entrypoint = %q, want %q", tc.id, c.Entrypoint, tc.want)
+		}
+	}
+}
+
+// TestConversation_IsHeadless pins the per-agent headless predicate.
+// Each agent uses a different tag value; the table cross-checks every
+// known combination plus a few sentinel "shouldn't match" cases so a
+// future Claude/Codex version that introduces a new mode surfaces here.
+func TestConversation_IsHeadless(t *testing.T) {
+	cases := []struct {
+		name  string
+		agent agent.ID
+		ep    string
+		want  bool
+	}{
+		// Claude
+		{"claude/sdk-cli", agent.IDClaude, "sdk-cli", true},
+		{"claude/cli", agent.IDClaude, "cli", false},
+		{"claude/empty", agent.IDClaude, "", false},
+		{"claude/unknown-future", agent.IDClaude, "future-mode", false},
+		// Codex
+		{"codex/codex_exec", agent.IDCodex, "codex_exec", true},
+		{"codex/codex-tui", agent.IDCodex, "codex-tui", false},
+		{"codex/empty", agent.IDCodex, "", false},
+		{"codex/unknown-future", agent.IDCodex, "codex_future", false},
+		// Cross-pollination: Claude's sdk-cli value on a Codex row
+		// should NOT match — the predicate must be agent-scoped.
+		{"codex/sdk-cli-doesnt-match", agent.IDCodex, "sdk-cli", false},
+		{"claude/codex_exec-doesnt-match", agent.IDClaude, "codex_exec", false},
+		// Antigravity: opaque transcripts, predicate is always false.
+		{"antigravity/empty", agent.IDAntigravity, "", false},
+		{"antigravity/even-with-tag", agent.IDAntigravity, "sdk-cli", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Conversation{Agent: tc.agent, Entrypoint: tc.ep}.IsHeadless()
+			if got != tc.want {
+				t.Errorf("IsHeadless(agent=%s, ep=%q) = %v, want %v", tc.agent, tc.ep, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestAll_ExcludeHeadlessFiltersSDKRows — the main integration check:
+// All(Options{ExcludeHeadless: true}) drops every headless row (Claude
+// sdk-cli + Codex codex_exec) while keeping interactive runs and rows
+// for agents with no headless signal (Antigravity).
+func TestAll_ExcludeHeadlessFiltersSDKRows(t *testing.T) {
+	home := t.TempDir()
+	ts := func(min int) string {
+		return time.Date(2026, 4, 30, 10, min, 0, 0, time.UTC).Format(time.RFC3339Nano)
+	}
+	// Claude: interactive + headless.
+	writeFile(t,
+		filepath.Join(home, ".claude/projects/-x/interactive.jsonl"),
+		`{"type":"user","entrypoint":"cli","message":{"role":"user","content":"a"},"timestamp":"`+ts(3)+`"}`+"\n",
+	)
+	writeFile(t,
+		filepath.Join(home, ".claude/projects/-x/headless.jsonl"),
+		`{"type":"user","entrypoint":"sdk-cli","message":{"role":"user","content":"b"},"timestamp":"`+ts(2)+`"}`+"\n",
+	)
+	// Codex: interactive (codex-tui) + headless (codex_exec).
+	codexDay := filepath.Join(home, ".codex/sessions/2026/04/30")
+	writeFile(t,
+		filepath.Join(codexDay, "rollout-2026-04-30T10-04-00-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.jsonl"),
+		`{"timestamp":"`+ts(4)+`","type":"session_meta","payload":{"id":"cx-int","originator":"codex-tui","source":"cli","cwd":"/p"}}`+"\n",
+	)
+	writeFile(t,
+		filepath.Join(codexDay, "rollout-2026-04-30T10-05-00-bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb.jsonl"),
+		`{"timestamp":"`+ts(5)+`","type":"session_meta","payload":{"id":"cx-exec","originator":"codex_exec","source":"exec","cwd":"/p"}}`+"\n",
+	)
+	// Antigravity: opaque, never filtered.
+	writeFile(t,
+		filepath.Join(home, ".gemini/antigravity-cli/conversations/agy.pb"),
+		"opaque",
+	)
+
+	all, err := All(Options{HomeDir: home})
+	if err != nil {
+		t.Fatalf("All (no filter): %v", err)
+	}
+	if len(all) != 5 {
+		t.Fatalf("baseline len = %d, want 5 (no filter should keep everything)", len(all))
+	}
+
+	filtered, err := All(Options{HomeDir: home, ExcludeHeadless: true})
+	if err != nil {
+		t.Fatalf("All (filter): %v", err)
+	}
+	// Expect: Claude interactive + Codex interactive + Antigravity = 3.
+	if len(filtered) != 3 {
+		t.Fatalf("filtered len = %d, want 3 (both headless rows dropped) — got: %+v", len(filtered), filtered)
+	}
+	for _, c := range filtered {
+		if c.IsHeadless() {
+			t.Errorf("headless row leaked through filter: %+v", c)
+		}
+	}
+	// Antigravity must still be present — IsHeadless is always false
+	// for it, so the filter is a no-op on those rows.
+	foundAgy := false
+	for _, c := range filtered {
+		if c.Agent == agent.IDAntigravity {
+			foundAgy = true
+		}
+	}
+	if !foundAgy {
+		t.Error("Antigravity row was wrongly filtered — IsHeadless is always false for that agent")
+	}
+}
+
+// TestAll_ExcludeHeadlessDefaultsToOff — backwards-compatibility pin.
+// Zero-value Options must return every row, including headless ones.
+// External callers that don't know about this flag must keep seeing
+// everything; the new "hide by default" policy lives in the TUI / CLI,
+// not the package.
+func TestAll_ExcludeHeadlessDefaultsToOff(t *testing.T) {
+	home := t.TempDir()
+	writeFile(t,
+		filepath.Join(home, ".claude/projects/-x/headless.jsonl"),
+		`{"type":"user","entrypoint":"sdk-cli","message":{"role":"user","content":"a"},"timestamp":"2026-04-30T10:00:00Z"}`+"\n",
+	)
+	got, err := All(Options{HomeDir: home})
+	if err != nil {
+		t.Fatalf("All: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1 — zero-value Options should not filter", len(got))
+	}
+	if !got[0].IsHeadless() {
+		t.Errorf("expected the headless row to be present; got %+v", got[0])
+	}
+}

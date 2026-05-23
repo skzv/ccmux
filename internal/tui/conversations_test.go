@@ -441,6 +441,124 @@ func TestConversations_NarrowLayout(t *testing.T) {
 	}
 }
 
+// TestConversationsModel_ToggleHeadless_FlipsAndResetsCursor — the H
+// keybind flips the headless-visibility flag, reports the new value, and
+// resets the cursor so the user lands at the top of the freshly-shaped
+// list (a stale cursor would point at a row that may no longer be
+// visible after refresh).
+func TestConversationsModel_ToggleHeadless_FlipsAndResetsCursor(t *testing.T) {
+	m := newConversations(styles.Default(), DefaultKeymap())
+	m.SetList(fakeConversations())
+	m.cursor = 2
+
+	if m.ShowHeadless() {
+		t.Fatal("precondition: ShowHeadless should default to false")
+	}
+	now := m.ToggleHeadless()
+	if !now || !m.ShowHeadless() {
+		t.Errorf("ToggleHeadless() = %v, ShowHeadless() = %v, want both true after first toggle", now, m.ShowHeadless())
+	}
+	if m.cursor != 0 {
+		t.Errorf("cursor = %d, want 0 (reset after toggle)", m.cursor)
+	}
+	// Second toggle flips back.
+	now = m.ToggleHeadless()
+	if now || m.ShowHeadless() {
+		t.Errorf("second toggle should flip back to hidden; got = %v / ShowHeadless = %v", now, m.ShowHeadless())
+	}
+}
+
+// TestConversationsModel_ToggleHeadless_DisarmsPendingDelete — a
+// pending delete is implicitly armed against a specific row in a
+// specific filter view. Toggling the filter changes which rows are
+// visible, so the prior arm is stale and must clear, just like
+// SetList / cursor-move do.
+func TestConversationsModel_ToggleHeadless_DisarmsPendingDelete(t *testing.T) {
+	m := newConversations(styles.Default(), DefaultKeymap())
+	m.SetList(fakeConversations())
+	m, _ = m.Update(keyMsg("x")) // arm row 0
+	if m.pendingDelete == "" {
+		t.Fatal("precondition: armed")
+	}
+	m.ToggleHeadless()
+	if m.pendingDelete != "" {
+		t.Errorf("toggling headless filter should disarm, pendingDelete = %q", m.pendingDelete)
+	}
+}
+
+// TestConversationsModel_SetShowHeadless_SeedsFromConfig — App.New
+// pushes the config value here at startup; the user's H keybind then
+// owns the flag for the rest of the session. This pins the entry
+// point so a config-only change still works without a TUI toggle.
+func TestConversationsModel_SetShowHeadless_SeedsFromConfig(t *testing.T) {
+	m := newConversations(styles.Default(), DefaultKeymap())
+	if m.ShowHeadless() {
+		t.Fatal("default: ShowHeadless should be false")
+	}
+	m.SetShowHeadless(true)
+	if !m.ShowHeadless() {
+		t.Errorf("SetShowHeadless(true) did not stick")
+	}
+}
+
+// TestConversationsModel_View_HintShowsToggleStatus — the inline hint
+// line at the bottom of the wide layout has to surface the current
+// headless visibility (and the H keybind that flips it). Otherwise
+// the toggle is invisible and discoverable only via the help overlay.
+func TestConversationsModel_View_HintShowsToggleStatus(t *testing.T) {
+	m := newConversations(styles.Default(), DefaultKeymap())
+	m.SetList(fakeConversations())
+
+	out := m.View(120, 40)
+	if !strings.Contains(out, "H headless: hidden") {
+		t.Errorf("hint should show 'H headless: hidden' by default, got:\n%s", out)
+	}
+	m.ToggleHeadless()
+	out = m.View(120, 40)
+	if !strings.Contains(out, "H headless: shown") {
+		t.Errorf("after toggle, hint should show 'H headless: shown', got:\n%s", out)
+	}
+}
+
+// TestConversationsModel_View_DetailMarksHeadlessRow — when a headless
+// row IS visible (user has flipped the toggle to inspect their
+// automation), the detail pane has to call it out with a mode-specific
+// label so the user knows which automation flavour they're about to
+// resume. Otherwise a `sdk-cli` or `codex exec` resume comes as a
+// surprise.
+func TestConversationsModel_View_DetailMarksHeadlessRow(t *testing.T) {
+	cases := []struct {
+		name      string
+		agent     agent.ID
+		ep        string
+		wantLabel string
+	}{
+		{"claude sdk-cli", agent.IDClaude, "sdk-cli", "headless / SDK"},
+		{"codex codex_exec", agent.IDCodex, "codex_exec", "headless / exec"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newConversations(styles.Default(), DefaultKeymap())
+			m.SetList([]conversations.Conversation{
+				{
+					ID:           "headless-1",
+					Agent:        tc.agent,
+					Project:      "/p",
+					LastActivity: time.Now(),
+					Preview:      "automated prompt",
+					Entrypoint:   tc.ep,
+				},
+			})
+			m.SetShowHeadless(true) // so the row is visible
+
+			out := m.View(120, 40)
+			if !strings.Contains(out, tc.wantLabel) {
+				t.Errorf("detail pane should flag headless rows with %q, got:\n%s", tc.wantLabel, out)
+			}
+		})
+	}
+}
+
 // TestConversations_CursorVisibleWhenScrolledPastWindow — regression
 // for the "scroll down far enough and the cursor row disappears" bug.
 // renderList used to walk from index 0 and break at len(rows) >= height,

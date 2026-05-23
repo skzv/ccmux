@@ -298,3 +298,55 @@ func TestAutoCheck_MissingKeyKeepsDefaultOn(t *testing.T) {
 		t.Error("a config without [update] should keep AutoCheck=true")
 	}
 }
+
+// TestDefaults_ShowHeadlessIsFalse — the noise-filter default. Fresh
+// installs and configs that predate the field both hide headless /
+// SDK Claude runs from the conversations list, because automation
+// runs otherwise drown out interactive work. Users opt back in via
+// conversations.show_headless=true or the H toggle in the TUI.
+func TestDefaults_ShowHeadlessIsFalse(t *testing.T) {
+	withFakeHome(t)
+	if Defaults().Conversations.ShowHeadless {
+		t.Error("Defaults().Conversations.ShowHeadless = true, want false (hide automation noise)")
+	}
+}
+
+// TestShowHeadless_SurvivesSaveLoad — a user who flips it on expects
+// the choice to persist across restarts; nothing in the config
+// pipeline drops the field silently.
+func TestShowHeadless_SurvivesSaveLoad(t *testing.T) {
+	withFakeHome(t)
+	in := Defaults()
+	in.Conversations.ShowHeadless = true
+	if err := Save(in); err != nil {
+		t.Fatal(err)
+	}
+	out, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !out.Conversations.ShowHeadless {
+		t.Error("ShowHeadless = false after saving true — round-trip lost the setting")
+	}
+}
+
+// TestShowHeadless_MissingKeyKeepsHiddenDefault — a config.toml from
+// before this field existed must keep the new "hide" behavior rather
+// than accidentally opt the user in to noisy automation rows.
+func TestShowHeadless_MissingKeyKeepsHiddenDefault(t *testing.T) {
+	home := withFakeHome(t)
+	p := filepath.Join(home, ".config", "ccmux", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte("theme = \"nord\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Conversations.ShowHeadless {
+		t.Error("a config without [conversations] should keep ShowHeadless=false")
+	}
+}
