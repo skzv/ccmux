@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/skzv/ccmux/internal/config"
 )
 
 // Status is the parsed shape of `claude auth status`.
@@ -84,9 +86,14 @@ func Get(ctx context.Context) (Status, error) {
 
 // fetch shells out to `claude auth status` and parses its JSON output.
 func fetch(ctx context.Context) (Status, error) {
-	bin, err := exec.LookPath("claude")
-	if err != nil {
-		return Status{}, errors.New("claude not on PATH")
+	cfg, _ := config.Load()
+	bin := strings.TrimSpace(cfg.Agents.Claude.Command)
+	if bin == "" {
+		var err error
+		bin, err = exec.LookPath("claude")
+		if err != nil {
+			return Status{}, errors.New("claude not on PATH")
+		}
 	}
 	c, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()

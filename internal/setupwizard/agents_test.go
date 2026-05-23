@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/skzv/ccmux/internal/agent"
+	"github.com/skzv/ccmux/internal/config"
 )
 
 // TestInstallHintFor_CoversAllShippedAgents — same contract as
@@ -37,6 +38,68 @@ func TestInstallHintFor_NamesActualPackage(t *testing.T) {
 		t.Run(string(id), func(t *testing.T) {
 			if got := installHintFor(id); !strings.Contains(got, want) {
 				t.Errorf("missing identifier %q in hint: %q", want, got)
+			}
+		})
+	}
+}
+
+func TestDefaultAgentCommandSelection(t *testing.T) {
+	tests := []struct {
+		name       string
+		current    string
+		candidates []string
+		want       string
+		wantPrompt bool
+	}{
+		{
+			name:       "configured command wins",
+			current:    "  /Users/me/.nvm/versions/node/v24/bin/claude  ",
+			candidates: []string{"/opt/homebrew/bin/claude"},
+			want:       "/Users/me/.nvm/versions/node/v24/bin/claude",
+		},
+		{
+			name: "no candidates skips",
+		},
+		{
+			name:       "single candidate is selected without prompt",
+			candidates: []string{"/opt/homebrew/bin/claude"},
+			want:       "/opt/homebrew/bin/claude",
+		},
+		{
+			name:       "multiple candidates prompt with path first default",
+			candidates: []string{"/Users/me/.nvm/bin/claude", "/opt/homebrew/bin/claude"},
+			want:       "/Users/me/.nvm/bin/claude",
+			wantPrompt: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, gotPrompt := defaultAgentCommandSelection(tt.current, tt.candidates)
+			if got != tt.want {
+				t.Fatalf("selection = %q, want %q", got, tt.want)
+			}
+			if gotPrompt != tt.wantPrompt {
+				t.Fatalf("shouldPrompt = %v, want %v", gotPrompt, tt.wantPrompt)
+			}
+		})
+	}
+}
+
+func TestConfiguredAgentCommand(t *testing.T) {
+	cfg := config.Config{}
+	cfg.Agents.Claude.Command = "  /tmp/claude  "
+	cfg.Agents.Codex.Command = "  /tmp/codex  "
+	cfg.Agents.Antigravity.Command = "  /tmp/agy  "
+
+	cases := map[agent.ID]string{
+		agent.IDClaude:      "/tmp/claude",
+		agent.IDCodex:       "/tmp/codex",
+		agent.IDAntigravity: "/tmp/agy",
+	}
+	for id, want := range cases {
+		t.Run(string(id), func(t *testing.T) {
+			if got := configuredAgentCommand(cfg, id); got != want {
+				t.Fatalf("configuredAgentCommand(%s) = %q, want %q", id, got, want)
 			}
 		})
 	}

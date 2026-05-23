@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/skzv/ccmux/internal/config"
 )
 
 // probeLinux fills in the systemd-user unit + is-enabled/is-active state.
@@ -41,7 +43,8 @@ func installLinux() (Status, error) {
 	if err := os.MkdirAll(filepath.Dir(s.ServicePath), 0o755); err != nil {
 		return s, err
 	}
-	body := UnitFile(s.BinaryPath)
+	cfg, _ := config.Load()
+	body := UnitFileWithPath(s.BinaryPath, managedPath(home, cfg.AgentCommands(), "/usr/local/bin", "/usr/bin", "/bin"))
 	if err := os.WriteFile(s.ServicePath, []byte(body), 0o644); err != nil {
 		return s, err
 	}

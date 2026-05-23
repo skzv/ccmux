@@ -17,7 +17,9 @@ package agent
 
 import (
 	"context"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -81,6 +83,14 @@ type Agent interface {
 	TranscriptsRoot(home string) string
 	InitialPrompt(name, description string) string
 	Classify(pane string, lastChange time.Time, idleThreshold time.Duration) State
+}
+
+// Commands holds user-configured executable paths for agents. Empty
+// fields preserve the default binary-on-PATH behavior for that agent.
+type Commands struct {
+	Claude      string
+	Codex       string
+	Antigravity string
 }
 
 // All returns every supported agent in canonical order
@@ -162,4 +172,119 @@ var installLookupHook = func(_ context.Context, bin string) bool {
 
 func isInstalled(ctx context.Context, bin string) bool {
 	return installLookupHook(ctx, bin)
+}
+
+// ExecutableCandidates returns every executable named bin found on a
+// PATH-like string, preserving PATH order and deduplicating repeated
+// absolute paths. It is intentionally pure with respect to PATH reads
+// so setup/doctor tests can inject a fixture path without mutating the
+// process environment.
+func ExecutableCandidates(bin, pathEnv string) []string {
+	if bin == "" {
+		return nil
+	}
+	seen := map[string]bool{}
+	out := []string{}
+	for _, dir := range filepath.SplitList(pathEnv) {
+		if dir == "" {
+			continue
+		}
+		candidate := filepath.Join(dir, bin)
+		if !Executable(candidate) {
+			continue
+		}
+		abs, err := filepath.Abs(candidate)
+		if err != nil {
+			abs = candidate
+		}
+		if seen[abs] {
+			continue
+		}
+		seen[abs] = true
+		out = append(out, abs)
+	}
+	return out
+}
+
+// Executable reports whether path names an executable file.
+func Executable(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir() && info.Mode()&0o111 != 0
+}
+
+// Candidates returns every executable for an agent on the current PATH.
+func Candidates(a Agent) []string {
+	return ExecutableCandidates(a.Binary(), os.Getenv("PATH"))
+}
+
+// LaunchCmd resolves the tmux shell command for an agent, honoring a
+// configured executable path when present. The configured value is used
+// only as the argv[0] command token; flags and shell fallbacks keep the
+// agent-specific shape from the built-in implementations.
+func LaunchCmd(id ID, continueFlag bool, commands Commands) string {
+	a := ByID(id)
+	return launchCmdWithBinary(a, configuredBinary(a.ID(), a.Binary(), commands), continueFlag)
+}
+
+// ResumeArgs resolves the argv vector for resuming one specific
+// conversation with optional configured command substitution.
+func ResumeArgs(id ID, conversationID string, commands Commands) []string {
+	if conversationID == "" {
+		return nil
+	}
+	switch id {
+	case IDClaude:
+		return []string{configuredBinary(IDClaude, "claude", commands), "--resume", conversationID}
+	case IDCodex:
+		return []string{configuredBinary(IDCodex, "codex", commands), "resume", conversationID}
+	case IDAntigravity:
+		return []string{configuredBinary(IDAntigravity, "agy", commands), "--conversation", conversationID}
+	}
+	return nil
+}
+
+func configuredBinary(id ID, fallback string, commands Commands) string {
+	switch id {
+	case IDClaude:
+		if strings.TrimSpace(commands.Claude) != "" {
+			return strings.TrimSpace(commands.Claude)
+		}
+	case IDCodex:
+		if strings.TrimSpace(commands.Codex) != "" {
+			return strings.TrimSpace(commands.Codex)
+		}
+	case IDAntigravity:
+		if strings.TrimSpace(commands.Antigravity) != "" {
+			return strings.TrimSpace(commands.Antigravity)
+		}
+	}
+	return fallback
+}
+
+func launchCmdWithBinary(a Agent, binary string, continueFlag bool) string {
+	cmd := shellQuote(binary)
+	if !continueFlag {
+		return cmd
+	}
+	return cmd + " --continue || " + cmd + " || zsh || bash || sh"
+}
+
+// ShellQuote quotes one shell token using POSIX single-quote rules.
+func ShellQuote(s string) string {
+	return shellQuote(s)
+}
+
+func shellQuote(s string) string {
+	if s == "" {
+		return "''"
+	}
+	if strings.IndexFunc(s, func(r rune) bool {
+		return !(r >= 'A' && r <= 'Z') &&
+			!(r >= 'a' && r <= 'z') &&
+			!(r >= '0' && r <= '9') &&
+			!strings.ContainsRune("@%_+=:,./-", r)
+	}) == -1 {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }

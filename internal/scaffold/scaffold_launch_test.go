@@ -60,3 +60,31 @@ func TestLaunchCmd_EmptyAgentDefaultsToClaude(t *testing.T) {
 		t.Errorf("LaunchCmd(empty Agent) = %q, want %q (claude back-compat)", got, want)
 	}
 }
+
+func TestLaunchCmd_ConfiguredCommands(t *testing.T) {
+	commands := agent.Commands{
+		Claude:      "/tmp/claude",
+		Codex:       "/tmp/codex",
+		Antigravity: "/tmp/agy",
+	}
+	tests := []struct {
+		name string
+		id   agent.ID
+		want string
+	}{
+		{name: "claude", id: agent.IDClaude, want: "/tmp/claude"},
+		{name: "codex", id: agent.IDCodex, want: "/tmp/codex"},
+		{name: "antigravity", id: agent.IDAntigravity, want: "/tmp/agy"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := LaunchCmd(Options{
+				Agent:    tt.id,
+				Commands: commands,
+			})
+			if got != tt.want {
+				t.Errorf("configured LaunchCmd = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

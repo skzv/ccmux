@@ -335,6 +335,31 @@ func TestResumeArgs_AgentDialects(t *testing.T) {
 	}
 }
 
+func TestResumeArgsWithCommands_ConfiguredCommands(t *testing.T) {
+	commands := agent.Commands{
+		Claude:      "/tmp/claude",
+		Codex:       "/tmp/codex",
+		Antigravity: "/tmp/agy",
+	}
+	tests := []struct {
+		name string
+		c    Conversation
+		want []string
+	}{
+		{name: "claude", c: Conversation{ID: "u-1", Agent: agent.IDClaude}, want: []string{"/tmp/claude", "--resume", "u-1"}},
+		{name: "codex", c: Conversation{ID: "u-1", Agent: agent.IDCodex}, want: []string{"/tmp/codex", "resume", "u-1"}},
+		{name: "antigravity", c: Conversation{ID: "u-1", Agent: agent.IDAntigravity}, want: []string{"/tmp/agy", "--conversation", "u-1"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.c.ResumeArgsWithCommands(commands)
+			if !equalStringSlice(got, tt.want) {
+				t.Errorf("ResumeArgsWithCommands = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func equalStringSlice(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

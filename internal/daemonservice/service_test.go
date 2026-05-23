@@ -4,6 +4,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/skzv/ccmux/internal/agent"
 )
 
 func TestLabelIsCanonical(t *testing.T) {
@@ -36,6 +38,18 @@ func TestUnitFile_BinaryPathSubstituted(t *testing.T) {
 	body := UnitFile("/opt/foo/ccmuxd")
 	if !strings.Contains(body, "ExecStart=/opt/foo/ccmuxd") {
 		t.Fatalf("ExecStart not substituted: %s", body)
+	}
+}
+
+func TestManagedPath_IncludesConfiguredCommandBeforeDefaults(t *testing.T) {
+	got := managedPath("/Users/me", agent.Commands{
+		Claude:      "/Users/me/.nvm/versions/node/v23.9.0/bin/claude",
+		Codex:       "/Users/me/.nvm/versions/node/v23.9.0/bin/codex",
+		Antigravity: "/Users/me/.local/share/antigravity/bin/agy",
+	}, "/opt/homebrew/bin", "/usr/bin")
+	wantPrefix := "/Users/me/.local/bin:/Users/me/.nvm/versions/node/v23.9.0/bin:/Users/me/.local/share/antigravity/bin:/opt/homebrew/bin"
+	if !strings.HasPrefix(got, wantPrefix) {
+		t.Fatalf("managedPath = %q, want prefix %q", got, wantPrefix)
 	}
 }
 
@@ -86,6 +100,7 @@ func TestPlistTemplate_RendersAllFields(t *testing.T) {
 		StderrPath: "/tmp/err",
 		HomeDir:    "/Users/skz",
 		WorkingDir: "/Users/skz",
+		Path:       "/Users/skz/.local/bin:/opt/homebrew/bin:/usr/bin:/bin",
 	})
 	if err != nil {
 		t.Fatal(err)

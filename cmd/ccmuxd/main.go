@@ -417,7 +417,7 @@ func (s *server) createSession(w http.ResponseWriter, r *http.Request) {
 		// "claude --continue || claude || zsh" regardless, which
 		// meant Codex / Antigravity projects launched claude from
 		// remote starts.
-		launch := projectLaunchCmd(path, req.Continue)
+		launch := projectLaunchCmd(path, req.Continue, s.cfg.AgentCommands())
 		if err := tmux.New(ctx, session, path, launch); err != nil {
 			http.Error(w, "tmux new-session: "+err.Error(), http.StatusInternalServerError)
 			return
@@ -489,7 +489,7 @@ func (s *server) createBareSession(w http.ResponseWriter, r *http.Request) {
 		// Order: explicit request agent → daemon's
 		// sessions.default_agent → $SHELL. Bare sessions don't carry
 		// --continue because they're not tied to a project transcript.
-		launch := bareSessionLaunchCmd(req.Agent, s.cfg.Agents.Default)
+		launch := bareSessionLaunchCmd(req.Agent, s.cfg.Agents.Default, s.cfg.AgentCommands())
 		if err := tmux.New(ctx, name, path, launch); err != nil {
 			http.Error(w, "tmux new-session: "+err.Error(), http.StatusInternalServerError)
 			return
@@ -516,8 +516,8 @@ func (s *server) createBareSession(w http.ResponseWriter, r *http.Request) {
 // continueFlag=true matches the existing UX: every "attach to known
 // project" path passes --continue so the user resumes their prior
 // conversation; only fresh scaffolds start without --continue.
-func projectLaunchCmd(projectPath string, continueFlag bool) string {
-	return agent.ByID(project.ReadAgent(projectPath)).LaunchCmd(continueFlag)
+func projectLaunchCmd(projectPath string, continueFlag bool, commands agent.Commands) string {
+	return agent.LaunchCmd(project.ReadAgent(projectPath), continueFlag, commands)
 }
 
 // bareSessionLaunchCmd resolves which command tmux new-session runs
@@ -533,11 +533,11 @@ func projectLaunchCmd(projectPath string, continueFlag bool) string {
 // IDs are normalized via agent.ParseID so the daemon accepts the
 // "gemini" back-compat alias. Exposed for tests so the precedence is
 // pinned without standing up an http server.
-func bareSessionLaunchCmd(reqAgent, configDefault string) string {
-	if cmd := agentLaunchCmdOrShell(reqAgent, false); cmd != "" {
+func bareSessionLaunchCmd(reqAgent, configDefault string, commands agent.Commands) string {
+	if cmd := agentLaunchCmdOrShell(reqAgent, false, commands); cmd != "" {
 		return cmd
 	}
-	if cmd := agentLaunchCmdOrShell(configDefault, false); cmd != "" {
+	if cmd := agentLaunchCmdOrShell(configDefault, false, commands); cmd != "" {
 		return cmd
 	}
 	return shellLaunchCmd()
@@ -547,7 +547,7 @@ func bareSessionLaunchCmd(reqAgent, configDefault string) string {
 // Returns the LaunchCmd for a known agent, the shell command for an
 // explicit "shell" pick, and "" for an empty or unrecognized value so
 // the caller can fall through to the next precedence level.
-func agentLaunchCmdOrShell(s string, continueFlag bool) string {
+func agentLaunchCmdOrShell(s string, continueFlag bool, commands agent.Commands) string {
 	trimmed := strings.TrimSpace(s)
 	if trimmed == "" {
 		return ""
@@ -556,7 +556,7 @@ func agentLaunchCmdOrShell(s string, continueFlag bool) string {
 		return shellLaunchCmd()
 	}
 	if id, ok := agent.ParseID(trimmed); ok {
-		return agent.ByID(id).LaunchCmd(continueFlag)
+		return agent.LaunchCmd(id, continueFlag, commands)
 	}
 	return ""
 }
@@ -1038,9 +1038,10 @@ func (s *server) createProject(w http.ResponseWriter, r *http.Request) {
 	// claude-default on read via project.ReadAgent.
 	chosenAgent, _ := agent.ParseID(req.Agent)
 	session, err := scaffold.StartSession(ctx, scaffold.Options{
-		Name:  name,
-		Dir:   dir,
-		Agent: chosenAgent,
+		Name:     name,
+		Dir:      dir,
+		Agent:    chosenAgent,
+		Commands: s.cfg.AgentCommands(),
 	})
 	if err != nil {
 		http.Error(w, "start: "+err.Error(), http.StatusInternalServerError)

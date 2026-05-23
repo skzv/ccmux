@@ -118,7 +118,11 @@ test: check-go
 # Packages covered: internal/e2e (subprocess CUJs) and cmd/ccmuxd
 # (poll-loop white-box tests).
 test-e2e: check-go build
-	go test -tags integration -timeout 180s ./internal/e2e/ ./cmd/ccmuxd/
+	@tmp="$$(mktemp -d /tmp/ccmux-e2e.XXXXXX)"; \
+	gomodcache="$$(go env GOMODCACHE)"; \
+	gocache="$$(go env GOCACHE)"; \
+	trap 'env -u TMUX HOME="$$tmp" TMUX_TMPDIR="$$tmp" tmux kill-server >/dev/null 2>&1 || true; rm -rf "$$tmp"' EXIT INT TERM; \
+	env -u TMUX HOME="$$tmp" TMUX_TMPDIR="$$tmp" GOMODCACHE="$$gomodcache" GOCACHE="$$gocache" go test -tags integration -timeout 180s ./internal/e2e/ ./cmd/ccmuxd/
 
 # Native Go fuzzer pass — one round-trip over every FuzzXxx target.
 #

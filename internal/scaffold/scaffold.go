@@ -27,20 +27,21 @@ import (
 
 // Options is the input shape for StartSession.
 type Options struct {
-	Name  string   // project name; becomes the directory basename when Dir is empty
-	Dir   string   // target directory (absolute). Empty → ./<Name> resolved to absolute.
-	Agent agent.ID // which agent to launch; empty defaults to claude
+	Name     string         // project name; becomes the directory basename when Dir is empty
+	Dir      string         // target directory (absolute). Empty → ./<Name> resolved to absolute.
+	Agent    agent.ID       // which agent to launch; empty defaults to claude
+	Commands agent.Commands // optional configured agent executable paths
 }
 
 // LaunchCmd is the tmux launch command for a new project's session.
-// Routes through agent.ByID(opts.Agent).LaunchCmd(false) — false
-// because a brand-new project has no prior conversation to resume;
-// passing --continue would make the agent hunt for a transcript that
-// doesn't exist. Exposed (and tested) separately from StartSession so
-// the "every agent's binary actually runs" invariant has a unit-test
-// home that doesn't need a live tmux server.
+// Routes through agent.LaunchCmd(..., false, ...) — false because a
+// brand-new project has no prior conversation to resume; passing
+// --continue would make the agent hunt for a transcript that doesn't
+// exist. Exposed (and tested) separately from StartSession so the
+// "every agent's binary actually runs" invariant has a unit-test home
+// that doesn't need a live tmux server.
 func LaunchCmd(opts Options) string {
-	return agent.ByID(opts.Agent).LaunchCmd(false)
+	return agent.LaunchCmd(opts.Agent, false, opts.Commands)
 }
 
 // PrepareDir resolves the project directory, creates it if missing, and
