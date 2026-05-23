@@ -204,12 +204,40 @@ tapes: build
 	@echo "tapes: rendering docs/vhs/cuj11_update.tape (update demo)"
 	@CCMUX_UPDATE_DEMO=true bash docs/vhs/render.sh docs/vhs/cuj11_update.tape
 
-# Checks that every CUJ in the catalog has a corresponding tape file.
-# Runs cheaply in CI — no VHS needed.
+# tapes-check enforces the CUJ catalog ⇄ artifact invariant. The
+# catalog at docs/01_Specs/01_CUJ_Catalog.md is the source of truth;
+# every row whose ID matches `C\d+` must have a tape under docs/vhs/,
+# and every row marked `demoable: full` must additionally have its
+# rendered GIF under docs/vhs/out/. `stubbed` and `still` entries skip
+# the GIF requirement (e.g. C7's GIF is gitignored — the Network
+# screen leaks live tailnet peer names/IPs).
+#
+# Runs cheaply in CI — no VHS or ffmpeg needed.
 tapes-check:
-	@missing=0; \
-	for t in $(TAPES) docs/vhs/cuj11_update.tape; do \
-		[ -f "$$t" ] || { echo "tapes-check: missing $$t"; missing=$$((missing+1)); }; \
-	done; \
-	[ $$missing -eq 0 ] || exit $$missing
-	@echo "tapes-check: all tapes present"
+	@awk -F'|' '/^\| C[0-9]+ \|/ { \
+		id=$$2; slug=$$3; demoable=$$7; \
+		gsub(/^ +| +$$/, "", id); \
+		gsub(/^ +| +$$/, "", slug); \
+		gsub(/^ +| +$$/, "", demoable); \
+		print id, slug, demoable; \
+	}' docs/01_Specs/01_CUJ_Catalog.md > $(BIN_DIR)/.cuj-catalog.tmp; \
+	missing=0; \
+	while read id slug demoable; do \
+		num=$${id#C}; \
+		if [ $$num -lt 10 ]; then num="0$$num"; fi; \
+		tape="docs/vhs/cuj$${num}_$${slug}.tape"; \
+		if [ ! -f "$$tape" ]; then \
+			echo "tapes-check: missing tape $$tape (catalog $$id)"; \
+			missing=$$((missing+1)); \
+		fi; \
+		if [ "$$demoable" = "full" ]; then \
+			gif="docs/vhs/out/cuj$${num}_$${slug}.gif"; \
+			if [ ! -f "$$gif" ]; then \
+				echo "tapes-check: missing GIF $$gif (catalog $$id demoable=full)"; \
+				missing=$$((missing+1)); \
+			fi; \
+		fi; \
+	done < $(BIN_DIR)/.cuj-catalog.tmp; \
+	rm -f $(BIN_DIR)/.cuj-catalog.tmp; \
+	if [ $$missing -gt 0 ]; then exit $$missing; fi; \
+	echo "tapes-check: catalog and rendered artifacts in sync"
