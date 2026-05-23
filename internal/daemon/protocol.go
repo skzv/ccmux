@@ -167,6 +167,22 @@ type ProjectInfo struct {
 type PairRequest struct {
 	Token     string `json:"token"`
 	PublicKey string `json:"public_key"`
+	// Optional APNs registration carried inline so push works from
+	// first pair without a second round trip. Omitted means the
+	// client doesn't (yet) have a push token to register.
+	DeviceToken string `json:"device_token,omitempty"`
+	APNsEnv     string `json:"apns_env,omitempty"` // "development" | "production"
+}
+
+// RegisterDeviceRequest is the body of POST /v1/devices. Used to
+// update the APNs device token on an already-paired host (e.g. when
+// the user granted notifications after the initial pair, or when iOS
+// rolls the token). Identified by the same SSH public key that was
+// recorded at pair time, so no separate device-id concept is needed.
+type RegisterDeviceRequest struct {
+	Token     string `json:"token"`
+	Env       string `json:"env"`
+	PublicKey string `json:"public_key"`
 }
 
 // PairResponse is what POST /v1/pair returns on success.

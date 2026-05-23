@@ -27,6 +27,21 @@ type Config struct {
 	Subscription  SubscriptionConfig  `toml:"subscription"`
 	Tour          TourConfig          `toml:"tour"`
 	Hosts         []Host              `toml:"host"`
+	APNs          APNsConfig          `toml:"apns"`
+}
+
+// APNsConfig configures Apple Push Notifications so the daemon can
+// notify paired iPhones when sessions finish or need input. Off by
+// default — flip Enabled=true and fill in KeyPath/KeyID/TeamID once
+// the Apple Developer account has Push Notifications enabled for the
+// iOS app's bundle id.
+type APNsConfig struct {
+	Enabled     bool   `toml:"enabled"`
+	KeyPath     string `toml:"key_path"`    // path to AuthKey_XXXXXXXXXX.p8
+	KeyID       string `toml:"key_id"`      // 10-char key id from Apple Developer
+	TeamID      string `toml:"team_id"`     // 10-char team id
+	Topic       string `toml:"topic"`       // iOS bundle id, e.g. "dev.skz.ccmux"
+	Environment string `toml:"environment"` // optional override; usually omitted
 }
 
 // SessionsConfig holds preferences for the Sessions screen's "new
