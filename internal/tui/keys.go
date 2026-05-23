@@ -29,7 +29,6 @@ type Keymap struct {
 	NewItem   key.Binding
 	Kill      key.Binding
 	Rename    key.Binding
-	KeepAwake key.Binding
 	Snapshot  key.Binding
 	OpenInApp key.Binding
 	EditInEd  key.Binding
@@ -60,7 +59,6 @@ func DefaultKeymap() Keymap {
 		NewItem:   key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new")),
 		Kill:      key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "kill")),
 		Rename:    key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "rename")),
-		KeepAwake: key.NewBinding(key.WithKeys("k"), key.WithHelp("k", "keep-awake")),
 		Snapshot:  key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "snapshot")),
 		OpenInApp: key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "open")),
 		EditInEd:  key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit")),

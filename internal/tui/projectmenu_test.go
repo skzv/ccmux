@@ -49,6 +49,26 @@ func TestProjectMenu_EmptyHasNoContent(t *testing.T) {
 	}
 }
 
+// TestProjectMenu_HistoryOnlyDefaultsToNewSession — a project with no
+// live tmux session but with past conversations should still make
+// "enter project" land on the action that creates the canonical
+// project session. The history remains available with arrow navigation.
+func TestProjectMenu_HistoryOnlyDefaultsToNewSession(t *testing.T) {
+	convs := []conversations.Conversation{
+		{ID: "conv1", Agent: agent.IDClaude},
+		{ID: "conv2", Agent: agent.IDClaude},
+	}
+	m := newProjectMenu(styles.Default(), "foo", "/p/foo", nil, convs)
+
+	if m.cursor != len(m.entries)-1 {
+		t.Fatalf("cursor = %d, want last row %d", m.cursor, len(m.entries)-1)
+	}
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if pick := drainPick(t, cmd); pick.Entry.kind != menuNewSession {
+		t.Errorf("default enter picked %v, want menuNewSession", pick.Entry.kind)
+	}
+}
+
 // TestProjectMenu_EnterPicksEntry — Enter on each row emits a
 // projectMenuPickMsg carrying that exact entry.
 func TestProjectMenu_EnterPicksEntry(t *testing.T) {

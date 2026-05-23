@@ -20,7 +20,6 @@ type SessionState struct {
 	Created     time.Time `json:"created"`      // session creation time
 	LastChange  time.Time `json:"last_change"`  // pane content last changed
 	PromptCount int       `json:"prompt_count"` // # of times we've seen a needs-input transition
-	KeepAwake   bool      `json:"keep_awake"`   // per-session "always keep awake" pin
 	// Agent is the AI agent driving this session, sourced from the
 	// project's .ccmux/agent sidecar. One of "claude" / "codex" /
 	// "antigravity" (or the legacy alias "gemini"). Empty for sessions
@@ -64,11 +63,9 @@ type SessionEvent struct {
 
 // NewSessionRequest is the body of POST /v1/sessions.
 type NewSessionRequest struct {
-	Project    string `json:"project"`     // project name (basename of path)
-	Path       string `json:"path"`        // working directory; defaults to ~/Projects/<project>
-	Continue   bool   `json:"continue"`    // start Claude with --continue
-	KeepAwake  bool   `json:"keep_awake"`  // pin this session immediately
-	FirstInput string `json:"first_input"` // initial prompt to feed Claude
+	Project  string `json:"project"`  // project name (basename of path)
+	Path     string `json:"path"`     // working directory; defaults to ~/Projects/<project>
+	Continue bool   `json:"continue"` // start Claude with --continue
 	// Name overrides the tmux session name. Empty falls back to the
 	// derived c-<project> from tmux.SessionNameForPath.
 	Name string `json:"name,omitempty"`
@@ -200,11 +197,6 @@ type PairTokenResponse struct {
 // RenameRequest is the body of POST /v1/sessions/{name}/rename.
 type RenameRequest struct {
 	Name string `json:"name"`
-}
-
-// KeepAwakeRequest is the body of POST /v1/sessions/{name}/keep-awake.
-type KeepAwakeRequest struct {
-	Enabled bool `json:"enabled"`
 }
 
 // SendKeysRequest is the body of POST /v1/sessions/{name}/send-keys.
