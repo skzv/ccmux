@@ -53,6 +53,7 @@ func (m antigravityConfigModel) Update(msg tea.Msg) (antigravityConfigModel, tea
 			cur, _ := antigravityconfig.EffectiveYoloMode()
 			if _, err := antigravityconfig.SetYoloMode(!cur); err != nil {
 				m.err = "set yolo: " + err.Error()
+				m.saveMsg = ""
 			} else {
 				m.saveMsg = fmt.Sprintf("Antigravity YOLO → %v", !cur)
 				m.savedAt = time.Now()
@@ -63,6 +64,7 @@ func (m antigravityConfigModel) Update(msg tea.Msg) (antigravityConfigModel, tea
 			next := nextAntigravityEffort()
 			if _, err := antigravityconfig.SetEffortLevel(next); err != nil {
 				m.err = "set effort: " + err.Error()
+				m.saveMsg = ""
 			} else {
 				m.saveMsg = "Antigravity effort → " + next
 				m.savedAt = time.Now()
