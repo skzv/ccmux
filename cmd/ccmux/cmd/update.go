@@ -1,8 +1,15 @@
-// `ccmux update` — pull the latest ccmux from its git checkout, rebuild,
-// install to ~/.local/bin, and reload the daemon. The flow assumes the
-// user installed via `git clone + make install`, which is the documented
-// path; for binary-distribution we'd publish releases and swap this for a
-// download step.
+// `ccmux update` — bring this machine's ccmux to the latest version
+// and restart the daemon. Three install paths are supported:
+//
+//   - Homebrew (auto-detected from the running binary's prefix): runs
+//     `brew update && brew upgrade ccmux`. No git checkout required.
+//   - git clone + make install (the source-build path): runs
+//     `git pull --ff-only && make install` in the auto-detected
+//     checkout.
+//   - One-line install.sh: not handled here today — re-run the same
+//     curl-pipe-sh command from the README.
+//
+// Pass --repo PATH to force the git path even on a brew install.
 package cmd
 
 import (
@@ -30,10 +37,17 @@ func newUpdateCmd() *cobra.Command {
 	)
 	c := &cobra.Command{
 		Use:   "update",
-		Short: "Pull latest, rebuild, install, and reload the daemon",
-		Long: `Locates the ccmux git checkout (the running binary's repo, falling
-back to ~/Projects/ccmux), runs git pull --ff-only, make install, then
-restarts the daemon under launchd/systemd so the new binary takes effect.
+		Short: "Bring ccmux to the latest version (Homebrew or git) and reload the daemon",
+		Long: `Detects how ccmux was installed and runs the appropriate update path:
+
+  - Homebrew (running binary lives under $(brew --prefix)/bin):
+    runs ` + "`brew update`" + ` then ` + "`brew upgrade ccmux`" + `.
+  - git clone + make install: locates the checkout (the running binary's
+    repo, falling back to ~/Projects/ccmux), runs ` + "`git pull --ff-only`" + `,
+    ` + "`make install`" + `.
+
+Either way ccmux restarts the daemon under launchd/systemd so the new
+binary takes effect.
 
 After a successful update ccmux offers to re-run the setup wizard so
 new config options introduced upstream (server mode toggle, new
@@ -41,8 +55,22 @@ prompts) can be reviewed. Pass --setup to skip the prompt and run
 setup automatically, or --no-setup-prompt to skip the prompt and
 NOT run setup.
 
+Pass --repo PATH to force the git path even on a Homebrew install.
 Use --dry-run to preview the commands without executing them.`,
 		RunE: func(_ *cobra.Command, _ []string) error {
+			// Homebrew path: if the running binary lives under a brew
+			// prefix and the user didn't force --repo, hand off to brew.
+			// `--skip-pull` doesn't map cleanly onto brew's flow (brew
+			// update is the closest analogue) so we just let it run.
+			exe, _ := os.Executable()
+			if repoFlag == "" && exe != "" && isHomebrewInstall(exe) {
+				if err := runBrewUpdate(exe, dryRun, noRestart); err != nil {
+					return err
+				}
+				return offerSetupRerun(runSetup, noSetupPrompt)
+			}
+
+			// Source path: git pull + make install.
 			repo, err := resolveRepo(repoFlag)
 			if err != nil {
 				return err
@@ -79,25 +107,7 @@ Use --dry-run to preview the commands without executing them.`,
 			fmt.Println("✓ ccmuxd restarted")
 			fmt.Println("✓ ccmux updated. Restart any open TUIs to pick up the new binary.")
 
-			// Offer to re-run setup. New ccmux versions sometimes add
-			// config prompts (e.g. server mode); the user who just
-			// upgraded probably wants the chance to answer the new
-			// questions without remembering they exist.
-			if runSetup || (!noSetupPrompt && promptYesNo("Re-run `ccmux setup` to review any new options?")) {
-				fmt.Println()
-				ccmuxBin, err := os.Executable()
-				if err != nil {
-					ccmuxBin = "ccmux"
-				}
-				setup := exec.Command(ccmuxBin, "setup")
-				setup.Stdin = os.Stdin
-				setup.Stdout = os.Stdout
-				setup.Stderr = os.Stderr
-				if err := setup.Run(); err != nil {
-					return fmt.Errorf("ccmux setup: %w", err)
-				}
-			}
-			return nil
+			return offerSetupRerun(runSetup, noSetupPrompt)
 		},
 	}
 	c.Flags().StringVar(&repoFlag, "repo", "", "path to the ccmux git checkout (default: auto-detect)")
@@ -333,6 +343,114 @@ func remoteTrackingFor(repo, branch string) string {
 func remoteRefExists(repo, ref string) bool {
 	cmd := exec.Command("git", "-C", repo, "rev-parse", "--verify", "--quiet", "refs/remotes/"+ref)
 	return cmd.Run() == nil
+}
+
+// runBrewUpdate handles the Homebrew install path: brew update (refresh
+// the tap formulae), brew upgrade ccmux (install the new version),
+// daemon restart. Mirrors the success/failure messaging of the git
+// path so the user sees the same shape regardless of how they installed.
+func runBrewUpdate(exe string, dryRun, noRestart bool) error {
+	fmt.Printf("ccmux update: Homebrew install detected at %s\n", exe)
+	// brew update can transiently fail (rate limit, no network) and
+	// brew upgrade often succeeds anyway against the locally-cached
+	// formula. Log + continue rather than failing hard.
+	if err := runStep("", dryRun, "brew", "update"); err != nil {
+		fmt.Printf("note: brew update failed (%v); continuing with brew upgrade\n", err)
+	}
+	if err := runStep("", dryRun, "brew", "upgrade", "ccmux"); err != nil {
+		return err
+	}
+	if noRestart {
+		fmt.Println("✓ ccmux upgraded; --no-restart skipped daemon reload")
+		return nil
+	}
+	if dryRun {
+		fmt.Println("[dry-run] would restart ccmuxd via daemonservice.Restart()")
+		return nil
+	}
+	if _, err := daemonservice.Restart(); err != nil {
+		fmt.Printf("warning: daemon restart failed: %v\n", err)
+		fmt.Println("you can restart manually with `ccmux daemon install` (or launchctl/systemctl).")
+		return nil
+	}
+	fmt.Println("✓ ccmuxd restarted")
+	fmt.Println("✓ ccmux upgraded. Restart any open TUIs to pick up the new binary.")
+	return nil
+}
+
+// offerSetupRerun is the shared "re-run setup?" prompt called by both
+// the brew and git paths. Pulled out so a new install path doesn't have
+// to remember to add the prompt itself.
+func offerSetupRerun(runSetup, noSetupPrompt bool) error {
+	if !runSetup && (noSetupPrompt || !promptYesNo("Re-run `ccmux setup` to review any new options?")) {
+		return nil
+	}
+	fmt.Println()
+	ccmuxBin, err := os.Executable()
+	if err != nil {
+		ccmuxBin = "ccmux"
+	}
+	setup := exec.Command(ccmuxBin, "setup")
+	setup.Stdin = os.Stdin
+	setup.Stdout = os.Stdout
+	setup.Stderr = os.Stderr
+	if err := setup.Run(); err != nil {
+		return fmt.Errorf("ccmux setup: %w", err)
+	}
+	return nil
+}
+
+// isHomebrewInstall reports whether `exe` lives under any standard
+// Homebrew installation prefix. Resolves symlinks first because brew
+// links $(prefix)/bin/ccmux → $(prefix)/Cellar/ccmux/X.Y.Z/bin/ccmux.
+func isHomebrewInstall(exe string) bool {
+	real, err := filepath.EvalSymlinks(exe)
+	if err != nil {
+		real = exe // fall back to the original path
+	}
+	return isUnderHomebrewPrefix(real, homebrewPrefixes())
+}
+
+// isUnderHomebrewPrefix is the testable core of isHomebrewInstall —
+// a pure string-prefix check against a caller-provided prefix list.
+func isUnderHomebrewPrefix(exe string, prefixes []string) bool {
+	for _, prefix := range prefixes {
+		if prefix == "" {
+			continue
+		}
+		if strings.HasPrefix(exe, prefix+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// homebrewPrefixes returns the set of locations where Homebrew installs
+// binaries on this host. The hard-coded list covers the conventional
+// macOS (Apple Silicon /opt/homebrew, Intel /usr/local) and Linuxbrew
+// paths; `brew --prefix` adds whatever brew actually thinks its prefix
+// is (covers unusual installs at the cost of a fast subprocess).
+func homebrewPrefixes() []string {
+	prefixes := []string{
+		"/opt/homebrew",
+		"/usr/local",
+		"/home/linuxbrew/.linuxbrew",
+	}
+	if out, err := exec.Command("brew", "--prefix").Output(); err == nil {
+		if p := strings.TrimSpace(string(out)); p != "" {
+			seen := false
+			for _, existing := range prefixes {
+				if existing == p {
+					seen = true
+					break
+				}
+			}
+			if !seen {
+				prefixes = append(prefixes, p)
+			}
+		}
+	}
+	return prefixes
 }
 
 func runStep(cwd string, dryRun bool, name string, args ...string) error {

@@ -419,6 +419,54 @@ func TestEnsureGoodUpstream_UnfixableIsNoOp(t *testing.T) {
 	}
 }
 
+// TestIsUnderHomebrewPrefix covers the pure prefix-matching logic
+// that drives Homebrew detection in `ccmux update`. The function has
+// to recognize both macOS prefixes (Apple Silicon /opt/homebrew,
+// Intel /usr/local) and Linuxbrew, but NOT misfire on similar-looking
+// paths like /opt/homebrew-tap or /usr/local-extras, or on the
+// install-script default of ~/.local/bin/.
+func TestIsUnderHomebrewPrefix(t *testing.T) {
+	prefixes := []string{
+		"/opt/homebrew",
+		"/usr/local",
+		"/home/linuxbrew/.linuxbrew",
+	}
+	cases := []struct {
+		name string
+		exe  string
+		want bool
+	}{
+		// Hit
+		{"apple silicon cellar", "/opt/homebrew/Cellar/ccmux/0.1.1/bin/ccmux", true},
+		{"apple silicon bin symlink", "/opt/homebrew/bin/ccmux", true},
+		{"intel cellar", "/usr/local/Cellar/ccmux/0.1.1/bin/ccmux", true},
+		{"linuxbrew", "/home/linuxbrew/.linuxbrew/bin/ccmux", true},
+		// Miss — close but not under any prefix
+		{"install.sh default", "/Users/alice/.local/bin/ccmux", false},
+		{"system /usr/bin", "/usr/bin/ccmux", false},
+		{"prefix-collision /opt/homebrew-tap", "/opt/homebrew-tap/bin/ccmux", false},
+		{"prefix-collision /usr/local-extras", "/usr/local-extras/bin/ccmux", false},
+		{"empty exe", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isUnderHomebrewPrefix(tc.exe, prefixes); got != tc.want {
+				t.Errorf("isUnderHomebrewPrefix(%q) = %v, want %v", tc.exe, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestIsUnderHomebrewPrefix_SkipsEmpty — an empty entry in the
+// prefix list mustn't make every absolute path match (an empty
+// prefix + "/" would prefix-match "/anything"). Guards a regression
+// where homebrewPrefixes() picks up an empty `brew --prefix` output.
+func TestIsUnderHomebrewPrefix_SkipsEmpty(t *testing.T) {
+	if isUnderHomebrewPrefix("/usr/bin/ccmux", []string{""}) {
+		t.Error("empty prefix matched /usr/bin/ccmux — would treat every install as Homebrew")
+	}
+}
+
 // TestEnsureGoodUpstream_NoUpstreamSetsOriginSameName — a branch
 // with NO upstream at all + a same-named remote branch existing
 // gets its upstream set automatically. Less common than the
