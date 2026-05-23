@@ -118,7 +118,9 @@ Attaching to an auto-discovered peer execs `ssh -t <host> -- tmux attach -t <nam
 ### 🏗️ New projects
 - `ccmux new <name>` — creates the project directory and starts an agent session in it. That's all it does: **no `CLAUDE.md`, no `docs/` tree, no `git init`.** Run `/init`, `openspec`, or `git init` yourself inside the session — bootstrapping is the agent's job, not ccmux's. The "n" form picker lets you choose Claude / Codex / Antigravity, and `ccmux new --agent <id>` is the CLI equivalent.
 - **Open a project = see its history.** Pressing Enter on a project in the Projects tab opens a menu listing its running sessions *and* its past agent conversations, so you can attach, resume an earlier conversation, or start fresh in one place. `ccmux project <name>` prints the same from the CLI.
+- **Conversations list hides automation noise by default.** Headless agent runs — `claude -p` / SDK invocations (`entrypoint: "sdk-cli"`) and `codex exec` runs (`originator: "codex_exec"`) — are filtered out of the Conversations tab, the project menu, and `ccmux list-conversations` so a user who wires agents into scripts doesn't drown in one-shot rows. Antigravity transcripts carry no headless tag, so those rows are always shown. Press `H` in the Conversations screen to toggle headless back on, pass `--include-headless` to the CLI, or set `[conversations] show_headless = true` in `~/.config/ccmux/config.toml` to opt back in permanently.
 - **Create on any device.** In the Projects tab, press `n` and pick which device should host the new project (local or any reachable peer running `ccmuxd`). The remote daemon creates the directory + starts the session natively, and ccmux ssh-attaches you in.
+- **Every subdirectory of your projects root shows up automatically.** No `.git` / `CLAUDE.md` / marker file required — if it's a directory under `~/Projects/` (or whatever you've configured), it appears. The `git · CLAUDE · docs/` tags on each row still tell you at a glance which directories are real software projects vs scratch dirs.
 
 ### 🤝 Multi-agent (Claude, Codex, Antigravity)
 - Per-project agent stored in `<project>/.ccmux/agent` — sticky, survives across sessions
@@ -211,7 +213,6 @@ Useful keys on the Sessions screen:
 - `Enter` — attach
 - `x` — kill the highlighted session
 - `R` — rename
-- `k` — pin keep-awake (the daemon holds a `caffeinate -s` while pinned)
 - `?` — full keymap
 
 ### 3. Working from your phone (≈3 min, one-time setup)
@@ -311,7 +312,25 @@ ccmux uninstall       # clean removal
 
 ## Install
 
-**From source (Homebrew tap coming with v0.1 release):**
+**Homebrew (macOS, Linuxbrew on Linux):**
+
+```bash
+brew install skzv/tap/ccmux
+ccmux setup
+```
+
+`brew install` pulls cross-compiled binaries from the [GitHub Release](https://github.com/skzv/ccmux/releases/latest) and wires the runtime deps (`tmux`, `mosh`, `ripgrep`). `ccmux setup` then runs the interactive wizard for the things brew can't cover (Tailscale, the agent CLIs, the ccmuxd background service).
+
+**One-line install script (no Homebrew):**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/skzv/ccmux/main/scripts/install.sh | sh
+ccmux setup
+```
+
+Downloads the latest release tarball into `~/.local/bin/`, strips the macOS quarantine attribute automatically, then drops you at the wizard.
+
+**From source:**
 
 ```bash
 git clone https://github.com/skzv/ccmux.git
@@ -322,15 +341,23 @@ make setup
 `make setup` builds, installs `ccmux` + `ccmuxd` into `~/.local/bin/`, then runs the wizard. Idempotent — re-run any time.
 
 Requirements:
-- Go 1.26+ (build only)
+- Go 1.26+ (source builds only — `brew install` and `install.sh` don't need it)
 - macOS, Linux, or Windows via WSL2 (see [Windows guide](docs/04_Guides/Windows.md) — native Windows tracks as an open TODO)
-- `~/.local/bin` on your PATH
+- `~/.local/bin` on your PATH (for source / install-script paths)
 
 ```bash
 ccmux          # launch the TUI
 ccmux setup    # re-run the wizard
 ccmux doctor   # health check
 ```
+
+> **macOS, raw release tarballs:** if you grab a binary tarball directly from [Releases](https://github.com/skzv/ccmux/releases) instead of going through `brew install` / `make setup` / `scripts/install.sh`, macOS may refuse to open it (*"cannot verify the developer"*). Strip the quarantine attribute once and you're done:
+>
+> ```bash
+> xattr -d com.apple.quarantine ./ccmux ./ccmuxd
+> ```
+>
+> All three supported install paths above handle this for you. Apple code-signing + notarization will land here once the project's Apple Developer account is approved.
 
 ## Uninstall
 

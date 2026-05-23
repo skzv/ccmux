@@ -154,7 +154,6 @@ GET    /v1/sessions/{name}                → SessionState
 POST   /v1/sessions                       → SessionState         (create)
 POST   /v1/sessions/{name}/kill           → 204
 POST   /v1/sessions/{name}/snapshot       → SnapshotID
-POST   /v1/sessions/{name}/keep-awake     → 204                  (toggle pin)
 GET    /v1/snapshots                      → []Snapshot
 GET    /v1/metrics?since=…                → AggregatedMetrics
 GET    /v1/health                         → {ok, hostname, version, sessions}
@@ -166,7 +165,7 @@ Same schema on both transports. The client uses the local socket when possible (
 Why the daemon at all (vs. TUI shelling out to tmux every render)?
 
 1. The poll loop runs once per host, not once per TUI render. Cheaper.
-2. State includes daemon-only derived fields (idle duration, last-bell time, prompt count, keep-awake pins).
+2. State includes daemon-only derived fields (idle duration, last-bell time, prompt count).
 3. The sleep-prevention `caffeinate` lock needs a long-lived process to hold it.
 4. Server mode needs a long-lived HTTP listener.
 
@@ -182,7 +181,6 @@ name    = "mini"
 address = "mini.tail-xxxxx.ts.net"
 user    = "skz"
 mosh    = true
-keep_awake_on_remote = false   # honor remote's policy, don't override
 
 [[host]]
 name    = "lambda-a100"
@@ -228,8 +226,15 @@ Each tracked session is in exactly one of:
 | `~/.local/state/ccmux/ccmuxd.sock` | Daemon Unix socket. |
 | `~/.local/state/ccmux/ccmuxd.log` | Daemon log (rotated by lumberjack). |
 | `~/.local/state/ccmux/ccmuxd.pid` | Daemon PID file. |
+| `<project>/.ccmux/agent` | Per-project sidecar recording which AI agent (claude / codex / antigravity) the project runs. Written by scaffold and the Projects-screen `a` switcher. |
 
 The XDG-ish split (`config` for user-editable, `share` for app data, `state` for runtime) is intentional. On macOS the canonical place would be `~/Library`, but we'd lose Linux portability. XDG paths work on both.
+
+## Project discovery
+
+`project.Discover(root)` walks the projects root one level deep and surfaces every non-hidden directory as a project — no marker file required. The `HasGit` / `HasCM` / `HasDocs` flags on `Project` still record which of `.git/`, `CLAUDE.md`, and `docs/` are present so the TUI can render them as visual tags ("git · CLAUDE · docs/") — useful for the eye to tell "real software project" from "scratch directory."
+
+The rule used to require one of those markers, which left worktrees without `CLAUDE.md`, freshly-cloned repos, and scratch dirs invisible to ccmux with no in-app fix. The simpler "every directory shows up" rule matches what users actually mean by "everything in my projects folder," and the visual tags carry the marker information for sorting/filtering purposes without acting as a gate.
 
 ## tmux Naming Convention
 

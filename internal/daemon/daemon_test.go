@@ -29,7 +29,7 @@ func TestProtocol_SessionStateRoundTrip(t *testing.T) {
 		Name: "c-foo", Host: "local", Project: "foo", Path: "/Users/skz/Projects/foo",
 		State: "needs_input", Attached: true, Windows: 3,
 		Created: now, LastChange: now,
-		PromptCount: 42, KeepAwake: true,
+		PromptCount: 42,
 	}
 	b, err := json.Marshal(in)
 	if err != nil {
@@ -172,7 +172,7 @@ func TestClient_PostJSONAndDecodeResponse(t *testing.T) {
 	})
 	c := spawnFakeDaemon(t, mux)
 
-	got, err := c.NewSession(context.Background(), NewSessionRequest{Project: "x", FirstInput: "hello"})
+	got, err := c.NewSession(context.Background(), NewSessionRequest{Project: "x"})
 	if err != nil {
 		t.Fatal(err)
 	}

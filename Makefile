@@ -1,4 +1,4 @@
-.PHONY: build install setup uninstall run test test-e2e lint clean fmt vet daemon tui check-go bootstrap fuzz fuzz-quick tapes tapes-check release-check release-snapshot
+.PHONY: build install setup uninstall run test test-e2e lint clean fmt vet daemon tui check-go bootstrap fuzz fuzz-quick tapes tapes-check release-check release-snapshot brew-test
 
 BIN_DIR    := bin
 INSTALL_DIR := $(HOME)/.local/bin
@@ -180,6 +180,15 @@ release-check:
 release-snapshot: check-go
 	@command -v goreleaser >/dev/null 2>&1 || { echo "release: goreleaser not installed — brew install goreleaser"; exit 1; }
 	goreleaser release --snapshot --clean
+
+# brew-test — install the published formula into a sandbox HOME,
+# run `ccmux --help` / `ccmux doctor`, then uninstall. Useful after
+# a release to confirm `brew install skzv/tap/ccmux` actually works
+# without disturbing your dev install or running ccmuxd. See
+# scripts/brew-test.sh for the isolation model + --tap / --keep flags.
+brew-test:
+	@command -v brew >/dev/null 2>&1 || { echo "brew-test: brew not installed"; exit 1; }
+	bash scripts/brew-test.sh
 
 # --- Demo tapes -------------------------------------------------------
 # Renders every CUJ tape to docs/vhs/out/. Requires: make build, vhs, ffmpeg.

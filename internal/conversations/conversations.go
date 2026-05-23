@@ -71,6 +71,53 @@ type Conversation struct {
 	// Path is the absolute filesystem path to the transcript file.
 	// Useful for "open in editor" actions and diagnostic output.
 	Path string
+
+	// Entrypoint is the agent's own tag for how the session was
+	// launched. Per-agent semantics — IsHeadless interprets the value
+	// in the context of c.Agent:
+	//
+	//   Claude (sourced from the `entrypoint` field on the first user
+	//   event):
+	//     "cli"        — interactive `claude` session.
+	//     "sdk-cli"    — headless / SDK (`claude -p`, the SDK,
+	//                    automation wrappers).
+	//
+	//   Codex (sourced from `payload.originator` on the first
+	//   `session_meta` event):
+	//     "codex-tui"  — interactive `codex` session.
+	//     "codex_exec" — headless `codex exec` run.
+	//
+	//   Antigravity:
+	//     ""           — always. Transcripts are opaque protobuf so
+	//                    we can't read a launch-mode tag.
+	//
+	//   "" on Claude/Codex means the parser didn't find the tag
+	//   (e.g. a metadata-only stub, an older transcript format).
+	//
+	// Drives the default "hide automation noise" filter on the
+	// conversations list. See Options.ExcludeHeadless and IsHeadless.
+	Entrypoint string
+}
+
+// IsHeadless reports whether this conversation was a headless agent
+// invocation (`claude -p`, the SDK, `codex exec`, …) rather than an
+// interactive terminal session. The mapping is per-agent because each
+// agent uses a different tag:
+//
+//   - Claude    → entrypoint == "sdk-cli"
+//   - Codex     → originator == "codex_exec"
+//   - Antigravity → never (opaque .pb transcripts carry no signal)
+//
+// Adding a new headless mode to an existing agent only needs an extra
+// case here — every TUI/CLI surface routes through this predicate.
+func (c Conversation) IsHeadless() bool {
+	switch c.Agent {
+	case agent.IDClaude:
+		return c.Entrypoint == "sdk-cli"
+	case agent.IDCodex:
+		return c.Entrypoint == "codex_exec"
+	}
+	return false
 }
 
 // ResumeArgs returns the argv vector to launch the agent that owns
@@ -166,6 +213,20 @@ type Options struct {
 	// Since filters out conversations whose LastActivity is older than
 	// `time.Now().Sub(Since)` durations. Zero means no filter.
 	Since time.Duration
+
+	// ExcludeHeadless drops conversations launched in headless / SDK
+	// mode (anything where Conversation.IsHeadless reports true).
+	// These accumulate fast when users wire Claude into automation —
+	// shell scripts, watchers, the SDK — so the TUI and CLI hide
+	// them by default to keep the conversations list usable as a
+	// record of interactive work. Set true at the caller to apply.
+	//
+	// The package itself stays policy-neutral: zero value preserves
+	// the existing "show everything" behavior so external callers
+	// don't silently lose rows on upgrade. The TUI / CLI pass true
+	// (overridable by the user) — see internal/config.ConversationsConfig
+	// and the `--include-headless` flag on `ccmux list-conversations`.
+	ExcludeHeadless bool
 }
 
 // All returns conversations from every supported agent, sorted by
@@ -212,6 +273,16 @@ func All(opts Options) ([]Conversation, error) {
 		filtered := all[:0]
 		for _, c := range all {
 			if c.LastActivity.After(cutoff) {
+				filtered = append(filtered, c)
+			}
+		}
+		all = filtered
+	}
+
+	if opts.ExcludeHeadless {
+		filtered := all[:0]
+		for _, c := range all {
+			if !c.IsHeadless() {
 				filtered = append(filtered, c)
 			}
 		}
@@ -323,6 +394,12 @@ func readClaudeTranscript(path, project string) Conversation {
 			if c.Preview == "" {
 				c.Preview = truncatedPreview(ev.MessageContent())
 			}
+			// First user event with an entrypoint wins. Claude tags
+			// every user event identically within a session, so we
+			// don't need to scan past the first hit.
+			if c.Entrypoint == "" && ev.Entrypoint != "" {
+				c.Entrypoint = ev.Entrypoint
+			}
 		}
 		if ts := ev.Timestamp(); !ts.IsZero() && ts.After(latestEvent) {
 			latestEvent = ts
@@ -356,6 +433,11 @@ type claudeEvent struct {
 	// at the time of the prompt. More reliable than decoding the
 	// project directory name (which is a lossy encoding of the path).
 	Cwd string `json:"cwd"`
+	// Entrypoint is Claude's launch-mode tag, present on user events.
+	// "cli" for interactive sessions, "sdk-cli" for headless / SDK
+	// runs (`claude -p`, the SDK, automation wrappers). Drives the
+	// default "hide automation noise" filter — see Conversation.IsHeadless.
+	Entrypoint string `json:"entrypoint"`
 }
 
 // MessageContent extracts the user-visible text from the embedded
@@ -489,14 +571,22 @@ func readCodexTranscript(path string) Conversation {
 		if err := json.Unmarshal(sc.Bytes(), &ev); err != nil {
 			continue
 		}
+		// session_meta is always the first event in a Codex rollout
+		// and carries the launch-mode tag in payload.originator
+		// ("codex_exec" for headless `codex exec`, "codex-tui" for an
+		// interactive session). Capture once; subsequent events don't
+		// re-state it.
+		if ev.Type == "session_meta" && c.Entrypoint == "" && ev.Payload.Originator != "" {
+			c.Entrypoint = ev.Payload.Originator
+		}
 		if ev.Cwd != "" && c.Project == "" {
 			c.Project = ev.Cwd
 		}
 		if ev.Type == "user_message" && c.Preview == "" {
 			c.Preview = truncatedPreview(ev.Text)
 		}
-		// Stop scanning once we have both project and preview.
-		if c.Project != "" && c.Preview != "" {
+		// Stop scanning once we have entrypoint, project, and preview.
+		if c.Entrypoint != "" && c.Project != "" && c.Preview != "" {
 			break
 		}
 	}
@@ -506,9 +596,21 @@ func readCodexTranscript(path string) Conversation {
 // codexEvent — permissive view over Codex's rollout-event shape.
 // Only the fields we need for the conversation row.
 type codexEvent struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
-	Cwd  string `json:"cwd"`
+	Type    string            `json:"type"`
+	Text    string            `json:"text"`
+	Cwd     string            `json:"cwd"`
+	Payload codexEventPayload `json:"payload"`
+}
+
+// codexEventPayload — the nested payload Codex wraps every event in.
+// session_meta's payload carries the originator + source fields that
+// distinguish headless `codex exec` from interactive `codex` runs.
+type codexEventPayload struct {
+	// Originator is Codex's launch-mode tag on the session_meta event:
+	// "codex_exec" for headless `codex exec`, "codex-tui" for the
+	// interactive TUI. Mirrors Claude's `entrypoint` field; surfaces
+	// on Conversation.Entrypoint and drives IsHeadless.
+	Originator string `json:"originator"`
 }
 
 // ListAntigravity walks ~/.gemini/antigravity-cli/conversations/<uuid>.pb.
