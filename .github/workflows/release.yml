@@ -57,9 +57,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: brew-test
-        run: bash scripts/brew-test.sh
-        env:
-          # gh inside the script needs write-irrelevant *read* access
-          # to clone the private tap. Same PAT goreleaser uses for the
-          # push side; works for clone too.
-          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+        # --tap mode: install through the real public tap path, exactly
+        # what a random user runs. No gh clone needed now that the tap
+        # is public, so no PAT either.
+        run: bash scripts/brew-test.sh --tap
