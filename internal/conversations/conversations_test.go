@@ -500,3 +500,158 @@ func TestDelete_UnknownAgent(t *testing.T) {
 		t.Errorf("unknown-agent guard failed — file was deleted: %v", err)
 	}
 }
+
+// TestListClaude_CapturesEntrypoint — Claude tags every user event with
+// `entrypoint` ("cli" for interactive, "sdk-cli" for headless / SDK /
+// `claude -p`). readClaudeTranscript must surface that tag on the
+// Conversation so the filter knows what to hide.
+//
+// Three rows pinned: interactive (cli), headless (sdk-cli), and an
+// untagged transcript (e.g. an ai-title-only metadata stub) where
+// the field stays empty.
+func TestListClaude_CapturesEntrypoint(t *testing.T) {
+	home := t.TempDir()
+	writeFile(t,
+		filepath.Join(home, ".claude/projects/-Users-skz-Projects-foo/interactive.jsonl"),
+		`{"type":"user","entrypoint":"cli","message":{"role":"user","content":"hi"},"timestamp":"2026-04-30T10:00:00Z"}`+"\n",
+	)
+	writeFile(t,
+		filepath.Join(home, ".claude/projects/-Users-skz-Projects-foo/headless.jsonl"),
+		`{"type":"user","entrypoint":"sdk-cli","message":{"role":"user","content":"automated"},"timestamp":"2026-04-30T10:00:00Z"}`+"\n",
+	)
+	writeFile(t,
+		filepath.Join(home, ".claude/projects/-Users-skz-Projects-foo/titleonly.jsonl"),
+		// No user event — just an ai-title stub. Entrypoint must stay "".
+		`{"type":"ai-title","aiTitle":"some title","sessionId":"titleonly"}`+"\n",
+	)
+
+	got, err := ListClaude(home)
+	if err != nil {
+		t.Fatalf("ListClaude: %v", err)
+	}
+	byID := map[string]Conversation{}
+	for _, c := range got {
+		byID[c.ID] = c
+	}
+	cases := []struct {
+		id   string
+		want string
+	}{
+		{"interactive", "cli"},
+		{"headless", "sdk-cli"},
+		{"titleonly", ""},
+	}
+	for _, tc := range cases {
+		c, ok := byID[tc.id]
+		if !ok {
+			t.Errorf("missing conversation %q in result", tc.id)
+			continue
+		}
+		if c.Entrypoint != tc.want {
+			t.Errorf("%s: Entrypoint = %q, want %q", tc.id, c.Entrypoint, tc.want)
+		}
+	}
+}
+
+// TestConversation_IsHeadless pins the headless predicate: only the
+// literal "sdk-cli" tag counts as headless. Future Claude versions may
+// introduce other entrypoints; this test will surface a needed update
+// the moment a new value starts appearing.
+func TestConversation_IsHeadless(t *testing.T) {
+	cases := []struct {
+		ep   string
+		want bool
+	}{
+		{"sdk-cli", true},
+		{"cli", false},
+		{"", false},
+		{"unknown-future-value", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.ep, func(t *testing.T) {
+			got := Conversation{Entrypoint: tc.ep}.IsHeadless()
+			if got != tc.want {
+				t.Errorf("IsHeadless(%q) = %v, want %v", tc.ep, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestAll_ExcludeHeadlessFiltersSDKRows — the main integration check:
+// All(Options{ExcludeHeadless: true}) drops sdk-cli rows but keeps both
+// interactive (cli) and unmarked rows. The unmarked-row case is what
+// keeps Codex / Antigravity from being collateral damage — those agents
+// don't tag entrypoint, so leaving them visible is the right default.
+func TestAll_ExcludeHeadlessFiltersSDKRows(t *testing.T) {
+	home := t.TempDir()
+	ts := func(min int) string {
+		return time.Date(2026, 4, 30, 10, min, 0, 0, time.UTC).Format(time.RFC3339Nano)
+	}
+	writeFile(t,
+		filepath.Join(home, ".claude/projects/-x/interactive.jsonl"),
+		`{"type":"user","entrypoint":"cli","message":{"role":"user","content":"a"},"timestamp":"`+ts(3)+`"}`+"\n",
+	)
+	writeFile(t,
+		filepath.Join(home, ".claude/projects/-x/headless.jsonl"),
+		`{"type":"user","entrypoint":"sdk-cli","message":{"role":"user","content":"b"},"timestamp":"`+ts(2)+`"}`+"\n",
+	)
+	writeFile(t,
+		filepath.Join(home, ".gemini/antigravity-cli/conversations/agy.pb"),
+		"opaque",
+	)
+
+	all, err := All(Options{HomeDir: home})
+	if err != nil {
+		t.Fatalf("All (no filter): %v", err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("baseline len = %d, want 3 (no filter should keep everything)", len(all))
+	}
+
+	filtered, err := All(Options{HomeDir: home, ExcludeHeadless: true})
+	if err != nil {
+		t.Fatalf("All (filter): %v", err)
+	}
+	if len(filtered) != 2 {
+		t.Fatalf("filtered len = %d, want 2 (headless dropped) — got: %+v", len(filtered), filtered)
+	}
+	for _, c := range filtered {
+		if c.IsHeadless() {
+			t.Errorf("headless row leaked through filter: %+v", c)
+		}
+	}
+	// Antigravity (no entrypoint field) must still be present — the
+	// filter is targeted at sdk-cli, not "anything without a cli tag."
+	foundAgy := false
+	for _, c := range filtered {
+		if c.Agent == agent.IDAntigravity {
+			foundAgy = true
+		}
+	}
+	if !foundAgy {
+		t.Error("Antigravity row was wrongly filtered — only sdk-cli should drop")
+	}
+}
+
+// TestAll_ExcludeHeadlessDefaultsToOff — backwards-compatibility pin.
+// Zero-value Options must return every row, including headless ones.
+// External callers that don't know about this flag must keep seeing
+// everything; the new "hide by default" policy lives in the TUI / CLI,
+// not the package.
+func TestAll_ExcludeHeadlessDefaultsToOff(t *testing.T) {
+	home := t.TempDir()
+	writeFile(t,
+		filepath.Join(home, ".claude/projects/-x/headless.jsonl"),
+		`{"type":"user","entrypoint":"sdk-cli","message":{"role":"user","content":"a"},"timestamp":"2026-04-30T10:00:00Z"}`+"\n",
+	)
+	got, err := All(Options{HomeDir: home})
+	if err != nil {
+		t.Fatalf("All: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1 — zero-value Options should not filter", len(got))
+	}
+	if !got[0].IsHeadless() {
+		t.Errorf("expected the headless row to be present; got %+v", got[0])
+	}
+}

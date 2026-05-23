@@ -32,6 +32,9 @@ type Keymap struct {
 	Snapshot  key.Binding
 	OpenInApp key.Binding
 	EditInEd  key.Binding
+
+	// Conversations-screen actions
+	ToggleHeadless key.Binding
 }
 
 // DefaultKeymap returns ccmux's canonical bindings. Vim-style and arrow keys
@@ -62,5 +65,7 @@ func DefaultKeymap() Keymap {
 		Snapshot:  key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "snapshot")),
 		OpenInApp: key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "open")),
 		EditInEd:  key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit")),
+
+		ToggleHeadless: key.NewBinding(key.WithKeys("H"), key.WithHelp("H", "toggle headless")),
 	}
 }

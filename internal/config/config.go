@@ -22,6 +22,7 @@ type Config struct {
 	Notes         NotesConfig         `toml:"notes"`
 	Notifications NotificationsConfig `toml:"notifications"`
 	Sessions      SessionsConfig      `toml:"sessions"`
+	Conversations ConversationsConfig `toml:"conversations"`
 	Agents        AgentsConfig        `toml:"agents"`
 	Update        UpdateConfig        `toml:"update"`
 	Subscription  SubscriptionConfig  `toml:"subscription"`
@@ -86,6 +87,23 @@ type SessionsConfig struct {
 // mode through one predicate instead of string-comparing inline.
 func (s SessionsConfig) DetachOthersOnAttach() bool {
 	return strings.EqualFold(strings.TrimSpace(s.AttachMode), "exclusive")
+}
+
+// ConversationsConfig controls the past-conversations list shown in
+// the TUI and printed by `ccmux list-conversations`. The list pulls
+// from every agent's on-disk transcripts (Claude / Codex / Antigravity),
+// so it accumulates indefinitely; these knobs are how the user keeps
+// it useful as automation noise piles up.
+type ConversationsConfig struct {
+	// ShowHeadless includes headless / SDK conversations in the list.
+	// Default false: hide them. Claude tags every transcript with
+	// `entrypoint: "cli"` for interactive sessions and `"sdk-cli"` for
+	// `claude -p` / SDK / automation invocations; the latter routinely
+	// dwarfs the former for users who wire Claude into scripts. Set
+	// true to see everything, or toggle live in the Conversations
+	// screen with H. CLI mirror: `--include-headless` on
+	// `ccmux list-conversations`.
+	ShowHeadless bool `toml:"show_headless"`
 }
 
 // AgentsConfig holds the cross-app default-agent preference and

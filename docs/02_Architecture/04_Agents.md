@@ -80,6 +80,46 @@ boolean, and dashboard row ordering don't have to change.
   tag in muted styling. Claude rows show nothing (the 95% case stays
   visually clean).
 
+## Conversations: hiding automation noise
+
+The Conversations screen and `ccmux list-conversations` enumerate every
+on-disk transcript across all three agents. For users who wire Claude
+into automation (shell wrappers, the SDK, `claude -p` one-shots) the
+list is dominated by single-turn rows that swamp the actual interactive
+work — sometimes 20%+ of every transcript on disk.
+
+Claude tags every user event in the JSONL transcript with an
+`entrypoint` field:
+
+- `"cli"` — interactive `claude` session in a terminal.
+- `"sdk-cli"` — headless run via `claude -p`, the SDK, or anything
+  that calls Claude non-interactively.
+
+`Conversation.IsHeadless()` returns true for the `sdk-cli` case, and
+`conversations.All(Options{ExcludeHeadless: true})` filters those rows
+out after the sort. The package itself stays policy-neutral
+(zero-value Options preserves the old "show everything" behavior so
+external callers don't silently lose rows); the policy lives in the
+TUI and CLI layers, both of which exclude headless rows by default:
+
+- **TUI** — `internal/tui/conversations.go` carries a `showHeadless`
+  flag seeded from `config.Conversations.ShowHeadless`. The H keybind
+  flips it live, the bottom-of-screen hint surfaces the current state,
+  and the detail pane marks headless rows as `headless / SDK` so a
+  user who's opted them in knows what they're resuming. The
+  per-project menu (Enter on a project row) honors the same default.
+- **CLI** — `ccmux list-conversations` and `ccmux project <name>`
+  read the same config, plus `list-conversations --include-headless`
+  for a one-shot override. `ccmux resume` without an ID also skips
+  headless rows when picking the most-recent fallback (a bare
+  `ccmux resume` shouldn't drop the user into a `claude -p` replay);
+  resuming by explicit ID always works.
+
+Codex and Antigravity don't carry an entrypoint field, so their rows
+always report `IsHeadless()=false` and are never filtered by this
+toggle. If those agents later add their own headless markers,
+`IsHeadless()` is the one place to teach them.
+
 ## What's deliberately not abstracted (v1)
 
 - **Usage panel** — `internal/claudeusage` still walks `~/.claude/projects/*/*.jsonl`

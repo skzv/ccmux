@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/skzv/ccmux/internal/agent"
+	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/conversations"
 	"github.com/skzv/ccmux/internal/tmux"
 )
@@ -46,6 +47,9 @@ Forms:
 Use ` + "`ccmux list-conversations`" + ` to discover IDs.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
+			// Always fetch the full list — when the user passes an
+			// explicit ID we need to find it regardless of headless
+			// status; the default-most-recent path filters below.
 			list, err := conversations.All(conversations.Options{})
 			if err != nil {
 				return fmt.Errorf("list conversations: %w", err)
@@ -61,6 +65,27 @@ Use ` + "`ccmux list-conversations`" + ` to discover IDs.`,
 					return fmt.Errorf("no conversation with id %q (use `ccmux list-conversations` to list)", args[0])
 				}
 			} else {
+				// Bare `ccmux resume` shouldn't drop the user into a
+				// `claude -p` automation run. Filter headless rows out
+				// of the most-recent picker unless the user opted them
+				// back in via config — they can always target a
+				// specific headless run by ID.
+				showHeadless := false
+				if cfg, err := config.Load(); err == nil {
+					showHeadless = cfg.Conversations.ShowHeadless
+				}
+				if !showHeadless {
+					interactive := list[:0]
+					for _, c := range list {
+						if !c.IsHeadless() {
+							interactive = append(interactive, c)
+						}
+					}
+					list = interactive
+					if len(list) == 0 {
+						return fmt.Errorf("no past interactive conversations found — only headless / SDK runs. Pass an ID, or set conversations.show_headless=true")
+					}
+				}
 				// No explicit id: pick most-recent, optionally filtered by agent.
 				if agentFilter != "" {
 					want, ok := agent.ParseID(agentFilter)

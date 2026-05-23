@@ -64,6 +64,16 @@ type conversationsModel struct {
 	// refresh all disarm — the user can't accidentally confirm a
 	// delete they armed minutes ago on a different row.
 	pendingDelete string
+
+	// showHeadless includes headless / SDK conversations in the list
+	// (anything Conversation.IsHeadless reports true for: `claude -p`,
+	// the SDK, automation wrappers). Seeded from config.Conversations.
+	// ShowHeadless; toggled live with H. Default false hides them
+	// because automation runs accumulate fast and drown out
+	// interactive sessions in the list. Apply path: this flag flips
+	// to inverted ExcludeHeadless on conversations.Options at refresh
+	// time — see App.refreshConversationsCmd.
+	showHeadless bool
 }
 
 func newConversations(st styles.Styles, km Keymap) conversationsModel {
@@ -125,6 +135,32 @@ func (m *conversationsModel) SetProjectFilter(filter string) {
 		m.cursor = 0
 	}
 	m.projectFilter = filter
+}
+
+// SetShowHeadless seeds the live toggle from config at startup. The
+// App reads config.Conversations.ShowHeadless and pushes the value
+// here so the first refresh applies it. After startup, the user owns
+// the flag via the H keybind — we don't re-read config every refresh.
+func (m *conversationsModel) SetShowHeadless(b bool) {
+	m.showHeadless = b
+}
+
+// ToggleHeadless flips the headless-visibility flag and reports the
+// new value so the caller can rebuild the conversations list with the
+// matching filter. Cursor resets so the user lands at the top of the
+// freshly-shaped list — a stale cursor into the prior slice would
+// point at a row that may no longer be visible.
+func (m *conversationsModel) ToggleHeadless() bool {
+	m.showHeadless = !m.showHeadless
+	m.cursor = 0
+	m.pendingDelete = ""
+	return m.showHeadless
+}
+
+// ShowHeadless reports the current state of the headless-visibility
+// flag. Used by the View to label the toggle hint and by tests.
+func (m conversationsModel) ShowHeadless() bool {
+	return m.showHeadless
 }
 
 // Selected returns the conversation under the cursor, respecting the
@@ -257,7 +293,11 @@ func (m conversationsModel) View(width, height int) string {
 	list := m.renderList(visible, listW, height-4)
 	detail := m.renderDetail(visible[m.cursor], detailW, height-4)
 	body := lipgloss.JoinHorizontal(lipgloss.Top, list, " ", detail)
-	hint := st.Muted.Render("enter resume · x delete · esc clear filter · 1-8 switch screens")
+	hStatus := "hidden"
+	if m.showHeadless {
+		hStatus = "shown"
+	}
+	hint := st.Muted.Render("enter resume · x delete · esc clear filter · H headless: " + hStatus + " · 1-8 switch screens")
 	return st.Pane.Width(width - 2).Height(height - 2).Render(
 		lipgloss.JoinVertical(lipgloss.Left, header, "", body, hint),
 	)
@@ -337,6 +377,9 @@ func (m conversationsModel) renderDetail(c conversations.Conversation, width, he
 		st.Muted.Render("ID         ") + c.ID,
 		st.Muted.Render("Project    ") + emptyOr(c.Project, "(unknown)"),
 		st.Muted.Render("Last active") + "  " + c.LastActivity.Format("2006-01-02 15:04"),
+	}
+	if c.IsHeadless() {
+		lines = append(lines, st.Muted.Render("Mode       ")+st.StatusError.Render("headless / SDK"))
 	}
 	if c.Preview != "" {
 		lines = append(lines, "", st.Muted.Render("Preview"), wrap(c.Preview, width-2))

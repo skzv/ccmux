@@ -71,6 +71,31 @@ type Conversation struct {
 	// Path is the absolute filesystem path to the transcript file.
 	// Useful for "open in editor" actions and diagnostic output.
 	Path string
+
+	// Entrypoint is Claude's own tag for how the session was launched.
+	// Sourced from the `entrypoint` field on the first user event in
+	// the transcript:
+	//
+	//   "cli"      — interactive `claude` session.
+	//   "sdk-cli"  — headless / SDK invocation (`claude -p`, the SDK,
+	//                automation wrappers that wire Claude into scripts).
+	//   ""         — no user event carried the tag. Typically a
+	//                metadata-only stub (ai-title, permission-mode)
+	//                Claude writes for title indexing, or a Codex /
+	//                Antigravity row (those agents don't use this
+	//                field).
+	//
+	// Drives the default "hide automation noise" filter on the
+	// conversations list. See Options.ExcludeHeadless and IsHeadless.
+	Entrypoint string
+}
+
+// IsHeadless reports whether this conversation was a headless agent
+// invocation (e.g. `claude -p`, the SDK) rather than an interactive
+// terminal session. Currently only Claude tags transcripts with this
+// information; Codex and Antigravity rows always report false.
+func (c Conversation) IsHeadless() bool {
+	return c.Entrypoint == "sdk-cli"
 }
 
 // ResumeArgs returns the argv vector to launch the agent that owns
@@ -166,6 +191,20 @@ type Options struct {
 	// Since filters out conversations whose LastActivity is older than
 	// `time.Now().Sub(Since)` durations. Zero means no filter.
 	Since time.Duration
+
+	// ExcludeHeadless drops conversations launched in headless / SDK
+	// mode (anything where Conversation.IsHeadless reports true).
+	// These accumulate fast when users wire Claude into automation —
+	// shell scripts, watchers, the SDK — so the TUI and CLI hide
+	// them by default to keep the conversations list usable as a
+	// record of interactive work. Set true at the caller to apply.
+	//
+	// The package itself stays policy-neutral: zero value preserves
+	// the existing "show everything" behavior so external callers
+	// don't silently lose rows on upgrade. The TUI / CLI pass true
+	// (overridable by the user) — see internal/config.ConversationsConfig
+	// and the `--include-headless` flag on `ccmux list-conversations`.
+	ExcludeHeadless bool
 }
 
 // All returns conversations from every supported agent, sorted by
@@ -212,6 +251,16 @@ func All(opts Options) ([]Conversation, error) {
 		filtered := all[:0]
 		for _, c := range all {
 			if c.LastActivity.After(cutoff) {
+				filtered = append(filtered, c)
+			}
+		}
+		all = filtered
+	}
+
+	if opts.ExcludeHeadless {
+		filtered := all[:0]
+		for _, c := range all {
+			if !c.IsHeadless() {
 				filtered = append(filtered, c)
 			}
 		}
@@ -323,6 +372,12 @@ func readClaudeTranscript(path, project string) Conversation {
 			if c.Preview == "" {
 				c.Preview = truncatedPreview(ev.MessageContent())
 			}
+			// First user event with an entrypoint wins. Claude tags
+			// every user event identically within a session, so we
+			// don't need to scan past the first hit.
+			if c.Entrypoint == "" && ev.Entrypoint != "" {
+				c.Entrypoint = ev.Entrypoint
+			}
 		}
 		if ts := ev.Timestamp(); !ts.IsZero() && ts.After(latestEvent) {
 			latestEvent = ts
@@ -356,6 +411,11 @@ type claudeEvent struct {
 	// at the time of the prompt. More reliable than decoding the
 	// project directory name (which is a lossy encoding of the path).
 	Cwd string `json:"cwd"`
+	// Entrypoint is Claude's launch-mode tag, present on user events.
+	// "cli" for interactive sessions, "sdk-cli" for headless / SDK
+	// runs (`claude -p`, the SDK, automation wrappers). Drives the
+	// default "hide automation noise" filter — see Conversation.IsHeadless.
+	Entrypoint string `json:"entrypoint"`
 }
 
 // MessageContent extracts the user-visible text from the embedded
