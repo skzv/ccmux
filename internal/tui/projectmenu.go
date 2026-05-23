@@ -54,7 +54,11 @@ func newProjectMenu(st styles.Styles, project, projectPath string, sessions []tm
 		entries = append(entries, projectMenuEntry{kind: menuConversation, conv: c})
 	}
 	entries = append(entries, projectMenuEntry{kind: menuNewSession})
-	return projectMenuModel{st: st, project: project, projectPath: projectPath, entries: entries}
+	cursor := 0
+	if len(sessions) == 0 && len(convs) > 0 {
+		cursor = len(entries) - 1
+	}
+	return projectMenuModel{st: st, project: project, projectPath: projectPath, entries: entries, cursor: cursor}
 }
 
 // hasContent reports whether the menu lists anything beyond the
