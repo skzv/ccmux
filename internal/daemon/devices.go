@@ -13,15 +13,36 @@ import (
 	"time"
 )
 
-// DeviceRegistration is one mobile client's APNs binding: the SSH
-// public key it paired with, plus the most recent APNs device token
-// and environment. The daemon's APNs sender walks all registrations
-// on a needs-input / completion event and pushes to each.
+// Provider identifies which push gateway a registered device token
+// belongs to. The empty/legacy value defaults to APNs when read so
+// older devices.json files written before this field existed migrate
+// transparently.
+const (
+	ProviderAPNs = "apns"
+	ProviderFCM  = "fcm"
+)
+
+// DeviceRegistration is one mobile client's push binding: the SSH
+// public key it paired with, plus the most recent device token,
+// environment (APNs only), and which provider routes the push. The
+// daemon's dispatcher walks all registrations on a needs-input /
+// completion event and pushes through the matching gateway.
 type DeviceRegistration struct {
 	PublicKeyHash string    `json:"public_key_hash"`
 	Token         string    `json:"token"`
-	Environment   string    `json:"environment"` // "development" | "production"
+	Provider      string    `json:"provider,omitempty"` // "apns" | "fcm"; empty reads as "apns"
+	Environment   string    `json:"environment"`        // "development" | "production" (APNs only)
 	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+// ResolvedProvider returns Provider with the empty/legacy value mapped
+// to ProviderAPNs so callers can switch on a non-empty value without
+// special-casing migrated records.
+func (r DeviceRegistration) ResolvedProvider() string {
+	if r.Provider == "" {
+		return ProviderAPNs
+	}
+	return r.Provider
 }
 
 // DeviceStore is a tiny JSON-backed registry of mobile clients. One
@@ -70,22 +91,49 @@ func OpenDeviceStore(path string) (*DeviceStore, error) {
 
 // Register adds or refreshes one device's APNs token. Empty token or
 // env is rejected so a malformed mobile request can't corrupt the
-// store with junk that then gets pushed to APNs.
+// store with junk that then gets pushed to APNs. Kept for legacy
+// iOS callers that predate the multi-provider device store;
+// internally delegates to RegisterWithProvider.
 func (s *DeviceStore) Register(publicKey, token, env string) error {
+	return s.RegisterWithProvider(publicKey, token, ProviderAPNs, env)
+}
+
+// RegisterWithProvider adds or refreshes one device's push binding,
+// recording which gateway (APNs / FCM) is responsible. APNs records
+// require Environment to be set to development|production; FCM
+// records ignore environment but require a non-empty token.
+func (s *DeviceStore) RegisterWithProvider(publicKey, token, provider, env string) error {
 	if strings.TrimSpace(publicKey) == "" {
 		return errors.New("devicestore: public key required")
 	}
 	if strings.TrimSpace(token) == "" {
 		return errors.New("devicestore: token required")
 	}
-	if env != "development" && env != "production" {
-		return fmt.Errorf("devicestore: env must be development|production, got %q", env)
+	if provider == "" {
+		provider = ProviderAPNs
+	}
+	switch provider {
+	case ProviderAPNs:
+		if env != "development" && env != "production" {
+			return fmt.Errorf("devicestore: env must be development|production for apns, got %q", env)
+		}
+	case ProviderFCM:
+		// FCM has no analogue to the APNs sandbox/production split —
+		// the same token works in any environment. Reject any non-
+		// empty env so a misconfigured client can't accidentally pin
+		// itself to a value the dispatcher would have to ignore later.
+		if env != "" {
+			return fmt.Errorf("devicestore: env must be empty for fcm, got %q", env)
+		}
+	default:
+		return fmt.Errorf("devicestore: unknown provider %q", provider)
 	}
 	hash := HashPublicKey(publicKey)
 	s.mu.Lock()
 	s.byID[hash] = DeviceRegistration{
 		PublicKeyHash: hash,
 		Token:         token,
+		Provider:      provider,
 		Environment:   env,
 		UpdatedAt:     time.Now(),
 	}

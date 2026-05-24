@@ -31,6 +31,7 @@ import (
 	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/conversations"
 	"github.com/skzv/ccmux/internal/daemon"
+	"github.com/skzv/ccmux/internal/fcm"
 	"github.com/skzv/ccmux/internal/moshi"
 	"github.com/skzv/ccmux/internal/notes"
 	"github.com/skzv/ccmux/internal/project"
@@ -205,17 +206,21 @@ type server struct {
 	events  *daemon.EventBus
 	sshUser string
 
-	// devices tracks paired iPhones for push routing. apnsSender
-	// is the APNs HTTP/2 client; both fields stay non-nil even when
+	// devices tracks paired iPhones (and Android phones once the FCM
+	// path is fully wired) for push routing. apnsSender / fcmSender
+	// are gateway clients; all three fields stay non-nil even when
 	// push is disabled, so handlers can call them unconditionally.
 	devices    *daemon.DeviceStore
 	apnsSender *apns.Sender
+	fcmSender  *fcm.Sender
 	// apnsSlots caps the number of concurrent APNs sends so a slow
 	// HTTP/2 handshake can't accumulate goroutines on every poll tick.
 	// Defaults to 16 — enough headroom for a small fleet of paired
 	// phones, small enough that a wedged APNs endpoint applies
 	// back-pressure to the poll loop rather than leaking forever.
 	apnsSlots chan struct{}
+	// fcmSlots mirrors apnsSlots for the FCM v1 path.
+	fcmSlots chan struct{}
 
 	// moshiState is refreshed periodically (not every poll) so we don't
 	// shell out to moshi-hook every 2 seconds. Used only to drive the
@@ -267,6 +272,21 @@ func newServer(cfg config.Config) *server {
 		sender, _ = apns.New(apns.Config{})
 	}
 
+	// FCM sender follows the APNs pattern: best-effort init, log+disable
+	// on failure so a misconfigured Firebase entry never blocks startup.
+	// The package is dormant by default so the no-op fallback after a
+	// bad config keeps the dispatcher's per-provider branch well-formed.
+	fcmCfg := fcm.Config{
+		Enabled:         cfg.FCM.Enabled,
+		CredentialsPath: cfg.FCM.CredentialsPath,
+		ProjectID:       cfg.FCM.ProjectID,
+	}
+	fcmSender, err := fcm.New(fcmCfg)
+	if err != nil {
+		log.Printf("ccmuxd: FCM disabled: %v", err)
+		fcmSender, _ = fcm.New(fcm.Config{})
+	}
+
 	return &server{
 		cfg:        cfg,
 		seen:       map[string]*tracked{},
@@ -278,7 +298,9 @@ func newServer(cfg config.Config) *server {
 		sshUser:    sshUser,
 		devices:    devices,
 		apnsSender: sender,
+		fcmSender:  fcmSender,
 		apnsSlots:  make(chan struct{}, 16),
+		fcmSlots:   make(chan struct{}, 16),
 	}
 }
 

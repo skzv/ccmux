@@ -30,6 +30,7 @@ type Config struct {
 	Tour          TourConfig          `toml:"tour"`
 	Hosts         []Host              `toml:"host"`
 	APNs          APNsConfig          `toml:"apns"`
+	FCM           FCMConfig           `toml:"fcm"`
 }
 
 // APNsConfig configures Apple Push Notifications so the daemon can
@@ -44,6 +45,17 @@ type APNsConfig struct {
 	TeamID      string `toml:"team_id"`     // 10-char team id
 	Topic       string `toml:"topic"`       // iOS bundle id, e.g. "dev.skz.ccmux"
 	Environment string `toml:"environment"` // optional override; usually omitted
+}
+
+// FCMConfig configures Firebase Cloud Messaging so the daemon can
+// notify paired Android devices when sessions finish or need input.
+// Parallel to APNsConfig — off by default; flip Enabled=true and
+// fill in CredentialsPath + ProjectID once a Firebase service account
+// JSON is available on disk.
+type FCMConfig struct {
+	Enabled         bool   `toml:"enabled"`
+	CredentialsPath string `toml:"credentials_path"` // path to firebase service-account JSON
+	ProjectID       string `toml:"project_id"`       // Firebase project id, e.g. "ccmux-mobile"
 }
 
 // SessionsConfig holds preferences for the Sessions screen's "new
