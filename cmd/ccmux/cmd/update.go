@@ -275,14 +275,15 @@ func resolveDefaultBranch(repo string) string {
 // could silently switch the user from `main` to whatever origin's
 // default became — a quiet behavior change is worse than a noisy
 // error. If the same-named remote branch isn't there either, we
-// fall through with a clear message instead of trying to be clever.
+// surface a clear error instead of letting `git pull --ff-only`
+// emit its cryptic "no such ref was fetched" message.
 func ensureGoodUpstream(repo string, dryRun bool) error {
 	branch, err := currentBranchName(repo)
 	if err != nil || branch == "" {
 		return nil
 	}
-	upstream := remoteTrackingFor(repo, branch)
-	if upstream == "" {
+	remote, mergeRef, hasUpstream := configuredUpstream(repo, branch)
+	if !hasUpstream {
 		// No upstream set at all — `git pull --ff-only` would error
 		// with "There is no tracking information for the current
 		// branch." Set it to origin/<branch> if that ref exists.
@@ -291,23 +292,28 @@ func ensureGoodUpstream(repo string, dryRun bool) error {
 			return runStep(repo, dryRun, "git", "branch", "--set-upstream-to=origin/"+branch, branch)
 		}
 		// No same-named remote either. Let pull fail with git's
-		// stock message — the user needs to decide where to track.
+		// stock "no tracking information" message — clearer than
+		// anything we'd invent, and the user needs to decide
+		// where to track.
 		return nil
 	}
-	// Upstream IS set; check whether the remote ref still exists. A
-	// fast `git rev-parse --verify` against the remote-tracking
-	// branch (e.g. refs/remotes/origin/foo) tells us. If it's
-	// missing, retarget when there's a same-named remote branch.
-	remoteRef := strings.TrimPrefix(upstream, "refs/remotes/")
+	// Upstream IS configured. Derive the remote-tracking ref name
+	// (e.g. "origin/fix/foo") from the configured remote + merge
+	// ref, then check whether the ref is actually present locally.
+	// We deliberately read git config rather than `git rev-parse
+	// <branch>@{upstream}` because @{upstream} errors out when the
+	// remote-tracking ref is missing, which is precisely the case
+	// we need to detect here.
+	remoteRef := remote + "/" + strings.TrimPrefix(mergeRef, "refs/heads/")
 	if remoteRefExists(repo, remoteRef) {
 		return nil // upstream points at a real ref — pull will work
 	}
-	fmt.Printf("note: %s tracks %s which no longer exists on origin\n", branch, remoteRef)
+	fmt.Printf("note: %s tracks %s which doesn't exist locally (deleted on remote or never fetched)\n", branch, remoteRef)
 	if remoteRefExists(repo, "origin/"+branch) {
 		fmt.Printf("       retargeting upstream to origin/%s\n", branch)
 		return runStep(repo, dryRun, "git", "branch", "--set-upstream-to=origin/"+branch, branch)
 	}
-	return fmt.Errorf("branch %s tracks a deleted remote (%s) and no origin/%s exists; run `git fetch origin` and then `git branch --set-upstream-to=origin/<branch> %s` yourself", branch, remoteRef, branch, branch)
+	return fmt.Errorf("branch %s tracks %s which no remote branch matches; either push it (`git push -u origin %s`), retarget (`git branch --set-upstream-to=origin/<branch> %s`), or rerun with --skip-pull to just rebuild local code", branch, remoteRef, branch, branch)
 }
 
 // currentBranchName returns the short name of HEAD's symbolic ref
@@ -322,7 +328,11 @@ func currentBranchName(repo string) (string, error) {
 }
 
 // remoteTrackingFor returns the upstream ref for `branch`
-// (e.g. "refs/remotes/origin/main"), or empty if no upstream is set.
+// (e.g. "refs/remotes/origin/main"), or empty if no upstream is set
+// OR if the upstream is configured but the remote-tracking ref
+// doesn't exist locally. Callers that need to distinguish those
+// two states should use configuredUpstream instead — this helper
+// is kept for tests that only care about the happy path.
 func remoteTrackingFor(repo, branch string) string {
 	out, err := exec.Command("git", "-C", repo, "rev-parse", "--symbolic-full-name", "--abbrev-ref=loose", branch+"@{upstream}").Output()
 	if err != nil {
@@ -332,9 +342,30 @@ func remoteTrackingFor(repo, branch string) string {
 	if short == "" {
 		return ""
 	}
-	// The output is "origin/main" not "refs/remotes/origin/main";
-	// re-prefix so the caller can compare against the ref namespace.
 	return "refs/remotes/" + short
+}
+
+// configuredUpstream reads branch.<branch>.remote and
+// branch.<branch>.merge directly from git config. Unlike
+// `git rev-parse <branch>@{upstream}`, this does not require the
+// remote-tracking ref to exist locally — so it correctly
+// distinguishes "no upstream configured" from "upstream
+// configured but pointing at a missing/deleted remote branch."
+func configuredUpstream(repo, branch string) (remote, mergeRef string, ok bool) {
+	remoteOut, err := exec.Command("git", "-C", repo, "config", "--get", "branch."+branch+".remote").Output()
+	if err != nil {
+		return "", "", false
+	}
+	mergeOut, err := exec.Command("git", "-C", repo, "config", "--get", "branch."+branch+".merge").Output()
+	if err != nil {
+		return "", "", false
+	}
+	remote = strings.TrimSpace(string(remoteOut))
+	mergeRef = strings.TrimSpace(string(mergeOut))
+	if remote == "" || mergeRef == "" {
+		return "", "", false
+	}
+	return remote, mergeRef, true
 }
 
 // remoteRefExists returns true if `ref` (e.g. "origin/main") is a
