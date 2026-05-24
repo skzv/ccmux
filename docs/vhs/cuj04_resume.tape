@@ -28,19 +28,21 @@ Sleep 3500ms
 Type "2"
 Sleep 1s
 
-# Conversations load from ~/.claude. Navigate through the list.
+# Conversations load from ~/.claude. Navigate through the list so the
+# viewer sees the detail pane update for each entry.
 Sleep 1500ms
 Type "j"
-Sleep 500ms
+Sleep 800ms
 Type "j"
-Sleep 500ms
+Sleep 800ms
 Type "k"
-Sleep 500ms
+Sleep 1500ms
 
-# Select (resume) the highlighted conversation.
-# This launches `claude --resume <uuid>` in a new tmux session.
-Enter
-Sleep 3s
-
-# Claude resumes — picks up the prior conversation thread exactly where it left off.
-Sleep 2s
+# NB: the actual "press Enter to resume" step is omitted intentionally.
+# The tape runs in an isolated $HOME with seeded transcripts so the
+# list looks lived-in, but the agent wrappers restore the real $HOME
+# (for keychain/auth) — and the real Claude install has none of these
+# fake UUIDs, so an actual resume would surface "no conversation
+# found." Letting viewers see the populated list + detail pane gets
+# the point across without that footgun.
+Sleep 1s
