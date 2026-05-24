@@ -234,3 +234,134 @@ func TestRegister_Concurrent(t *testing.T) {
 		t.Errorf("after concurrent register: %d entries, want %d", n, N)
 	}
 }
+
+// TestRegister_LegacyAPNsRoundtrip — the legacy Register(publicKey,
+// token, env) call must still produce an APNs-provider record so
+// existing iOS clients keep working unchanged after the multi-
+// provider migration. The new code path delegates to
+// RegisterWithProvider(..., ProviderAPNs, env) so Provider is
+// persisted explicitly; the on-disk migration from records that
+// predate the field is covered by TestOpenDeviceStore_MigratesLegacyJSON.
+func TestRegister_LegacyAPNsRoundtrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "devices.json")
+	s, err := OpenDeviceStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Register(testPubKey, "ios-tok", "production"); err != nil {
+		t.Fatalf("legacy Register: %v", err)
+	}
+	regs := s.All()
+	if len(regs) != 1 {
+		t.Fatalf("want 1 reg, got %d", len(regs))
+	}
+	got := regs[0]
+	if got.ResolvedProvider() != ProviderAPNs {
+		t.Errorf("ResolvedProvider=%q, want %q", got.ResolvedProvider(), ProviderAPNs)
+	}
+	if got.Environment != "production" {
+		t.Errorf("Environment=%q, want \"production\"", got.Environment)
+	}
+}
+
+// TestRegisterWithProvider_FCM — an FCM registration has no env and
+// resolves to provider "fcm" without any migration step.
+func TestRegisterWithProvider_FCM(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "devices.json")
+	s, err := OpenDeviceStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RegisterWithProvider(testPubKey, "fcm-tok", ProviderFCM, ""); err != nil {
+		t.Fatalf("RegisterWithProvider(fcm): %v", err)
+	}
+	got := s.All()[0]
+	if got.Provider != ProviderFCM {
+		t.Errorf("Provider=%q, want %q", got.Provider, ProviderFCM)
+	}
+	if got.ResolvedProvider() != ProviderFCM {
+		t.Errorf("ResolvedProvider=%q, want %q", got.ResolvedProvider(), ProviderFCM)
+	}
+	if got.Environment != "" {
+		t.Errorf("Environment=%q, want \"\"", got.Environment)
+	}
+}
+
+// TestRegisterWithProvider_RejectsBadProvider — only "apns" and
+// "fcm" are recognized. Empty defaults to "apns" via the existing
+// legacy Register code path; any other string is rejected so a
+// misconfigured client can't silently end up with an unrouted
+// record.
+func TestRegisterWithProvider_RejectsBadProvider(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "devices.json")
+	s, err := OpenDeviceStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RegisterWithProvider(testPubKey, "tok", "huawei", ""); err == nil {
+		t.Fatal("expected error for unknown provider")
+	}
+	if err := s.RegisterWithProvider(testPubKey, "tok", ProviderFCM, "production"); err == nil {
+		t.Fatal("expected error when FCM record carries non-empty env")
+	}
+	if err := s.RegisterWithProvider(testPubKey, "tok", ProviderAPNs, ""); err == nil {
+		t.Fatal("expected error when APNs record carries empty env")
+	}
+}
+
+// TestOpenDeviceStore_MigratesLegacyJSON — a devices.json written
+// before the Provider field was added must round-trip through
+// OpenDeviceStore + ResolvedProvider as if it were an APNs record.
+// Matches the spec scenario "Migration of existing records".
+func TestOpenDeviceStore_MigratesLegacyJSON(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "devices.json")
+	// Hand-crafted legacy payload: no provider field at all.
+	legacy := `[
+	{"public_key_hash":"abc123","token":"legacy-token","environment":"production","updated_at":"2025-01-01T00:00:00Z"}
+]`
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := OpenDeviceStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	regs := s.All()
+	if len(regs) != 1 {
+		t.Fatalf("want 1 reg, got %d", len(regs))
+	}
+	if regs[0].Provider != "" {
+		t.Errorf("legacy entry got Provider=%q, want \"\"", regs[0].Provider)
+	}
+	if regs[0].ResolvedProvider() != ProviderAPNs {
+		t.Errorf("legacy entry resolved to %q, want %q", regs[0].ResolvedProvider(), ProviderAPNs)
+	}
+	if regs[0].Token != "legacy-token" {
+		t.Errorf("legacy entry token=%q, want \"legacy-token\"", regs[0].Token)
+	}
+	// Persisted shape should still be Provider=omitempty until the
+	// next Register touches the record.
+	raw, _ := os.ReadFile(path)
+	if jsonContainsField(raw, "provider") {
+		t.Error("legacy record was rewritten with provider field on first read; expected lazy migration")
+	}
+	_ = json.Valid // silence unused import in some builds
+}
+
+// jsonContainsField is a cheap substring check — we don't want to
+// rewrite the test file in lockstep with json field renaming, and
+// the real check (parsed JSON shape) is already covered by the
+// other tests in this file.
+func jsonContainsField(raw []byte, field string) bool {
+	return jsonContains(raw, `"`+field+`":`)
+}
+
+func jsonContains(raw []byte, needle string) bool {
+	for i := 0; i+len(needle) <= len(raw); i++ {
+		if string(raw[i:i+len(needle)]) == needle {
+			return true
+		}
+	}
+	return false
+}

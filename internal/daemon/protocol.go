@@ -247,14 +247,20 @@ type PairRequest struct {
 }
 
 // RegisterDeviceRequest is the body of POST /v1/devices. Used to
-// update the APNs device token on an already-paired host (e.g. when
-// the user granted notifications after the initial pair, or when iOS
-// rolls the token). Identified by the same SSH public key that was
-// recorded at pair time, so no separate device-id concept is needed.
+// update a mobile device's push token on an already-paired host
+// (e.g. when the user granted notifications after the initial pair,
+// or when iOS / FCM rolls the token). Identified by the same SSH
+// public key that was recorded at pair time, so no separate
+// device-id concept is needed.
+//
+// Provider is "apns" or "fcm". An empty Provider is treated as
+// "apns" so existing iOS clients that predate the multi-gateway
+// device store keep working without a client change.
 type RegisterDeviceRequest struct {
 	Token     string `json:"token"`
-	Env       string `json:"env"`
+	Env       string `json:"env,omitempty"` // required for apns; empty for fcm
 	PublicKey string `json:"public_key"`
+	Provider  string `json:"provider,omitempty"` // "apns" (default) | "fcm"
 }
 
 // PairResponse is what POST /v1/pair returns on success.

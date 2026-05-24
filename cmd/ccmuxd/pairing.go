@@ -16,6 +16,7 @@ import (
 	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/apns"
 	"github.com/skzv/ccmux/internal/daemon"
+	"github.com/skzv/ccmux/internal/fcm"
 )
 
 func (s *server) handlePairToken(w http.ResponseWriter, r *http.Request) {
@@ -116,7 +117,7 @@ func (s *server) handleRegisterDevice(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "decode: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := s.devices.Register(req.PublicKey, req.Token, req.Env); err != nil {
+	if err := s.devices.RegisterWithProvider(req.PublicKey, req.Token, req.Provider, req.Env); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -181,34 +182,73 @@ func (s *server) sendAPNsAsync(label, token, env string, n apns.Notification) {
 	}()
 }
 
-// maybePushForStateTransition fires an APNs push when a tracked
-// session enters a state the user should know about: needs_input
-// (Y/N from the agent) or active → idle (the agent finished its
-// response and is waiting for the next prompt). No-op when push is
-// disabled or no devices are registered.
+// maybePushForStateTransition fires a push when a tracked session
+// enters a state the user should know about: needs_input (Y/N from
+// the agent) or active → idle (the agent finished its response and
+// is waiting for the next prompt). Routes per-device through the
+// matching gateway (APNs for iOS, FCM for Android). No-op when both
+// gateways are disabled or no devices are registered.
 func (s *server) maybePushForStateTransition(sessionName string, prev, next agent.State) {
-	if s.devices == nil || !s.apnsSender.Enabled() {
+	if s.devices == nil || (!s.apnsSender.Enabled() && !s.fcmSender.Enabled()) {
 		return
 	}
-	var title, body string
+	var title, body, kind string
 	switch {
 	case next == agent.StateNeedsInput:
 		title = sessionName + " needs input"
 		body = "Tap to reply."
+		kind = "needs_input"
 	case next == agent.StateIdle && prev == agent.StateActive:
 		title = sessionName + " finished"
 		body = "Your agent is waiting for the next prompt."
+		kind = "active_to_idle"
 	default:
 		return
 	}
-	notif := apns.Notification{
+	hostname, _ := os.Hostname()
+	apnsNotif := apns.Notification{
 		Title:     title,
 		Body:      body,
 		SessionID: "local/" + sessionName,
 	}
-	for _, reg := range s.devices.All() {
-		s.sendAPNsAsync("push", reg.Token, reg.Environment, notif)
+	fcmNotif := fcm.Notification{
+		Title:     title,
+		Body:      body,
+		SessionID: "local/" + sessionName,
+		Kind:      kind,
+		Host:      hostname,
 	}
+	for _, reg := range s.devices.All() {
+		switch reg.ResolvedProvider() {
+		case daemon.ProviderAPNs:
+			if s.apnsSender.Enabled() {
+				s.sendAPNsAsync("push", reg.Token, reg.Environment, apnsNotif)
+			}
+		case daemon.ProviderFCM:
+			if s.fcmSender.Enabled() {
+				s.sendFCMAsync("push", reg.Token, fcmNotif)
+			}
+		}
+	}
+}
+
+// sendFCMAsync dispatches one FCM push on a bounded worker pool,
+// mirroring sendAPNsAsync. While the fcm package is dormant Send is
+// a no-op, but the bounded pool already exists so the eventual
+// real-sender PR plugs in without changing this dispatcher.
+func (s *server) sendFCMAsync(label, token string, n fcm.Notification) {
+	select {
+	case s.fcmSlots <- struct{}{}:
+	default:
+		log.Printf("ccmuxd: FCM %s (%s): dropped — sender saturated", label, n.SessionID)
+		return
+	}
+	go func() {
+		defer func() { <-s.fcmSlots }()
+		if err := s.fcmSender.Send(token, n); err != nil {
+			log.Printf("ccmuxd: FCM %s (%s): %v", label, n.SessionID, err)
+		}
+	}()
 }
 
 // validatePairKey parses the wire-format public key into a canonical
