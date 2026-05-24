@@ -11,11 +11,11 @@ Set Height 1000
 Set Padding 20
 Set TypingSpeed 80ms
 
-# render.sh sleeps 4s; add 4 more here so daemon classifies all sessions.
+# render.sh sleeps 4s; add a small buffer so daemon classifies all sessions.
 Hide
 Type "cd ~ && clear"
 Enter
-Sleep 4s
+Sleep 2s
 Show
 
 # Launch the TUI.
@@ -24,7 +24,7 @@ Sleep 300ms
 Enter
 
 # Dashboard settles — 5 sessions visible across 3 agents.
-Sleep 4s
+Sleep 2500ms
 
 # --- Screen 1: Home — navigate to auth-service, attach ---
 Type "j"
@@ -120,5 +120,14 @@ Sleep 400ms
 Type "1"
 Sleep 2500ms
 
+# Quit + clear: ending on a fresh prompt reads as "demo complete"; without
+# the clear the GIF's last frame is the "[detached (from session ...)]"
+# message tmux prints when ccmux exits, which looks like an error.
 Type "q"
-Sleep 800ms
+Sleep 600ms
+Hide
+Type "clear"
+Enter
+Sleep 200ms
+Show
+Sleep 1s

@@ -442,7 +442,7 @@ func (m projectsModel) renderDetail(width, height int) string {
 	agentDisplay := agent.ByID(p.Agent).DisplayName()
 	lines := []string{
 		m.st.Emphasis.Render(p.Name) + "   " + m.st.Muted.Render("on "+host),
-		m.st.Muted.Render(p.Path),
+		m.st.Muted.Render(summarizePath(p.Path)),
 		"",
 		"session name  " + m.st.Emphasis.Render(p.SessionName()),
 		"agent         " + m.st.Emphasis.Render(agentDisplay),

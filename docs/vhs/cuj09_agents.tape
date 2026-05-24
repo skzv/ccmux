@@ -21,7 +21,7 @@ Show
 Type "ccmux"
 Sleep 300ms
 Enter
-Sleep 3500ms
+Sleep 2s
 
 # Go to the Agents screen (key 5).
 Type "5"

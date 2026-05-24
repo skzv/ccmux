@@ -22,7 +22,7 @@ Sleep 300ms
 Enter
 
 # Let the dashboard paint and the daemon's first poll land.
-Sleep 3500ms
+Sleep 2s
 
 # Go to the Projects screen.
 Type "3"
@@ -50,15 +50,36 @@ Sleep 600ms
 Left
 Sleep 400ms
 
-# Submit the form with Claude — creates the dir and boots the session.
+# Submit the form with Claude — creates the dir and ATTACHES to the
+# brand-new session (form-submit goes through createSession which
+# attaches immediately, not just creates). Hold briefly so Claude's
+# banner is visible (proves the agent really booted), then detach
+# and return to Home to show the api-service session now in the
+# dashboard list — that's the actual "win" of this CUJ.
 Enter
-Sleep 3500ms
+Sleep 3s
 
-# Back to the Home screen to see the new session in the list.
+# Detach back to ccmux. Without this, sending "1" would go to
+# Claude (which ignores it) instead of switching ccmux screens.
+Ctrl+b
+Sleep 300ms
+Type "d"
+Sleep 1500ms
+
+# Navigate to Home to show the populated session list with the new
+# api-service entry.
 Type "1"
-Sleep 2s
+Sleep 2500ms
 
-# Attach to the new api-service session to see Claude running.
+# Quit ccmux. Hide+clear so the tape doesn't end on the tmux
+# "[detached (from session ...)]" line ccmux prints on exit —
+# that line reads as an error on a public demo.
+Type "q"
+Sleep 600ms
+Hide
+Type "clear"
 Enter
-Sleep 3000ms
+Sleep 200ms
+Show
+Sleep 1s
 

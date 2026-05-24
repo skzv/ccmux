@@ -34,7 +34,7 @@ Sleep 300ms
 Type "ccmux"
 Sleep 300ms
 Enter
-Sleep 3500ms
+Sleep 2s
 
 # Navigate to Settings (screen 6) — the runtime status view.
 Type "6"
@@ -43,15 +43,17 @@ Sleep 1s
 # Read the settings for a moment (shows daemon, Moshi, theme, paths).
 Sleep 3s
 
-# Navigate down through the settings rows.
+# Navigate down through the settings rows. Tightened to 250ms per
+# step — earlier 400ms had no visible state change between presses
+# and made the demo feel sluggish.
 Type "j"
-Sleep 400ms
+Sleep 250ms
 Type "j"
-Sleep 400ms
+Sleep 250ms
 Type "j"
-Sleep 400ms
+Sleep 250ms
 
-Sleep 1500ms
+Sleep 1s
 
 # Quit.
 Type "q"

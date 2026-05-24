@@ -20,7 +20,7 @@ Show
 Type "ccmux"
 Sleep 300ms
 Enter
-Sleep 3500ms
+Sleep 2s
 
 # Switch to the Notes screen.
 Type "4"
@@ -63,16 +63,18 @@ Sleep 500ms
 
 # Type a search query.
 Type "refresh token"
-Sleep 300ms
+Sleep 600ms
 Enter
-Sleep 1500ms
+# Bumped 1500ms → 2s so viewers can actually read the ripgrep
+# matches before the j-key moves the cursor.
+Sleep 2s
 
 # Search results appear — navigate them.
 Type "j"
-Sleep 500ms
+Sleep 1s
 
 # Preview shows the matching file (docs/api.md or architecture.md).
-Sleep 1500ms
+Sleep 2s
 
 # Clear search and return to the full list.
 Escape
@@ -80,4 +82,4 @@ Sleep 500ms
 
 # Quit.
 Type "q"
-Sleep 800ms
+Sleep 500ms

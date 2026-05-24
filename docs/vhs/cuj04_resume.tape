@@ -22,7 +22,7 @@ Sleep 300ms
 Enter
 
 # Let the dashboard settle.
-Sleep 3500ms
+Sleep 2s
 
 # Switch to the Conversations screen.
 Type "2"

@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -562,11 +563,28 @@ func toastCmd(kind toastKind, text string, ttlSec int) tea.Cmd {
 	}
 }
 
-// summarizePath replaces the user's home prefix with `~` so long paths
-// fit in toasts.
+// summarizePath replaces the user's home prefix with `~` so long
+// paths fit in toasts and detail panes.
+//
+// Both arguments are passed through filepath.Clean so a stray double
+// slash in $HOME (macOS's $TMPDIR has a trailing /, which leaks into
+// derived paths in the VHS demo harness) doesn't prevent the prefix
+// match. Same hardening as cmd/ccmux/cmd.tildify.
 func summarizePath(p string) string {
-	if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(p, home) {
-		return "~" + p[len(home):]
+	if p == "" {
+		return p
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return p
+	}
+	cleanP := filepath.Clean(p)
+	cleanHome := filepath.Clean(home)
+	if cleanP == cleanHome {
+		return "~"
+	}
+	if strings.HasPrefix(cleanP, cleanHome+string(filepath.Separator)) {
+		return "~" + cleanP[len(cleanHome):]
 	}
 	return p
 }

@@ -249,7 +249,7 @@ func (m sessionsModel) renderDetail(width int, narrow bool) string {
 		"",
 		fmt.Sprintf("state    %s %s", stateGlyph(m.st, sel.State), sel.State),
 		fmt.Sprintf("project  %s", sel.Project),
-		fmt.Sprintf("path     %s", truncate(sel.Path, width-12)),
+		fmt.Sprintf("path     %s", truncate(summarizePath(sel.Path), width-12)),
 		fmt.Sprintf("windows  %d", sel.Windows),
 		attachedLine,
 		fmt.Sprintf("created  %s", relTime(sel.Created)),

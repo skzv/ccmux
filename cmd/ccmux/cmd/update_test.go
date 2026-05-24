@@ -534,3 +534,54 @@ func TestEnsureGoodUpstream_NoUpstreamSetsOriginSameName(t *testing.T) {
 		t.Errorf("upstream not set to origin/experiment: got %q", got)
 	}
 }
+
+// TestTildify_StandardPath — happy path: $HOME prefix is replaced with ~.
+func TestTildify_StandardPath(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	if got := tildify(tmp + "/Projects/ccmux"); got != "~/Projects/ccmux" {
+		t.Errorf("tildify = %q, want ~/Projects/ccmux", got)
+	}
+}
+
+// TestTildify_HomeItself — path equal to $HOME tildifies to bare ~.
+func TestTildify_HomeItself(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	if got := tildify(tmp); got != "~" {
+		t.Errorf("tildify(HOME) = %q, want ~", got)
+	}
+}
+
+// TestTildify_DoubleSlashInHome pins the macOS-TMPDIR-trailing-slash
+// regression: when `mktemp -d "$TMPDIR/foo.XXX"` runs on macOS,
+// TMPDIR's trailing / produces a path with a double slash, which
+// propagates into $HOME. A naive HasPrefix-only tildify would fail
+// to match. filepath.Clean normalizes both sides so the prefix check
+// still hits.
+func TestTildify_DoubleSlashInHome(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp+"//extra") // simulate double slash
+	if got := tildify(tmp + "/extra/Projects/ccmux"); got != "~/Projects/ccmux" {
+		t.Errorf("tildify with double-slash HOME = %q, want ~/Projects/ccmux", got)
+	}
+}
+
+// TestTildify_PathOutsideHome — paths outside $HOME pass through unchanged.
+func TestTildify_PathOutsideHome(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	if got := tildify("/usr/local/bin/ccmux"); got != "/usr/local/bin/ccmux" {
+		t.Errorf("tildify outside HOME = %q, want passthrough", got)
+	}
+}
+
+// TestTildify_PrefixIsNotComponentMatch — /tmp/foobar must NOT match
+// when $HOME is /tmp/foo. Without the filepath.Separator suffix on
+// the prefix check, "/tmp/foo" prefix-matches "/tmp/foobar" → bug.
+func TestTildify_PrefixIsNotComponentMatch(t *testing.T) {
+	t.Setenv("HOME", "/tmp/foo")
+	if got := tildify("/tmp/foobar/x"); got != "/tmp/foobar/x" {
+		t.Errorf("tildify must not match partial path components: got %q", got)
+	}
+}

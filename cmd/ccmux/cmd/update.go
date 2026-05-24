@@ -75,7 +75,7 @@ Use --dry-run to preview the commands without executing them.`,
 			if err != nil {
 				return err
 			}
-			fmt.Printf("ccmux update: using checkout %s\n", repo)
+			fmt.Printf("ccmux update: using checkout %s\n", tildify(repo))
 
 			if !skipPull {
 				if err := ensureOnBranch(repo, dryRun); err != nil {
@@ -490,10 +490,10 @@ func runStep(cwd string, dryRun bool, name string, args ...string) error {
 		display += " " + a
 	}
 	if dryRun {
-		fmt.Printf("[dry-run] (in %s) %s\n", cwd, display)
+		fmt.Printf("[dry-run] (in %s) %s\n", tildify(cwd), display)
 		return nil
 	}
-	fmt.Printf("→ (in %s) %s\n", cwd, display)
+	fmt.Printf("→ (in %s) %s\n", tildify(cwd), display)
 	cmd := exec.Command(name, args...)
 	cmd.Dir = cwd
 	cmd.Stdout = os.Stdout
@@ -502,4 +502,33 @@ func runStep(cwd string, dryRun bool, name string, args ...string) error {
 		return fmt.Errorf("%s: %w", display, err)
 	}
 	return nil
+}
+
+// tildify shortens an absolute path by replacing the user's home
+// directory prefix with `~`. Output-only: returns p unchanged on
+// missing $HOME or paths outside it. Used by the runStep prints so
+// the dry-run / progress output is readable when cwd is a long
+// /var/folders/... mktemp dir (e.g. in the VHS demo harness).
+//
+// Both arguments are passed through filepath.Clean so a stray double
+// slash in $HOME (which macOS's $TMPDIR leaves in when the demo
+// harness builds paths with `mktemp -d "$TMPDIR/...`") doesn't
+// prevent the prefix match.
+func tildify(p string) string {
+	if p == "" {
+		return p
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return p
+	}
+	cleanP := filepath.Clean(p)
+	cleanHome := filepath.Clean(home)
+	if cleanP == cleanHome {
+		return "~"
+	}
+	if strings.HasPrefix(cleanP, cleanHome+string(filepath.Separator)) {
+		return "~" + cleanP[len(cleanHome):]
+	}
+	return p
 }

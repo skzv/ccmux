@@ -20,7 +20,7 @@ Show
 Type "ccmux"
 Sleep 300ms
 Enter
-Sleep 3500ms
+Sleep 2s
 
 # Go to Projects.
 Type "3"
@@ -65,11 +65,37 @@ Type "j"
 Sleep 300ms
 
 # Attach to the new inference-api session — agy is running.
+# Hold on the trust prompt so the viewer sees Antigravity's
+# "Accessing workspace" / agent header, then quit before pressing
+# Enter again. Earlier passes pressed Enter twice more to dismiss
+# the trust prompt, but that immediately spawned Antigravity's
+# vim-based prompt editor (an empty `/var/folders/.../jetski-prompt-
+# *.txt`), which made the demo end on a sea of `~` characters.
 Enter
 Sleep 3s
-# "Accessing workspace" appears first, then the trust prompt — wait for it.
+
+# Detach back to ccmux. Without this, sending "1" below would go
+# to Antigravity (which opens its vim prompt editor on Enter) and
+# the demo would end on a sea of empty-line tildes.
+Ctrl+b
+Sleep 300ms
+Type "d"
+Sleep 1500ms
+
+# Navigate to Home — the Sessions list shows the new c-inference-api
+# session with the agy badge, proving the picker assigned the right
+# agent for this project.
+Type "1"
+Sleep 2500ms
+
+# Quit ccmux. The tmux detach prints a "[detached (from session ...)]"
+# line on the shell that ccmux quits to — looks like an error in
+# the rendered GIF. Hide+clear so the tape ends on a fresh prompt.
+Type "q"
+Sleep 600ms
+Hide
+Type "clear"
 Enter
-Sleep 2s
-# Second pass in case trust prompt needed extra time to appear.
-Enter
-Sleep 3s
+Sleep 200ms
+Show
+Sleep 1s
