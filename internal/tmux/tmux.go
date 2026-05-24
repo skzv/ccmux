@@ -79,7 +79,7 @@ type Session struct {
 
 // Has reports whether a session by the given name exists on the default tmux server.
 func Has(ctx context.Context, name string) (bool, error) {
-	cmd := exec.CommandContext(ctx, "tmux", "has-session", "-t", exactSession(name))
+	cmd := command(ctx, "tmux", "has-session", "-t", exactSession(name))
 	if err := cmd.Run(); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			// tmux exits 1 when the session doesn't exist; that's not a "real" error.
@@ -151,7 +151,7 @@ func New(ctx context.Context, name, dir, cmdline string) error {
 	if cmdline != "" {
 		args = append(args, cmdline)
 	}
-	cmd := exec.CommandContext(ctx, "tmux", args...)
+	cmd := command(ctx, "tmux", args...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("tmux new-session: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
@@ -160,7 +160,7 @@ func New(ctx context.Context, name, dir, cmdline string) error {
 
 // Kill terminates the named session.
 func Kill(ctx context.Context, name string) error {
-	cmd := exec.CommandContext(ctx, "tmux", "kill-session", "-t", exactSession(name))
+	cmd := command(ctx, "tmux", "kill-session", "-t", exactSession(name))
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("tmux kill-session: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
@@ -169,7 +169,7 @@ func Kill(ctx context.Context, name string) error {
 
 // Rename renames a session.
 func Rename(ctx context.Context, oldName, newName string) error {
-	cmd := exec.CommandContext(ctx, "tmux", "rename-session", "-t", exactSession(oldName), newName)
+	cmd := command(ctx, "tmux", "rename-session", "-t", exactSession(oldName), newName)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("tmux rename-session: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
@@ -195,7 +195,7 @@ func CapturePane(ctx context.Context, name string, lines int) (string, error) {
 // SendKeys sends a literal key sequence to the named session.
 // Use this to inject a BEL byte for notification triggers (`SendKeys(ctx, name, "\a")`).
 func SendKeys(ctx context.Context, name, keys string) error {
-	cmd := exec.CommandContext(ctx, "tmux", "send-keys", "-t", exactPane(name), keys)
+	cmd := command(ctx, "tmux", "send-keys", "-t", exactPane(name), keys)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("tmux send-keys: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
@@ -208,7 +208,7 @@ func SendKeys(ctx context.Context, name, keys string) error {
 // typed as characters instead of being interpreted as the Enter key.
 // Call SendKeys(ctx, name, "Enter") separately to submit.
 func SendText(ctx context.Context, name, text string) error {
-	cmd := exec.CommandContext(ctx, "tmux", "send-keys", "-t", exactPane(name), "-l", text)
+	cmd := command(ctx, "tmux", "send-keys", "-t", exactPane(name), "-l", text)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("tmux send-keys -l: %w (%s)", err, strings.TrimSpace(string(out)))
 	}

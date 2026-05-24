@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"os/exec"
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -12,11 +11,6 @@ import (
 // don't want every callsite to do a `for _, k := range b.Keys()` loop.
 func keyMatches(msg tea.KeyMsg, b key.Binding) bool {
 	return key.Matches(msg, b)
-}
-
-// cmdFor constructs an *exec.Cmd. Wrapper exists so tests can swap it.
-var cmdFor = func(name string, args ...string) *exec.Cmd {
-	return exec.Command(name, args...)
 }
 
 // tickEvery is the Bubble Tea pattern for "send tickMsg in d, then again,

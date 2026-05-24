@@ -144,7 +144,8 @@ FUZZ_TARGETS := \
 	./internal/sleeplock:FuzzParsePmsetBatt \
 	./internal/claude:FuzzClassify \
 	./internal/tmux:FuzzSessionNameForPath \
-	./internal/tui:FuzzRenderSessionLine_DegenerateInputs
+	./internal/tui:FuzzRenderSessionLine_DegenerateInputs \
+	./internal/tui:FuzzDialTarget
 
 fuzz: check-go
 	@for pair in $(FUZZ_TARGETS); do \

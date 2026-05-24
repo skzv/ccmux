@@ -79,14 +79,27 @@ func SnapshotSession(ctx context.Context, session string, lastChange time.Time, 
 }
 
 // looksLikeClaudePrompt is a heuristic for "Claude is currently rendering its
-// input box waiting on the user." Claude Code uses box-drawing characters and
-// a `>` cursor in its TUI; matching is intentionally loose because the exact
+// input box waiting on the user." Claude Code uses rounded box-drawing
+// characters in its TUI; matching is intentionally loose because the exact
 // art changes across versions.
+//
+// Previously the heuristic counted hits across {╭╮╰╯│─>} and matched
+// at ≥2 — which false-positived on output that emits two of {│,─,>}:
+// `tree` output, `gh`/`bat` headers, the ccmux tmux status bar
+// itself. Each false positive fired a spurious bell + APNs push.
+//
+// The fix: require one of the rounded corner glyphs ╭╮╰╯. Those
+// appear in Claude's input frame and rarely anywhere else (`tree` uses
+// the sharp variants ┌┐└┘, status bars use bare verticals, ASCII art
+// uses straight lines). We still require a second hit from the
+// extended set so a stray rune in user-typed content doesn't trigger.
 func looksLikeClaudePrompt(line string) bool {
 	if line == "" {
 		return false
 	}
-	// The Claude Code input frame includes characters from this set.
+	if !strings.ContainsAny(line, "╭╮╰╯") {
+		return false
+	}
 	hits := 0
 	for _, ch := range "╭╮╰╯│─>" {
 		if strings.ContainsRune(line, ch) {

@@ -38,11 +38,14 @@ func testEd25519AuthorizedKey(t *testing.T) string {
 
 // pairTestServer builds the minimal server the pairing handlers touch:
 // just a token store and the daemon config they read host/user/port from.
+// ListenTailnet=true matches the configuration the pairing CUJ actually
+// runs under — handlePairToken refuses to mint a URL pointing at a
+// listener that was never started.
 func pairTestServer() *server {
 	return &server{
 		tokens: daemon.NewTokenStore(),
 		cfg: config.Config{
-			Daemon: config.DaemonConfig{TailnetPort: 7474, SSHUser: "alice"},
+			Daemon: config.DaemonConfig{TailnetPort: 7474, SSHUser: "alice", ListenTailnet: true},
 		},
 	}
 }
@@ -91,6 +94,23 @@ func TestHandlePairToken_RejectsGET(t *testing.T) {
 	s.handlePairToken(rec, httptest.NewRequest(http.MethodGet, "/v1/pair-token", nil))
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("GET status = %d, want 405", rec.Code)
+	}
+}
+
+// TestHandlePairToken_RefusesWhenTailnetDisabled — minting a pair URL
+// when daemon.listen_tailnet=false would hand the phone a URL pointing
+// at a port nothing's listening on, with no hint why. Fail loudly
+// instead.
+func TestHandlePairToken_RefusesWhenTailnetDisabled(t *testing.T) {
+	s := pairTestServer()
+	s.cfg.Daemon.ListenTailnet = false
+	rec := httptest.NewRecorder()
+	s.handlePairToken(rec, httptest.NewRequest(http.MethodPost, "/v1/pair-token", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503; body=%s", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "listen_tailnet") {
+		t.Errorf("error body %q should mention the config key to set", rec.Body)
 	}
 }
 

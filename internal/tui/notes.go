@@ -700,7 +700,3 @@ func pickEditor() string {
 	}
 	return "vi"
 }
-
-// stripUnused suppresses "imported and not used" for `strings` when the
-// only use is inside method bodies we may be touching.
-var _ = strings.TrimSpace

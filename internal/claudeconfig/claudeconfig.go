@@ -215,14 +215,69 @@ func WriteSettings(s *Settings) (backup string, err error) {
 	if err != nil {
 		return backup, err
 	}
-	if err := os.WriteFile(p.Settings, data, 0o644); err != nil {
+	// Write-then-rename so a crash mid-write can't truncate settings.json
+	// and lose the round-trip-preserved Extra fields. Same pattern as
+	// internal/daemon/devices.go.
+	if err := writeFileAtomic(p.Settings, data, 0o644); err != nil {
 		return backup, err
 	}
 	return backup, nil
 }
 
-// backupFile copies `src` to <backupDir>/<basename>.<unix-ms>. Idempotent
-// on missing src (no-op, no backup file created).
+// writeFileAtomic writes data to a sibling temp file in the destination
+// directory, fsyncs, then renames into place. Rename is atomic on the
+// same filesystem; the temp lives next to the target so the rename
+// never crosses devices.
+func writeFileAtomic(dst string, data []byte, mode os.FileMode) error {
+	dir := filepath.Dir(dst)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".settings-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	// Best-effort cleanup of the temp on any error path before the
+	// rename actually takes effect.
+	cleaned := false
+	defer func() {
+		if !cleaned {
+			_ = os.Remove(tmpName)
+		}
+	}()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(mode); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, dst); err != nil {
+		return err
+	}
+	cleaned = true
+	return nil
+}
+
+// maxBackupsPerFile caps the number of timestamped backups kept per
+// settings file. Each WriteSettings / SetModel / SetEffortLevel /
+// SetAlwaysThinking / SetYoloMode call creates one backup; without a
+// cap, heavy TUI users accumulate thousands of files (one per toggle)
+// in ~/.claude/backups/.
+const maxBackupsPerFile = 50
+
+// backupFile copies `src` to <backupDir>/<basename>.<timestamp> and
+// prunes older backups for the same basename beyond maxBackupsPerFile.
+// Idempotent on missing src (no-op, no backup file created).
 func backupFile(src, backupDir string) (string, error) {
 	if _, err := os.Stat(src); os.IsNotExist(err) {
 		return "", nil
@@ -230,8 +285,9 @@ func backupFile(src, backupDir string) (string, error) {
 	if err := os.MkdirAll(backupDir, 0o755); err != nil {
 		return "", err
 	}
-	ts := time.Now().Format("20060102-150405")
-	dst := filepath.Join(backupDir, filepath.Base(src)+"."+ts)
+	ts := time.Now().Format("20060102-150405.000")
+	base := filepath.Base(src)
+	dst := filepath.Join(backupDir, base+"."+ts)
 	in, err := os.Open(src)
 	if err != nil {
 		return "", err
@@ -245,7 +301,43 @@ func backupFile(src, backupDir string) (string, error) {
 	if _, err := io.Copy(out, in); err != nil {
 		return dst, err
 	}
+	// Prune older backups. Best-effort: rotation failures don't fail
+	// the write — the user's edit succeeded, the directory just stays
+	// fuller than we'd like.
+	pruneBackups(backupDir, base, maxBackupsPerFile)
 	return dst, nil
+}
+
+// pruneBackups keeps only the keep newest <base>.* entries in dir.
+// Sort by name — the timestamp suffix is lexically ordered so name
+// sort == time sort, and stat'ing every file would be slower for the
+// large directories rotation is meant to bound.
+func pruneBackups(dir, base string, keep int) {
+	if keep <= 0 {
+		return
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	prefix := base + "."
+	matches := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if strings.HasPrefix(name, prefix) {
+			matches = append(matches, name)
+		}
+	}
+	if len(matches) <= keep {
+		return
+	}
+	sort.Strings(matches)
+	for _, name := range matches[:len(matches)-keep] {
+		_ = os.Remove(filepath.Join(dir, name))
+	}
 }
 
 // SetModel updates only the model field, preserving everything else.

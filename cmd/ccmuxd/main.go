@@ -47,6 +47,13 @@ import (
 
 var version = "dev"
 
+// maxJSONBodyBytes caps the size of an incoming JSON request body for
+// every handler. The largest legitimate body on either socket is a
+// device-registration payload at well under 4 KiB; the cap exists so
+// a tailnet peer can't OOM the daemon by streaming gigabytes of trash
+// into a Decode call.
+const maxJSONBodyBytes = 64 * 1024
+
 func main() {
 	if err := run(); err != nil {
 		log.Fatalf("ccmuxd: %v", err)
@@ -129,7 +136,7 @@ func run() error {
 	mux := http.NewServeMux()
 	srv.routes(mux)
 	srv.localOnlyRoutes(mux)
-	httpSrv := &http.Server{Handler: mux}
+	httpSrv := newHTTPServer(mux)
 
 	go func() {
 		if err := httpSrv.Serve(unixLn); err != nil && err != http.ErrServerClosed {
@@ -144,9 +151,13 @@ func run() error {
 		if addr, err := tailscaleAddr(cfg.Daemon.TailnetPort); err == nil {
 			tailnetMux := http.NewServeMux()
 			srv.routes(tailnetMux)
+			tailnetSrv := newHTTPServer(tailnetMux)
+			tailnetSrv.Addr = addr
 			go func() {
 				log.Printf("ccmuxd: tailnet listening on %s", addr)
-				_ = http.ListenAndServe(addr, tailnetMux)
+				if err := tailnetSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+					log.Printf("ccmuxd: tailnet serve: %v", err)
+				}
 			}()
 		} else {
 			log.Printf("ccmuxd: tailnet listener disabled: %v", err)
@@ -202,6 +213,12 @@ type server struct {
 	// push is disabled, so handlers can call them unconditionally.
 	devices    *daemon.DeviceStore
 	apnsSender *apns.Sender
+	// apnsSlots caps the number of concurrent APNs sends so a slow
+	// HTTP/2 handshake can't accumulate goroutines on every poll tick.
+	// Defaults to 16 — enough headroom for a small fleet of paired
+	// phones, small enough that a wedged APNs endpoint applies
+	// back-pressure to the poll loop rather than leaking forever.
+	apnsSlots chan struct{}
 
 	// moshiState is refreshed periodically (not every poll) so we don't
 	// shell out to moshi-hook every 2 seconds. Used only to drive the
@@ -264,6 +281,7 @@ func newServer(cfg config.Config) *server {
 		sshUser:    sshUser,
 		devices:    devices,
 		apnsSender: sender,
+		apnsSlots:  make(chan struct{}, 16),
 	}
 }
 
@@ -366,7 +384,7 @@ func (s *server) listSessions(w http.ResponseWriter, r *http.Request) {
 // The request body is daemon.NewSessionRequest.
 func (s *server) createSession(w http.ResponseWriter, r *http.Request) {
 	var req daemon.NewSessionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)).Decode(&req); err != nil {
 		http.Error(w, "decode: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -461,7 +479,7 @@ func (s *server) createBareSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req daemon.NewBareSessionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)).Decode(&req); err != nil {
 		http.Error(w, "decode: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -681,8 +699,15 @@ func (s *server) handleRename(w http.ResponseWriter, r *http.Request, name strin
 		return
 	}
 	var req daemon.RenameRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)).Decode(&req); err != nil || req.Name == "" {
 		http.Error(w, "name required", http.StatusBadRequest)
+		return
+	}
+	// Same rule createSession/createBareSession enforce: tmux interprets
+	// `name:window.pane` as a target spec, so a rename to "victim:0"
+	// would let later send-keys land in an unrelated tmux session.
+	if strings.ContainsAny(req.Name, "/\\:") {
+		http.Error(w, "name must not contain /, \\, or :", http.StatusBadRequest)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
@@ -706,7 +731,7 @@ func (s *server) handleSendKeys(w http.ResponseWriter, r *http.Request, name str
 		return
 	}
 	var req daemon.SendKeysRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Keys == "" {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)).Decode(&req); err != nil || req.Keys == "" {
 		http.Error(w, "keys required", http.StatusBadRequest)
 		return
 	}
@@ -847,6 +872,17 @@ func (s *server) handlePairToken(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	// Pairing produces a URL the phone POSTs back to over the tailnet.
+	// If the tailnet listener was never started, the minted URL points
+	// at a port nothing is listening on — the phone gets a confusing
+	// "connection refused" with no hint that daemon.listen_tailnet is
+	// off. Fail loudly here instead.
+	if !s.cfg.Daemon.ListenTailnet {
+		http.Error(w,
+			"tailnet listener disabled (set daemon.listen_tailnet=true in config.toml and restart ccmuxd)",
+			http.StatusServiceUnavailable)
+		return
+	}
 	token, err := s.tokens.Create(5 * time.Minute)
 	if err != nil {
 		http.Error(w, "generate token: "+err.Error(), http.StatusInternalServerError)
@@ -878,7 +914,7 @@ func (s *server) handlePair(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req daemon.PairRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)).Decode(&req); err != nil {
 		http.Error(w, "decode: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -925,7 +961,7 @@ func (s *server) handleRegisterDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req daemon.RegisterDeviceRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)).Decode(&req); err != nil {
 		http.Error(w, "decode: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -953,7 +989,7 @@ func (s *server) handleTestPush(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		PublicKey string `json:"public_key"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.PublicKey == "" {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)).Decode(&body); err != nil || body.PublicKey == "" {
 		http.Error(w, "public_key required", http.StatusBadRequest)
 		return
 	}
@@ -967,17 +1003,31 @@ func (s *server) handleTestPush(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
+	s.sendAPNsAsync("test-push", reg.Token, reg.Environment, apns.Notification{
+		Title:     "ccmux test push",
+		Body:      "If you see this, push notifications are working.",
+		SessionID: "ccmux-test",
+	})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// sendAPNsAsync dispatches one push on a bounded worker pool. If the
+// pool is saturated (16 concurrent sends — usually means APNs is
+// stalled or down) the call drops the notification and logs, rather
+// than spawning an unbounded goroutine that may never return.
+func (s *server) sendAPNsAsync(label, token, env string, n apns.Notification) {
+	select {
+	case s.apnsSlots <- struct{}{}:
+	default:
+		log.Printf("ccmuxd: APNs %s (%s): dropped — sender saturated", label, n.SessionID)
+		return
+	}
 	go func() {
-		err := s.apnsSender.Send(reg.Token, reg.Environment, apns.Notification{
-			Title:     "ccmux test push",
-			Body:      "If you see this, push notifications are working.",
-			SessionID: "ccmux-test",
-		})
-		if err != nil {
-			log.Printf("ccmuxd: test push failed: %v", err)
+		defer func() { <-s.apnsSlots }()
+		if err := s.apnsSender.Send(token, env, n); err != nil {
+			log.Printf("ccmuxd: APNs %s (%s): %v", label, n.SessionID, err)
 		}
 	}()
-	w.WriteHeader(http.StatusNoContent)
 }
 
 // handlePeers returns every tailnet peer plus an indication of which
@@ -1130,12 +1180,7 @@ func (s *server) maybePushForStateTransition(sessionName string, prev, next agen
 		SessionID: "local/" + sessionName,
 	}
 	for _, reg := range s.devices.All() {
-		reg := reg
-		go func() {
-			if err := s.apnsSender.Send(reg.Token, reg.Environment, notif); err != nil {
-				log.Printf("ccmuxd: APNs push (%s): %v", sessionName, err)
-			}
-		}()
+		s.sendAPNsAsync("push", reg.Token, reg.Environment, notif)
 	}
 }
 
@@ -1263,7 +1308,7 @@ func (s *server) listProjects(w http.ResponseWriter, _ *http.Request) {
 // directory; no CLAUDE.md, no docs/ tree, no git init.
 func (s *server) createProject(w http.ResponseWriter, r *http.Request) {
 	var req daemon.NewProjectRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)).Decode(&req); err != nil {
 		http.Error(w, "decode: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -1501,4 +1546,22 @@ func indexByte(s string, b byte) int {
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// newHTTPServer returns an *http.Server with timeouts set. zero-value
+// timeouts let a tailnet peer hold a TCP connection open forever
+// (slow-loris) or stall a handler reading from a half-open body — both
+// of which leak Server goroutines for the daemon's lifetime. The
+// values are generous enough to cover handleAttach's long-lived
+// websocket and handleEvents's SSE stream (both opt out via
+// per-request hijacking / streaming flush; ReadHeaderTimeout still
+// applies to the initial request line).
+func newHTTPServer(h http.Handler) *http.Server {
+	return &http.Server{
+		Handler:           h,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		// Bodies are read inside handlers; per-handler context timeouts
+		// (5s on most write paths) bound how long a Decode can stall.
+	}
 }
