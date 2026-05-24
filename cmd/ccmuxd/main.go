@@ -41,6 +41,7 @@ import (
 	"github.com/skzv/ccmux/internal/tailnet"
 	"github.com/skzv/ccmux/internal/tmux"
 	"github.com/skzv/ccmux/internal/tmuxchrome"
+	"github.com/skzv/ccmux/internal/usage"
 )
 
 var version = "dev"
@@ -285,6 +286,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/v1/devices/test", s.handleTestPush)
 	mux.HandleFunc("/v1/peers", s.handlePeers)
 	mux.HandleFunc("/v1/conversations", s.handleConversations)
+	mux.HandleFunc("/v1/usage", s.handleUsage)
 }
 
 // localOnlyRoutes registers endpoints that must never be reachable from
@@ -900,6 +902,51 @@ func (s *server) handlePeers(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, out)
+}
+
+// handleUsage returns per-agent token + cost activity over a rolling
+// window (default 5 hours, override via ?window=2h, 24h, 30m, …). The
+// walkers are best-effort: a missing or corrupt transcript on one
+// agent doesn't sink the others. iOS uses this for its dashboard
+// usage card.
+func (s *server) handleUsage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	window := 5 * time.Hour
+	if q := r.URL.Query().Get("window"); q != "" {
+		if d, err := time.ParseDuration(q); err == nil && d > 0 {
+			window = d
+		}
+	}
+	// Each walker is cheap and IO-bound; run them concurrently so a
+	// slow disk doesn't serialize three reads of ~the same fs subtree.
+	var (
+		wg                 sync.WaitGroup
+		claude, codex, ant usage.AgentSummary
+	)
+	wg.Add(3)
+	go func() { defer wg.Done(); claude, _ = usage.WalkClaude(window) }()
+	go func() { defer wg.Done(); codex, _ = usage.WalkCodex(window) }()
+	go func() { defer wg.Done(); ant, _ = usage.WalkAntigravity(window) }()
+	wg.Wait()
+	writeJSON(w, daemon.AgentUsage{
+		Claude:      toUsageSummary(claude),
+		Codex:       toUsageSummary(codex),
+		Antigravity: toUsageSummary(ant),
+	})
+}
+
+func toUsageSummary(s usage.AgentSummary) daemon.UsageSummary {
+	return daemon.UsageSummary{
+		HasData:       s.HasData,
+		WindowSeconds: int(s.Window / time.Second),
+		Prompts:       s.Prompts,
+		InputTokens:   s.InputTokens,
+		OutputTokens:  s.OutputTokens,
+		EstimatedCost: s.EstimatedCost,
+	}
 }
 
 // handleConversations returns past agent transcripts (Claude, Codex,
