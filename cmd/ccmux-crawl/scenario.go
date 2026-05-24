@@ -135,6 +135,12 @@ func findScenario(name string) *scenario {
 // Update. Commands that return nil stop the chain early.
 func runScenario(s scenario) (err error) {
 	cfg, _ := config.Load()
+	// Skip the first-run tour: with Tour.Shown=false the tour overlay
+	// auto-opens and intercepts every key, so scenarios that test post-
+	// onboarding behavior (?, n, R, x …) never reach the screen they
+	// target. Locally this is masked by the dev's own completed-tour
+	// config; in CI the loaded config is empty so the bug surfaces.
+	cfg.Tour.Shown = true
 	app := tui.New(cfg, "crawl")
 	_ = app.Init()
 

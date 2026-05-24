@@ -49,6 +49,12 @@ func runCrawl(iters int, gen generator, viewWidth, viewHeight int) (res driveRes
 // into the modal before random-fuzzing begins.
 func runCrawlWithPreamble(iters int, preamble []Input, gen generator, viewWidth, viewHeight int) (res driveResult) {
 	cfg, _ := config.Load()
+	// Skip the first-run tour: with Tour.Shown=false the tour overlay
+	// auto-opens and swallows every key, so the random walk never
+	// reaches any of the seven screens. Locally the dev's config
+	// already has the tour completed, which masks this in development
+	// but trips CI and the form/all-screens-random preambles.
+	cfg.Tour.Shown = true
 	app := tui.New(cfg, "crawl")
 	_ = app.Init() // returns a Cmd; we don't execute it (would touch real tmux)
 
