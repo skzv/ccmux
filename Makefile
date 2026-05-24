@@ -75,6 +75,16 @@ ifeq ($(UNAME_S),Darwin)
 	@codesign --force --sign - $(INSTALL_DIR)/ccmuxd 2>/dev/null || true
 endif
 	@echo "Installed to $(INSTALL_DIR). Make sure it's on your PATH."
+	@# Best-effort daemon restart so the running ccmuxd picks up the
+	@# newly-installed binary. Soft-fails (|| true) so a first install
+	@# (no plist/unit yet) doesn't make `make install` exit non-zero
+	@# — `ccmux daemon restart` returns an error when the service
+	@# isn't registered, which is the expected state pre-`ccmux setup`.
+	@# Without this, `make install` left an old ccmuxd process running
+	@# the previous binary's route table; mobile/web clients hitting
+	@# new endpoints would silently 404. See cmd/ccmux/cmd/update.go
+	@# for the same restart at the end of `ccmux update`.
+	@$(INSTALL_DIR)/ccmux daemon restart 2>/dev/null || true
 
 # `make bootstrap` is the friendliest entry point for a fresh machine:
 # it verifies the build chain (go / git / make / brew on macOS),

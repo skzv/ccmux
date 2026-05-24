@@ -75,6 +75,17 @@ brews:
     install: |
       bin.install "ccmux"
       bin.install "ccmuxd"
+    post_install: |
+      # `brew upgrade ccmux` replaces the binary on disk, but the
+      # ccmuxd process already running under launchd keeps its old
+      # text segment + route table. The user's mobile/web clients
+      # then hit new endpoints (added in this release) and see 404s
+      # silently. Restart so the upgrade actually takes effect.
+      # Soft-fail: if the daemon isn't registered with launchd yet
+      # (first-ever install before `ccmux setup`), `ccmux daemon
+      # restart` returns an error — that's fine, suppress it so
+      # brew doesn't surface a scary post_install failure.
+      system "#{bin}/ccmux", "daemon", "restart" rescue nil
     caveats: |
       Finish setup — Tailscale, agents, and the ccmuxd background
       service — with the interactive wizard:
