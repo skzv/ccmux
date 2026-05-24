@@ -165,6 +165,84 @@ func TestApp_AgentsCodexThinkingModeKeyBypassesGlobalRefresh(t *testing.T) {
 	}
 }
 
+// TestCodex_YoloToggleWritesConfig — pressing "y" on the Codex subtab
+// writes the YOLO combo (approval_policy="never" + sandbox_mode=
+// "danger-full-access") into config.toml. Pressing again clears them
+// back to empty. Verifies both the on-disk state and that the screen
+// reloaded and surfaced a save-success flash.
+func TestCodex_YoloToggleWritesConfig(t *testing.T) {
+	setIsolatedAgentHomes(t)
+	m := newAgents(styles.Default(), DefaultKeymap())
+	m = switchAgentsSubtab(t, m, agent.IDCodex)
+
+	// On.
+	m, _ = m.Update(keyMsg("y"))
+	got, err := codexconfig.ReadSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ApprovalPolicy != codexconfig.YoloApprovalPolicy {
+		t.Errorf("approval_policy = %q, want %q", got.ApprovalPolicy, codexconfig.YoloApprovalPolicy)
+	}
+	if got.SandboxMode != codexconfig.YoloSandboxMode {
+		t.Errorf("sandbox_mode = %q, want %q", got.SandboxMode, codexconfig.YoloSandboxMode)
+	}
+	if m.codex.err != "" {
+		t.Errorf("codex.err = %q, want empty", m.codex.err)
+	}
+	if !strings.Contains(m.codex.saveMsg, "Codex YOLO") {
+		t.Errorf("saveMsg = %q, want Codex YOLO success", m.codex.saveMsg)
+	}
+
+	// Off.
+	m, _ = m.Update(keyMsg("y"))
+	got, err = codexconfig.ReadSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ApprovalPolicy == codexconfig.YoloApprovalPolicy {
+		t.Errorf("approval_policy still %q after second toggle, want cleared", got.ApprovalPolicy)
+	}
+	if got.SandboxMode == codexconfig.YoloSandboxMode {
+		t.Errorf("sandbox_mode still %q after second toggle, want cleared", got.SandboxMode)
+	}
+}
+
+// TestAntigravity_YoloToggleWritesSettings — pressing "y" on the
+// Antigravity subtab flips the yolo bool in settings.json. Pressing
+// again reverts. Mirrors the codex YOLO toggle test.
+func TestAntigravity_YoloToggleWritesSettings(t *testing.T) {
+	setIsolatedAgentHomes(t)
+	m := newAgents(styles.Default(), DefaultKeymap())
+	m = switchAgentsSubtab(t, m, agent.IDAntigravity)
+
+	// On.
+	m, _ = m.Update(keyMsg("y"))
+	got, err := antigravityconfig.ReadSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Yolo {
+		t.Errorf("antigravity yolo = false, want true after toggle")
+	}
+	if m.antigravity.err != "" {
+		t.Errorf("antigravity.err = %q, want empty", m.antigravity.err)
+	}
+	if !strings.Contains(m.antigravity.saveMsg, "Antigravity YOLO") {
+		t.Errorf("saveMsg = %q, want Antigravity YOLO success", m.antigravity.saveMsg)
+	}
+
+	// Off.
+	m, _ = m.Update(keyMsg("y"))
+	got, err = antigravityconfig.ReadSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Yolo {
+		t.Errorf("antigravity yolo still true after second toggle, want false")
+	}
+}
+
 func TestAgents_ThinkingModeWriteErrorDoesNotKeepSuccessState(t *testing.T) {
 	homes := setIsolatedAgentHomes(t)
 	m := newAgents(styles.Default(), DefaultKeymap())

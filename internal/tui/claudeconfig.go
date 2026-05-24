@@ -147,7 +147,14 @@ func (m claudeModel) Update(msg tea.Msg) (claudeModel, tea.Cmd) {
 		case "m":
 			m.picker = pickerModel
 			m.pickerCursor = 0
-			cur := strings.ToLower(strings.TrimSpace(m.settings.Model))
+			// Pre-position on the EFFECTIVE model so the cursor lands
+			// on whatever Claude Code actually uses right now, not just
+			// what's in settings.json. Reading settings.Model misses
+			// the case where $ANTHROPIC_MODEL overrides: the picker
+			// would open on "Inherit" because settings.Model is empty,
+			// the user picks the model they ALREADY use, nothing
+			// visibly changes, and they conclude the picker is broken.
+			cur := normalizeModelAlias(m.model)
 			for i, opt := range claudeconfig.KnownModels() {
 				if opt.Alias == cur {
 					m.pickerCursor = i
@@ -481,8 +488,18 @@ func (m claudeModel) viewPicker(width, height int) string {
 	lines := []string{
 		st.Emphasis.Render(title),
 		st.Subtitle.Render("Writes to " + m.paths.Settings + " (backed up first)."),
-		"",
 	}
+	// When an environment variable shadows the file value, picking a
+	// row here still writes settings.json but the env var keeps
+	// winning at the Claude Code layer. Surface that explicitly so
+	// the picker doesn't appear broken when nothing visibly changes.
+	if m.picker == pickerModel && m.modelSource == "$ANTHROPIC_MODEL" {
+		lines = append(lines, st.StatusWarning.Render(
+			"⚠ $ANTHROPIC_MODEL="+m.model+" is overriding settings.json. "+
+				"Unset it to let your pick take effect.",
+		))
+	}
+	lines = append(lines, "")
 	for i, o := range rows {
 		row := fmt.Sprintf("  %-40s %s", o.Label, st.Muted.Render(o.Desc))
 		if i == m.pickerCursor {
@@ -503,6 +520,28 @@ func (m claudeModel) viewPicker(width, height int) string {
 type pickerRow struct {
 	Label string
 	Desc  string
+}
+
+// normalizeModelAlias maps a value returned by claudeconfig.EffectiveModel
+// — which may be a short alias ("opus"), a full ID ("claude-opus-4-7"),
+// or the literal "(default)" sentinel — to one of the picker's
+// KnownModels aliases so the cursor can pre-position correctly.
+// Unknown inputs fall through unchanged so cursor lookup still works
+// for aliases the user added directly to settings.json.
+func normalizeModelAlias(model string) string {
+	s := strings.ToLower(strings.TrimSpace(model))
+	if s == "" || s == "(default)" {
+		return "" // matches the "Inherit / no override" row
+	}
+	switch s {
+	case "claude-opus-4-7", "claude-opus-4-1", "claude-opus-4":
+		return "opus"
+	case "claude-sonnet-4-6", "claude-sonnet-4-5", "claude-sonnet-4":
+		return "sonnet"
+	case "claude-haiku-4-5", "claude-haiku-4":
+		return "haiku"
+	}
+	return s
 }
 
 // openClaudeFileCmd creates the target file if requested, then exec's
