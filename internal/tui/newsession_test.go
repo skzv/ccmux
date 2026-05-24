@@ -224,7 +224,7 @@ func TestRemoteSessionStartedMsg_EmptyDialHostToasts(t *testing.T) {
 	if cmd != nil {
 		t.Errorf("expected nil cmd for empty DialHost, got non-nil")
 	}
-	if a2.toast == "" {
+	if !a2.toasts.Active() {
 		t.Error("expected error toast for empty DialHost, got empty toast")
 	}
 }

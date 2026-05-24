@@ -124,10 +124,7 @@ type App struct {
 	settings       settingsModel
 	network        networkModel
 
-	toast      string
-	toastKind  toastKind
-	toastUntil time.Time
-	toastLog   []toastEntry // small ring buffer for the help overlay
+	toasts toastController // transient footer notification + the help-overlay ring buffer
 
 	helpOpen     bool
 	tour         tourModel // first-run interactive tour; re-openable with T
@@ -807,9 +804,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Esc dismisses the current toast (when no modal is open). The
 		// projects-screen modal handles esc itself before this code runs.
-		if msg.String() == "esc" && a.toast != "" && time.Now().Before(a.toastUntil) &&
+		if msg.String() == "esc" && a.toasts.Active() &&
 			!(a.screen == ScreenProjects && (a.projectsM.form != nil || a.projectsM.menu != nil)) {
-			a.toast = ""
+			a.toasts.Clear()
 			return a, nil
 		}
 
@@ -1244,17 +1241,8 @@ func (a App) renderStatusBar() string {
 
 // renderFooter is the help line. Single-row. Toast takes precedence.
 func (a App) renderFooter() string {
-	if a.toast != "" && time.Now().Before(a.toastUntil) {
-		base := a.styles.Toast
-		switch a.toastKind {
-		case toastError:
-			base = lipgloss.NewStyle().Background(a.styles.P.Red).Foreground(a.styles.P.BG).Padding(0, 1)
-		case toastSuccess:
-			base = lipgloss.NewStyle().Background(a.styles.P.Green).Foreground(a.styles.P.BG).Padding(0, 1)
-		case toastWarning:
-			base = lipgloss.NewStyle().Background(a.styles.P.Yellow).Foreground(a.styles.P.BG).Padding(0, 1)
-		}
-		return forceSingleLine(base.Render(a.toast), a.width)
+	if a.toasts.Active() {
+		return forceSingleLine(a.toasts.Render(a.styles), a.width)
 	}
 	// Hint line ordered T0-first: `? help` (the gateway to every
 	// binding) and `q quit` lead, so if forceSingleLine still has to
@@ -1291,27 +1279,10 @@ func shortHostname(h string) string {
 	return h
 }
 
+// setToast is a thin wrapper for callers that haven't been migrated
+// to a.toasts.Set directly. The real logic lives on toastController.
 func (a *App) setToast(kind toastKind, text string, ttl time.Duration) {
-	a.toast = text
-	a.toastKind = kind
-	if ttl <= 0 {
-		ttl = 3 * time.Second
-	}
-	if kind == toastError && ttl < 8*time.Second {
-		// Errors are easy to blink past — give them longer than info
-		// toasts by default, even when the caller asked for a short ttl.
-		ttl = 8 * time.Second
-	}
-	a.toastUntil = time.Now().Add(ttl)
-	// Append to the ring buffer (cap 10). The help overlay shows these
-	// in reverse-chronological order.
-	a.toastLog = append([]toastEntry{{At: time.Now(), Kind: kind, Text: text}}, a.toastLog...)
-	if len(a.toastLog) > 10 {
-		a.toastLog = a.toastLog[:10]
-	}
-	if dbg := debugLogger(); dbg != nil {
-		dbg.Printf("toast[%d] %s", kind, text)
-	}
+	a.toasts.Set(kind, text, ttl)
 }
 
 // refreshSessionsCmd fetches sessions from local ccmuxd, every

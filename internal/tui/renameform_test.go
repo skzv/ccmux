@@ -153,7 +153,7 @@ func TestApp_SessionRenamedMsgTriggersRefresh(t *testing.T) {
 	if cmd == nil {
 		t.Error("sessionRenamedMsg{Err:nil} produced no refresh cmd")
 	}
-	if a2.toast == "" {
+	if !a2.toasts.Active() {
 		t.Error("sessionRenamedMsg{Err:nil} produced no toast")
 	}
 }
