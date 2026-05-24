@@ -175,6 +175,16 @@ type PeerInfo struct {
 	Port       *int   `json:"port,omitempty"` // ccmuxd HTTP port if probed; nil otherwise
 }
 
+// PreviewResponse is returned by GET /v1/sessions/{name}/preview. The
+// Content field is the raw capture-pane output (ANSI sequences stripped
+// by tmux) — clients can render it monospaced as-is. Lines is the
+// number of trailing lines the daemon was asked to capture, echoed so
+// callers can match against ?lines=N.
+type PreviewResponse struct {
+	Lines   int    `json:"lines"`
+	Content string `json:"content"`
+}
+
 // UsageSummary is per-agent token + cost activity over a rolling
 // window, returned by GET /v1/usage. Drives the iOS app's dashboard
 // usage card and any future "what am I spending" surface.
