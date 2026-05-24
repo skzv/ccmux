@@ -66,19 +66,45 @@ func TestEventBus_PublishWithNoSubscribers(t *testing.T) {
 }
 
 // TestEventBus_SlowSubscriberDropsEvents — Publish is non-blocking: once a
-// subscriber's buffer (32) is full, further events are dropped rather
-// than stalling the poll loop.
+// subscriber's buffer is full, further events are dropped (and counted
+// via Dropped) rather than stalling the poll loop.
 func TestEventBus_SlowSubscriberDropsEvents(t *testing.T) {
 	b := NewEventBus()
 	ch := b.Subscribe() // never drained
 	defer b.Unsubscribe(ch)
 
-	for i := 0; i < 100; i++ {
+	const sent = eventBufferSize + 50
+	for i := 0; i < sent; i++ {
 		b.Publish(SessionEvent{Kind: "state_change"}) // must never block
 	}
-	if got := len(ch); got != 32 {
-		t.Fatalf("buffered %d events, want 32 (excess must be dropped)", got)
+	if got := len(ch); got != eventBufferSize {
+		t.Fatalf("buffered %d events, want %d (excess must be dropped)", got, eventBufferSize)
 	}
+	if got := b.Dropped(ch); got != uint64(sent-eventBufferSize) {
+		t.Errorf("Dropped() = %d, want %d", got, sent-eventBufferSize)
+	}
+}
+
+// TestEventBus_DroppedZeroForUnknownChannel — calling Dropped on a
+// channel that's already been Unsubscribed returns 0 (no panic, no
+// stale stat lookup).
+func TestEventBus_DroppedZeroForUnknownChannel(t *testing.T) {
+	b := NewEventBus()
+	ch := b.Subscribe()
+	b.Unsubscribe(ch)
+	if got := b.Dropped(ch); got != 0 {
+		t.Errorf("Dropped on unsubscribed channel = %d, want 0", got)
+	}
+}
+
+// TestEventBus_DoubleUnsubscribeIsNoop — calling Unsubscribe twice on the
+// same channel must not panic. The second call sees the channel already
+// removed from the map and skips the close.
+func TestEventBus_DoubleUnsubscribeIsNoop(t *testing.T) {
+	b := NewEventBus()
+	ch := b.Subscribe()
+	b.Unsubscribe(ch)
+	b.Unsubscribe(ch) // must not panic
 }
 
 // TestEventBus_Concurrent — Publish racing against Subscribe/Unsubscribe

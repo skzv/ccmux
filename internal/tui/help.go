@@ -112,9 +112,9 @@ func (a App) renderHelpOverlay(width, height int) string {
 		))
 	}
 
-	if len(a.toastLog) > 0 {
+	if log := a.toasts.Log(); len(log) > 0 {
 		lines = append(lines, "", st.Subtitle.Render("Recent activity"))
-		for _, t := range a.toastLog {
+		for _, t := range log {
 			label := t.Text
 			color := st.Muted
 			switch t.Kind {

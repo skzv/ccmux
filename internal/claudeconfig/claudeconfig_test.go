@@ -561,3 +561,100 @@ func TestEffectiveYoloMode_Precedence(t *testing.T) {
 		t.Errorf("settings: got (%v, %q)", enabled, src)
 	}
 }
+
+// TestWriteSettings_Atomic — a partial write must never leave settings.json
+// truncated or empty. The atomic write-then-rename means either the
+// previous version is still on disk, or the new one is — never a half.
+func TestWriteSettings_Atomic(t *testing.T) {
+	dir := withFakeClaudeDir(t)
+	// Pre-seed with content that round-trip-preserves Extra so we can
+	// confirm a failed write doesn't blow it away.
+	initial := `{"model":"sonnet","customField":42}`
+	if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(initial), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Successful write replaces the file atomically — the temp file must
+	// not linger.
+	s, err := ReadSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Model = "opus"
+	if _, err := WriteSettings(s); err != nil {
+		t.Fatalf("WriteSettings: %v", err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".settings-") && strings.HasSuffix(e.Name(), ".tmp") {
+			t.Errorf("temp file %q leaked after successful write", e.Name())
+		}
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "settings.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), `"customField": 42`) {
+		t.Errorf("Extra field lost after atomic write:\n%s", got)
+	}
+	if !strings.Contains(string(got), `"model": "opus"`) {
+		t.Errorf("model not updated:\n%s", got)
+	}
+}
+
+// TestBackupFile_RotatesBeyondCap — every WriteSettings call creates a
+// backup; without rotation a power user accumulates thousands. After
+// the cap the oldest entries get pruned.
+func TestBackupFile_RotatesBeyondCap(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "settings.json")
+	backups := filepath.Join(dir, "backups")
+	if err := os.WriteFile(src, []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Seed maxBackupsPerFile + 5 pre-existing backup files with lexically
+	// ordered names (matches the timestamp suffix the real code uses).
+	if err := os.MkdirAll(backups, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < maxBackupsPerFile+5; i++ {
+		name := "settings.json." + sprintN(i)
+		if err := os.WriteFile(filepath.Join(backups, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := backupFile(src, backups); err != nil {
+		t.Fatalf("backupFile: %v", err)
+	}
+	entries, err := os.ReadDir(backups)
+	if err != nil {
+		t.Fatal(err)
+	}
+	matches := 0
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "settings.json.") {
+			matches++
+		}
+	}
+	if matches != maxBackupsPerFile {
+		t.Errorf("after rotation: %d backup files, want %d", matches, maxBackupsPerFile)
+	}
+}
+
+// sprintN renders n as a fixed-width 6-digit decimal so lexical sort
+// matches numerical order (rotation prunes the lexically-smallest
+// entries, which on real backups corresponds to the oldest by
+// timestamp).
+func sprintN(n int) string {
+	const digits = "0123456789"
+	out := []byte{'0', '0', '0', '0', '0', '0'}
+	i := len(out) - 1
+	for n > 0 && i >= 0 {
+		out[i] = digits[n%10]
+		n /= 10
+		i--
+	}
+	return string(out)
+}

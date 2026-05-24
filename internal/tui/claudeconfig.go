@@ -3,7 +3,6 @@ package tui
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -514,13 +513,7 @@ func openClaudeFileCmd(editor, path string, createIfMissing bool) tea.Cmd {
 			_ = os.WriteFile(path, []byte("# CLAUDE.md\n\n(global Claude Code instructions for this host)\n"), 0o644)
 		}
 	}
-	c := exec.Command(editor, path)
-	return tea.ExecProcess(c, func(err error) tea.Msg {
-		if err != nil {
-			return toastMsg{Text: "editor: " + err.Error(), Kind: toastError, Until: time.Now().Add(5 * time.Second)}
-		}
-		return claudeReloadMsg{}
-	})
+	return openEditorCmd(editor, path, claudeReloadMsg{})
 }
 
 // toastCmd is a small helper to emit a transient toast from a screen.

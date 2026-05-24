@@ -25,6 +25,7 @@ import (
 	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/moshi"
 	"github.com/skzv/ccmux/internal/project"
+	"github.com/skzv/ccmux/internal/remoteattach"
 	"github.com/skzv/ccmux/internal/selfupdate"
 	"github.com/skzv/ccmux/internal/tailnet"
 	"github.com/skzv/ccmux/internal/tmux"
@@ -124,10 +125,7 @@ type App struct {
 	settings       settingsModel
 	network        networkModel
 
-	toast      string
-	toastKind  toastKind
-	toastUntil time.Time
-	toastLog   []toastEntry // small ring buffer for the help overlay
+	toasts toastController // transient footer notification + the help-overlay ring buffer
 
 	helpOpen     bool
 	tour         tourModel // first-run interactive tour; re-openable with T
@@ -504,7 +502,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.dashboard.SetVersion(a.version)
 		a.sessionsM.SetSessions(a.sessions)
 		if msg.Err != nil {
-			a.setToast(toastError, "refresh: "+msg.Err.Error(), 5*time.Second)
+			a.toasts.Set(toastError, "refresh: "+msg.Err.Error(), 5*time.Second)
 		}
 		return a, nil
 
@@ -526,7 +524,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Kind == toastError && a.attach.active {
 			a.stopAttaching()
 		}
-		a.setToast(msg.Kind, msg.Text, time.Until(msg.Until))
+		a.toasts.Set(msg.Kind, msg.Text, time.Until(msg.Until))
 		return a, nil
 
 	case projectMenuMsg:
@@ -593,9 +591,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case sessionRenamedMsg:
 		if msg.Err != nil {
-			a.setToast(toastError, "rename failed: "+msg.Err.Error(), 5*time.Second)
+			a.toasts.Set(toastError, "rename failed: "+msg.Err.Error(), 5*time.Second)
 		} else {
-			a.setToast(toastSuccess, "renamed "+msg.OldName+" → "+msg.NewName, 3*time.Second)
+			a.toasts.Set(toastSuccess, "renamed "+msg.OldName+" → "+msg.NewName, 3*time.Second)
 		}
 		return a, a.refreshSessionsCmd()
 
@@ -605,7 +603,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// for discovered hosts (PATH prepend + login shell, etc.).
 		if msg.DialHost == "" {
 			a.stopAttaching()
-			a.setToast(toastError, "remote session created but no dial host known", 5*time.Second)
+			a.toasts.Set(toastError, "remote session created but no dial host known", 5*time.Second)
 			return a, nil
 		}
 		target := msg.DialHost
@@ -615,12 +613,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		remoteCmd := remoteTmuxAttach(msg.SessionName, a.cfg.Sessions.DetachOthersOnAttach())
 		var c *exec.Cmd
 		if msg.Mosh {
-			c = exec.Command("mosh", target, "--", "bash", "-c", remoteCmd)
+			c = remoteattach.Mosh(target, remoteCmd)
 			if dbg := debugLogger(); dbg != nil {
 				dbg.Printf("remote attach: mosh %s -- bash -c %q", target, remoteCmd)
 			}
 		} else {
-			c = exec.Command("ssh", "-t", target, remoteCmd)
+			c = remoteattach.SSH(target, remoteCmd)
 			if dbg := debugLogger(); dbg != nil {
 				dbg.Printf("remote attach: ssh -t %s %q", target, remoteCmd)
 			}
@@ -681,9 +679,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case sessionKilledMsg:
 		if msg.Err != nil {
-			a.setToast(toastError, "kill failed: "+msg.Err.Error(), 5*time.Second)
+			a.toasts.Set(toastError, "kill failed: "+msg.Err.Error(), 5*time.Second)
 		} else {
-			a.setToast(toastSuccess, "killed "+msg.Name, 3*time.Second)
+			a.toasts.Set(toastSuccess, "killed "+msg.Name, 3*time.Second)
 		}
 		return a, a.refreshSessionsCmd()
 
@@ -691,17 +689,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// A screen (Notes or Settings) asked the app to suspend and run
 		// $EDITOR. Route the follow-up reload by Source so the right
 		// screen refreshes when control returns.
-		source := msg.Source
-		c := exec.Command(msg.Editor, msg.Path)
-		return a, tea.ExecProcess(c, func(err error) tea.Msg {
-			if err != nil {
-				return toastMsg{Text: "editor: " + err.Error(), Kind: toastError, Until: time.Now().Add(5 * time.Second)}
-			}
-			if source == "settings" {
-				return configReloadMsg{}
-			}
-			return notesReloadMsg{}
-		})
+		var onSuccess tea.Msg = notesReloadMsg{}
+		if msg.Source == "settings" {
+			onSuccess = configReloadMsg{}
+		}
+		return a, openEditorCmd(msg.Editor, msg.Path, onSuccess)
 
 	case configReloadMsg:
 		// User finished editing ~/.config/ccmux/config.toml in $EDITOR.
@@ -709,12 +701,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// holds a cached copy. Errors surface as a toast — the previous
 		// in-memory config stays in place so the TUI doesn't go blank.
 		if cfg, err := config.Load(); err != nil {
-			a.setToast(toastError, "reload config: "+err.Error(), 5*time.Second)
+			a.toasts.Set(toastError, "reload config: "+err.Error(), 5*time.Second)
 		} else {
 			a.cfg = cfg
 			a.settings.SetConfig(cfg)
 			a.dashboard.SetConfig(cfg)
-			a.setToast(toastSuccess, "config reloaded", 2*time.Second)
+			a.toasts.Set(toastSuccess, "config reloaded", 2*time.Second)
 		}
 		return a, nil
 
@@ -731,14 +723,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// tmux. The overlay stays drawn through the suspend; on the
 		// way back, the callback's attachExitedMsg clears it.
 		if msg.Nested {
-			c := exec.Command("tmux", "switch-client", "-t", msg.Session)
-			return a, tea.ExecProcess(c, func(err error) tea.Msg {
+			return a, tea.ExecProcess(tmux.SwitchClientCmd(msg.Session), func(err error) tea.Msg {
 				return attachExitedMsg{Err: err}
 			})
 		}
-		attachArgs := tmux.AttachArgs(msg.Session, msg.DetachOthers)
 		return a, tea.ExecProcess(
-			exec.Command("tmux", attachArgs...),
+			tmux.AttachCmd(msg.Session, msg.DetachOthers),
 			func(err error) tea.Msg { return attachExitedMsg{Err: err} },
 		)
 
@@ -815,9 +805,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Esc dismisses the current toast (when no modal is open). The
 		// projects-screen modal handles esc itself before this code runs.
-		if msg.String() == "esc" && a.toast != "" && time.Now().Before(a.toastUntil) &&
+		if msg.String() == "esc" && a.toasts.Active() &&
 			!(a.screen == ScreenProjects && (a.projectsM.form != nil || a.projectsM.menu != nil)) {
-			a.toast = ""
+			a.toasts.Clear()
 			return a, nil
 		}
 
@@ -1252,17 +1242,8 @@ func (a App) renderStatusBar() string {
 
 // renderFooter is the help line. Single-row. Toast takes precedence.
 func (a App) renderFooter() string {
-	if a.toast != "" && time.Now().Before(a.toastUntil) {
-		base := a.styles.Toast
-		switch a.toastKind {
-		case toastError:
-			base = lipgloss.NewStyle().Background(a.styles.P.Red).Foreground(a.styles.P.BG).Padding(0, 1)
-		case toastSuccess:
-			base = lipgloss.NewStyle().Background(a.styles.P.Green).Foreground(a.styles.P.BG).Padding(0, 1)
-		case toastWarning:
-			base = lipgloss.NewStyle().Background(a.styles.P.Yellow).Foreground(a.styles.P.BG).Padding(0, 1)
-		}
-		return forceSingleLine(base.Render(a.toast), a.width)
+	if a.toasts.Active() {
+		return forceSingleLine(a.toasts.Render(a.styles), a.width)
 	}
 	// Hint line ordered T0-first: `? help` (the gateway to every
 	// binding) and `q quit` lead, so if forceSingleLine still has to
@@ -1297,29 +1278,6 @@ func shortHostname(h string) string {
 		return h[:i]
 	}
 	return h
-}
-
-func (a *App) setToast(kind toastKind, text string, ttl time.Duration) {
-	a.toast = text
-	a.toastKind = kind
-	if ttl <= 0 {
-		ttl = 3 * time.Second
-	}
-	if kind == toastError && ttl < 8*time.Second {
-		// Errors are easy to blink past — give them longer than info
-		// toasts by default, even when the caller asked for a short ttl.
-		ttl = 8 * time.Second
-	}
-	a.toastUntil = time.Now().Add(ttl)
-	// Append to the ring buffer (cap 10). The help overlay shows these
-	// in reverse-chronological order.
-	a.toastLog = append([]toastEntry{{At: time.Now(), Kind: kind, Text: text}}, a.toastLog...)
-	if len(a.toastLog) > 10 {
-		a.toastLog = a.toastLog[:10]
-	}
-	if dbg := debugLogger(); dbg != nil {
-		dbg.Printf("toast[%d] %s", kind, text)
-	}
 }
 
 // refreshSessionsCmd fetches sessions from local ccmuxd, every
@@ -1697,14 +1655,10 @@ func (a App) attachSelectedSession() (App, tea.Cmd) {
 			if h.User != "" {
 				target = h.User + "@" + h.Address
 			}
-			bin := "mosh"
-			if !h.Mosh {
-				bin = "ssh"
-			}
 			remoteArgs := tmux.AttachArgs(sel.Name, a.cfg.Sessions.DetachOthersOnAttach())
 			tick := a.startAttaching(attachKindRemote, sel.Host)
 			return a, tea.Batch(tick, tea.ExecProcess(
-				exec.Command(bin, append([]string{target, "--", "tmux"}, remoteArgs...)...),
+				remoteattach.RunArgv(target, h.Mosh, append([]string{"tmux"}, remoteArgs...)),
 				func(err error) tea.Msg { return attachExitedMsg{Err: err} },
 			))
 		}
@@ -1744,7 +1698,7 @@ func (a App) attachSelectedSession() (App, tea.Cmd) {
 				}
 			}
 			remoteCmd := remoteTmuxAttach(sel.Name, a.cfg.Sessions.DetachOthersOnAttach())
-			cmd := exec.Command("ssh", "-t", dial, remoteCmd)
+			cmd := remoteattach.SSH(dial, remoteCmd)
 			if dbg := debugLogger(); dbg != nil {
 				dbg.Printf("attach discovered: ssh -t %s %q", dial, remoteCmd)
 			}

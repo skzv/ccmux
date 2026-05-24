@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"os"
 	"os/exec"
 	"time"
 
@@ -8,15 +9,44 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+// pickEditor picks the editor to suspend ccmux into. Order: $VISUAL,
+// $EDITOR, then the first of nvim/vim/nano found on PATH; falls back
+// to "vi" as the POSIX baseline. Lives in helpers so notes.go,
+// claudeconfig.go, app.go, and codexconfig.go all agree.
+func pickEditor() string {
+	for _, env := range []string{"VISUAL", "EDITOR"} {
+		if v := os.Getenv(env); v != "" {
+			return v
+		}
+	}
+	for _, bin := range []string{"nvim", "vim", "nano"} {
+		if _, err := exec.LookPath(bin); err == nil {
+			return bin
+		}
+	}
+	return "vi"
+}
+
+// openEditorCmd builds the tea.Cmd that suspends the TUI, exec's
+// `editor path`, and dispatches `onSuccess` when the editor returns
+// cleanly. An editor failure emits an error toast instead. The
+// callback is a tea.Msg, not a tea.Cmd, so each caller picks the
+// reload message its screen listens for (e.g. notesReloadMsg,
+// claudeReloadMsg, configReloadMsg).
+func openEditorCmd(editor, path string, onSuccess tea.Msg) tea.Cmd {
+	c := exec.Command(editor, path)
+	return tea.ExecProcess(c, func(err error) tea.Msg {
+		if err != nil {
+			return toastMsg{Text: "editor: " + err.Error(), Kind: toastError, Until: nowPlus(5)}
+		}
+		return onSuccess
+	})
+}
+
 // keyMatches is a small wrapper because we use the binding-style API but
 // don't want every callsite to do a `for _, k := range b.Keys()` loop.
 func keyMatches(msg tea.KeyMsg, b key.Binding) bool {
 	return key.Matches(msg, b)
-}
-
-// cmdFor constructs an *exec.Cmd. Wrapper exists so tests can swap it.
-var cmdFor = func(name string, args ...string) *exec.Cmd {
-	return exec.Command(name, args...)
 }
 
 // tickEvery is the Bubble Tea pattern for "send tickMsg in d, then again,

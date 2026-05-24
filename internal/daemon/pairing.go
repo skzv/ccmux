@@ -37,6 +37,11 @@ func (s *TokenStore) Create(ttl time.Duration) (string, error) {
 func (s *TokenStore) Consume(token string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Purge here too: if a daemon mints one token and then runs for
+	// weeks without minting another, the original Create-only sweep
+	// never fires, and expired-but-not-purged entries pile up across
+	// many failed pair attempts.
+	s.purge()
 	exp, ok := s.tokens[token]
 	delete(s.tokens, token)
 	return ok && time.Now().Before(exp)

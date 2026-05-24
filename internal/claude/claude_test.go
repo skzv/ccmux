@@ -68,10 +68,17 @@ func TestLooksLikeClaudePrompt(t *testing.T) {
 		line string
 		want bool
 	}{
+		// Realistic Claude frame: corners + horizontal + vertical.
 		{"╭───╮", true},
+		// A line with a corner glyph plus the > cursor.
 		{"│ > ╯", true},
+		// Single rounded corner glyph at the bottom of the box.
+		{"╰─────╯", true},
 		{"plain text", false},
-		{"╭", false}, // only 1 hit
+		{"╭", false},        // only 1 hit, even with a corner
+		{"│ > $", false},    // no corner — would false-positive on tree/gh/bat
+		{"├── file", false}, // tree uses sharp corners, not rounded
+		{"│ status │", false},
 		{"$ ls -la", false},
 		{"", false},
 	}
@@ -90,8 +97,11 @@ func TestLooksLikeShellPrompt(t *testing.T) {
 		{"sasha@laptop:~$", true},
 		{"root@host:/#", true},
 		{"prompt %", true},
-		// A Claude-prompt line ending in $ or # should NOT be classified shell.
-		{"│ > $", false},
+		// Claude tail lines really end in `│` or `╯`, never `$`/`#`/`%`,
+		// so a Claude pane can't be misread as a shell prompt by tail
+		// suffix alone — and looksLikeClaudePrompt still vetoes the
+		// corner cases.
+		{"│ > ╯", false},
 		{"plain text", false},
 		{"", false},
 	}

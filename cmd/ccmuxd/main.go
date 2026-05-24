@@ -12,7 +12,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -25,8 +24,6 @@ import (
 	"sync"
 	"syscall"
 	"time"
-
-	"golang.org/x/crypto/ssh"
 
 	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/apns"
@@ -46,6 +43,13 @@ import (
 )
 
 var version = "dev"
+
+// maxJSONBodyBytes caps the size of an incoming JSON request body for
+// every handler. The largest legitimate body on either socket is a
+// device-registration payload at well under 4 KiB; the cap exists so
+// a tailnet peer can't OOM the daemon by streaming gigabytes of trash
+// into a Decode call.
+const maxJSONBodyBytes = 64 * 1024
 
 func main() {
 	if err := run(); err != nil {
@@ -129,7 +133,7 @@ func run() error {
 	mux := http.NewServeMux()
 	srv.routes(mux)
 	srv.localOnlyRoutes(mux)
-	httpSrv := &http.Server{Handler: mux}
+	httpSrv := newHTTPServer(mux)
 
 	go func() {
 		if err := httpSrv.Serve(unixLn); err != nil && err != http.ErrServerClosed {
@@ -144,9 +148,13 @@ func run() error {
 		if addr, err := tailscaleAddr(cfg.Daemon.TailnetPort); err == nil {
 			tailnetMux := http.NewServeMux()
 			srv.routes(tailnetMux)
+			tailnetSrv := newHTTPServer(tailnetMux)
+			tailnetSrv.Addr = addr
 			go func() {
 				log.Printf("ccmuxd: tailnet listening on %s", addr)
-				_ = http.ListenAndServe(addr, tailnetMux)
+				if err := tailnetSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+					log.Printf("ccmuxd: tailnet serve: %v", err)
+				}
 			}()
 		} else {
 			log.Printf("ccmuxd: tailnet listener disabled: %v", err)
@@ -202,6 +210,12 @@ type server struct {
 	// push is disabled, so handlers can call them unconditionally.
 	devices    *daemon.DeviceStore
 	apnsSender *apns.Sender
+	// apnsSlots caps the number of concurrent APNs sends so a slow
+	// HTTP/2 handshake can't accumulate goroutines on every poll tick.
+	// Defaults to 16 — enough headroom for a small fleet of paired
+	// phones, small enough that a wedged APNs endpoint applies
+	// back-pressure to the poll loop rather than leaking forever.
+	apnsSlots chan struct{}
 
 	// moshiState is refreshed periodically (not every poll) so we don't
 	// shell out to moshi-hook every 2 seconds. Used only to drive the
@@ -264,6 +278,7 @@ func newServer(cfg config.Config) *server {
 		sshUser:    sshUser,
 		devices:    devices,
 		apnsSender: sender,
+		apnsSlots:  make(chan struct{}, 16),
 	}
 }
 
@@ -366,7 +381,7 @@ func (s *server) listSessions(w http.ResponseWriter, r *http.Request) {
 // The request body is daemon.NewSessionRequest.
 func (s *server) createSession(w http.ResponseWriter, r *http.Request) {
 	var req daemon.NewSessionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)).Decode(&req); err != nil {
 		http.Error(w, "decode: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -461,7 +476,7 @@ func (s *server) createBareSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req daemon.NewBareSessionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)).Decode(&req); err != nil {
 		http.Error(w, "decode: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -515,99 +530,6 @@ func (s *server) createBareSession(w http.ResponseWriter, r *http.Request) {
 		Path:    path,
 		Host:    host,
 	})
-}
-
-// projectLaunchCmd resolves the launch command for a project's tmux
-// session from its .ccmux/agent sidecar. Pure helper so a test can
-// pin "Antigravity project → agy launch" without standing up tmux.
-//
-// continueFlag=true matches the existing UX: every "attach to known
-// project" path passes --continue so the user resumes their prior
-// conversation; only fresh scaffolds start without --continue.
-func projectLaunchCmd(projectPath string, continueFlag bool, commands agent.Commands) string {
-	return agent.LaunchCmd(project.ReadAgent(projectPath), continueFlag, commands)
-}
-
-// bareSessionLaunchCmd resolves which command tmux new-session runs
-// inside a new bare session. Precedence:
-//
-//  1. explicit request agent — the picker selection or
-//     `ccmux shell --agent`. The literal "shell" short-circuits to
-//     $SHELL so a conscious "no agent" pick isn't second-guessed by
-//     the config default.
-//  2. daemon's sessions.default_agent config (same rules).
-//  3. $SHELL (or /bin/sh if $SHELL is unset).
-//
-// IDs are normalized via agent.ParseID so the daemon accepts the
-// "gemini" back-compat alias. Exposed for tests so the precedence is
-// pinned without standing up an http server.
-func bareSessionLaunchCmd(reqAgent, configDefault string, commands agent.Commands) string {
-	if cmd := agentLaunchCmdOrShell(reqAgent, false, commands); cmd != "" {
-		return cmd
-	}
-	if cmd := agentLaunchCmdOrShell(configDefault, false, commands); cmd != "" {
-		return cmd
-	}
-	return shellLaunchCmd()
-}
-
-// agentLaunchCmdOrShell decodes a single agent-id-or-"shell" string.
-// Returns the LaunchCmd for a known agent, the shell command for an
-// explicit "shell" pick, and "" for an empty or unrecognized value so
-// the caller can fall through to the next precedence level.
-func agentLaunchCmdOrShell(s string, continueFlag bool, commands agent.Commands) string {
-	trimmed := strings.TrimSpace(s)
-	if trimmed == "" {
-		return ""
-	}
-	if strings.EqualFold(trimmed, "shell") {
-		return shellLaunchCmd()
-	}
-	if id, ok := agent.ParseID(trimmed); ok {
-		return agent.LaunchCmd(id, continueFlag, commands)
-	}
-	return ""
-}
-
-// shellLaunchCmd is the bare-shell escape hatch.
-func shellLaunchCmd() string {
-	shell := os.Getenv("SHELL")
-	if shell == "" {
-		shell = "/bin/sh"
-	}
-	return shell
-}
-
-// resolveBarePath picks the working directory for a bare session.
-// Order: explicit req.Path → daemon's configured DefaultDir → $HOME.
-// Exported as a helper so the unit tests can pin the priority.
-func resolveBarePath(reqPath, configDefault string) string {
-	for _, candidate := range []string{reqPath, configDefault} {
-		if c := strings.TrimSpace(candidate); c != "" {
-			return expandTilde(c)
-		}
-	}
-	home, _ := os.UserHomeDir()
-	return home
-}
-
-// expandTilde rewrites a leading "~/" to the daemon's $HOME. Bare-
-// path strings come straight from config.toml and the wire; users
-// expect "~/foo" to mean the daemon's home, not the client's. Other
-// shell expansions ($VAR, *, …) are deliberately NOT handled —
-// that's a recipe for surprises in a daemon process.
-func expandTilde(p string) string {
-	if p == "~" {
-		if home, err := os.UserHomeDir(); err == nil {
-			return home
-		}
-	}
-	if strings.HasPrefix(p, "~/") {
-		if home, err := os.UserHomeDir(); err == nil {
-			return filepath.Join(home, p[2:])
-		}
-	}
-	return p
 }
 
 // applyChrome wraps tmuxchrome.Apply with the daemon-side defaults:
@@ -681,8 +603,15 @@ func (s *server) handleRename(w http.ResponseWriter, r *http.Request, name strin
 		return
 	}
 	var req daemon.RenameRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)).Decode(&req); err != nil || req.Name == "" {
 		http.Error(w, "name required", http.StatusBadRequest)
+		return
+	}
+	// Same rule createSession/createBareSession enforce: tmux interprets
+	// `name:window.pane` as a target spec, so a rename to "victim:0"
+	// would let later send-keys land in an unrelated tmux session.
+	if strings.ContainsAny(req.Name, "/\\:") {
+		http.Error(w, "name must not contain /, \\, or :", http.StatusBadRequest)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
@@ -706,7 +635,7 @@ func (s *server) handleSendKeys(w http.ResponseWriter, r *http.Request, name str
 		return
 	}
 	var req daemon.SendKeysRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Keys == "" {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)).Decode(&req); err != nil || req.Keys == "" {
 		http.Error(w, "keys required", http.StatusBadRequest)
 		return
 	}
@@ -842,144 +771,6 @@ func (s *server) handlePreview(w http.ResponseWriter, r *http.Request, name stri
 	writeJSON(w, daemon.PreviewResponse{Lines: lines, Content: out})
 }
 
-func (s *server) handlePairToken(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	token, err := s.tokens.Create(5 * time.Minute)
-	if err != nil {
-		http.Error(w, "generate token: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	// Build the ccmux:// deep-link URL.
-	host, _ := os.Hostname()
-	tailIP, _ := tailscaleAddr(s.cfg.Daemon.TailnetPort)
-	// Use MagicDNS hostname if available, otherwise tailscale IP.
-	pairHost := host
-	if tailIP != "" {
-		// tailIP is "IP:port"; strip the port
-		if idx := strings.LastIndex(tailIP, ":"); idx >= 0 {
-			pairHost = tailIP[:idx]
-		}
-	}
-	sshUser := s.cfg.Daemon.SSHUser
-	if sshUser == "" {
-		sshUser, _ = os.LookupEnv("USER")
-	}
-	pairURL := fmt.Sprintf("ccmux://pair?host=%s&user=%s&port=%d&token=%s",
-		pairHost, sshUser, s.cfg.Daemon.TailnetPort, token)
-	writeJSON(w, daemon.PairTokenResponse{Token: token, URL: pairURL})
-}
-
-func (s *server) handlePair(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var req daemon.PairRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "decode: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-	// Validate the public key BEFORE consuming the token so a malformed
-	// key doesn't burn the user's single-use pair token. Returns a
-	// canonical single-line authorized_keys entry (any pre-key options
-	// the client tried to smuggle in are stripped during re-serialize).
-	authLine, err := validatePairKey(req.PublicKey)
-	if err != nil {
-		http.Error(w, "invalid public key: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-	if !s.tokens.Consume(req.Token) {
-		http.Error(w, "invalid or expired token", http.StatusUnauthorized)
-		return
-	}
-	if err := appendAuthorizedKey(authLine); err != nil {
-		http.Error(w, "write authorized_keys: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	// Optional APNs registration carried with the pair — lets push
-	// work from first pair without a second round trip. Failures
-	// (no device store, bad env) log and continue; pairing itself
-	// has already succeeded.
-	if s.devices != nil && req.DeviceToken != "" {
-		if err := s.devices.Register(authLine, req.DeviceToken, req.APNsEnv); err != nil {
-			log.Printf("ccmuxd: pair-time device register: %v", err)
-		}
-	}
-	host, _ := os.Hostname()
-	writeJSON(w, daemon.PairResponse{Hostname: host, Version: version})
-}
-
-// handleRegisterDevice updates an APNs device token on an already-
-// paired host. The client supplies the public key it paired with so
-// the daemon can scope the update to the right paired identity.
-func (s *server) handleRegisterDevice(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if s.devices == nil {
-		http.Error(w, "device registry unavailable", http.StatusServiceUnavailable)
-		return
-	}
-	var req daemon.RegisterDeviceRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "decode: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-	if err := s.devices.Register(req.PublicKey, req.Token, req.Env); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
-// handleTestPush sends a verification push to the device registered
-// for the requesting public key. Returns 204 even when APNs is
-// disabled (the request is well-formed; the user just hasn't flipped
-// the switch yet) so the mobile UI can give an honest "sent"
-// confirmation. The detailed status appears in ccmuxd's log.
-func (s *server) handleTestPush(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if s.devices == nil {
-		http.Error(w, "device registry unavailable", http.StatusServiceUnavailable)
-		return
-	}
-	var body struct {
-		PublicKey string `json:"public_key"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.PublicKey == "" {
-		http.Error(w, "public_key required", http.StatusBadRequest)
-		return
-	}
-	reg, ok := s.devices.Lookup(body.PublicKey)
-	if !ok {
-		http.Error(w, "no device registered for this key", http.StatusNotFound)
-		return
-	}
-	if !s.apnsSender.Enabled() {
-		log.Printf("ccmuxd: test push requested but APNs disabled")
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
-	go func() {
-		err := s.apnsSender.Send(reg.Token, reg.Environment, apns.Notification{
-			Title:     "ccmux test push",
-			Body:      "If you see this, push notifications are working.",
-			SessionID: "ccmux-test",
-		})
-		if err != nil {
-			log.Printf("ccmuxd: test push failed: %v", err)
-		}
-	}()
-	w.WriteHeader(http.StatusNoContent)
-}
-
 // handlePeers returns every tailnet peer plus an indication of which
 // ones already run ccmuxd. Used by clients (iOS Settings → Add host)
 // to populate a "your other Macs on the tailnet" picker without each
@@ -1104,41 +895,6 @@ func (s *server) handleConversations(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, out)
 }
 
-// maybePushForStateTransition fires an APNs push when a tracked
-// session enters a state the user should know about: needs_input
-// (Y/N from the agent) or active → idle (the agent finished its
-// response and is waiting for the next prompt). No-op when push is
-// disabled or no devices are registered.
-func (s *server) maybePushForStateTransition(sessionName string, prev, next agent.State) {
-	if s.devices == nil || !s.apnsSender.Enabled() {
-		return
-	}
-	var title, body string
-	switch {
-	case next == agent.StateNeedsInput:
-		title = sessionName + " needs input"
-		body = "Tap to reply."
-	case next == agent.StateIdle && prev == agent.StateActive:
-		title = sessionName + " finished"
-		body = "Your agent is waiting for the next prompt."
-	default:
-		return
-	}
-	notif := apns.Notification{
-		Title:     title,
-		Body:      body,
-		SessionID: "local/" + sessionName,
-	}
-	for _, reg := range s.devices.All() {
-		reg := reg
-		go func() {
-			if err := s.apnsSender.Send(reg.Token, reg.Environment, notif); err != nil {
-				log.Printf("ccmuxd: APNs push (%s): %v", sessionName, err)
-			}
-		}()
-	}
-}
-
 func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -1151,70 +907,54 @@ func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	ch := s.events.Subscribe()
 	defer s.events.Unsubscribe(ch)
 	enc := json.NewEncoder(w)
+	// Push the headers + a comment frame immediately. Without this,
+	// http.Get on the client side blocks until the handler writes
+	// something — which doesn't happen until the first event arrives
+	// (or the heartbeat fires 20s later).
+	if _, err := fmt.Fprintf(w, ": connected\n\n"); err != nil {
+		return
+	}
+	flusher.Flush()
+	// Heartbeat keeps idle connections alive across NAT timeouts and
+	// gives a fast path to detect a dead client. SSE comment lines
+	// (starting with ":") are ignored by the EventSource spec.
+	hb := time.NewTicker(20 * time.Second)
+	defer hb.Stop()
+	var lastDropsReported uint64
 	for {
 		select {
 		case <-r.Context().Done():
 			return
+		case <-hb.C:
+			if _, err := fmt.Fprintf(w, ": ping\n\n"); err != nil {
+				return
+			}
+			flusher.Flush()
 		case ev, open := <-ch:
 			if !open {
 				return
 			}
-			fmt.Fprintf(w, "data: ")
-			_ = enc.Encode(ev)
-			fmt.Fprintf(w, "\n")
+			// If the subscriber missed events while we weren't reading
+			// fast enough, surface it as a synthetic frame so clients
+			// can refresh state instead of silently desyncing.
+			if d := s.events.Dropped(ch); d > lastDropsReported {
+				if _, err := fmt.Fprintf(w, "event: drops\ndata: %d\n\n", d-lastDropsReported); err != nil {
+					return
+				}
+				lastDropsReported = d
+			}
+			if _, err := fmt.Fprintf(w, "data: "); err != nil {
+				return
+			}
+			if err := enc.Encode(ev); err != nil {
+				return
+			}
+			if _, err := fmt.Fprintf(w, "\n"); err != nil {
+				return
+			}
 			flusher.Flush()
 		}
 	}
-}
-
-// validatePairKey parses the wire-format public key into a canonical
-// authorized_keys line. Rejects:
-//   - empty / whitespace-only input
-//   - anything that isn't a parseable SSH public key
-//   - extra data on the line (pre-key options like `command="rm -rf /"`,
-//     `from="…"`, `no-pty`, etc.) — these would otherwise let a paired
-//     peer install an unconstrained backdoor as a side effect of pairing
-//   - extra lines (a peer that smuggles `<valid-key>\n<malicious-key>\n`)
-//
-// Re-serialize via MarshalAuthorizedKey to produce a canonical
-// `<type> <base64>` line, dropping any comment and any options the
-// caller may have prepended.
-func validatePairKey(s string) (string, error) {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return "", errors.New("empty")
-	}
-	pub, _, options, rest, err := ssh.ParseAuthorizedKey([]byte(s))
-	if err != nil {
-		return "", err
-	}
-	if len(options) > 0 {
-		return "", errors.New("pre-key options are not allowed")
-	}
-	if strings.TrimSpace(string(rest)) != "" {
-		return "", errors.New("multi-line input is not allowed")
-	}
-	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(pub))), nil
-}
-
-func appendAuthorizedKey(pubKey string) error {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return err
-	}
-	sshDir := filepath.Join(home, ".ssh")
-	if err := os.MkdirAll(sshDir, 0o700); err != nil {
-		return err
-	}
-	authKeys := filepath.Join(sshDir, "authorized_keys")
-	f, err := os.OpenFile(authKeys, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	key := strings.TrimSpace(pubKey) + "\n"
-	_, err = f.WriteString(key)
-	return err
 }
 
 // handleProjects routes /v1/projects:
@@ -1263,7 +1003,7 @@ func (s *server) listProjects(w http.ResponseWriter, _ *http.Request) {
 // directory; no CLAUDE.md, no docs/ tree, no git init.
 func (s *server) createProject(w http.ResponseWriter, r *http.Request) {
 	var req daemon.NewProjectRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)).Decode(&req); err != nil {
 		http.Error(w, "decode: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -1318,159 +1058,6 @@ func (s *server) createProject(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// pollLoop is the heartbeat: capture-pane on each tmux session, derive
-// state, and trigger bell when transitioning to NEEDS_INPUT.
-func (s *server) pollLoop(ctx context.Context) {
-	interval := time.Duration(s.cfg.Daemon.PollIntervalSeconds) * time.Second
-	idleNeeds := time.Duration(s.cfg.Daemon.IdleSecondsForNeedsInput) * time.Second
-	t := time.NewTicker(interval)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			s.pollOnce(ctx, idleNeeds)
-		}
-	}
-}
-
-func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
-	tss, err := tmux.List(ctx)
-	if err != nil {
-		return
-	}
-	// Keep the moshi state cache warm — it drives the tmux status-bar
-	// "moshi reachable" badge in applyChrome. The result is no longer
-	// used for the bell decision: ccmux rings the bell on every
-	// needs_input transition when Notifications.Bell is true, and the
-	// phone push (if any) fires alongside it.
-	s.refreshMoshiStateCached(ctx)
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	live := map[string]bool{}
-	anyActive := false
-	for _, ts := range tss {
-		live[ts.Name] = true
-		t, ok := s.seen[ts.Name]
-		if !ok {
-			t = &tracked{
-				created:     ts.Created,
-				lastChange:  time.Now(),
-				state:       agent.StateUnknown,
-				agentID:     project.ReadAgent(ts.Path),
-				projectPath: ts.Path,
-			}
-			s.seen[ts.Name] = t
-			s.events.Publish(daemon.SessionEvent{
-				At:   time.Now(),
-				Kind: "created",
-				Session: daemon.SessionState{
-					Name: ts.Name, Host: "local", State: string(agent.StateUnknown),
-					Path: ts.Path,
-				},
-			})
-		}
-		pane, err := s.capture(ctx, ts.Name, 60)
-		if err != nil {
-			// A capture failure (pane closing mid-poll, tmux busy)
-			// must not be swallowed silently — log it. The session's
-			// state is left as last classified rather than blanked,
-			// since the failure is usually transient.
-			log.Printf("ccmuxd: capture-pane %s: %v", ts.Name, err)
-			continue
-		}
-		if pane != t.last {
-			t.last = pane
-			t.lastChange = time.Now()
-		}
-		// Per-session agent dispatch. ByID is the unchecked path; we
-		// fed it via project.ReadAgent which always returns a valid id
-		// (defaulting to claude on missing/garbage). The Classify
-		// signature is uniform across agents — a string pane + the
-		// lastChange/idle threshold pair — so the switch is invisible
-		// from this call site's perspective.
-		newState := agent.ByID(t.agentID).Classify(pane, t.lastChange, idleNeeds)
-		// Transition into NEEDS_INPUT triggers the bell. Always-ring
-		// policy: the BEL fires whenever notifications.bell is true,
-		// independent of moshi-hook. The two notification channels
-		// are complementary (audible chime at the laptop, push on
-		// your phone); duplicate-suppression was a knob that hid the
-		// laptop signal even when the user was at the laptop.
-		if newState == agent.StateNeedsInput && t.state != agent.StateNeedsInput {
-			if s.cfg.Notifications.Bell {
-				_ = s.bell(ctx, ts.Name)
-			}
-			t.promptCount++
-		}
-		prevState := t.state
-		t.state = newState
-		if newState != prevState {
-			kind := "state_change"
-			if newState == agent.StateNeedsInput {
-				kind = "needs_input"
-			}
-			s.events.Publish(daemon.SessionEvent{
-				At:   time.Now(),
-				Kind: kind,
-				Session: daemon.SessionState{
-					Name: ts.Name, Host: "local", State: string(newState),
-					Path: ts.Path,
-				},
-			})
-			// Push notifications to paired phones — needs_input
-			// (agent paused for Y/N) and active → idle (agent
-			// finished its response). Off when APNs is disabled or
-			// no devices are registered.
-			s.maybePushForStateTransition(ts.Name, prevState, newState)
-		}
-		if newState == agent.StateActive {
-			anyActive = true
-		}
-	}
-	// Garbage-collect tracked entries for sessions that no longer exist.
-	for name := range s.seen {
-		if !live[name] {
-			delete(s.seen, name)
-		}
-	}
-	// Sleep manager reacts to the boolean "any session active?".
-	s.sleeper.SetActive(anyActive)
-}
-
-// refreshMoshiStateCached keeps the moshi.Status cache warm for the
-// tmux status-bar badge. Cached for 60s so we don't shell out to
-// moshi-hook every 2-second poll tick. The cache is consumed by
-// applyChrome — the bell decision itself ignores it (always-ring).
-func (s *server) refreshMoshiStateCached(ctx context.Context) {
-	s.moshiMu.Lock()
-	defer s.moshiMu.Unlock()
-	if time.Since(s.moshiCheckAt) > 60*time.Second {
-		s.moshiState = moshi.Detect(ctx)
-		s.moshiCheckAt = time.Now()
-	}
-}
-
-// startSleepManager constructs the sleeplock.Manager from config. The
-// backward-compat shim: if Mode is empty AND the legacy
-// DangerousKeepAwakeOnBattery flag is true, we treat that as
-// Mode="dangerous". The legacy flag is otherwise honored only as the
-// "off" interpretation for safe.
-func (s *server) startSleepManager() {
-	modeStr := s.cfg.Sleep.Mode
-	if modeStr == "" && s.cfg.Sleep.DangerousKeepAwakeOnBattery {
-		modeStr = "dangerous"
-	}
-	cutoff := s.cfg.Sleep.LowBatteryCutoff
-	if cutoff <= 0 {
-		cutoff = 20
-	}
-	s.sleeper = sleeplock.NewManager(sleeplock.ParseMode(modeStr), cutoff)
-	log.Printf("ccmuxd: sleep manager initialized (mode=%s, low_battery_cutoff=%d%%)",
-		s.sleeper.Requested(), cutoff)
-}
-
 // tailscaleAddr returns "<tailscale_ip>:<port>" if Tailscale is running, else error.
 func tailscaleAddr(port int) (string, error) {
 	out, err := exec.Command("tailscale", "ip", "-4").Output()
@@ -1501,4 +1088,22 @@ func indexByte(s string, b byte) int {
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// newHTTPServer returns an *http.Server with timeouts set. zero-value
+// timeouts let a tailnet peer hold a TCP connection open forever
+// (slow-loris) or stall a handler reading from a half-open body — both
+// of which leak Server goroutines for the daemon's lifetime. The
+// values are generous enough to cover handleAttach's long-lived
+// websocket and handleEvents's SSE stream (both opt out via
+// per-request hijacking / streaming flush; ReadHeaderTimeout still
+// applies to the initial request line).
+func newHTTPServer(h http.Handler) *http.Server {
+	return &http.Server{
+		Handler:           h,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		// Bodies are read inside handlers; per-handler context timeouts
+		// (5s on most write paths) bound how long a Decode can stall.
+	}
 }

@@ -13,11 +13,11 @@ package tui
 
 import (
 	"fmt"
-	"os/exec"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/skzv/ccmux/internal/remoteattach"
 	"github.com/skzv/ccmux/internal/tui/styles"
 )
 
@@ -83,7 +83,7 @@ func (m networkModel) SSHCmd() tea.Cmd {
 	if dial == "" {
 		return nil
 	}
-	cmd := exec.Command("ssh", "-t", dial)
+	cmd := remoteattach.SSHInteractive(dial)
 	if dbg := debugLogger(); dbg != nil {
 		dbg.Printf("network ssh: %s", dial)
 	}
