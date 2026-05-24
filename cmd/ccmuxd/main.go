@@ -1196,6 +1196,14 @@ func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	ch := s.events.Subscribe()
 	defer s.events.Unsubscribe(ch)
 	enc := json.NewEncoder(w)
+	// Push the headers + a comment frame immediately. Without this,
+	// http.Get on the client side blocks until the handler writes
+	// something — which doesn't happen until the first event arrives
+	// (or the heartbeat fires 20s later).
+	if _, err := fmt.Fprintf(w, ": connected\n\n"); err != nil {
+		return
+	}
+	flusher.Flush()
 	// Heartbeat keeps idle connections alive across NAT timeouts and
 	// gives a fast path to detect a dead client. SSE comment lines
 	// (starting with ":") are ignored by the EventSource spec.

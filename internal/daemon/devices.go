@@ -137,11 +137,37 @@ func (s *DeviceStore) flush() error {
 		return err
 	}
 	// Write-then-rename so a crash mid-write can't truncate the file.
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	// Use os.CreateTemp for a unique suffix per call — two concurrent
+	// Registers racing on a single ".tmp" name would otherwise hit
+	// "rename: no such file or directory" when one finished before the
+	// other's WriteFile sequenced through.
+	tmp, err := os.CreateTemp(filepath.Dir(s.path), "devices-*.tmp")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, s.path)
+	tmpName := tmp.Name()
+	cleaned := false
+	defer func() {
+		if !cleaned {
+			_ = os.Remove(tmpName)
+		}
+	}()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, s.path); err != nil {
+		return err
+	}
+	cleaned = true
+	return nil
 }
 
 // HashPublicKey turns an SSH authorized_keys-style public key into a
