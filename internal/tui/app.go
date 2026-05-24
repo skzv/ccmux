@@ -1590,7 +1590,7 @@ func (a App) refreshProjectsCmd() tea.Cmd {
 // configuredHostKeys returns every "addr:port" string that should be
 // treated as already-known when merging tailnet auto-discovery into a
 // list of configured hosts. Resolves DNS names to tailnet IPs so a
-// host configured as "sanguisugabogg:7474" still dedupes against the
+// host configured as "user:7474" still dedupes against the
 // scan's "100.x.x.x:7474" entry for the same machine. Falls back to
 // the literal address-only key when resolution fails — better to
 // dedupe one form than none.
