@@ -525,6 +525,34 @@ func newDaemonCmd() *cobra.Command {
 			},
 		},
 		&cobra.Command{
+			Use:   "restart",
+			Short: "Restart ccmuxd so a newly-installed binary takes effect",
+			Long: `Bounces the running daemon so a freshly-installed ccmuxd binary is
+picked up. macOS uses ` + "`launchctl kickstart -k`" + `, Linux uses
+` + "`systemctl --user restart`" + `; both preserve the autostart wiring
+` + "`ccmux daemon install`" + ` set up.
+
+Called automatically by ` + "`ccmux update`" + `, ` + "`make install`" + `, and the
+Homebrew formula's post_install hook — so the common upgrade paths
+all pick up new code without a logout. Run by hand after a manual
+` + "`go build`" + ` if you've side-stepped those paths.
+
+Idempotent. If the daemon isn't running yet, prints a note and exits 0
+so install scripts can call it unconditionally.`,
+			RunE: func(_ *cobra.Command, _ []string) error {
+				s, err := daemonservice.Restart()
+				if err != nil {
+					return err
+				}
+				if s.Running {
+					fmt.Println("✓ ccmuxd restarted")
+				} else {
+					fmt.Println("note: ccmuxd is not running — start it with `ccmux daemon start` or `ccmux daemon install`")
+				}
+				return nil
+			},
+		},
+		&cobra.Command{
 			Use:   "install",
 			Short: "Install ccmuxd as a system service so it starts on login + restarts on crash",
 			Long: `macOS: writes ~/Library/LaunchAgents/dev.ccmux.daemon.plist with

@@ -177,7 +177,7 @@ func TestDaemonCmd_HasExpectedSubcommands(t *testing.T) {
 	for _, sub := range cmd.Commands() {
 		have[sub.Use] = true
 	}
-	for _, want := range []string{"start", "status", "stop", "install", "uninstall", "unit"} {
+	for _, want := range []string{"start", "status", "stop", "restart", "install", "uninstall", "unit"} {
 		if !have[want] {
 			t.Errorf("daemon subcommand %q missing — was %v", want, keys(have))
 		}
