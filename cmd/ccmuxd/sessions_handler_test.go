@@ -69,12 +69,12 @@ func TestHandleSessionsItem_RoutingEdgeCases(t *testing.T) {
 	}
 
 	cases := []struct {
-		path   string
-		want   int
+		path string
+		want int
 	}{
-		{"/v1/sessions//kill", http.StatusBadRequest},      // empty name
-		{"/v1/sessions/foo", http.StatusBadRequest},         // no subaction
-		{"/v1/sessions/foo/bogus", http.StatusNotFound},     // unknown subaction
+		{"/v1/sessions//kill", http.StatusBadRequest},   // empty name
+		{"/v1/sessions/foo", http.StatusBadRequest},     // no subaction
+		{"/v1/sessions/foo/bogus", http.StatusNotFound}, // unknown subaction
 	}
 
 	for _, tc := range cases {
