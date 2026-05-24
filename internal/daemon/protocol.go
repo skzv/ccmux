@@ -160,6 +160,34 @@ type ProjectInfo struct {
 	Modified time.Time `json:"modified"`
 }
 
+// PeerInfo is one row in the GET /v1/peers response. Maps the daemon's
+// internal tailnet scan output to a shape clients (iOS, TUI) can use to
+// render "other ccmuxd hosts on your tailnet" pickers without each
+// needing tailscale-CLI access. Online peers that didn't respond to a
+// ccmuxd probe still show up with RunsCCMuxd=false so the UI can offer
+// an "install ccmux there" hint.
+type PeerInfo struct {
+	Hostname    string `json:"hostname"`     // pretty name (Tailscale HostName or MagicDNS short form)
+	Addr        string `json:"addr"`         // tailnet IPv4 (e.g. "100.75.64.20")
+	OS          string `json:"os"`           // "macOS" | "Linux" | "iOS" | …
+	Online      bool   `json:"online"`
+	RunsCCMuxd  bool   `json:"runs_ccmuxd"`  // ccmuxd /v1/health probe succeeded
+	Port        *int   `json:"port,omitempty"` // ccmuxd HTTP port if probed; nil otherwise
+}
+
+// Conversation is one past agent transcript on disk. Returned by
+// GET /v1/conversations so clients can show a unified history across
+// Claude / Codex / Antigravity sessions without each needing to know
+// the on-disk layouts.
+type Conversation struct {
+	ID       string    `json:"id"`                  // agent's own UUID; passed to its --resume flag
+	Agent    string    `json:"agent"`               // "claude" | "codex" | "antigravity"
+	Project  string    `json:"project,omitempty"`   // best-effort project label
+	Path     string    `json:"path,omitempty"`      // session's working directory if known
+	Preview  string    `json:"preview,omitempty"`   // first user message (empty for antigravity)
+	Modified time.Time `json:"modified"`            // when the transcript was last written
+}
+
 // PairRequest is the body of POST /v1/pair (mobile → daemon).
 type PairRequest struct {
 	Token     string `json:"token"`
