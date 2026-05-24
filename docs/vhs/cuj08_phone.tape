@@ -24,7 +24,7 @@ Sleep 300ms
 Enter
 
 # Let the narrow-layout dashboard paint.
-Sleep 4s
+Sleep 2500ms
 Screenshot docs/vhs/out/cuj08_phone.png
 
 # Scroll the sessions list.

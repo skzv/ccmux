@@ -26,7 +26,14 @@ command -v vhs >/dev/null 2>&1 || { echo "render: vhs not installed — 'brew in
 
 REAL_TMUX="$(command -v tmux)"
 REAL_HOME="$HOME"
-root="$(mktemp -d "${TMPDIR:-/tmp}/ccmux-vhs.XXXXXX")"
+# Hard-code /tmp (NOT $TMPDIR) for the sandbox root: this gives a
+# short path like /tmp/ccmux-vhs.XXX which agent banners — Claude's
+# header, Antigravity's "Accessing workspace" prompt — render in
+# their own UI (we can't tildify those, they're the agent's own
+# output). Defaulting to $TMPDIR on macOS produced 80+-char paths
+# like /private/var/folders/h4/lcrsqwgs4d.../T/ccmux-vhs.XXX which
+# made every public-demo agent screen unreadable.
+root="$(mktemp -d "/tmp/ccmux-vhs.XXXXXX")"
 TMUX_SOCK="$root/tmux.sock"
 
 export HOME="$root/home"
@@ -90,6 +97,19 @@ cp "$repo/bin/ccmux" "$repo/bin/ccmuxd" "$root/bin/"
 
 # Add ccmux to .local/bin so 'ccmux doctor' PATH check passes.
 ln -sf "$root/bin/ccmux" "$HOME/.local/bin/ccmux"
+
+# --- Tailscale stub: suppress real peer scan in demos.
+# Without this, ccmux's peer auto-discovery walks the dev's actual
+# tailnet — real hostnames (orbita, project-server) and a paired
+# iPhone show up in the rendered Devices panel, which is a privacy
+# leak on a public README GIF. Stub exits non-zero so ScanTailnet
+# treats the host as "tailscale not installed" and returns an empty
+# peer list.
+cat > "$root/bin/tailscale" <<'WRAP'
+#!/bin/sh
+exit 1
+WRAP
+chmod +x "$root/bin/tailscale"
 
 # --- Shell prompt (suppress zsh new-user wizard) ---------------------
 printf "PROMPT='%%F{magenta}\xe2\x9d\xaf%%f '\nZSH_DISABLE_COMPFIX=true\n" > "$HOME/.zshrc"

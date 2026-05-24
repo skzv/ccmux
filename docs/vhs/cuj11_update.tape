@@ -27,20 +27,21 @@ Sleep 300ms
 Enter
 
 # Wait for the update check to complete and the banner to paint.
-Sleep 5s
+Sleep 3s
 Screenshot docs/vhs/out/cuj11_update.png
 
 # Show the update banner for a moment, then show the user acting on it.
-Sleep 2s
+Sleep 1500ms
 
 # Quit to shell to run the update command.
 Type "q"
-Sleep 800ms
-Type "ccmux update"
+Sleep 500ms
+# Use --dry-run so the demo shows the plan ccmux would execute
+# without actually running `make install` against the demo's seeded
+# checkout (whose Makefile has no install target). On a real install
+# the same command minus --dry-run performs the upgrade + daemon
+# restart end-to-end.
+Type "ccmux update --dry-run"
 Sleep 300ms
 Enter
-Sleep 2s
-
-# Quit.
-Type "q"
-Sleep 500ms
+Sleep 3s

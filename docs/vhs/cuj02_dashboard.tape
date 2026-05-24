@@ -22,20 +22,23 @@ Sleep 300ms
 Enter
 
 # Let the dashboard paint and the daemon's first poll land.
-Sleep 4s
+Sleep 2500ms
 Screenshot docs/vhs/out/cuj02_dashboard.png
-Sleep 2s
 
-# Scroll through the sessions list to show navigation.
+# Scroll through the sessions list to show navigation. Each j/k pause
+# at 600ms gives the right pane time to refresh with the newly-
+# selected session's detail block.
 Type "j"
-Sleep 500ms
+Sleep 600ms
 Type "j"
-Sleep 500ms
+Sleep 600ms
+Type "j"
+Sleep 600ms
 Type "k"
-Sleep 500ms
-
-Sleep 1s
+Sleep 600ms
+Type "k"
+Sleep 800ms
 
 # Quit.
 Type "q"
-Sleep 800ms
+Sleep 500ms

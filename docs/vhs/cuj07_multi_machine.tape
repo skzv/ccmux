@@ -22,7 +22,7 @@ Show
 Type "ccmux"
 Sleep 300ms
 Enter
-Sleep 3500ms
+Sleep 2s
 
 # The Home screen shows the dashboard with local sessions on the left
 # and the devices panel on the right (local host + any configured remotes).

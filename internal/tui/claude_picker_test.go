@@ -425,3 +425,52 @@ func effortAt(i int) string {
 	}
 	return opts[i].Value
 }
+
+// TestSummarizePath_StandardPath — happy path: $HOME prefix becomes ~.
+func TestSummarizePath_StandardPath(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	if got := summarizePath(tmp + "/Projects/ccmux"); got != "~/Projects/ccmux" {
+		t.Errorf("summarizePath = %q, want ~/Projects/ccmux", got)
+	}
+}
+
+// TestSummarizePath_HomeItself — bare $HOME becomes bare ~.
+func TestSummarizePath_HomeItself(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	if got := summarizePath(tmp); got != "~" {
+		t.Errorf("summarizePath(HOME) = %q, want ~", got)
+	}
+}
+
+// TestSummarizePath_DoubleSlashInHome pins the macOS-TMPDIR-trailing-
+// slash regression that broke the cuj11 demo's tildified path: the
+// raw HasPrefix check failed against /var/folders/.../T//foo derived
+// from $TMPDIR. filepath.Clean normalizes both sides.
+func TestSummarizePath_DoubleSlashInHome(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp+"//extra")
+	if got := summarizePath(tmp + "/extra/Projects/ccmux"); got != "~/Projects/ccmux" {
+		t.Errorf("summarizePath with double-slash HOME = %q, want ~/Projects/ccmux", got)
+	}
+}
+
+// TestSummarizePath_PathOutsideHome — passes through unchanged.
+func TestSummarizePath_PathOutsideHome(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	if got := summarizePath("/usr/local/bin/ccmux"); got != "/usr/local/bin/ccmux" {
+		t.Errorf("summarizePath outside HOME = %q, want passthrough", got)
+	}
+}
+
+// TestSummarizePath_PrefixIsNotComponentMatch — /tmp/foo prefix must
+// not falsely tildify /tmp/foobar. Without the trailing-separator
+// guard, /tmp/foobar would render as ~bar.
+func TestSummarizePath_PrefixIsNotComponentMatch(t *testing.T) {
+	t.Setenv("HOME", "/tmp/foo")
+	if got := summarizePath("/tmp/foobar/x"); got != "/tmp/foobar/x" {
+		t.Errorf("summarizePath must not match partial components: got %q", got)
+	}
+}
