@@ -192,6 +192,49 @@ func TestSettings_ReadOnlyFieldRefusesEnter(t *testing.T) {
 	}
 }
 
+// TestSettings_SubscriptionTierAccepts_ScreenEdit — exercises the
+// subscription.tier row at the settingsModel level: park cursor on
+// the row, press Enter to open the inline editor, type "pro", commit.
+// The cfg field updates and the value persists to disk. This is the
+// screen-level companion to TestEditableFields_SubscriptionTier, which
+// only covers the field's set() closure directly.
+func TestSettings_SubscriptionTierAccepts_ScreenEdit(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	m := newSettings(styles.Default(), DefaultKeymap(), config.Defaults(), "test")
+
+	// Park cursor on the subscription.tier row.
+	for i, f := range editableFields() {
+		if f.label == "subscription.tier" {
+			m.cursor = i
+		}
+	}
+
+	// Enter opens the inline textinput.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !m.editing {
+		t.Fatal("Enter on subscription.tier should activate editing")
+	}
+	m.editor.SetValue("pro")
+	m, _ = m.commit()
+	if m.editing {
+		t.Fatalf("commit should close the editor; errMsg=%q", m.errMsg)
+	}
+	if m.errMsg != "" {
+		t.Fatalf("unexpected commit error: %s", m.errMsg)
+	}
+	if m.cfg.Subscription.Tier != "pro" {
+		t.Errorf("Subscription.Tier = %q, want pro", m.cfg.Subscription.Tier)
+	}
+	// Persisted to disk.
+	reloaded, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.Subscription.Tier != "pro" {
+		t.Errorf("config.Save didn't persist Subscription.Tier: got %q", reloaded.Subscription.Tier)
+	}
+}
+
 // byLabel is a tiny test helper that returns the named field or nil.
 func byLabel(fields []editableField, name string) *editableField {
 	for i := range fields {
