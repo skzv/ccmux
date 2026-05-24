@@ -111,6 +111,20 @@ func Options(session, projectLabel string, moshiReachable, nested bool, prefix s
 		fgMuted, returnHint, moshiBadge,
 	)
 
+	// Terminal title: push the project label to the host terminal
+	// (iTerm tab/window, GNOME Terminal, kitty, Alacritty, etc.) so
+	// a user with several Claude sessions open across windows can
+	// see at a glance which is which. Without set-titles, tmux
+	// emits no title escape and the terminal falls back to whatever
+	// the shell last set — typically "tmux" or the binary name.
+	//
+	// #{?#{!=:#{client_prefix},0},⌃,} is empty most of the time;
+	// when the user has just pressed the prefix it briefly shows a
+	// caret so a glance at the title bar can confirm tmux saw the
+	// prefix. Cheap, on-brand. Per-session so it doesn't override
+	// the user's other tmux sessions' titles.
+	titleFmt := fmt.Sprintf("ccmux • %s#{?client_prefix, ⌃,}", projectLabel)
+
 	return [][]string{
 		{"status", "on"},
 		{"status-position", "bottom"},
@@ -133,6 +147,9 @@ func Options(session, projectLabel string, moshiReachable, nested bool, prefix s
 		// it overrides any `window-size smallest` in their ~/.tmux.conf
 		// for ccmux sessions specifically.
 		{"window-size", "latest"},
+		// Terminal title push: see titleFmt above.
+		{"set-titles", "on"},
+		{"set-titles-string", titleFmt},
 	}
 }
 
@@ -171,11 +188,17 @@ func PrettyKey(k string) string {
 // when ccmux kills or "releases" a session so the chrome doesn't linger
 // if the user later attaches to it from a non-ccmux client.
 func Reset(ctx context.Context, session string) error {
-	opts := []string{
-		"status-position", "status-style", "status-left", "status-right",
-		"status-left-length", "status-right-length",
-		"window-status-current-style", "window-status-style",
-		"status-interval", "window-size",
+	// Derive the unset list from Options() so adding a new option
+	// can never leave a stale value behind after Reset. The values
+	// passed here are placeholders — we only care about the keys.
+	applied := Options(session, session, false, false, "Ctrl-b")
+	opts := make([]string, 0, len(applied)+1)
+	// status itself isn't part of Options' key list (we set it to
+	// "on" but a fresh session already defaults to on, so unsetting
+	// is a no-op). Include it anyway so future toggles are covered.
+	opts = append(opts, "status")
+	for _, kv := range applied {
+		opts = append(opts, kv[0])
 	}
 	for _, key := range opts {
 		_ = exec.CommandContext(ctx, "tmux", "set-option", "-t", session, "-u", key).Run()

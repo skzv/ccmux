@@ -160,3 +160,63 @@ func TestOptions_EmptyLabelFallsBackToSession(t *testing.T) {
 		}
 	}
 }
+
+// TestOptions_SetsTerminalTitle pins the iTerm/GNOME/kitty window-title
+// behavior: tmux's set-titles defaults to off, so without these two
+// options the host terminal stays stuck on whatever the shell last set
+// (typically "tmux"). The user reported the iTerm window showed only
+// "tmux" with no way to tell which Claude session lived there; this
+// surface ensures every ccmux-attached session pushes "ccmux • <label>"
+// up to the terminal. Per-session via Apply so vanilla tmux sessions
+// the user runs elsewhere keep their default titling.
+func TestOptions_SetsTerminalTitle(t *testing.T) {
+	opts := Options("c-foo", "auth-redesign", false, false, "Ctrl-b")
+	asMap := map[string]string{}
+	for _, kv := range opts {
+		asMap[kv[0]] = kv[1]
+	}
+	if asMap["set-titles"] != "on" {
+		t.Errorf("set-titles = %q, want on (host terminal won't update otherwise)", asMap["set-titles"])
+	}
+	title := asMap["set-titles-string"]
+	if !strings.Contains(title, "ccmux") {
+		t.Errorf("set-titles-string missing ccmux brand: %q", title)
+	}
+	if !strings.Contains(title, "auth-redesign") {
+		t.Errorf("set-titles-string missing project label: %q", title)
+	}
+}
+
+// TestOptions_TitleFallsBackToSessionWhenLabelEmpty mirrors the
+// status-left fallback: a bare session with no project context should
+// still surface its tmux name in the terminal title rather than just
+// "ccmux • ".
+func TestOptions_TitleFallsBackToSessionWhenLabelEmpty(t *testing.T) {
+	opts := Options("c-foo", "", false, false, "Ctrl-b")
+	for _, kv := range opts {
+		if kv[0] == "set-titles-string" && !strings.Contains(kv[1], "c-foo") {
+			t.Errorf("empty label: title should fall back to session name: %q", kv[1])
+		}
+	}
+}
+
+// TestOptions_EmitsTitleKeysForReset pins that Options emits
+// set-titles + set-titles-string. Reset derives its unset list from
+// Options() so the two stay in sync — but the keys must actually
+// appear in Options for that derivation to do any good. Without this,
+// a ccmux session killed mid-attach could leave its custom title
+// pushing in place on the next vanilla `tmux attach`, and the user
+// would see "ccmux • foo" in their terminal title with no ccmux
+// running.
+func TestOptions_EmitsTitleKeysForReset(t *testing.T) {
+	opts := Options("c-foo", "p", false, false, "Ctrl-b")
+	have := map[string]bool{}
+	for _, kv := range opts {
+		have[kv[0]] = true
+	}
+	for _, want := range []string{"set-titles", "set-titles-string"} {
+		if !have[want] {
+			t.Errorf("Options() must emit %q so Reset has it to unset", want)
+		}
+	}
+}
