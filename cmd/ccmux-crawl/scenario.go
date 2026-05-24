@@ -38,14 +38,14 @@ func allScenarios() []scenario {
 		{
 			name: "all-screens",
 			steps: []step{
-				{in: keyRune('1'), want: "Home"},
-				{in: keyRune('2'), want: "Conversations"},
-				{in: keyRune('3'), want: "Projects"},
+				{in: keyRune('1'), want: "Sessions"},
+				{in: keyRune('2'), want: "Projects"},
+				{in: keyRune('3'), want: "Conversations"},
 				{in: keyRune('4'), want: "Notes"},
 				{in: keyRune('5'), want: "Agents"},
 				{in: keyRune('6'), want: "Settings"},
 				{in: keyRune('7'), want: "Network"},
-				{in: keyRune('1'), want: "Home"},
+				{in: keyRune('1'), want: "Sessions"},
 			},
 		},
 		{
@@ -65,10 +65,10 @@ func allScenarios() []scenario {
 		{
 			name: "nav-and-back",
 			steps: []step{
-				{in: keyRune('3'), want: "Projects"},
-				{in: keyRune('1'), want: "Home"},
+				{in: keyRune('2'), want: "Projects"},
+				{in: keyRune('1'), want: "Sessions"},
 				{in: keyRune('4'), want: "Notes"},
-				{in: keyRune('1'), want: "Home"},
+				{in: keyRune('1'), want: "Sessions"},
 			},
 		},
 		{

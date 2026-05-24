@@ -25,7 +25,7 @@ Enter
 Sleep 2s
 
 # Go to the Projects screen.
-Type "3"
+Type "2"
 Sleep 600ms
 
 # Open the new-project form.

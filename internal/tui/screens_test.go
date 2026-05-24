@@ -60,7 +60,7 @@ func TestRenderHeader_ShowsEveryScreen(t *testing.T) {
 		styles: styles.Default(),
 		keys:   DefaultKeymap(),
 		width:  200, // wide enough that labels aren't collapsed to numbers
-		screen: ScreenHome,
+		screen: ScreenSessions,
 	}
 	header := a.renderHeader()
 	for _, s := range allScreens() {
@@ -81,7 +81,7 @@ func TestRenderHeader_NumbersMatchKeymap(t *testing.T) {
 		styles: styles.Default(),
 		keys:   DefaultKeymap(),
 		width:  200,
-		screen: ScreenHome,
+		screen: ScreenSessions,
 	}
 	header := a.renderHeader()
 	// Each screen's tab should render as "[N] Label" with N = enum+1.
@@ -147,7 +147,7 @@ func itoaTest(n int) string {
 // screen is a single full-width column with the hero dropped entirely:
 // sessions, then the Session summary / Devices / Usage tiles.
 func TestHomeView_NarrowSingleColumn(t *testing.T) {
-	a := newTestApp(ScreenHome)
+	a := newTestApp(ScreenSessions)
 	// The Devices tile only renders when at least one host is known;
 	// give it one so the full column order can be checked.
 	a.dashboard.SetHosts([]hostStatus{{Name: "sputnik", Local: true, OK: true}})
@@ -176,7 +176,7 @@ func TestHomeView_NarrowSingleColumn(t *testing.T) {
 // left, the session detail + stat tiles on the right. Every tile is
 // present and no line overflows.
 func TestHomeView_WideTwoColumn(t *testing.T) {
-	a := newTestApp(ScreenHome)
+	a := newTestApp(ScreenSessions)
 	a.dashboard.SetHosts([]hostStatus{{Name: "sputnik", Local: true, OK: true}})
 	out := a.homeView(200, 60) // ≥ 120 → banner + two columns
 	assertNoOverflow(t, out, 200)
@@ -191,7 +191,7 @@ func TestHomeView_WideTwoColumn(t *testing.T) {
 // above both columns, so "Hello." renders before the sessions list
 // (left column) and before "Session summary" (right column).
 func TestHomeView_WideHeroIsBanner(t *testing.T) {
-	a := newTestApp(ScreenHome)
+	a := newTestApp(ScreenSessions)
 	a.dashboard.SetHosts([]hostStatus{{Name: "sputnik", Local: true, OK: true}})
 	out := a.homeView(200, 60)
 	hello := strings.Index(out, "Hello.")

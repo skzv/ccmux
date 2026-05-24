@@ -19,19 +19,19 @@ func TestTUIFlow_ScreenNavigation(t *testing.T) {
 	e.writeConfig(cfg)
 
 	d := newTUIDriver(t, e, 40, 120)
-	d.WaitFor("Home")
+	d.WaitFor("Sessions")
 
 	steps := []struct {
 		key   string
 		label string
 	}{
-		{"2", "Conversations"},
-		{"3", "Projects"},
+		{"2", "Projects"},
+		{"3", "Conversations"},
 		{"4", "Notes"},
 		{"5", "Agents"},
 		{"6", "Settings"},
 		{"7", "Network"},
-		{"1", "Home"},
+		{"1", "Sessions"},
 	}
 	for _, tc := range steps {
 		d.Send(tc.key)
@@ -51,7 +51,7 @@ func TestTUIFlow_HelpOverlay(t *testing.T) {
 	e.writeConfig(cfg)
 
 	d := newTUIDriver(t, e, 40, 120)
-	d.WaitFor("Home")
+	d.WaitFor("Sessions")
 
 	// Open the help overlay.
 	d.Send("?")
@@ -81,7 +81,7 @@ func TestTUIFlow_NewSessionForm_OpenAndCancel(t *testing.T) {
 	e.writeConfig(cfg)
 
 	d := newTUIDriver(t, e, 40, 120)
-	d.WaitFor("Home")
+	d.WaitFor("Sessions")
 
 	// Open the form.
 	d.Send("n")
@@ -89,7 +89,7 @@ func TestTUIFlow_NewSessionForm_OpenAndCancel(t *testing.T) {
 
 	// Cancel.
 	d.Send(KeyEsc)
-	d.WaitForTimeout("Home", 5*time.Second)
+	d.WaitForTimeout("Sessions", 5*time.Second)
 
 	if names := e.sessionNames(); len(names) != 0 {
 		t.Errorf("expected no tmux sessions after cancel, got %v", names)
@@ -109,7 +109,7 @@ func TestTUIFlow_CreateBareSession(t *testing.T) {
 	e.startDaemon()
 
 	d := newTUIDriver(t, e, 40, 120)
-	d.WaitFor("Home")
+	d.WaitFor("Sessions")
 
 	// Open the form and type a session name.
 	d.Send("n")
@@ -154,7 +154,7 @@ func TestTUIFlow_KillSession(t *testing.T) {
 	}
 
 	d := newTUIDriver(t, e, 40, 120)
-	d.WaitFor("Home")
+	d.WaitFor("Sessions")
 
 	// Wait for the session to appear in the TUI.
 	d.WaitForTimeout("tui-kill-test", 8*time.Second)
@@ -191,7 +191,7 @@ func TestTUIFlow_RenameSession(t *testing.T) {
 	}
 
 	d := newTUIDriver(t, e, 40, 120)
-	d.WaitFor("Home")
+	d.WaitFor("Sessions")
 	d.WaitForTimeout("tui-rename-src", 8*time.Second)
 
 	// Open the rename form.
@@ -231,10 +231,10 @@ func TestTUIFlow_ProjectsScreen(t *testing.T) {
 	writeFile(t, filepath.Join(projDir, "CLAUDE.md"), "# my-project\n")
 
 	d := newTUIDriver(t, e, 40, 120)
-	d.WaitFor("Home")
+	d.WaitFor("Sessions")
 
-	// Switch to Projects screen.
-	d.Send("3")
+	// Switch to Projects screen (key "2" after the v0.1.x tab reorder).
+	d.Send("2")
 	d.WaitFor("Projects")
 
 	// The project name should appear in the list.
@@ -260,7 +260,7 @@ func TestTUIFlow_TourNavigation(t *testing.T) {
 
 	// Step 2.
 	d.Send(KeyEnter)
-	d.WaitForTimeout("Home (1)", 5*time.Second)
+	d.WaitForTimeout("Sessions (1)", 5*time.Second)
 
 	// Step 3.
 	d.Send(KeyEnter)
@@ -272,7 +272,7 @@ func TestTUIFlow_TourNavigation(t *testing.T) {
 
 	// Finish: Enter on the last slide closes the tour and returns to Home.
 	d.Send(KeyEnter)
-	d.WaitForTimeout("Home", 8*time.Second)
+	d.WaitForTimeout("Sessions", 8*time.Second)
 
 	d.Quit()
 }

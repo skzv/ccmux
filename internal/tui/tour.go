@@ -37,9 +37,9 @@ func defaultTourSteps() []tourStep {
 			KeyHint: "→ / space / enter: next  ·  esc: skip",
 		},
 		{
-			Title: "Home (1) — Sessions + Stats",
+			Title: "Sessions (1) — Sessions + Stats",
 			Body: []string{
-				"Home is your command centre. Left pane: live sessions. Right pane: usage stats.",
+				"Sessions is your command centre. Left pane: live sessions. Right pane: usage stats.",
 			},
 			Bullets: []string{
 				"↑↓/jk — navigate the session list · Enter — attach to the highlighted session",
@@ -50,13 +50,13 @@ func defaultTourSteps() []tourStep {
 			KeyHint: "Press 1 / F1 anywhere to come back here",
 		},
 		{
-			Title: "Conversations, Projects, Notes, Agents (2-5)",
+			Title: "Projects, Conversations, Notes, Agents (2-5)",
 			Body: []string{
 				"The remaining screens cover the full workflow loop:",
 			},
 			Bullets: []string{
-				"2 — Conversations: every past agent dialogue (Claude/Codex/Antigravity) — resume any",
-				"3 — Projects: every dir under ~/Projects with a CLAUDE.md or .git",
+				"2 — Projects: every dir under ~/Projects with a CLAUDE.md or .git",
+				"3 — Conversations: every past agent dialogue (Claude/Codex/Antigravity) — resume any",
 				"4 — Notes: per-project docs/ vault — Specs, ADRs, Agent Logs",
 				"5 — Agents: edit ~/.claude / ~/.codex / ~/.gemini/antigravity-cli config",
 				"6 — Settings: ccmux's own config (paths, daemon, theme)",

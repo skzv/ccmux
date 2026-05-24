@@ -309,7 +309,7 @@ func TestEnterOnConversations_EmptyList_NoOverlay(t *testing.T) {
 // most common attach path.
 func TestAttachSelectedSession_LocalFlipsOverlay(t *testing.T) {
 	a := newAppForTest(t)
-	a.screen = ScreenHome
+	a.screen = ScreenSessions
 	a.sessionsM.SetSessions([]daemon.SessionState{
 		{Name: "c-myproj", Host: "local", Project: "myproj"},
 	})
@@ -329,7 +329,7 @@ func TestAttachSelectedSession_LocalFlipsOverlay(t *testing.T) {
 // no row selected, no overlay should appear and no cmd should fire.
 func TestAttachSelectedSession_NoSelection_NoOverlay(t *testing.T) {
 	a := newAppForTest(t)
-	a.screen = ScreenHome
+	a.screen = ScreenSessions
 	// No SetSessions — Selected returns nil.
 	a2, cmd := a.attachSelectedSession()
 	if a2.attach.active {
