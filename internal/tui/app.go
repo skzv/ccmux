@@ -501,7 +501,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.dashboard.SetVersion(a.version)
 		a.sessionsM.SetSessions(a.sessions)
 		if msg.Err != nil {
-			a.setToast(toastError, "refresh: "+msg.Err.Error(), 5*time.Second)
+			a.toasts.Set(toastError, "refresh: "+msg.Err.Error(), 5*time.Second)
 		}
 		return a, nil
 
@@ -523,7 +523,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Kind == toastError && a.attach.active {
 			a.stopAttaching()
 		}
-		a.setToast(msg.Kind, msg.Text, time.Until(msg.Until))
+		a.toasts.Set(msg.Kind, msg.Text, time.Until(msg.Until))
 		return a, nil
 
 	case projectMenuMsg:
@@ -590,9 +590,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case sessionRenamedMsg:
 		if msg.Err != nil {
-			a.setToast(toastError, "rename failed: "+msg.Err.Error(), 5*time.Second)
+			a.toasts.Set(toastError, "rename failed: "+msg.Err.Error(), 5*time.Second)
 		} else {
-			a.setToast(toastSuccess, "renamed "+msg.OldName+" → "+msg.NewName, 3*time.Second)
+			a.toasts.Set(toastSuccess, "renamed "+msg.OldName+" → "+msg.NewName, 3*time.Second)
 		}
 		return a, a.refreshSessionsCmd()
 
@@ -602,7 +602,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// for discovered hosts (PATH prepend + login shell, etc.).
 		if msg.DialHost == "" {
 			a.stopAttaching()
-			a.setToast(toastError, "remote session created but no dial host known", 5*time.Second)
+			a.toasts.Set(toastError, "remote session created but no dial host known", 5*time.Second)
 			return a, nil
 		}
 		target := msg.DialHost
@@ -678,9 +678,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case sessionKilledMsg:
 		if msg.Err != nil {
-			a.setToast(toastError, "kill failed: "+msg.Err.Error(), 5*time.Second)
+			a.toasts.Set(toastError, "kill failed: "+msg.Err.Error(), 5*time.Second)
 		} else {
-			a.setToast(toastSuccess, "killed "+msg.Name, 3*time.Second)
+			a.toasts.Set(toastSuccess, "killed "+msg.Name, 3*time.Second)
 		}
 		return a, a.refreshSessionsCmd()
 
@@ -700,12 +700,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// holds a cached copy. Errors surface as a toast — the previous
 		// in-memory config stays in place so the TUI doesn't go blank.
 		if cfg, err := config.Load(); err != nil {
-			a.setToast(toastError, "reload config: "+err.Error(), 5*time.Second)
+			a.toasts.Set(toastError, "reload config: "+err.Error(), 5*time.Second)
 		} else {
 			a.cfg = cfg
 			a.settings.SetConfig(cfg)
 			a.dashboard.SetConfig(cfg)
-			a.setToast(toastSuccess, "config reloaded", 2*time.Second)
+			a.toasts.Set(toastSuccess, "config reloaded", 2*time.Second)
 		}
 		return a, nil
 
@@ -1277,12 +1277,6 @@ func shortHostname(h string) string {
 		return h[:i]
 	}
 	return h
-}
-
-// setToast is a thin wrapper for callers that haven't been migrated
-// to a.toasts.Set directly. The real logic lives on toastController.
-func (a *App) setToast(kind toastKind, text string, ttl time.Duration) {
-	a.toasts.Set(kind, text, ttl)
 }
 
 // refreshSessionsCmd fetches sessions from local ccmuxd, every
