@@ -97,6 +97,16 @@ func TestEventBus_DroppedZeroForUnknownChannel(t *testing.T) {
 	}
 }
 
+// TestEventBus_DoubleUnsubscribeIsNoop — calling Unsubscribe twice on the
+// same channel must not panic. The second call sees the channel already
+// removed from the map and skips the close.
+func TestEventBus_DoubleUnsubscribeIsNoop(t *testing.T) {
+	b := NewEventBus()
+	ch := b.Subscribe()
+	b.Unsubscribe(ch)
+	b.Unsubscribe(ch) // must not panic
+}
+
 // TestEventBus_Concurrent — Publish racing against Subscribe/Unsubscribe
 // must not panic with a send-on-closed-channel (meaningful under -race).
 func TestEventBus_Concurrent(t *testing.T) {

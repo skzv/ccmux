@@ -38,12 +38,16 @@ func (b *EventBus) Subscribe() chan SessionEvent {
 	return ch
 }
 
-// Unsubscribe removes and closes the channel.
+// Unsubscribe removes and closes the channel. Idempotent: a second call
+// for the same channel is a no-op rather than a panic.
 func (b *EventBus) Unsubscribe(ch chan SessionEvent) {
 	b.mu.Lock()
+	_, registered := b.subs[ch]
 	delete(b.subs, ch)
 	b.mu.Unlock()
-	close(ch)
+	if registered {
+		close(ch)
+	}
 }
 
 // Publish sends an event to all subscribers. Non-blocking: when a
