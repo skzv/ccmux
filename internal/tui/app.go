@@ -4,6 +4,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"sort"
@@ -1391,16 +1392,19 @@ func (a App) refreshSessionsCmd() tea.Cmd {
 		}
 
 		// Configured hosts. Tracked so we don't double-add a peer that's
-		// both explicitly configured AND auto-discovered.
+		// both explicitly configured AND auto-discovered. configuredHostKeys
+		// resolves DNS names to IPs so a host configured as "mac-mini:7474"
+		// still dedupes against the scan's "100.x.x.x:7474" entry.
 		seen := map[string]bool{}
 		for _, h := range hosts {
-			addr := h.Address
-			if h.Port == 0 {
-				addr += ":7474"
-			} else {
-				addr += fmt.Sprintf(":%d", h.Port)
+			for _, k := range configuredHostKeys(h, tailnetPort) {
+				seen[k] = true
 			}
-			seen[addr] = true
+			port := h.Port
+			if port == 0 {
+				port = tailnetPort
+			}
+			addr := fmt.Sprintf("%s:%d", h.Address, port)
 			cli := daemon.RemoteClient(addr)
 			ss, e := cli.Sessions(ctx)
 			st := hostStatus{
@@ -1536,16 +1540,20 @@ func (a App) refreshProjectsCmd() tea.Cmd {
 			}
 		}
 
-		// Configured remote hosts.
+		// Configured remote hosts. seen is keyed by every form of the
+		// host's address we can resolve (literal + each tailnet IP) so
+		// the auto-discovery scan below doesn't re-fetch a peer that's
+		// already configured under a DNS name.
 		seen := map[string]bool{}
 		for _, h := range hosts {
-			addr := h.Address
-			if h.Port == 0 {
-				addr += ":7474"
-			} else {
-				addr += fmt.Sprintf(":%d", h.Port)
+			for _, k := range configuredHostKeys(h, tailnetPort) {
+				seen[k] = true
 			}
-			seen[addr] = true
+			port := h.Port
+			if port == 0 {
+				port = tailnetPort
+			}
+			addr := fmt.Sprintf("%s:%d", h.Address, port)
 			all = appendRemoteProjects(ctx, all, addr, h.Name)
 		}
 
@@ -1577,6 +1585,34 @@ func (a App) refreshProjectsCmd() tea.Cmd {
 		})
 		return projectsLoadedMsg{Projects: all}
 	}
+}
+
+// configuredHostKeys returns every "addr:port" string that should be
+// treated as already-known when merging tailnet auto-discovery into a
+// list of configured hosts. Resolves DNS names to tailnet IPs so a
+// host configured as "sanguisugabogg:7474" still dedupes against the
+// scan's "100.x.x.x:7474" entry for the same machine. Falls back to
+// the literal address-only key when resolution fails — better to
+// dedupe one form than none.
+//
+// `defaultPort` is the port to use when h.Port == 0. Callers pass the
+// same value they hand to ScanTailnet so both paths agree on what
+// "the default daemon port" means in this user's config.
+func configuredHostKeys(h config.Host, defaultPort int) []string {
+	port := h.Port
+	if port == 0 {
+		port = defaultPort
+	}
+	keys := []string{fmt.Sprintf("%s:%d", h.Address, port)}
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	var r net.Resolver
+	if ips, err := r.LookupHost(ctx, h.Address); err == nil {
+		for _, ip := range ips {
+			keys = append(keys, fmt.Sprintf("%s:%d", ip, port))
+		}
+	}
+	return keys
 }
 
 // appendRemoteProjects fetches projects from one remote ccmuxd at

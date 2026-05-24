@@ -104,6 +104,48 @@ func TestDialAddrFor_StripsPort(t *testing.T) {
 	}
 }
 
+// TestConfiguredHostKeys_DedupsAcrossResolvedIP locks in the fix for
+// "every project shows twice on the dashboard": a host configured by
+// DNS name (e.g. "localhost:7474") wasn't deduping against the same
+// peer auto-discovered by IP ("127.0.0.1:7474"), so its projects and
+// sessions got fetched and rendered twice.
+func TestConfiguredHostKeys_DedupsAcrossResolvedIP(t *testing.T) {
+	keys := configuredHostKeys(config.Host{Name: "loop", Address: "localhost", Port: 7474}, 7474)
+	want := map[string]bool{"localhost:7474": false}
+	for _, k := range keys {
+		want[k] = true
+	}
+	if !want["localhost:7474"] {
+		t.Fatalf("missing literal key in %v", keys)
+	}
+	hasIP := false
+	for _, k := range keys {
+		if k == "127.0.0.1:7474" || k == "[::1]:7474" || k == "::1:7474" {
+			hasIP = true
+		}
+	}
+	if !hasIP {
+		t.Errorf("no resolved-IP key for localhost in %v — auto-discovery dedupe will miss", keys)
+	}
+}
+
+// TestConfiguredHostKeys_DefaultsPort confirms an unset h.Port falls
+// back to the caller-supplied default (which mirrors what the same
+// caller hands to ScanTailnet, so the two paths agree on what "the
+// default daemon port" means in this user's config).
+func TestConfiguredHostKeys_DefaultsPort(t *testing.T) {
+	keys := configuredHostKeys(config.Host{Address: "example.invalid"}, 9999)
+	found := false
+	for _, k := range keys {
+		if k == "example.invalid:9999" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected example.invalid:9999 in %v", keys)
+	}
+}
+
 func TestRemoteTmuxAttach(t *testing.T) {
 	// detachOthers=false → mirror mode (the default).
 	got := remoteTmuxAttach("c-foo", false)
