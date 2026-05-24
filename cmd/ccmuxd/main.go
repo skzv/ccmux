@@ -35,6 +35,7 @@ import (
 	"github.com/skzv/ccmux/internal/conversations"
 	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/moshi"
+	"github.com/skzv/ccmux/internal/notes"
 	"github.com/skzv/ccmux/internal/project"
 	"github.com/skzv/ccmux/internal/scaffold"
 	"github.com/skzv/ccmux/internal/sleeplock"
@@ -287,6 +288,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/v1/peers", s.handlePeers)
 	mux.HandleFunc("/v1/conversations", s.handleConversations)
 	mux.HandleFunc("/v1/usage", s.handleUsage)
+	mux.HandleFunc("/v1/notes", s.handleNotes)
 }
 
 // localOnlyRoutes registers endpoints that must never be reachable from
@@ -715,6 +717,92 @@ func (s *server) handleSendKeys(w http.ResponseWriter, r *http.Request, name str
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleNotes serves both list and read for a project's markdown
+// vault — `?project=<name>` returns the list, `&file=<rel>` returns
+// the contents of one file.
+//
+// Security: project is resolved against the daemon's configured
+// Projects.Root via project.Discover (same source as the dashboard),
+// so a caller can only ever reference projects ccmux already lists.
+// The file query is path-traversal-validated below — clients can't
+// reach outside the project root via "../" or absolute paths.
+func (s *server) handleNotes(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	name := strings.TrimSpace(r.URL.Query().Get("project"))
+	if name == "" {
+		http.Error(w, "project query required", http.StatusBadRequest)
+		return
+	}
+	projs, err := project.Discover(s.cfg.Projects.Root)
+	if err != nil {
+		http.Error(w, "discover: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	var proj project.Project
+	var found bool
+	for _, p := range projs {
+		if p.Name == name {
+			proj = p
+			found = true
+			break
+		}
+	}
+	if !found {
+		http.Error(w, "project not found", http.StatusNotFound)
+		return
+	}
+	vault := notes.Open(proj.Path)
+
+	if rel := strings.TrimSpace(r.URL.Query().Get("file")); rel != "" {
+		// Path-traversal hardening: reject absolute paths, ".." segments,
+		// and anything that isn't a .md file. notes.Vault.Read trusts
+		// its input, so we validate here.
+		if strings.HasPrefix(rel, "/") || strings.HasPrefix(rel, `\`) {
+			http.Error(w, "file must be a project-relative path", http.StatusBadRequest)
+			return
+		}
+		cleaned := filepath.ToSlash(filepath.Clean(rel))
+		if strings.HasPrefix(cleaned, "..") || strings.Contains(cleaned, "/../") {
+			http.Error(w, "path traversal not allowed", http.StatusBadRequest)
+			return
+		}
+		if !strings.HasSuffix(strings.ToLower(cleaned), ".md") {
+			http.Error(w, "only .md files are served", http.StatusBadRequest)
+			return
+		}
+		body, err := vault.Read(cleaned)
+		if err != nil {
+			if os.IsNotExist(err) {
+				http.Error(w, "file not found", http.StatusNotFound)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, daemon.NoteContent{Rel: cleaned, Content: string(body)})
+		return
+	}
+
+	entries, err := vault.List()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	out := make([]daemon.NoteEntry, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, daemon.NoteEntry{
+			Rel:      e.Rel,
+			Dir:      e.Dir,
+			Display:  e.Display,
+			Modified: e.Modified,
+		})
+	}
+	writeJSON(w, out)
 }
 
 // handlePreview returns the last N lines of the session's active pane
