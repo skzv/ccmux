@@ -175,6 +175,22 @@ type PeerInfo struct {
 	Port       *int   `json:"port,omitempty"` // ccmuxd HTTP port if probed; nil otherwise
 }
 
+// NoteEntry is one markdown file in the project's notes vault.
+// Returned by GET /v1/notes?project=<name>.
+type NoteEntry struct {
+	Rel      string    `json:"rel"`      // slash-separated path from the project root
+	Dir      string    `json:"dir"`      // "" for a root-level file
+	Display  string    `json:"display"`  // human-readable label
+	Modified time.Time `json:"modified"` // file mtime
+}
+
+// NoteContent is the body of one markdown file.
+// Returned by GET /v1/notes?project=<name>&file=<rel>.
+type NoteContent struct {
+	Rel     string `json:"rel"`
+	Content string `json:"content"`
+}
+
 // PreviewResponse is returned by GET /v1/sessions/{name}/preview. The
 // Content field is the raw capture-pane output (ANSI sequences stripped
 // by tmux) — clients can render it monospaced as-is. Lines is the
