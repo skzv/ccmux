@@ -175,6 +175,27 @@ type PeerInfo struct {
 	Port       *int   `json:"port,omitempty"` // ccmuxd HTTP port if probed; nil otherwise
 }
 
+// UsageSummary is per-agent token + cost activity over a rolling
+// window, returned by GET /v1/usage. Drives the iOS app's dashboard
+// usage card and any future "what am I spending" surface.
+type UsageSummary struct {
+	HasData       bool    `json:"has_data"` // false → no transcripts found
+	WindowSeconds int     `json:"window_seconds"`
+	Prompts       int     `json:"prompts"`
+	InputTokens   int     `json:"input_tokens"`
+	OutputTokens  int     `json:"output_tokens"`
+	EstimatedCost float64 `json:"estimated_cost"` // USD at published API rates
+}
+
+// AgentUsage groups all three supported agents into one response so a
+// client can render a unified "today's activity" card in a single
+// round trip.
+type AgentUsage struct {
+	Claude      UsageSummary `json:"claude"`
+	Codex       UsageSummary `json:"codex"`
+	Antigravity UsageSummary `json:"antigravity"`
+}
+
 // Conversation is one past agent transcript on disk. Returned by
 // GET /v1/conversations so clients can show a unified history across
 // Claude / Codex / Antigravity sessions without each needing to know
