@@ -1196,17 +1196,43 @@ func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	ch := s.events.Subscribe()
 	defer s.events.Unsubscribe(ch)
 	enc := json.NewEncoder(w)
+	// Heartbeat keeps idle connections alive across NAT timeouts and
+	// gives a fast path to detect a dead client. SSE comment lines
+	// (starting with ":") are ignored by the EventSource spec.
+	hb := time.NewTicker(20 * time.Second)
+	defer hb.Stop()
+	var lastDropsReported uint64
 	for {
 		select {
 		case <-r.Context().Done():
 			return
+		case <-hb.C:
+			if _, err := fmt.Fprintf(w, ": ping\n\n"); err != nil {
+				return
+			}
+			flusher.Flush()
 		case ev, open := <-ch:
 			if !open {
 				return
 			}
-			fmt.Fprintf(w, "data: ")
-			_ = enc.Encode(ev)
-			fmt.Fprintf(w, "\n")
+			// If the subscriber missed events while we weren't reading
+			// fast enough, surface it as a synthetic frame so clients
+			// can refresh state instead of silently desyncing.
+			if d := s.events.Dropped(ch); d > lastDropsReported {
+				if _, err := fmt.Fprintf(w, "event: drops\ndata: %d\n\n", d-lastDropsReported); err != nil {
+					return
+				}
+				lastDropsReported = d
+			}
+			if _, err := fmt.Fprintf(w, "data: "); err != nil {
+				return
+			}
+			if err := enc.Encode(ev); err != nil {
+				return
+			}
+			if _, err := fmt.Fprintf(w, "\n"); err != nil {
+				return
+			}
 			flusher.Flush()
 		}
 	}
@@ -1392,24 +1418,28 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 	// phone push (if any) fires alongside it.
 	s.refreshMoshiStateCached(ctx)
 
+	// Phase 1: under the lock, ensure a tracked entry exists for every
+	// live session and snapshot the per-session state we need for
+	// classification. Cheap — no shell-outs.
+	now := time.Now()
+	live := make(map[string]bool, len(tss))
+	snaps := make([]pollSnap, 0, len(tss))
+	var createdEvents []daemon.SessionEvent
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	live := map[string]bool{}
-	anyActive := false
 	for _, ts := range tss {
 		live[ts.Name] = true
 		t, ok := s.seen[ts.Name]
 		if !ok {
 			t = &tracked{
 				created:     ts.Created,
-				lastChange:  time.Now(),
+				lastChange:  now,
 				state:       agent.StateUnknown,
 				agentID:     project.ReadAgent(ts.Path),
 				projectPath: ts.Path,
 			}
 			s.seen[ts.Name] = t
-			s.events.Publish(daemon.SessionEvent{
-				At:   time.Now(),
+			createdEvents = append(createdEvents, daemon.SessionEvent{
+				At:   now,
 				Kind: "created",
 				Session: daemon.SessionState{
 					Name: ts.Name, Host: "local", State: string(agent.StateUnknown),
@@ -1417,60 +1447,110 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 				},
 			})
 		}
-		pane, err := s.capture(ctx, ts.Name, 60)
+		snaps = append(snaps, pollSnap{
+			ts:       ts,
+			prevLast: t.last,
+			lastCh:   t.lastChange,
+			prevSt:   t.state,
+			agentID:  t.agentID,
+		})
+	}
+	s.mu.Unlock()
+
+	// Publish the created events with the lock released — Publish takes
+	// its own mutex and we don't want to hold s.mu across it.
+	for _, ev := range createdEvents {
+		s.events.Publish(ev)
+	}
+
+	// Phase 2: shell out to capture-pane for every session WITHOUT the
+	// lock held. This used to run under s.mu, which stalled every IPC
+	// handler (handleSessions / handleKill / handleRename / handleHealth)
+	// for the duration of the loop. With ~20 sessions and tmux jitter
+	// that was hundreds of ms per cycle.
+	type result struct {
+		name     string
+		pane     string
+		newState agent.State
+		captured bool
+	}
+	results := make([]result, 0, len(snaps))
+	for _, sn := range snaps {
+		pane, err := s.capture(ctx, sn.ts.Name, 60)
 		if err != nil {
-			// A capture failure (pane closing mid-poll, tmux busy)
-			// must not be swallowed silently — log it. The session's
-			// state is left as last classified rather than blanked,
-			// since the failure is usually transient.
-			log.Printf("ccmuxd: capture-pane %s: %v", ts.Name, err)
+			// Don't swallow silently — log. The session's state stays
+			// as last classified; the failure is usually transient.
+			log.Printf("ccmuxd: capture-pane %s: %v", sn.ts.Name, err)
 			continue
 		}
-		if pane != t.last {
-			t.last = pane
+		// Compute lastChange against the snapshot. If the pane content
+		// changed since last poll, the change-time is "now"; otherwise
+		// reuse the previous lastChange so Classify can decide idle.
+		lastCh := sn.lastCh
+		if pane != sn.prevLast {
+			lastCh = time.Now()
+		}
+		// Per-session agent dispatch. ByID always returns a non-nil
+		// classifier (defaulting to claude) so the switch is invisible
+		// from this call site's perspective.
+		newSt := agent.ByID(sn.agentID).Classify(pane, lastCh, idleNeeds)
+		results = append(results, result{
+			name:     sn.ts.Name,
+			pane:     pane,
+			newState: newSt,
+			captured: true,
+		})
+	}
+
+	// Phase 3: re-take the lock, fold the captures back into tracked
+	// state, and decide bells / events. Quick — pure map updates plus
+	// a few small comparisons.
+	var (
+		stateEvents []daemon.SessionEvent
+		bellNames   []string
+		pushes      []struct {
+			name       string
+			prev, next agent.State
+		}
+		anyActive bool
+	)
+	s.mu.Lock()
+	for _, r := range results {
+		t, ok := s.seen[r.name]
+		if !ok {
+			// Session was killed between Phase 1 and Phase 3 — skip.
+			continue
+		}
+		if r.pane != t.last {
+			t.last = r.pane
 			t.lastChange = time.Now()
 		}
-		// Per-session agent dispatch. ByID is the unchecked path; we
-		// fed it via project.ReadAgent which always returns a valid id
-		// (defaulting to claude on missing/garbage). The Classify
-		// signature is uniform across agents — a string pane + the
-		// lastChange/idle threshold pair — so the switch is invisible
-		// from this call site's perspective.
-		newState := agent.ByID(t.agentID).Classify(pane, t.lastChange, idleNeeds)
-		// Transition into NEEDS_INPUT triggers the bell. Always-ring
-		// policy: the BEL fires whenever notifications.bell is true,
-		// independent of moshi-hook. The two notification channels
-		// are complementary (audible chime at the laptop, push on
-		// your phone); duplicate-suppression was a knob that hid the
-		// laptop signal even when the user was at the laptop.
-		if newState == agent.StateNeedsInput && t.state != agent.StateNeedsInput {
-			if s.cfg.Notifications.Bell {
-				_ = s.bell(ctx, ts.Name)
-			}
+		if r.newState == agent.StateNeedsInput && t.state != agent.StateNeedsInput {
+			bellNames = append(bellNames, r.name)
 			t.promptCount++
 		}
-		prevState := t.state
-		t.state = newState
-		if newState != prevState {
+		prev := t.state
+		t.state = r.newState
+		if r.newState != prev {
 			kind := "state_change"
-			if newState == agent.StateNeedsInput {
+			if r.newState == agent.StateNeedsInput {
 				kind = "needs_input"
 			}
-			s.events.Publish(daemon.SessionEvent{
+			ts, _ := lookupTmuxSession(snaps, r.name)
+			stateEvents = append(stateEvents, daemon.SessionEvent{
 				At:   time.Now(),
 				Kind: kind,
 				Session: daemon.SessionState{
-					Name: ts.Name, Host: "local", State: string(newState),
+					Name: r.name, Host: "local", State: string(r.newState),
 					Path: ts.Path,
 				},
 			})
-			// Push notifications to paired phones — needs_input
-			// (agent paused for Y/N) and active → idle (agent
-			// finished its response). Off when APNs is disabled or
-			// no devices are registered.
-			s.maybePushForStateTransition(ts.Name, prevState, newState)
+			pushes = append(pushes, struct {
+				name       string
+				prev, next agent.State
+			}{r.name, prev, r.newState})
 		}
-		if newState == agent.StateActive {
+		if r.newState == agent.StateActive {
 			anyActive = true
 		}
 	}
@@ -1480,8 +1560,47 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 			delete(s.seen, name)
 		}
 	}
+	s.mu.Unlock()
+
+	// Phase 4: side effects, lock released. The bell shell-out and the
+	// APNs sends are cheap individually but should never block the
+	// poll loop's lock.
+	if s.cfg.Notifications.Bell {
+		for _, name := range bellNames {
+			_ = s.bell(ctx, name)
+		}
+	}
+	for _, ev := range stateEvents {
+		s.events.Publish(ev)
+	}
+	for _, p := range pushes {
+		s.maybePushForStateTransition(p.name, p.prev, p.next)
+	}
 	// Sleep manager reacts to the boolean "any session active?".
 	s.sleeper.SetActive(anyActive)
+}
+
+// pollSnap is the per-session snapshot pollOnce takes under the lock
+// before shelling out to capture-pane. Promoted to file scope so the
+// helpers that fold results back into tracked state can reference it.
+type pollSnap struct {
+	ts       tmux.Session
+	prevLast string
+	lastCh   time.Time
+	prevSt   agent.State
+	agentID  agent.ID
+}
+
+// lookupTmuxSession returns the snapshotted tmux.Session for `name`
+// from the Phase 1 snaps, so Phase 3 can attach ts.Path to events
+// without re-locking or re-shelling out.
+func lookupTmuxSession(snaps []pollSnap, name string) (tmux.Session, bool) {
+	for _, sn := range snaps {
+		if sn.ts.Name == name {
+			return sn.ts, true
+		}
+	}
+	return tmux.Session{}, false
 }
 
 // refreshMoshiStateCached keeps the moshi.Status cache warm for the

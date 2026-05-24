@@ -3,13 +3,27 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/creack/pty"
 )
+
+// attachPingInterval is how often the daemon sends a websocket ping to
+// the attached client. Without active pings, a client that drops off
+// (phone screen locks, NAT goes silent, network partition) leaves the
+// daemon-side PTY + tmux client process alive forever. The ping with
+// a deadline lets the websocket library notice the dead peer and tear
+// the connection down.
+const attachPingInterval = 25 * time.Second
+
+// attachPingDeadline bounds each ping's round-trip. A miss closes the
+// websocket and unblocks the read loop.
+const attachPingDeadline = 10 * time.Second
 
 // handleAttach upgrades GET /v1/sessions/{name}/attach to a WebSocket
 // and bridges it to a real `tmux attach` running in a PTY — giving the
@@ -35,13 +49,22 @@ func (s *server) handleAttach(w http.ResponseWriter, r *http.Request, name strin
 	}
 	defer conn.CloseNow()
 
-	cmd := exec.Command("tmux", "attach-session", "-t", "="+name)
+	// Carry the request context — tmux attach gets cancelled if the
+	// daemon shuts down. Previously this used exec.Command (no ctx),
+	// so a daemon SIGTERM left the child running.
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "tmux", "attach-session", "-t", "="+name)
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color", "LC_ALL=C.UTF-8")
 	ptmx, err := pty.Start(cmd)
 	if err != nil {
 		conn.Close(websocket.StatusInternalError, "pty start failed")
 		return
 	}
+	// Defer order matters: close pty (which causes the read loop to
+	// EOF), then kill+wait the child. Process.Kill is a no-op when
+	// CommandContext already terminated it via ctx cancellation.
 	defer func() { _ = ptmx.Close() }()
 	defer func() {
 		_ = cmd.Process.Kill()
@@ -49,8 +72,28 @@ func (s *server) handleAttach(w http.ResponseWriter, r *http.Request, name strin
 	}()
 	_ = pty.Setsize(ptmx, &pty.Winsize{Rows: 24, Cols: 80})
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	// Keep-alive: ping the client periodically. A failed ping cancels
+	// the request context, which closes the PTY and unwedges any
+	// goroutine blocked on a read.
+	go func() {
+		t := time.NewTicker(attachPingInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				pingCtx, pingCancel := context.WithTimeout(ctx, attachPingDeadline)
+				err := conn.Ping(pingCtx)
+				pingCancel()
+				if err != nil {
+					log.Printf("ccmuxd: attach %s: ping failed: %v", name, err)
+					cancel()
+					return
+				}
+			}
+		}
+	}()
 
 	// PTY → WebSocket.
 	go func() {
