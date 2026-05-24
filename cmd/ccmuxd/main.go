@@ -32,11 +32,13 @@ import (
 	"github.com/skzv/ccmux/internal/apns"
 	"github.com/skzv/ccmux/internal/clipboard"
 	"github.com/skzv/ccmux/internal/config"
+	"github.com/skzv/ccmux/internal/conversations"
 	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/moshi"
 	"github.com/skzv/ccmux/internal/project"
 	"github.com/skzv/ccmux/internal/scaffold"
 	"github.com/skzv/ccmux/internal/sleeplock"
+	"github.com/skzv/ccmux/internal/tailnet"
 	"github.com/skzv/ccmux/internal/tmux"
 	"github.com/skzv/ccmux/internal/tmuxchrome"
 )
@@ -281,6 +283,8 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/v1/events", s.handleEvents)
 	mux.HandleFunc("/v1/devices", s.handleRegisterDevice)
 	mux.HandleFunc("/v1/devices/test", s.handleTestPush)
+	mux.HandleFunc("/v1/peers", s.handlePeers)
+	mux.HandleFunc("/v1/conversations", s.handleConversations)
 }
 
 // localOnlyRoutes registers endpoints that must never be reachable from
@@ -845,6 +849,85 @@ func (s *server) handleTestPush(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handlePeers returns every tailnet peer plus an indication of which
+// ones already run ccmuxd. Used by clients (iOS Settings → Add host)
+// to populate a "your other Macs on the tailnet" picker without each
+// needing tailscale-CLI access themselves. Probe budget is intentional:
+// ScanTailnet pings each peer's /v1/health in parallel with a 1s
+// deadline, so even a tailnet of dozens settles in ~1s.
+func (s *server) handlePeers(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	scan, err := tailnet.ScanTailnet(ctx, s.cfg.Daemon.TailnetPort)
+	if err != nil {
+		// Tailscale not installed / not running is a normal state on
+		// some hosts — return an empty list rather than 500 so clients
+		// can show "no peers found" instead of an error toast.
+		log.Printf("ccmuxd: scan tailnet: %v", err)
+		writeJSON(w, []daemon.PeerInfo{})
+		return
+	}
+	out := make([]daemon.PeerInfo, 0, len(scan.Reachable)+len(scan.NeedsInstall)+len(scan.Mobile))
+	port := s.cfg.Daemon.TailnetPort
+	if port == 0 {
+		port = 7474
+	}
+	for _, d := range scan.Reachable {
+		// Address is "ip:port" — split for the client.
+		ip, _, _ := strings.Cut(d.Address, ":")
+		p := port
+		out = append(out, daemon.PeerInfo{
+			Hostname: d.Name, Addr: ip, OS: "macOS",
+			Online: true, RunsCCMuxd: true, Port: &p,
+		})
+	}
+	for _, peer := range scan.NeedsInstall {
+		out = append(out, daemon.PeerInfo{
+			Hostname: peer.DisplayName(), Addr: peer.Addr, OS: peer.OS,
+			Online: peer.Online, RunsCCMuxd: false,
+		})
+	}
+	for _, peer := range scan.Mobile {
+		out = append(out, daemon.PeerInfo{
+			Hostname: peer.DisplayName(), Addr: peer.Addr, OS: peer.OS,
+			Online: peer.Online, RunsCCMuxd: false,
+		})
+	}
+	writeJSON(w, out)
+}
+
+// handleConversations returns past agent transcripts (Claude, Codex,
+// Antigravity) from the daemon's home directory. Sorted most-recent
+// first; clients can do their own filtering. Headless / SDK runs are
+// excluded by default — they pile up fast in automation and aren't
+// usually what a user means by "my conversations".
+func (s *server) handleConversations(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	convos, err := conversations.All(conversations.Options{ExcludeHeadless: true})
+	if err != nil {
+		// Best-effort: even if one walker failed, others may have
+		// returned rows. conversations.All only errors when ALL walkers
+		// failed, which usually means home dir resolution broke.
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	out := make([]daemon.Conversation, 0, len(convos))
+	for _, c := range convos {
+		out = append(out, daemon.Conversation{
+			ID: c.ID, Agent: string(c.Agent), Project: c.Project,
+			Path: c.Path, Preview: c.Preview, Modified: c.LastActivity,
+		})
+	}
+	writeJSON(w, out)
 }
 
 // maybePushForStateTransition fires an APNs push when a tracked
