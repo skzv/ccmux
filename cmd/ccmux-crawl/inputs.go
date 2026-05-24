@@ -98,6 +98,17 @@ func randomResize(rng *rand.Rand) Input {
 	}
 }
 
+// resizeInput returns an Input wrapping a tea.WindowSizeMsg with the
+// given dimensions. Convenience constructor for scenario steps that
+// want to send a specific size (as opposed to randomResize, which
+// picks dimensions from an rng).
+func resizeInput(w, h int) Input {
+	return Input{
+		Msg:   tea.WindowSizeMsg{Width: w, Height: h},
+		Label: fmt.Sprintf("resize(%dx%d)", w, h),
+	}
+}
+
 // formatSequence renders an input sequence as one entry per line,
 // numbered for grepability against the iter index where a panic
 // happened. Used by the crash report writer.

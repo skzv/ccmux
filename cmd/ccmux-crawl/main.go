@@ -45,6 +45,7 @@ func main() {
 		newTUICmd(),
 		newFormCmd(),
 		newResizeCmd(),
+		newScenarioCmd(),
 	)
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "ccmux-crawl:", err)
