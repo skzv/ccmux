@@ -21,7 +21,7 @@ func newAppForTest(t *testing.T) App {
 	return App{
 		styles:         st,
 		keys:           km,
-		screen:         ScreenHome,
+		screen:         ScreenSessions,
 		dashboard:      newDashboard(st, km),
 		sessionsM:      newSessions(st, km),
 		conversationsM: newConversations(st, km),
@@ -37,7 +37,7 @@ func newAppForTest(t *testing.T) App {
 // ScreenConversations AND fire the refresh cmd so the list is fresh.
 func TestApp_KeyConversations_SwitchesScreen(t *testing.T) {
 	a := newAppForTest(t)
-	a.screen = ScreenHome
+	a.screen = ScreenSessions
 
 	m, cmd := a.Update(keyMsg(a.keys.Conversations.Keys()[0]))
 	a2 := m.(App)

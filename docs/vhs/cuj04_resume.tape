@@ -25,7 +25,7 @@ Enter
 Sleep 2s
 
 # Switch to the Conversations screen.
-Type "2"
+Type "3"
 Sleep 1s
 
 # Conversations load from ~/.claude. Navigate through the list so the

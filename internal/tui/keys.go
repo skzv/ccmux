@@ -5,10 +5,12 @@ import "github.com/charmbracelet/bubbles/key"
 // Keymap is the complete set of bindings used across the TUI.
 // Screen-specific bindings live alongside the screen; this is the global set.
 type Keymap struct {
-	// Navigation between screens
-	Home          key.Binding
-	Conversations key.Binding
+	// Navigation between screens. Order matches the tab bar:
+	// Sessions (1) → Projects (2) → Conversations (3) → Notes (4) →
+	// Agents (5) → Settings (6) → Network (7).
+	Sessions      key.Binding
 	Projects      key.Binding
+	Conversations key.Binding
 	Notes         key.Binding
 	Claude        key.Binding
 	Settings      key.Binding
@@ -41,9 +43,9 @@ type Keymap struct {
 // both work. F-keys jump between screens.
 func DefaultKeymap() Keymap {
 	return Keymap{
-		Home:          key.NewBinding(key.WithKeys("1", "f1"), key.WithHelp("1", "home")),
-		Conversations: key.NewBinding(key.WithKeys("2", "f2"), key.WithHelp("2", "conversations")),
-		Projects:      key.NewBinding(key.WithKeys("3", "f3"), key.WithHelp("3", "projects")),
+		Sessions:      key.NewBinding(key.WithKeys("1", "f1"), key.WithHelp("1", "sessions")),
+		Projects:      key.NewBinding(key.WithKeys("2", "f2"), key.WithHelp("2", "projects")),
+		Conversations: key.NewBinding(key.WithKeys("3", "f3"), key.WithHelp("3", "conversations")),
 		Notes:         key.NewBinding(key.WithKeys("4", "f4"), key.WithHelp("4", "notes")),
 		Claude:        key.NewBinding(key.WithKeys("5", "f5"), key.WithHelp("5", "claude")),
 		Settings:      key.NewBinding(key.WithKeys("6", "f6"), key.WithHelp("6", "settings")),

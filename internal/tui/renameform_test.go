@@ -84,7 +84,7 @@ func TestApp_RenameFormInterceptsEnter(t *testing.T) {
 	a := App{
 		styles:    st,
 		keys:      km,
-		screen:    ScreenHome,
+		screen:    ScreenSessions,
 		sessionsM: newSessions(st, km),
 		projectsM: newProjects(st, km),
 		matrix:    newMatrix(),
@@ -120,7 +120,7 @@ func TestApp_RenameFormInterceptsDigitKeys(t *testing.T) {
 	a := App{
 		styles:    st,
 		keys:      km,
-		screen:    ScreenHome,
+		screen:    ScreenSessions,
 		sessionsM: newSessions(st, km),
 		projectsM: newProjects(st, km),
 		matrix:    newMatrix(),
@@ -130,8 +130,8 @@ func TestApp_RenameFormInterceptsDigitKeys(t *testing.T) {
 
 	m, _ := a.Update(keyMsg("1"))
 	a2 := m.(App)
-	if a2.screen != ScreenHome {
-		t.Errorf("digit key while rename form open switched to screen %v; expected ScreenHome", a2.screen)
+	if a2.screen != ScreenSessions {
+		t.Errorf("digit key while rename form open switched to screen %v; expected ScreenSessions", a2.screen)
 	}
 }
 
@@ -143,7 +143,7 @@ func TestApp_SessionRenamedMsgTriggersRefresh(t *testing.T) {
 	a := App{
 		styles:    st,
 		keys:      km,
-		screen:    ScreenHome,
+		screen:    ScreenSessions,
 		sessionsM: newSessions(st, km),
 		projectsM: newProjects(st, km),
 		matrix:    newMatrix(),

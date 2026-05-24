@@ -23,7 +23,7 @@ type HelpItem struct {
 // so the "switch screens" help entry updates automatically when screens
 // are added or removed.
 func helpForScreen(s Screen, km Keymap) []HelpItem {
-	first := km.Home.Keys()[0]
+	first := km.Sessions.Keys()[0]
 	last := km.Network.Keys()[0]
 	switchHint := first + "-" + last + " / F" + first + "-F" + last
 	common := []HelpItem{
@@ -36,7 +36,7 @@ func helpForScreen(s Screen, km Keymap) []HelpItem {
 		{"q / Ctrl-c", "quit"},
 	}
 	switch s {
-	case ScreenHome:
+	case ScreenSessions:
 		return append([]HelpItem{
 			{"↑↓ / j k", "navigate session list"},
 			{"enter", "attach (Ctrl-b then d to detach back to ccmux)"},

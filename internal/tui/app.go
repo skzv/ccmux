@@ -37,17 +37,23 @@ import (
 type Screen int
 
 const (
-	// ScreenHome is the combined home screen: running sessions list on
-	// the left, dashboard stats (usage, update banner, device health) on
-	// the right. Merges what were previously separate Dashboard and
-	// Sessions tabs — the user can attach to a session directly from the
-	// same view that shows token usage and host health.
-	ScreenHome Screen = iota
+	// ScreenSessions is the combined sessions + dashboard view: running
+	// session list on the left, dashboard stats (usage, update banner,
+	// device health) on the right. Lives at key "1" because attaching
+	// to a session is the highest-frequency action — that's the home
+	// row, so to speak. Was named ScreenSessions before being relabelled
+	// "Sessions" to match what's actually on the tab.
+	ScreenSessions Screen = iota
+	// ScreenProjects is at key "2" because the most common second move
+	// is "where do I work next" — pick a project to attach or scaffold.
+	// Reordered ahead of Conversations after the v0.1.x usability pass:
+	// new sessions originate from projects, conversations are mostly
+	// looked at after the fact.
+	ScreenProjects
 	// ScreenConversations is the past-conversations browser:
 	// Claude/Codex/Antigravity transcripts across every project, sorted
-	// by recency. Reached via `2` (top-level) or `c` on a Projects row.
+	// by recency. Reached via `3` (top-level) or `c` on a Projects row.
 	ScreenConversations
-	ScreenProjects
 	ScreenNotes
 	ScreenAgents
 	ScreenSettings
@@ -73,9 +79,9 @@ const (
 // here is the canonical place since both the tab bar and the help
 // footer read String().
 var screenLabels = [screenCount]string{
-	ScreenHome:          "Home",
-	ScreenConversations: "Conversations",
+	ScreenSessions:      "Sessions",
 	ScreenProjects:      "Projects",
+	ScreenConversations: "Conversations",
 	ScreenNotes:         "Notes",
 	ScreenAgents:        "Agents",
 	ScreenSettings:      "Settings",
@@ -189,7 +195,7 @@ func New(cfg config.Config, version string) App {
 		styles:         st,
 		keys:           km,
 		version:        version,
-		screen:         ScreenHome,
+		screen:         ScreenSessions,
 		dashboard:      newDashboard(st, km),
 		sessionsM:      newSessions(st, km),
 		conversationsM: newConversations(st, km),
@@ -864,7 +870,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// intercepts the form's submit key and attaches to whatever session
 		// the cursor was on — observed as "Enter in the new-session form
 		// attaches to c-ccmux instead of creating a new session".
-		if a.screen == ScreenHome && (a.sessionsM.form != nil || a.sessionsM.renameForm != nil) {
+		if a.screen == ScreenSessions && (a.sessionsM.form != nil || a.sessionsM.renameForm != nil) {
 			if msg.String() == "ctrl+c" {
 				return a, tea.Quit
 			}
@@ -887,8 +893,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch {
 		case keyMatches(msg, a.keys.Quit):
 			return a, tea.Quit
-		case keyMatches(msg, a.keys.Home):
-			a.screen = ScreenHome
+		case keyMatches(msg, a.keys.Sessions):
+			a.screen = ScreenSessions
 			return a, nil
 		case keyMatches(msg, a.keys.Conversations):
 			a.screen = ScreenConversations
@@ -923,7 +929,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		case keyMatches(msg, a.keys.Refresh) && a.screen != ScreenAgents:
 			return a, a.refreshSessionsCmd()
-		case keyMatches(msg, a.keys.Enter) && a.screen == ScreenHome:
+		case keyMatches(msg, a.keys.Enter) && a.screen == ScreenSessions:
 			a2, cmd := a.attachSelectedSession()
 			return a2, cmd
 		case keyMatches(msg, a.keys.Enter) && a.screen == ScreenProjects:
@@ -972,7 +978,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Forward to the active screen.
 	var cmd tea.Cmd
 	switch a.screen {
-	case ScreenHome:
+	case ScreenSessions:
 		// Dashboard always updates (handles usage ticks, refresh msgs).
 		// Sessions handles navigation and session-action keys.
 		var dcmd tea.Cmd
@@ -1031,7 +1037,7 @@ func (a App) View() string {
 
 	var body string
 	switch a.screen {
-	case ScreenHome:
+	case ScreenSessions:
 		body = a.homeView(a.width, bodyHeight)
 	case ScreenConversations:
 		body = a.conversationsM.View(a.width, bodyHeight)

@@ -26,7 +26,7 @@ Enter
 # Dashboard settles — 5 sessions visible across 3 agents.
 Sleep 2500ms
 
-# --- Screen 1: Home — navigate to auth-service, attach ---
+# --- Screen 1: Sessions — navigate to auth-service, attach ---
 Type "j"
 Sleep 500ms
 Enter
@@ -38,8 +38,8 @@ Sleep 300ms
 Type "d"
 Sleep 1800ms
 
-# --- Screen 3: Projects ---
-Type "3"
+# --- Screen 2: Projects ---
+Type "2"
 Sleep 1000ms
 Type "j"
 Sleep 400ms
@@ -50,8 +50,8 @@ Sleep 400ms
 Type "k"
 Sleep 400ms
 
-# --- Screen 2: Conversations ---
-Type "2"
+# --- Screen 3: Conversations ---
+Type "3"
 Sleep 1000ms
 Type "j"
 Sleep 400ms
