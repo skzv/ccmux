@@ -393,13 +393,15 @@ func TestEnsureGoodUpstream_RetargetsDeletedUpstream(t *testing.T) {
 	}
 }
 
-// TestEnsureGoodUpstream_UnfixableIsNoOp — when the local branch has
-// no counterpart on origin (and any configured upstream points at
-// nothing reachable), we fall through silently. Guessing a different
-// remote branch would be a quiet behavior change worse than letting
-// `git pull` print its own diagnostic. Contract: no error, no
-// config mutation.
-func TestEnsureGoodUpstream_UnfixableIsNoOp(t *testing.T) {
+// TestEnsureGoodUpstream_UnfixableErrorsClearly — when the local
+// branch has a configured upstream that no longer exists on origin
+// AND no same-named remote branch to retarget to, the function
+// must surface a clear, actionable error rather than silently
+// returning. Otherwise the user lands in `git pull --ff-only`'s
+// cryptic "no such ref was fetched" message — which is exactly
+// what this layer is supposed to prevent. We must also leave
+// branch config untouched (no quiet behavior change).
+func TestEnsureGoodUpstream_UnfixableErrorsClearly(t *testing.T) {
 	repo := realGitRepoWithRemote(t)
 	mustGit(t, repo, "checkout", "-b", "weird")
 	mustGit(t, repo, "push", "-u", "origin", "weird")
@@ -409,8 +411,12 @@ func TestEnsureGoodUpstream_UnfixableIsNoOp(t *testing.T) {
 
 	before := mustGit(t, repo, "config", "--get-regexp", "branch\\.absent-on-remote\\.")
 
-	if err := ensureGoodUpstream(repo, false); err != nil {
-		t.Fatalf("unfixable case should not error: %v", err)
+	err := ensureGoodUpstream(repo, false)
+	if err == nil {
+		t.Fatal("unfixable upstream should error with an actionable message, got nil")
+	}
+	if !strings.Contains(err.Error(), "absent-on-remote") || !strings.Contains(err.Error(), "--skip-pull") {
+		t.Errorf("error should name the branch and mention --skip-pull: %v", err)
 	}
 
 	after := mustGit(t, repo, "config", "--get-regexp", "branch\\.absent-on-remote\\.")
@@ -464,6 +470,45 @@ func TestIsUnderHomebrewPrefix(t *testing.T) {
 func TestIsUnderHomebrewPrefix_SkipsEmpty(t *testing.T) {
 	if isUnderHomebrewPrefix("/usr/bin/ccmux", []string{""}) {
 		t.Error("empty prefix matched /usr/bin/ccmux — would treat every install as Homebrew")
+	}
+}
+
+// TestEnsureGoodUpstream_UnpushedBranchErrorsClearly — exact
+// reproduction of the bug the user hit on
+// `fix/daemon-client-fd-leak`: a fresh local branch created with
+// `git checkout -b` whose tracking config points at a remote ref
+// that was never pushed. Previously the function returned `""`
+// from remoteTrackingFor (because @{upstream} errors when the
+// remote-tracking ref is missing), fell into the "no upstream
+// set" branch, found no origin/<branch> to retarget to, and
+// silently returned nil — so pull then failed with git's
+// cryptic "no such ref was fetched" message. The fix reads git
+// config directly so we detect this state and error clearly.
+func TestEnsureGoodUpstream_UnpushedBranchErrorsClearly(t *testing.T) {
+	repo := realGitRepoWithRemote(t)
+	// Create a topic branch with `git checkout -b`, which sets up
+	// branch.X.remote/merge config but doesn't push anything.
+	mustGit(t, repo, "checkout", "-b", "fix/never-pushed")
+	// Manually configure tracking the way `git push -u` would
+	// have, without actually pushing.
+	mustGit(t, repo, "config", "branch.fix/never-pushed.remote", "origin")
+	mustGit(t, repo, "config", "branch.fix/never-pushed.merge", "refs/heads/fix/never-pushed")
+
+	// Sanity: configuredUpstream sees the config, remoteTrackingFor
+	// returns "" because @{upstream} can't resolve.
+	if _, _, ok := configuredUpstream(repo, "fix/never-pushed"); !ok {
+		t.Fatal("configuredUpstream should see the branch.X.remote/merge config")
+	}
+	if got := remoteTrackingFor(repo, "fix/never-pushed"); got != "" {
+		t.Fatalf("remoteTrackingFor should return empty for missing remote ref, got %q", got)
+	}
+
+	err := ensureGoodUpstream(repo, false)
+	if err == nil {
+		t.Fatal("unpushed branch with configured-but-missing upstream should error, got nil")
+	}
+	if !strings.Contains(err.Error(), "git push -u origin fix/never-pushed") {
+		t.Errorf("error should suggest pushing the branch: %v", err)
 	}
 }
 
