@@ -646,6 +646,8 @@ func (s *server) handleSessionsItem(w http.ResponseWriter, r *http.Request) {
 		s.handleRename(w, r, name)
 	case "send-keys":
 		s.handleSendKeys(w, r, name)
+	case "preview":
+		s.handlePreview(w, r, name)
 	case "attach":
 		s.handleAttach(w, r, name)
 	default:
@@ -713,6 +715,43 @@ func (s *server) handleSendKeys(w http.ResponseWriter, r *http.Request, name str
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handlePreview returns the last N lines of the session's active pane
+// as plain text. Read-only — the daemon's poll loop captures the pane
+// every few seconds anyway, so this just adds a "give me current
+// content" hook for clients that don't want to open the WebSocket
+// PTY just to take a peek. Used by the iOS app's session detail view
+// to show "what's on screen right now" without committing to a full
+// terminal attach.
+func (s *server) handlePreview(w http.ResponseWriter, r *http.Request, name string) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	lines := 24
+	if q := r.URL.Query().Get("lines"); q != "" {
+		var n int
+		if _, err := fmt.Sscanf(q, "%d", &n); err == nil && n > 0 && n <= 200 {
+			lines = n
+		}
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	out, err := tmux.CapturePane(ctx, name, lines)
+	if err != nil {
+		// tmux returns a non-zero exit when the session is gone; map to
+		// 404 so clients can distinguish "no session" from other
+		// errors without parsing stderr.
+		if strings.Contains(err.Error(), "can't find session") ||
+			strings.Contains(err.Error(), "no current session") {
+			http.Error(w, "session not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, daemon.PreviewResponse{Lines: lines, Content: out})
 }
 
 func (s *server) handlePairToken(w http.ResponseWriter, r *http.Request) {
