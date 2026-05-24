@@ -3,8 +3,6 @@ package tui
 import (
 	"context"
 	"fmt"
-	"os"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -677,26 +675,9 @@ func (m notesModel) renderProjectPicker(width, height int) string {
 
 // openInEditor returns a tea.Cmd that opens `path` in `editor` via
 // tea.ExecProcess. The TUI is suspended for the editor's lifetime.
+// Thin wrapper kept for callers in this file; the actual work lives
+// in helpers.openEditorCmd so notes/claudeconfig/app all share one
+// implementation.
 func openInEditor(editor, path string) tea.Cmd {
-	c := exec.Command(editor, path)
-	return tea.ExecProcess(c, func(err error) tea.Msg {
-		if err != nil {
-			return toastMsg{Text: "editor: " + err.Error(), Kind: toastError, Until: nowPlus(5)}
-		}
-		return notesReloadMsg{}
-	})
-}
-
-func pickEditor() string {
-	for _, env := range []string{"VISUAL", "EDITOR"} {
-		if v := os.Getenv(env); v != "" {
-			return v
-		}
-	}
-	for _, bin := range []string{"nvim", "vim", "nano"} {
-		if _, err := exec.LookPath(bin); err == nil {
-			return bin
-		}
-	}
-	return "vi"
+	return openEditorCmd(editor, path, notesReloadMsg{})
 }

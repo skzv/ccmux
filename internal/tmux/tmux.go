@@ -230,6 +230,22 @@ func AttachArgs(name string, detachOthers bool) []string {
 	return []string{"attach-session", "-t", name}
 }
 
+// AttachCmd builds the *exec.Cmd that, when passed to tea.ExecProcess,
+// foregrounds a tmux attach. Centralizes the "tmux + AttachArgs" call
+// so the TUI doesn't shell out to tmux directly (per CLAUDE.md's "all
+// tmux operations go through internal/tmux" rule).
+func AttachCmd(name string, detachOthers bool) *exec.Cmd {
+	return exec.Command("tmux", AttachArgs(name, detachOthers)...)
+}
+
+// SwitchClientCmd builds the *exec.Cmd that switches the current tmux
+// client to a different session. Used by the nested-tmux case: when
+// ccmux runs inside a tmux session itself, attach-session is refused
+// — switch-client is the correct verb.
+func SwitchClientCmd(name string) *exec.Cmd {
+	return exec.Command("tmux", "switch-client", "-t", name)
+}
+
 // Attach replaces the current process with `tmux attach -t name`.
 // This must be called from the foreground of a terminal — typically the TUI
 // suspends itself first, then re-execs into tmux. After tmux detaches, the

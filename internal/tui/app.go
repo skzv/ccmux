@@ -24,6 +24,7 @@ import (
 	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/moshi"
 	"github.com/skzv/ccmux/internal/project"
+	"github.com/skzv/ccmux/internal/remoteattach"
 	"github.com/skzv/ccmux/internal/selfupdate"
 	"github.com/skzv/ccmux/internal/tailnet"
 	"github.com/skzv/ccmux/internal/tmux"
@@ -614,12 +615,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		remoteCmd := remoteTmuxAttach(msg.SessionName, a.cfg.Sessions.DetachOthersOnAttach())
 		var c *exec.Cmd
 		if msg.Mosh {
-			c = exec.Command("mosh", target, "--", "bash", "-c", remoteCmd)
+			c = remoteattach.Mosh(target, remoteCmd)
 			if dbg := debugLogger(); dbg != nil {
 				dbg.Printf("remote attach: mosh %s -- bash -c %q", target, remoteCmd)
 			}
 		} else {
-			c = exec.Command("ssh", "-t", target, remoteCmd)
+			c = remoteattach.SSH(target, remoteCmd)
 			if dbg := debugLogger(); dbg != nil {
 				dbg.Printf("remote attach: ssh -t %s %q", target, remoteCmd)
 			}
@@ -690,17 +691,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// A screen (Notes or Settings) asked the app to suspend and run
 		// $EDITOR. Route the follow-up reload by Source so the right
 		// screen refreshes when control returns.
-		source := msg.Source
-		c := exec.Command(msg.Editor, msg.Path)
-		return a, tea.ExecProcess(c, func(err error) tea.Msg {
-			if err != nil {
-				return toastMsg{Text: "editor: " + err.Error(), Kind: toastError, Until: time.Now().Add(5 * time.Second)}
-			}
-			if source == "settings" {
-				return configReloadMsg{}
-			}
-			return notesReloadMsg{}
-		})
+		var onSuccess tea.Msg = notesReloadMsg{}
+		if msg.Source == "settings" {
+			onSuccess = configReloadMsg{}
+		}
+		return a, openEditorCmd(msg.Editor, msg.Path, onSuccess)
 
 	case configReloadMsg:
 		// User finished editing ~/.config/ccmux/config.toml in $EDITOR.
@@ -730,14 +725,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// tmux. The overlay stays drawn through the suspend; on the
 		// way back, the callback's attachExitedMsg clears it.
 		if msg.Nested {
-			c := exec.Command("tmux", "switch-client", "-t", msg.Session)
-			return a, tea.ExecProcess(c, func(err error) tea.Msg {
+			return a, tea.ExecProcess(tmux.SwitchClientCmd(msg.Session), func(err error) tea.Msg {
 				return attachExitedMsg{Err: err}
 			})
 		}
-		attachArgs := tmux.AttachArgs(msg.Session, msg.DetachOthers)
 		return a, tea.ExecProcess(
-			exec.Command("tmux", attachArgs...),
+			tmux.AttachCmd(msg.Session, msg.DetachOthers),
 			func(err error) tea.Msg { return attachExitedMsg{Err: err} },
 		)
 
@@ -1661,14 +1654,10 @@ func (a App) attachSelectedSession() (App, tea.Cmd) {
 			if h.User != "" {
 				target = h.User + "@" + h.Address
 			}
-			bin := "mosh"
-			if !h.Mosh {
-				bin = "ssh"
-			}
 			remoteArgs := tmux.AttachArgs(sel.Name, a.cfg.Sessions.DetachOthersOnAttach())
 			tick := a.startAttaching(attachKindRemote, sel.Host)
 			return a, tea.Batch(tick, tea.ExecProcess(
-				exec.Command(bin, append([]string{target, "--", "tmux"}, remoteArgs...)...),
+				remoteattach.RunArgv(target, h.Mosh, append([]string{"tmux"}, remoteArgs...)),
 				func(err error) tea.Msg { return attachExitedMsg{Err: err} },
 			))
 		}
@@ -1708,7 +1697,7 @@ func (a App) attachSelectedSession() (App, tea.Cmd) {
 				}
 			}
 			remoteCmd := remoteTmuxAttach(sel.Name, a.cfg.Sessions.DetachOthersOnAttach())
-			cmd := exec.Command("ssh", "-t", dial, remoteCmd)
+			cmd := remoteattach.SSH(dial, remoteCmd)
 			if dbg := debugLogger(); dbg != nil {
 				dbg.Printf("attach discovered: ssh -t %s %q", dial, remoteCmd)
 			}
