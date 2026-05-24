@@ -28,11 +28,11 @@ package antigravityconfig
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
+
+	"github.com/skzv/ccmux/internal/configfile"
 )
 
 // Paths returns the canonical file locations the Antigravity CLI uses
@@ -144,38 +144,16 @@ func WriteSettings(s *Settings) (backup string, err error) {
 	if err != nil {
 		return backup, err
 	}
-	if err := os.MkdirAll(filepath.Dir(p.Settings), 0o755); err != nil {
-		return backup, err
-	}
-	if err := os.WriteFile(p.Settings, data, 0o644); err != nil {
+	if err := configfile.WriteAtomic(p.Settings, data, 0o644); err != nil {
 		return backup, err
 	}
 	return backup, nil
 }
 
+// backupFile delegates to the shared helper so all three agent-config
+// packages rotate identically.
 func backupFile(src, backupDir string) (string, error) {
-	if _, err := os.Stat(src); os.IsNotExist(err) {
-		return "", nil
-	}
-	if err := os.MkdirAll(backupDir, 0o755); err != nil {
-		return "", err
-	}
-	ts := time.Now().Format("20060102-150405")
-	dst := filepath.Join(backupDir, filepath.Base(src)+"."+ts)
-	in, err := os.Open(src)
-	if err != nil {
-		return "", err
-	}
-	defer in.Close()
-	out, err := os.Create(dst)
-	if err != nil {
-		return "", err
-	}
-	defer out.Close()
-	if _, err := io.Copy(out, in); err != nil {
-		return dst, err
-	}
-	return dst, nil
+	return configfile.Backup(src, backupDir)
 }
 
 // SetEffortLevel updates only reasoningEffort. Pass "" to clear.
