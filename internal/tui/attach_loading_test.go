@@ -6,7 +6,10 @@ import (
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/skzv/ccmux/internal/agent"
+	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/conversations"
 	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/project"
@@ -235,6 +238,50 @@ func TestPrepLocalAttachCmd_EmitsAttachReadyMsg(t *testing.T) {
 	if !ready.DetachOthers {
 		t.Error("DetachOthers = false, want true (passed in as true)")
 	}
+}
+
+func TestLocalNewSessionAttachCmd_ForcesMirrorAttach(t *testing.T) {
+	a := newAppForTest(t)
+	a.cfg = config.Config{Sessions: config.SessionsConfig{AttachMode: "exclusive"}}
+
+	ready := mustAttachReadyMsg(t, a.localNewSessionAttachCmd("my-session", "my-project"))
+	if ready.DetachOthers {
+		t.Error("new-session attach used detachOthers=true; want false even when config is exclusive")
+	}
+}
+
+func TestLocalAttachCmd_ExistingSessionHonorsAttachMode(t *testing.T) {
+	cases := []struct {
+		mode string
+		want bool
+	}{
+		{mode: "mirror", want: false},
+		{mode: "exclusive", want: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.mode, func(t *testing.T) {
+			a := newAppForTest(t)
+			a.cfg = config.Config{Sessions: config.SessionsConfig{AttachMode: tc.mode}}
+
+			ready := mustAttachReadyMsg(t, a.localAttachCmd("my-session", "my-project"))
+			if ready.DetachOthers != tc.want {
+				t.Errorf("DetachOthers = %v, want %v for attach_mode=%q", ready.DetachOthers, tc.want, tc.mode)
+			}
+		})
+	}
+}
+
+func mustAttachReadyMsg(t *testing.T, cmd tea.Cmd) attachReadyMsg {
+	t.Helper()
+	if cmd == nil {
+		t.Fatal("attach cmd is nil")
+	}
+	msg := cmd()
+	ready, ok := msg.(attachReadyMsg)
+	if !ok {
+		t.Fatalf("attach cmd emitted %T, want attachReadyMsg", msg)
+	}
+	return ready
 }
 
 // TestAttachReadyMsg_NonNested_ReturnsExecProcessCmd — the handler

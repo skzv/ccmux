@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/tmux"
 	"github.com/skzv/ccmux/internal/tmuxchrome"
@@ -44,6 +45,10 @@ type sessionsModel struct {
 	// picker default at open time. Pushed by App on config load /
 	// reload; empty falls back to the first installed agent.
 	defaultAgent string
+
+	// agentCommands are setup-pinned executable paths for agents that
+	// may not be on this process's PATH, such as npm CLIs under nvm.
+	agentCommands agent.Commands
 }
 
 func newSessions(st styles.Styles, km Keymap) sessionsModel {
@@ -103,6 +108,13 @@ func (m *sessionsModel) SetDefaultAgent(a string) {
 	m.defaultAgent = a
 }
 
+// SetAgentCommands is called by App on startup/config reload so the
+// new-session picker can include setup-pinned agent executables even
+// when their bare binary names are not on this process's PATH.
+func (m *sessionsModel) SetAgentCommands(commands agent.Commands) {
+	m.agentCommands = commands
+}
+
 func (m sessionsModel) Update(msg tea.Msg) (sessionsModel, tea.Cmd) {
 	// Rename modal: route everything through the rename form except its
 	// own finalizer messages, which App handles.
@@ -142,7 +154,7 @@ func (m sessionsModel) Update(msg tea.Msg) (sessionsModel, tea.Cmd) {
 		switch {
 		case keyMatches(km, m.km.NewItem):
 			// Open the new-session form.
-			f := newNewSessionForm(m.st, m.hosts, m.defaultDir, m.defaultAgent)
+			f := newNewSessionForm(m.st, m.hosts, m.defaultDir, m.defaultAgent, m.agentCommands)
 			m.form = &f
 			return m, textinput.Blink
 		case keyMatches(km, m.km.Rename):

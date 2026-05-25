@@ -49,8 +49,8 @@ type newSessionFormModel struct {
 
 	// agents is the picker model. A sentinel entry with ID == "" at
 	// the end represents "shell — no agent"; selecting it preserves
-	// the pre-picker behaviour. Constructor seeds from
-	// agent.AllInstalled so the user only sees runnable choices.
+	// the pre-picker behaviour. Constructor seeds from runnable
+	// agents, including setup-pinned command paths.
 	agents   []sessionAgentChoice
 	agentIdx int
 }
@@ -62,14 +62,13 @@ type sessionAgentChoice struct {
 	Label string
 }
 
-// agentChoicesForBareSession builds the picker rows: installed agents
-// first (in agent.All() order), then a "shell" sentinel. If no agent
-// binaries resolve we still seed every agent so the form is usable —
-// the daemon-side spawn will surface a missing-binary error if the
-// user picks one that isn't on PATH (same behaviour as the new-project
-// picker).
-func agentChoicesForBareSession() []sessionAgentChoice {
-	installed := agent.AllInstalled(context.Background())
+// agentChoicesForBareSession builds the picker rows: available agents
+// first (in agent.All() order), then a "shell" sentinel. Availability
+// includes both PATH binaries and setup-pinned command paths. If none
+// resolve we still seed every agent so the form is usable; spawn will
+// surface a missing-binary error if the user picks one that cannot run.
+func agentChoicesForBareSession(commands agent.Commands) []sessionAgentChoice {
+	installed := agent.AllAvailable(context.Background(), commands)
 	if len(installed) == 0 {
 		installed = agent.All()
 	}
@@ -81,7 +80,7 @@ func agentChoicesForBareSession() []sessionAgentChoice {
 	return out
 }
 
-func newNewSessionForm(st styles.Styles, hosts []hostStatus, defaultDir, defaultAgent string) newSessionFormModel {
+func newNewSessionForm(st styles.Styles, hosts []hostStatus, defaultDir, defaultAgent string, commandsOpt ...agent.Commands) newSessionFormModel {
 	n := textinput.New()
 	n.Placeholder = "auto (c-shell-<runid>)"
 	n.CharLimit = 64
@@ -98,7 +97,11 @@ func newNewSessionForm(st styles.Styles, hosts []hostStatus, defaultDir, default
 	w.Width = 60
 	w.Prompt = ""
 
-	agents := agentChoicesForBareSession()
+	commands := agent.Commands{}
+	if len(commandsOpt) > 0 {
+		commands = commandsOpt[0]
+	}
+	agents := agentChoicesForBareSession(commands)
 	return newSessionFormModel{
 		st:          st,
 		name:        n,

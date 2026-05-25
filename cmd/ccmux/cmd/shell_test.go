@@ -1,6 +1,9 @@
 package cmd
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestDefaultPort — tiny helper but the wrong default would route
 // ccmux shell --host to a non-listening port and the user would see
@@ -35,5 +38,20 @@ func TestShellQuote(t *testing.T) {
 		if got := shellQuote(tc.in); got != tc.want {
 			t.Errorf("shellQuote(%q) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+func TestShellAttachCommandsOmitDetachFlag(t *testing.T) {
+	local := shellAttachCmd("c-foo")
+	if got := strings.Join(local.Args, " "); got != "tmux attach-session -t c-foo" {
+		t.Errorf("local shell attach args = %q, want mirror attach without -d", got)
+	}
+
+	remote := remoteShellTmuxAttach("c-foo")
+	if strings.Contains(remote, " -d ") {
+		t.Errorf("remote shell attach should not pass -d: %q", remote)
+	}
+	if !strings.Contains(remote, " tmux attach-session -t 'c-foo'") {
+		t.Errorf("remote shell attach should use mirror attach: %q", remote)
 	}
 }

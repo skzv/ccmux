@@ -114,6 +114,22 @@ func TestHostList_TabularOutput(t *testing.T) {
 	}
 }
 
+func TestDetachOthersForAttachIntent(t *testing.T) {
+	withTempCcmuxConfig(t)
+	cfg, _ := config.Load()
+	cfg.Sessions.AttachMode = "exclusive"
+	if err := config.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := detachOthersForAttachIntent(true); got {
+		t.Error("newly-created session attach should not detach other clients even when config is exclusive")
+	}
+	if got := detachOthersForAttachIntent(false); !got {
+		t.Error("existing-session attach should honor exclusive config")
+	}
+}
+
 // TestListCmd_JSONFlag — `ccmux list --json` emits a valid JSON
 // array. Without a running daemon the sessions list comes from the
 // local tmux server; with no tmux either, it's an empty array.
