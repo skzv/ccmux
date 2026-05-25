@@ -323,6 +323,7 @@ func TestResumeArgs_AgentDialects(t *testing.T) {
 		{agent.IDClaude, []string{"claude", "--resume", "u-1"}},
 		{agent.IDCodex, []string{"codex", "resume", "u-1"}},
 		{agent.IDAntigravity, []string{"agy", "--conversation", "u-1"}},
+		{agent.IDCursor, []string{"cursor-agent", "--resume", "u-1"}},
 		{agent.ID("imaginary"), nil},
 	}
 	for _, tc := range cases {
@@ -340,6 +341,7 @@ func TestResumeArgsWithCommands_ConfiguredCommands(t *testing.T) {
 		Claude:      "/tmp/claude",
 		Codex:       "/tmp/codex",
 		Antigravity: "/tmp/agy",
+		Cursor:      "/tmp/cursor-agent",
 	}
 	tests := []struct {
 		name string
@@ -349,6 +351,7 @@ func TestResumeArgsWithCommands_ConfiguredCommands(t *testing.T) {
 		{name: "claude", c: Conversation{ID: "u-1", Agent: agent.IDClaude}, want: []string{"/tmp/claude", "--resume", "u-1"}},
 		{name: "codex", c: Conversation{ID: "u-1", Agent: agent.IDCodex}, want: []string{"/tmp/codex", "resume", "u-1"}},
 		{name: "antigravity", c: Conversation{ID: "u-1", Agent: agent.IDAntigravity}, want: []string{"/tmp/agy", "--conversation", "u-1"}},
+		{name: "cursor", c: Conversation{ID: "u-1", Agent: agent.IDCursor}, want: []string{"/tmp/cursor-agent", "--resume", "u-1"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

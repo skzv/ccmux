@@ -1,4 +1,4 @@
-# CUJ C5 — Pick your agent: Claude / Codex / Antigravity per project.
+# CUJ C5 — Pick your agent: Claude / Codex / Antigravity / Cursor per project.
 # Render: docs/vhs/render.sh docs/vhs/cuj05_pick_agent.tape
 Output docs/vhs/out/cuj05_pick_agent.gif
 

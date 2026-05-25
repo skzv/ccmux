@@ -450,7 +450,7 @@ func (m projectsModel) renderDetail(width, height int) string {
 		m.st.Subtitle.Render("Keys"),
 		m.st.Key.Render("enter") + "  " + enterDesc,
 		m.st.Key.Render("n") + "      new project (modal form)",
-		m.st.Key.Render("a") + "      switch agent for this project (cycles claude→codex→antigravity; local only)",
+		m.st.Key.Render("a") + "      switch agent for this project (cycles claude→codex→antigravity→cursor; local only)",
 		m.st.Key.Render("c") + "      show conversations for this project",
 		m.st.Key.Render("5") + "      open Notes for this project (local only)",
 	}

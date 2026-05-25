@@ -103,7 +103,7 @@ func newNewCmd() *cobra.Command {
 			if agentFlag != "" {
 				id, ok := agent.ParseID(agentFlag)
 				if !ok {
-					return fmt.Errorf("unknown agent %q (want claude, codex, or antigravity)", agentFlag)
+					return fmt.Errorf("unknown agent %q (want claude, codex, antigravity, or cursor)", agentFlag)
 				}
 				opts.Agent = id
 			}
@@ -115,7 +115,7 @@ func newNewCmd() *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&agentFlag, "agent", "",
-		"agent to launch: claude, codex, or antigravity (default claude)")
+		"agent to launch: claude, codex, antigravity, or cursor (default claude)")
 	return c
 }
 
@@ -227,6 +227,8 @@ func configuredDoctorCommand(cfg config.Config, id agent.ID) string {
 		return strings.TrimSpace(cfg.Agents.Codex.Command)
 	case agent.IDAntigravity:
 		return strings.TrimSpace(cfg.Agents.Antigravity.Command)
+	case agent.IDCursor:
+		return strings.TrimSpace(cfg.Agents.Cursor.Command)
 	default:
 		return ""
 	}
@@ -303,7 +305,7 @@ func runDoctor() error {
 
 	// AI agents block. At least one must be installed for ccmux to
 	// be useful — without an agent there's nothing to put in the tmux
-	// pane the dashboard supervises. We don't require all three; a
+	// pane the dashboard supervises. We don't require every agent; a
 	// Claude-only user has every feature, and a Codex-only user has
 	// the same with a different agent.
 	fmt.Println()
@@ -415,6 +417,8 @@ func agentInstallHint(id agent.ID) string {
 		return "`npm i -g @openai/codex` (or see codex docs)"
 	case agent.IDAntigravity:
 		return "`curl -fsSL https://antigravity.google/cli/install.sh | bash` (or see antigravity docs)"
+	case agent.IDCursor:
+		return "`curl https://cursor.com/install -fsS | bash` (or see cursor docs)"
 	}
 	return ""
 }

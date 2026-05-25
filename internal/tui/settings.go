@@ -113,8 +113,8 @@ func editableFields() []editableField {
 		},
 		{
 			label:   "agents.default",
-			hint:    "Default agent for new projects and bare sessions. Enter cycles: claude → codex → antigravity → shell.",
-			options: []string{"claude", "codex", "antigravity", "shell"},
+			hint:    "Default agent for new projects and bare sessions. Enter cycles: claude → codex → antigravity → cursor → shell.",
+			options: []string{"claude", "codex", "antigravity", "cursor", "shell"},
 			get:     func(c *config.Config) string { return c.Agents.Default },
 			set: func(c *config.Config, raw string) error {
 				raw = strings.TrimSpace(strings.ToLower(raw))
@@ -134,7 +134,7 @@ func editableFields() []editableField {
 				// but we normalize to the canonical name on write.
 				id, ok := agent.ParseID(raw)
 				if !ok {
-					return fmt.Errorf("must be one of: claude, codex, antigravity, shell")
+					return fmt.Errorf("must be one of: claude, codex, antigravity, cursor, shell")
 				}
 				c.Agents.Default = string(id)
 				return nil

@@ -449,7 +449,7 @@ func TestSettings_NarrowLayout(t *testing.T) {
 
 // TestSettings_AgentsDefault_CyclePicker — the agents.default row is a
 // cycle-picker: pressing Enter advances claude → codex → antigravity →
-// shell (wrapping) and persists each step, instead of opening the
+// cursor → shell (wrapping) and persists each step, instead of opening the
 // free-text inline editor. This is the surface the user flips to make
 // codex (or any agent) their default.
 func TestSettings_AgentsDefault_CyclePicker(t *testing.T) {
@@ -470,7 +470,7 @@ func TestSettings_AgentsDefault_CyclePicker(t *testing.T) {
 	}
 
 	// Default is claude; Enter cycles forward and wraps back to claude.
-	for _, want := range []string{"codex", "antigravity", "shell", "claude"} {
+	for _, want := range []string{"codex", "antigravity", "cursor", "shell", "claude"} {
 		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 		if m.editing {
 			t.Fatal("cycle-picker Enter must not open the inline editor")

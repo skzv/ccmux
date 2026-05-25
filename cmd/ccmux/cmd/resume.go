@@ -33,7 +33,7 @@ func newResumeCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "resume [conversation-id]",
 		Short: "Resume a past agent conversation in a new tmux session",
-		Long: `Resume a past Claude / Codex / Antigravity conversation in a fresh
+		Long: `Resume a past Claude / Codex / Antigravity / Cursor conversation in a fresh
 tmux session running the right agent with the right --resume flag.
 
 Forms:
@@ -43,6 +43,7 @@ Forms:
   ccmux resume --agent claude     # most recent Claude conversation
   ccmux resume --agent codex      # most recent Codex conversation
   ccmux resume --agent antigravity# most recent Antigravity conversation
+  ccmux resume --agent cursor     # most recent Cursor conversation
 
 Use ` + "`ccmux list-conversations`" + ` to discover IDs.`,
 		Args: cobra.MaximumNArgs(1),
@@ -91,7 +92,7 @@ Use ` + "`ccmux list-conversations`" + ` to discover IDs.`,
 				if agentFilter != "" {
 					want, ok := agent.ParseID(agentFilter)
 					if !ok {
-						return fmt.Errorf("unknown agent %q (claude, codex, antigravity)", agentFilter)
+						return fmt.Errorf("unknown agent %q (claude, codex, antigravity, cursor)", agentFilter)
 					}
 					target = pickMostRecentByAgent(list, want)
 					if target.ID == "" {
@@ -105,7 +106,7 @@ Use ` + "`ccmux list-conversations`" + ` to discover IDs.`,
 			return resumeNow(target)
 		},
 	}
-	cmd.Flags().StringVar(&agentFilter, "agent", "", "restrict to a specific agent (claude / codex / antigravity)")
+	cmd.Flags().StringVar(&agentFilter, "agent", "", "restrict to a specific agent (claude / codex / antigravity / cursor)")
 	return cmd
 }
 

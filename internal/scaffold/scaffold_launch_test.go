@@ -66,6 +66,7 @@ func TestLaunchCmd_ConfiguredCommands(t *testing.T) {
 		Claude:      "/tmp/claude",
 		Codex:       "/tmp/codex",
 		Antigravity: "/tmp/agy",
+		Cursor:      "/tmp/cursor-agent",
 	}
 	tests := []struct {
 		name string
@@ -75,6 +76,7 @@ func TestLaunchCmd_ConfiguredCommands(t *testing.T) {
 		{name: "claude", id: agent.IDClaude, want: "/tmp/claude"},
 		{name: "codex", id: agent.IDCodex, want: "/tmp/codex"},
 		{name: "antigravity", id: agent.IDAntigravity, want: "/tmp/agy"},
+		{name: "cursor", id: agent.IDCursor, want: "/tmp/cursor-agent"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

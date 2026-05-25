@@ -226,7 +226,7 @@ Each tracked session is in exactly one of:
 | `~/.local/state/ccmux/ccmuxd.sock` | Daemon Unix socket. |
 | `~/.local/state/ccmux/ccmuxd.log` | Daemon log (rotated by lumberjack). |
 | `~/.local/state/ccmux/ccmuxd.pid` | Daemon PID file. |
-| `<project>/.ccmux/agent` | Per-project sidecar recording which AI agent (claude / codex / antigravity) the project runs. Written by scaffold and the Projects-screen `a` switcher. |
+| `<project>/.ccmux/agent` | Per-project sidecar recording which AI agent (claude / codex / antigravity / cursor) the project runs. Written by scaffold and the Projects-screen `a` switcher. |
 
 The XDG-ish split (`config` for user-editable, `share` for app data, `state` for runtime) is intentional. On macOS the canonical place would be `~/Library`, but we'd lose Linux portability. XDG paths work on both.
 

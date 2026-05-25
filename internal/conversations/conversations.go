@@ -42,7 +42,7 @@ import (
 )
 
 // Conversation is one past agent session as found on disk. Stable
-// shape across all three agents so the TUI / CLI can render a uniform
+// shape across supported agents so the TUI / CLI can render a uniform
 // list without per-agent special-casing in the view layer.
 type Conversation struct {
 	// ID is the agent's own conversation/session UUID. Stable across
@@ -142,6 +142,8 @@ func (c Conversation) ResumeArgsWithCommands(commands agent.Commands) []string {
 		return agent.ResumeArgs(agent.IDCodex, c.ID, commands)
 	case agent.IDAntigravity:
 		return agent.ResumeArgs(agent.IDAntigravity, c.ID, commands)
+	case agent.IDCursor:
+		return agent.ResumeArgs(agent.IDCursor, c.ID, commands)
 	}
 	// Unknown agent — empty argv; caller should treat as "can't
 	// resume" rather than spawn something bogus.

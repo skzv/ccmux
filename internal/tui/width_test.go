@@ -88,7 +88,7 @@ func TestWidthSweep_AllScreens(t *testing.T) {
 		{ScreenConversations, []string{"Conversations"}, nil},
 		{ScreenProjects, []string{"Projects"}, nil},
 		{ScreenNotes, []string{"Notes"}, nil},
-		{ScreenAgents, []string{"Claude", "Codex", "Antigravity"}, []string{"switch agent"}},
+		{ScreenAgents, []string{"Claude", "Codex", "Antigravity", "Cursor"}, []string{"switch agent"}},
 		{ScreenSettings, []string{"Settings"}, []string{"config file"}},
 		{ScreenNetwork, []string{"Network"}, []string{"every machine"}},
 	}

@@ -1,6 +1,8 @@
 package setupwizard
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -33,6 +35,7 @@ func TestInstallHintFor_NamesActualPackage(t *testing.T) {
 		agent.IDClaude:      "@anthropic-ai/claude-code",
 		agent.IDCodex:       "@openai/codex",
 		agent.IDAntigravity: "antigravity.google/cli/install.sh",
+		agent.IDCursor:      "cursor.com/install",
 	}
 	for id, want := range cases {
 		t.Run(string(id), func(t *testing.T) {
@@ -40,6 +43,60 @@ func TestInstallHintFor_NamesActualPackage(t *testing.T) {
 				t.Errorf("missing identifier %q in hint: %q", want, got)
 			}
 		})
+	}
+}
+
+func TestDefaultAgentChoices_UsesConfiguredExecutable(t *testing.T) {
+	dir := t.TempDir()
+	codexPath := filepath.Join(dir, "codex")
+	if err := os.WriteFile(codexPath, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.Config{}
+	cfg.Agents.Codex.Command = codexPath
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("SHELL", "/bin/false")
+
+	got := defaultAgentChoices(t.Context(), cfg)
+	want := []agent.ID{agent.IDClaude, agent.IDCodex}
+	if len(got) != len(want) {
+		t.Fatalf("defaultAgentChoices len = %d, want %d: %v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("defaultAgentChoices[%d] = %q, want %q (all choices: %v)", i, got[i], want[i], got)
+		}
+	}
+}
+
+func TestSetupAgentCandidates_IncludesLoginShellResolution(t *testing.T) {
+	dir := t.TempDir()
+	binDir := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	codexPath := filepath.Join(binDir, "codex")
+	if err := os.WriteFile(codexPath, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	shellPath := filepath.Join(dir, "shell")
+	shell := "#!/bin/sh\n" +
+		"if [ \"$1\" = \"-lc\" ] && [ \"$2\" = \"command -v codex\" ]; then\n" +
+		"  printf '%s\\n' '" + codexPath + "'\n" +
+		"  exit 0\n" +
+		"fi\n" +
+		"exit 1\n"
+	if err := os.WriteFile(shellPath, []byte(shell), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("SHELL", shellPath)
+
+	got := setupAgentCandidates(t.Context(), agent.Codex{})
+	if len(got) != 1 || got[0] != codexPath {
+		t.Fatalf("setupAgentCandidates = %v, want [%s]", got, codexPath)
 	}
 }
 
@@ -90,11 +147,13 @@ func TestConfiguredAgentCommand(t *testing.T) {
 	cfg.Agents.Claude.Command = "  /tmp/claude  "
 	cfg.Agents.Codex.Command = "  /tmp/codex  "
 	cfg.Agents.Antigravity.Command = "  /tmp/agy  "
+	cfg.Agents.Cursor.Command = "  /tmp/cursor-agent  "
 
 	cases := map[agent.ID]string{
 		agent.IDClaude:      "/tmp/claude",
 		agent.IDCodex:       "/tmp/codex",
 		agent.IDAntigravity: "/tmp/agy",
+		agent.IDCursor:      "/tmp/cursor-agent",
 	}
 	for id, want := range cases {
 		t.Run(string(id), func(t *testing.T) {

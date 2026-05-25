@@ -83,30 +83,39 @@ func (m agentsModel) Update(msg tea.Msg) (agentsModel, tea.Cmd) {
 		g, cmd := m.antigravity.Update(msg)
 		m.antigravity = g
 		return m, cmd
+	case agent.IDCursor:
+		return m, nil
 	}
 	return m, nil
 }
 
 func (m agentsModel) View(width, height int) string {
-	header := m.renderSubtabs(isNarrow(width))
+	narrow := isNarrow(width)
+	header := m.renderSubtabs(narrow)
 	// Account for the header row + a blank line between header and body.
 	bodyHeight := height - 2
 	if bodyHeight < 1 {
 		bodyHeight = 1
 	}
+	bodyWidth := width
+	if narrow && bodyWidth > 4 {
+		bodyWidth -= 4
+	}
 	var body string
 	switch m.active {
 	case agent.IDClaude:
-		body = m.claude.View(width, bodyHeight)
+		body = m.claude.View(bodyWidth, bodyHeight)
 	case agent.IDCodex:
-		body = m.codex.View(width, bodyHeight)
+		body = m.codex.View(bodyWidth, bodyHeight)
 	case agent.IDAntigravity:
-		body = m.antigravity.View(width, bodyHeight)
+		body = m.antigravity.View(bodyWidth, bodyHeight)
+	case agent.IDCursor:
+		body = m.st.Muted.Render("Cursor settings are managed by Cursor CLI.")
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, header, body)
 }
 
-// renderSubtabs draws the [◆ Claude]  Codex  Antigravity row. Active tab
+// renderSubtabs draws the [◆ Claude]  Codex  Antigravity  Cursor row. Active tab
 // gets the emphasis style + a diamond marker so it reads as the
 // current selection even in a screen reader; inactive tabs are
 // muted.
@@ -120,16 +129,16 @@ func (m agentsModel) renderSubtabs(narrow bool) string {
 			parts = append(parts, m.st.Muted.Render("  "+label))
 		}
 	}
-	subtabs := strings.Join(parts, "   ")
 	// The "(tab / h·l: switch agent)" hint is T2 — dropped on narrow.
 	if narrow {
-		return subtabs
+		return strings.Join(parts, "\n")
 	}
+	subtabs := strings.Join(parts, "   ")
 	return subtabs + "   " + m.st.Muted.Render("(tab / h·l: switch agent)")
 }
 
 // nextAgentSubtab cycles sub-tabs in agent.All() order. Wraps at the
-// ends so tab from Antigravity lands on Claude.
+// ends so tab from Cursor lands on Claude.
 func nextAgentSubtab(cur agent.ID, dir int) agent.ID {
 	all := agent.All()
 	for i, a := range all {

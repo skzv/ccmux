@@ -16,7 +16,7 @@ These are locked. Open new specs if you want to revisit.
 
 1. **Agent identity is per-project, switchable.**
    Each project has a default agent stored in `<project>/.ccmux/agent`
-   (one of `claude` / `codex` / `antigravity`; the legacy `gemini`
+   (one of `claude` / `codex` / `antigravity` / `cursor`; the legacy `gemini`
    alias is still accepted for projects scaffolded before the rebrand).
    Missing file → claude
    (back-compat). The Projects tab gains a key to switch the agent for
@@ -44,7 +44,7 @@ The current Claude-specific code becomes an `Agent` strategy with
 three implementations. The single change point is `internal/agent`:
 
 ```go
-type ID string  // "claude", "codex", "antigravity"
+type ID string  // "claude", "codex", "antigravity", "cursor"
 
 type Agent interface {
     ID() ID
@@ -59,7 +59,7 @@ type Agent interface {
 
 func ByID(id ID) Agent          // panics on unknown; ParseID is the safe parser
 func ParseID(s string) (ID, bool)
-func All() []Agent              // claude, codex, antigravity (canonical order)
+func All() []Agent              // claude, codex, antigravity, cursor (canonical order)
 func AllInstalled(ctx context.Context) []Agent  // intersect with $PATH
 func Default() Agent            // claude
 ```
@@ -114,7 +114,7 @@ master between phases.
    - ✅ Daemon poll loop reads each session's project agent from the
      sidecar (cached on `tracked.agentID`) and dispatches `Classify()`.
    - ✅ `daemon.SessionState.Agent` carries the agent over the wire.
-   - ✅ Dashboard rows show a `[codex]` / `[antigravity]` tag for non-default
+   - ✅ Dashboard rows show a `[codex]` / `[antigravity]` / `[cursor]` tag for non-default
      agents (Claude rows stay clean for back-compat).
    - ⏸ **Deferred — usage panel split.** `internal/claudeusage`
      stays Claude-only for v1. Per-agent transcript walkers need
