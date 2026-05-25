@@ -26,8 +26,12 @@ import (
 // must never block the attach. This matches the daemon's applyChrome
 // and the TUI's localAttachCmd.
 //
+// detachOthers controls the tmux -d flag. Existing-session attach callers
+// pass the configured attach mode; create-then-attach callers pass false so
+// opening a fresh session preserves other clients.
+//
 // On success this does not return: tmux.Attach replaces the process.
-func attachWithChrome(session, projectLabel string) error {
+func attachWithChrome(session, projectLabel string, detachOthers bool) error {
 	// The moshi probe drives only the cosmetic "reachable via Moshi"
 	// badge, and on macOS it shells out to slow tooling. Give it its
 	// own bounded context so a slow probe can't starve the chrome step
@@ -48,5 +52,5 @@ func attachWithChrome(session, projectLabel string) error {
 	_ = tmuxchrome.Apply(cctx, session, projectLabel, reachable, false)
 	ccancel()
 
-	return tmux.Attach(session, attachDetachOthers())
+	return tmux.Attach(session, detachOthers)
 }

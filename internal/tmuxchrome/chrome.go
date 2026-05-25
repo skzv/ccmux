@@ -7,8 +7,8 @@
 //
 //  1. The project / session name on the left in ccmux's brand color
 //     (Catppuccin mauve).
-//  2. A "prefix + d to return to ccmux" hint in the middle so the
-//     detach keybinding is always visible.
+//  2. A "prefix then d" or nested-session return hint in the middle so
+//     the return keybinding is always visible.
 //  3. A "📱 reachable via Moshi" indicator on the right, only when
 //     moshi-hook is paired so the user knows the phone can pick up
 //     this session seamlessly.
@@ -48,8 +48,9 @@ const (
 // flow). The detach hint differs:
 //
 //   - Standalone (not nested): `<prefix> then d` (tmux detach-client).
-//   - Nested: `<prefix> then L` (last-session, jumps back to the outer
-//     ccmux session). `<prefix> then d` would close the whole client.
+//   - Nested: `<prefix> then <resolved key>` (switch-client -l, jumps
+//     back to the outer ccmux session). `<prefix> then d` would close
+//     the whole client.
 //
 // Important wording: tmux prefix-key gestures are a SEQUENCE, not a
 // combo. The user presses the prefix, releases it, then presses the
@@ -62,7 +63,11 @@ func Apply(ctx context.Context, session, projectLabel string, moshiReachable, ne
 		return fmt.Errorf("tmuxchrome: session name required")
 	}
 	prefix := DetectedPrefix(ctx)
-	for _, kv := range Options(session, projectLabel, moshiReachable, nested, prefix) {
+	returnBinding := defaultNestedReturnBinding()
+	if nested {
+		returnBinding = ResolveNestedReturnBinding(ctx)
+	}
+	for _, kv := range optionsWithNestedReturnBinding(session, projectLabel, moshiReachable, nested, prefix, returnBinding) {
 		args := append([]string{"set-option", "-t", session, "-q", kv[0]}, kv[1])
 		cmd := exec.CommandContext(ctx, "tmux", args...)
 		// We intentionally ignore individual errors; a partial chrome is
@@ -70,7 +75,121 @@ func Apply(ctx context.Context, session, projectLabel string, moshiReachable, ne
 		// to surface.
 		_ = cmd.Run()
 	}
+	if nested && returnBinding.ShouldBind {
+		_ = ensureNestedReturnBinding(ctx, returnBinding.Key)
+	}
 	return nil
+}
+
+// NestedReturnBinding is the prefix-table binding ccmux will advertise
+// for returning from a switched-to session back to the outer ccmux
+// session. ShouldBind is true only for ccmux-selected fallback keys that
+// were unbound when inspected; existing user bindings are never
+// overwritten.
+type NestedReturnBinding struct {
+	Key        string
+	Display    string
+	ShouldBind bool
+}
+
+var nestedReturnFallbackKeys = []string{"BSpace", "C-g", "F12", "M-BSpace", "M-g"}
+
+type prefixBinding struct {
+	Key     string
+	Command []string
+}
+
+// ResolveNestedReturnBinding picks the best current prefix binding for
+// returning to ccmux from a nested tmux attach. It prefers any existing
+// switch-client -l binding, otherwise chooses the first unbound fallback
+// key. If the prefix table cannot be inspected or all fallbacks are
+// already bound, it returns a command fallback with an empty Key.
+func ResolveNestedReturnBinding(ctx context.Context) NestedReturnBinding {
+	bindings, err := listPrefixBindings(ctx)
+	if err != nil {
+		return NestedReturnBinding{}
+	}
+	return chooseNestedReturnBinding(bindings)
+}
+
+func defaultNestedReturnBinding() NestedReturnBinding {
+	return nestedReturnBindingForKey("BSpace", false)
+}
+
+func ensureNestedReturnBinding(ctx context.Context, key string) error {
+	args := nestedReturnBindingArgs(key)
+	return exec.CommandContext(ctx, args[0], args[1:]...).Run()
+}
+
+func nestedReturnBindingArgs(key string) []string {
+	return []string{"tmux", "bind-key", key, "switch-client", "-l"}
+}
+
+func listPrefixBindings(ctx context.Context) ([]prefixBinding, error) {
+	out, err := exec.CommandContext(ctx, "tmux", "list-keys", "-T", "prefix").Output()
+	if err != nil {
+		return nil, err
+	}
+	return parsePrefixBindings(string(out)), nil
+}
+
+func parsePrefixBindings(out string) []prefixBinding {
+	var bindings []prefixBinding
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		for i := 0; i+2 < len(fields); i++ {
+			if fields[i] != "-T" || fields[i+1] != "prefix" {
+				continue
+			}
+			bindings = append(bindings, prefixBinding{
+				Key:     fields[i+2],
+				Command: append([]string{}, fields[i+3:]...),
+			})
+			break
+		}
+	}
+	return bindings
+}
+
+func chooseNestedReturnBinding(bindings []prefixBinding) NestedReturnBinding {
+	bound := map[string]bool{}
+	for _, b := range bindings {
+		bound[b.Key] = true
+		if isNestedReturnCommand(b.Command) {
+			return nestedReturnBindingForKey(b.Key, false)
+		}
+	}
+	for _, key := range nestedReturnFallbackKeys {
+		if !bound[key] {
+			return nestedReturnBindingForKey(key, true)
+		}
+	}
+	return NestedReturnBinding{}
+}
+
+func isNestedReturnCommand(command []string) bool {
+	if len(command) == 0 {
+		return false
+	}
+	switch command[0] {
+	case "switch-client", "switchc":
+		for _, arg := range command[1:] {
+			if arg == "-l" {
+				return true
+			}
+		}
+	case "last-session", "last":
+		return true
+	}
+	return false
+}
+
+func nestedReturnBindingForKey(key string, shouldBind bool) NestedReturnBinding {
+	return NestedReturnBinding{
+		Key:        key,
+		Display:    PrettyKey(key),
+		ShouldBind: shouldBind,
+	}
 }
 
 // Options returns the tmux set-option key/value pairs Apply will emit
@@ -86,6 +205,10 @@ func Apply(ctx context.Context, session, projectLabel string, moshiReachable, ne
 // `prefix` is the human-readable prefix-key string (e.g. "Ctrl-b").
 // Pass DetectedPrefix(ctx) from Apply; tests can pass any string.
 func Options(session, projectLabel string, moshiReachable, nested bool, prefix string) [][]string {
+	return optionsWithNestedReturnBinding(session, projectLabel, moshiReachable, nested, prefix, defaultNestedReturnBinding())
+}
+
+func optionsWithNestedReturnBinding(session, projectLabel string, moshiReachable, nested bool, prefix string, returnBinding NestedReturnBinding) [][]string {
 	if projectLabel == "" {
 		projectLabel = session
 	}
@@ -99,7 +222,7 @@ func Options(session, projectLabel string, moshiReachable, nested bool, prefix s
 
 	returnHint := fmt.Sprintf("press %s then d to detach", prefix)
 	if nested {
-		returnHint = fmt.Sprintf("press %s then L to return to ccmux", prefix)
+		returnHint = nestedReturnHint(prefix, returnBinding)
 	}
 
 	statusLeft := fmt.Sprintf(
@@ -153,6 +276,13 @@ func Options(session, projectLabel string, moshiReachable, nested bool, prefix s
 	}
 }
 
+func nestedReturnHint(prefix string, binding NestedReturnBinding) string {
+	if binding.Key == "" {
+		return "run tmux switch-client -l to return to ccmux"
+	}
+	return fmt.Sprintf("press %s then %s to return to ccmux", prefix, binding.Display)
+}
+
 // DetectedPrefix returns the human-readable form of the user's current
 // tmux prefix-key binding (default Ctrl-b). Used by Apply and by the
 // Sessions detail pane so the hint matches the user's actual keymap
@@ -174,6 +304,10 @@ func DetectedPrefix(ctx context.Context) string {
 // the human-readable form a user would type from muscle memory.
 func PrettyKey(k string) string {
 	switch {
+	case k == "BSpace":
+		return "Backspace"
+	case k == "M-BSpace":
+		return "Alt-Backspace"
 	case strings.HasPrefix(k, "C-"):
 		return "Ctrl-" + k[2:]
 	case strings.HasPrefix(k, "M-"):

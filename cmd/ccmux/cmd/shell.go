@@ -17,7 +17,10 @@ import (
 
 	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/daemon"
+	"github.com/skzv/ccmux/internal/tmux"
 )
+
+const remoteShellAttachPath = "PATH=/opt/homebrew/bin:/usr/local/bin:/home/linuxbrew/.linuxbrew/bin:/snap/bin:$PATH"
 
 // newShellCmd registers the `ccmux shell` subcommand. CLI parity
 // with the TUI's Sessions-tab `n` form per CLAUDE.md's feature-
@@ -117,10 +120,7 @@ func runShellRemote(ctx context.Context, name, path, host, agentFlag string) err
 	// TUI uses for cross-platform tmux discovery. Duplicating here
 	// rather than reaching into internal/tui — that package is
 	// gigantic and the CLI shouldn't drag it in.
-	tmuxAttach := fmt.Sprintf(
-		`PATH=/opt/homebrew/bin:/usr/local/bin:/home/linuxbrew/.linuxbrew/bin:/snap/bin:$PATH tmux attach-session -d -t %s`,
-		shellQuote(res.Session),
-	)
+	tmuxAttach := remoteShellTmuxAttach(res.Session)
 	c := exec.Command("ssh", "-t", dial, tmuxAttach)
 	c.Stdin = os.Stdin
 	c.Stdout = os.Stdout
@@ -128,12 +128,29 @@ func runShellRemote(ctx context.Context, name, path, host, agentFlag string) err
 	return c.Run()
 }
 
-// execTmuxAttach is the foreground replacement for "tmux attach -d -t <name>".
+// remoteShellTmuxAttach builds the remote command for `ccmux shell --host`.
+// The session was just created, so attach in mirror mode and preserve any
+// other tmux clients on that remote server.
+func remoteShellTmuxAttach(session string) string {
+	return fmt.Sprintf(
+		`%s tmux attach-session -t %s`,
+		remoteShellAttachPath,
+		shellQuote(session),
+	)
+}
+
+// shellAttachCmd builds the foreground tmux attach for a freshly-created
+// `ccmux shell` local session. Fresh-session attach preserves other clients.
+func shellAttachCmd(name string) *exec.Cmd {
+	return tmux.AttachCmd(name, false)
+}
+
+// execTmuxAttach is the foreground replacement for "tmux attach -t <name>".
 // We use exec.Command + Run rather than syscall.Exec so deferred cleanups
 // in the parent run; for a one-shot CLI subcommand the difference doesn't
 // matter.
 func execTmuxAttach(name string) error {
-	c := exec.Command("tmux", "attach-session", "-d", "-t", name)
+	c := shellAttachCmd(name)
 	c.Stdin = os.Stdin
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr

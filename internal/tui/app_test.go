@@ -198,6 +198,27 @@ func TestRemoteTmuxAttach_DetachFlag(t *testing.T) {
 	}
 }
 
+func TestRemoteNewSessionAttachProcess_ForcesMirrorAttach(t *testing.T) {
+	cmd, target, remoteCmd := remoteNewSessionAttachProcess(remoteSessionStartedMsg{
+		SessionName: "c-foo",
+		DialHost:    "mac-mini.local",
+		User:        "sasha",
+		Mosh:        false,
+	})
+	if target != "sasha@mac-mini.local" {
+		t.Fatalf("target = %q, want sasha@mac-mini.local", target)
+	}
+	if len(cmd.Args) == 0 || cmd.Args[0] != "ssh" {
+		t.Fatalf("cmd.Args = %v, want ssh command", cmd.Args)
+	}
+	if strings.Contains(remoteCmd, " -d ") {
+		t.Errorf("new-session remote attach should not pass -d, got: %q", remoteCmd)
+	}
+	if !strings.Contains(remoteCmd, "attach-session -t ") {
+		t.Errorf("new-session remote attach should use mirror attach: %q", remoteCmd)
+	}
+}
+
 func TestShellQuote(t *testing.T) {
 	cases := []struct {
 		in, want string

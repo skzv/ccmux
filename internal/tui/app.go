@@ -209,6 +209,11 @@ func New(cfg config.Config, version string) App {
 	}
 	a.dashboard.SetConfig(cfg)
 	a.dashboard.SetVersion(version)
+	a.sessionsM.SetDefaultDir(cfg.Sessions.DefaultDir)
+	a.sessionsM.SetDefaultAgent(cfg.Agents.Default)
+	a.sessionsM.SetAgentCommands(cfg.AgentCommands())
+	a.projectsM.SetDefaultAgent(cfg.Agents.Default)
+	a.projectsM.SetAgentCommands(cfg.AgentCommands())
 	// Seed the live headless-visibility toggle from config. Users
 	// can flip it at runtime with H; the config value is just the
 	// starting position.
@@ -468,7 +473,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.attach.label = msg.Session
 		}
 		return a, tea.Batch(
-			a.localAttachCmd(msg.Session, msg.Project),
+			a.localNewSessionAttachCmd(msg.Session, msg.Project),
 			a.refreshSessionsCmd(),
 			func() tea.Msg {
 				return toastMsg{
@@ -504,7 +509,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.sessionsM.SetHosts(a.hosts)
 		a.sessionsM.SetDefaultDir(a.cfg.Sessions.DefaultDir)
 		a.sessionsM.SetDefaultAgent(a.cfg.Agents.Default)
+		a.sessionsM.SetAgentCommands(a.cfg.AgentCommands())
 		a.projectsM.SetDefaultAgent(a.cfg.Agents.Default)
+		a.projectsM.SetAgentCommands(a.cfg.AgentCommands())
 		a.dashboard.SetVersion(a.version)
 		a.sessionsM.SetSessions(a.sessions)
 		if msg.Err != nil {
@@ -612,19 +619,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.toasts.Set(toastError, "remote session created but no dial host known", 5*time.Second)
 			return a, nil
 		}
-		target := msg.DialHost
-		if msg.User != "" {
-			target = msg.User + "@" + msg.DialHost
-		}
-		remoteCmd := remoteTmuxAttach(msg.SessionName, a.cfg.Sessions.DetachOthersOnAttach())
-		var c *exec.Cmd
+		c, target, remoteCmd := remoteNewSessionAttachProcess(msg)
 		if msg.Mosh {
-			c = remoteattach.Mosh(target, remoteCmd)
 			if dbg := debugLogger(); dbg != nil {
 				dbg.Printf("remote attach: mosh %s -- bash -c %q", target, remoteCmd)
 			}
 		} else {
-			c = remoteattach.SSH(target, remoteCmd)
 			if dbg := debugLogger(); dbg != nil {
 				dbg.Printf("remote attach: ssh -t %s %q", target, remoteCmd)
 			}
@@ -664,10 +664,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Moshi-detect + chrome-apply prep.
 		if !a.attach.active {
 			tick := a.startAttaching(attachKindAttach, msg.Session)
-			return a, tea.Batch(tick, a.localAttachCmd(msg.Session, msg.Session))
+			return a, tea.Batch(tick, a.localNewSessionAttachCmd(msg.Session, msg.Session))
 		}
 		a.attach.label = msg.Session
-		return a, a.localAttachCmd(msg.Session, msg.Session)
+		return a, a.localNewSessionAttachCmd(msg.Session, msg.Session)
 
 	case projectSessionReadyMsg:
 		// New project is scaffolded and its tmux session is running.
@@ -678,10 +678,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Projects screen wondering why nothing happened.
 		if !a.attach.active {
 			tick := a.startAttaching(attachKindNew, msg.Project)
-			return a, tea.Batch(tick, a.localAttachCmd(msg.Session, msg.Project))
+			return a, tea.Batch(tick, a.localNewSessionAttachCmd(msg.Session, msg.Project))
 		}
 		a.attach.label = msg.Project
-		return a, a.localAttachCmd(msg.Session, msg.Project)
+		return a, a.localNewSessionAttachCmd(msg.Session, msg.Project)
 
 	case sessionKilledMsg:
 		if msg.Err != nil {
@@ -712,6 +712,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.cfg = cfg
 			a.settings.SetConfig(cfg)
 			a.dashboard.SetConfig(cfg)
+			a.sessionsM.SetDefaultDir(cfg.Sessions.DefaultDir)
+			a.sessionsM.SetDefaultAgent(cfg.Agents.Default)
+			a.sessionsM.SetAgentCommands(cfg.AgentCommands())
+			a.projectsM.SetDefaultAgent(cfg.Agents.Default)
+			a.projectsM.SetAgentCommands(cfg.AgentCommands())
 			a.toasts.Set(toastSuccess, "config reloaded", 2*time.Second)
 		}
 		return a, nil
@@ -1823,6 +1828,21 @@ func remoteTmuxAttach(session string, detachOthers bool) string {
 		" tmux attach-session" + flags + " -t " + shellQuote(session)
 }
 
+// remoteNewSessionAttachProcess builds the ssh/mosh process for a session
+// ccmux just created on a remote host. It deliberately forces mirror attach
+// so creating a new session never detaches existing remote tmux clients.
+func remoteNewSessionAttachProcess(msg remoteSessionStartedMsg) (*exec.Cmd, string, string) {
+	target := msg.DialHost
+	if msg.User != "" {
+		target = msg.User + "@" + msg.DialHost
+	}
+	remoteCmd := remoteTmuxAttach(msg.SessionName, false)
+	if msg.Mosh {
+		return remoteattach.Mosh(target, remoteCmd), target, remoteCmd
+	}
+	return remoteattach.SSH(target, remoteCmd), target, remoteCmd
+}
+
 // attachOrCreateForSelectedProject is Enter on Projects screen.
 // Routes by Host:
 //   - local (Host == "" or "local"): existing flow — tmux.New here,
@@ -2033,19 +2053,20 @@ func (a App) resumeConversationCmd(c conversations.Conversation) tea.Cmd {
 	}
 }
 
-// localAttachCmd kicks off a local-session attach. It does NOT call
-// tea.ExecProcess directly — instead it returns a prep cmd that runs
-// off-thread (Moshi-detect + tmuxchrome.Apply), emitting
-// attachReadyMsg when finished. The attachReadyMsg handler is the one
-// that suspends Bubble Tea and execs `tmux attach`. This indirection
-// is what lets the attach-loading overlay render in the gap between
-// keypress and suspend — the previous shape blocked Update for up to
-// ~7s and the user just stared at the regular TUI.
-//
-// Callers are expected to have already flipped a.attach via
-// startAttaching so the overlay is visible while the prep runs.
+// localAttachCmd kicks off an explicit existing-session attach, honoring
+// sessions.attach_mode. Create-then-attach flows use
+// localNewSessionAttachCmd so opening a newly-created session never
+// detaches existing tmux clients.
 func (a App) localAttachCmd(session, projectLabel string) tea.Cmd {
 	return prepLocalAttachCmd(session, projectLabel, a.cfg.Sessions.DetachOthersOnAttach())
+}
+
+// localNewSessionAttachCmd kicks off a local attach after ccmux has just
+// created the session. It shares the same prep pipeline as localAttachCmd
+// so nested-tmux switch-client behavior and chrome application stay
+// centralized, but forces mirror attach.
+func (a App) localNewSessionAttachCmd(session, projectLabel string) tea.Cmd {
+	return prepLocalAttachCmd(session, projectLabel, false)
 }
 
 // uniqueSessionName finds the next unused tmux session name by appending a

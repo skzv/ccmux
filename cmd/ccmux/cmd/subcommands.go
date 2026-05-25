@@ -53,6 +53,7 @@ func newAttachCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			created := false
 			if !has {
 				// Resolve the launch command from the project's
 				// sidecar so an Antigravity-tagged project doesn't
@@ -62,11 +63,12 @@ func newAttachCmd() *cobra.Command {
 				if err := tmux.New(ctx, session, abs, launch); err != nil {
 					return err
 				}
+				created = true
 			}
 			// Replace this process with tmux attach, applying ccmux
 			// chrome first so a CLI-spawned session looks the same as a
 			// TUI/daemon-spawned one.
-			return attachWithChrome(session, filepath.Base(abs))
+			return attachWithChrome(session, filepath.Base(abs), detachOthersForAttachIntent(created))
 		},
 	}
 }
@@ -81,6 +83,13 @@ func attachDetachOthers() bool {
 		return false
 	}
 	return cfg.Sessions.DetachOthersOnAttach()
+}
+
+func detachOthersForAttachIntent(created bool) bool {
+	if created {
+		return false
+	}
+	return attachDetachOthers()
 }
 
 // newNewCmd: `ccmux new <name> [--agent <id>]` — create a project
@@ -111,7 +120,7 @@ func newNewCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return attachWithChrome(session, args[0])
+			return attachWithChrome(session, args[0], false)
 		},
 	}
 	c.Flags().StringVar(&agentFlag, "agent", "",

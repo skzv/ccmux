@@ -169,6 +169,19 @@ func AllInstalled(ctx context.Context) []Agent {
 	return out
 }
 
+// AllAvailable returns every supported agent ccmux can launch from the
+// current process: either the default binary resolves on PATH, or setup
+// pinned an executable command override in config.
+func AllAvailable(ctx context.Context, commands Commands) []Agent {
+	out := []Agent{}
+	for _, a := range All() {
+		if isInstalled(ctx, a.Binary()) || commandAvailable(ctx, commandOverride(a.ID(), commands)) {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
 // isInstalled is a thin wrapper over exec.LookPath. Split out so tests
 // can swap the hook (see installLookupHook in agent_test.go).
 var installLookupHook = func(_ context.Context, bin string) bool {
@@ -178,6 +191,17 @@ var installLookupHook = func(_ context.Context, bin string) bool {
 
 func isInstalled(ctx context.Context, bin string) bool {
 	return installLookupHook(ctx, bin)
+}
+
+func commandAvailable(ctx context.Context, command string) bool {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return false
+	}
+	if filepath.IsAbs(command) || strings.ContainsRune(command, os.PathSeparator) {
+		return Executable(command)
+	}
+	return isInstalled(ctx, command)
 }
 
 // ExecutableCandidates returns every executable named bin found on a
@@ -252,6 +276,13 @@ func ResumeArgs(id ID, conversationID string, commands Commands) []string {
 }
 
 func configuredBinary(id ID, fallback string, commands Commands) string {
+	if command := commandOverride(id, commands); command != "" {
+		return command
+	}
+	return fallback
+}
+
+func commandOverride(id ID, commands Commands) string {
 	switch id {
 	case IDClaude:
 		if strings.TrimSpace(commands.Claude) != "" {
@@ -270,7 +301,7 @@ func configuredBinary(id ID, fallback string, commands Commands) string {
 			return strings.TrimSpace(commands.Cursor)
 		}
 	}
-	return fallback
+	return ""
 }
 
 func launchCmdWithBinary(a Agent, binary string, continueFlag bool) string {

@@ -40,6 +40,10 @@ type projectsModel struct {
 	// at open time. Empty falls back to the first installed agent.
 	defaultAgent string
 
+	// agentCommands are setup-pinned executable paths for agents that
+	// may not be on this process's PATH, such as npm CLIs under nvm.
+	agentCommands agent.Commands
+
 	// Filter state. When filterActive is true, keystrokes feed the
 	// textinput and the list view shows only projects whose name
 	// matches the filter (case-insensitive substring). Cursor is
@@ -69,6 +73,13 @@ func (m *projectsModel) SetProjects(p []project.Project) {
 // configReloadMsg (after the user edits Settings or config.toml).
 func (m *projectsModel) SetDefaultAgent(a string) {
 	m.defaultAgent = a
+}
+
+// SetAgentCommands is called by App on startup/config reload so the
+// new-project picker can include setup-pinned agent executables even
+// when their bare binary names are not on this process's PATH.
+func (m *projectsModel) SetAgentCommands(commands agent.Commands) {
+	m.agentCommands = commands
 }
 
 // visibleProjects returns the slice the user actually sees: the full
@@ -234,7 +245,7 @@ func (m projectsModel) Update(msg tea.Msg) (projectsModel, tea.Cmd) {
 				}
 			}
 		case keyMatches(km, m.km.NewItem):
-			f := newNewProjectForm(m.st, m.hosts, m.defaultAgent)
+			f := newNewProjectForm(m.st, m.hosts, m.defaultAgent, m.agentCommands)
 			m.form = &f
 			return m, tea.Batch(textInputBlink())
 		case km.String() == "a":

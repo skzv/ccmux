@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -81,6 +83,21 @@ func TestNewSessionForm_DefaultRowIsAgent(t *testing.T) {
 	cur := form.currentAgent()
 	if cur.ID == "" {
 		t.Errorf("default agent row = shell sentinel (ID empty), want an agent — picker would land users in $SHELL by default")
+	}
+}
+
+func TestNewSessionForm_UsesConfiguredAgentCommand(t *testing.T) {
+	dir := t.TempDir()
+	codexPath := filepath.Join(dir, "codex")
+	if err := os.WriteFile(codexPath, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", t.TempDir())
+
+	form := newNewSessionForm(styles.Default(), nil, "", "codex", agent.Commands{Codex: codexPath})
+	cur := form.currentAgent()
+	if cur.ID != agent.IDCodex {
+		t.Fatalf("currentAgent = %q, want codex; choices=%v", cur.ID, form.agents)
 	}
 }
 

@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/skzv/ccmux/internal/agent"
@@ -109,6 +111,20 @@ func TestNewProjectForm_HonorsDefaultAgent(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestNewProjectForm_UsesConfiguredAgentCommand(t *testing.T) {
+	dir := t.TempDir()
+	codexPath := filepath.Join(dir, "codex")
+	if err := os.WriteFile(codexPath, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", t.TempDir())
+
+	f := newNewProjectForm(styles.Default(), nil, "codex", agent.Commands{Codex: codexPath})
+	if got := f.agents[f.agentIdx].ID(); got != agent.IDCodex {
+		t.Fatalf("picked agent = %q, want codex", got)
 	}
 }
 

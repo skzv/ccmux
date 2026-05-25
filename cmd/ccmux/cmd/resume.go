@@ -155,6 +155,7 @@ func resumeNow(target conversations.Conversation) error {
 	cmdline := joinArgs(argv) + " || zsh"
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	detachOthers := false
 	if err := tmux.New(ctx, sessionName, target.Project, cmdline); err != nil {
 		// If the session already exists (e.g., the user already
 		// resumed this ID earlier in the day), tmux.New errors. Treat
@@ -162,6 +163,7 @@ func resumeNow(target conversations.Conversation) error {
 		if has, _ := tmux.Has(ctx, sessionName); !has {
 			return fmt.Errorf("create tmux session: %w", err)
 		}
+		detachOthers = attachDetachOthers()
 	}
 	// Hand off to tmux attach via exec — replaces the current process
 	// so when the user detaches they return to whatever shell launched
@@ -171,7 +173,7 @@ func resumeNow(target conversations.Conversation) error {
 	if target.Project != "" {
 		label = filepath.Base(target.Project)
 	}
-	return attachWithChrome(sessionName, label)
+	return attachWithChrome(sessionName, label, detachOthers)
 }
 
 // joinArgs glues an argv slice into a shell command, quoting each

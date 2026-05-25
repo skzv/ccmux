@@ -308,6 +308,21 @@ func TestAllInstalled_RespectsHook(t *testing.T) {
 	}
 }
 
+func TestAllAvailable_UsesConfiguredExecutable(t *testing.T) {
+	orig := installLookupHook
+	defer func() { installLookupHook = orig }()
+	installLookupHook = func(_ context.Context, _ string) bool { return false }
+
+	dir := t.TempDir()
+	codexPath := filepath.Join(dir, "codex")
+	writeExecutable(t, codexPath)
+
+	got := AllAvailable(context.Background(), Commands{Codex: codexPath})
+	if len(got) != 1 || got[0].ID() != IDCodex {
+		t.Fatalf("configured codex scenario: got %v, want [codex]", agentIDs(got))
+	}
+}
+
 func TestExecutableCandidates_PathOrderAndDedup(t *testing.T) {
 	dir1 := t.TempDir()
 	dir2 := t.TempDir()

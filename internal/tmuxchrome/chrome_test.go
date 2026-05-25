@@ -11,6 +11,8 @@ func TestPrettyKey(t *testing.T) {
 		{"C-a", "Ctrl-a"},
 		{"M-x", "Alt-x"},
 		{"S-F1", "Shift-F1"},
+		{"BSpace", "Backspace"},
+		{"M-BSpace", "Alt-Backspace"},
 		{"`", "`"}, // backtick remap left as-is
 		{"", ""},
 		{"plainkey", "plainkey"},
@@ -111,18 +113,102 @@ func TestOptions_WindowSizeLatest(t *testing.T) {
 // TestOptions_NestedSwitchesDetachHint — when ccmux's outer tmux is
 // running and we got here via `tmux switch-client`, plain "prefix + d"
 // would close the whole client. The chrome must instead tell the user
-// to use `prefix + L` to jump back to the outer session.
+// to use `prefix then Backspace` to jump back to the outer session.
 func TestOptions_NestedSwitchesDetachHint(t *testing.T) {
 	opts := Options("c-foo", "p", false, true /*nested*/, "Ctrl-b")
 	for _, kv := range opts {
 		if kv[0] != "status-right" {
 			continue
 		}
-		if !strings.Contains(kv[1], "Ctrl-b then L") {
-			t.Errorf("nested status-right should hint `then L`: %q", kv[1])
+		if !strings.Contains(kv[1], "Ctrl-b then Backspace") {
+			t.Errorf("nested status-right should hint `then Backspace`: %q", kv[1])
 		}
 		if strings.Contains(kv[1], "then d to detach") {
 			t.Errorf("nested status-right should NOT use the d-detach hint: %q", kv[1])
+		}
+	}
+}
+
+func TestNestedReturnBindingArgs(t *testing.T) {
+	got := strings.Join(nestedReturnBindingArgs("F12"), " ")
+	want := "tmux bind-key F12 switch-client -l"
+	if got != want {
+		t.Fatalf("nestedReturnBindingArgs = %q, want %q", got, want)
+	}
+}
+
+func TestParsePrefixBindings(t *testing.T) {
+	raw := "" +
+		"bind-key    -T prefix C-b send-prefix\n" +
+		"bind-key -r -T prefix L resize-pane -R 5\n" +
+		"bind-key    -T prefix BSpace switch-client -l\n"
+	got := parsePrefixBindings(raw)
+	if len(got) != 3 {
+		t.Fatalf("len = %d, want 3: %#v", len(got), got)
+	}
+	if got[1].Key != "L" || strings.Join(got[1].Command, " ") != "resize-pane -R 5" {
+		t.Fatalf("repeat binding parse = %#v, want L resize-pane -R 5", got[1])
+	}
+	if got[2].Key != "BSpace" || strings.Join(got[2].Command, " ") != "switch-client -l" {
+		t.Fatalf("return binding parse = %#v, want BSpace switch-client -l", got[2])
+	}
+}
+
+func TestChooseNestedReturnBinding_UsesExistingReturnBinding(t *testing.T) {
+	got := chooseNestedReturnBinding([]prefixBinding{
+		{Key: "L", Command: []string{"resize-pane", "-R", "5"}},
+		{Key: "G", Command: []string{"switch-client", "-l"}},
+	})
+	if got.Key != "G" || got.Display != "G" || got.ShouldBind {
+		t.Fatalf("binding = %#v, want existing G without rebinding", got)
+	}
+}
+
+func TestChooseNestedReturnBinding_SelectsFirstUnboundFallback(t *testing.T) {
+	got := chooseNestedReturnBinding([]prefixBinding{
+		{Key: "L", Command: []string{"resize-pane", "-R", "5"}},
+	})
+	if got.Key != "BSpace" || got.Display != "Backspace" || !got.ShouldBind {
+		t.Fatalf("binding = %#v, want BSpace with binding", got)
+	}
+}
+
+func TestChooseNestedReturnBinding_SkipsBoundFallbacks(t *testing.T) {
+	got := chooseNestedReturnBinding([]prefixBinding{
+		{Key: "BSpace", Command: []string{"send-prefix"}},
+		{Key: "C-g", Command: []string{"display-message", "busy"}},
+	})
+	if got.Key != "F12" || got.Display != "F12" || !got.ShouldBind {
+		t.Fatalf("binding = %#v, want F12 with binding", got)
+	}
+}
+
+func TestChooseNestedReturnBinding_ExhaustedFallsBackToCommand(t *testing.T) {
+	var bindings []prefixBinding
+	for _, key := range nestedReturnFallbackKeys {
+		bindings = append(bindings, prefixBinding{Key: key, Command: []string{"display-message", key}})
+	}
+	got := chooseNestedReturnBinding(bindings)
+	if got.Key != "" || got.Display != "" || got.ShouldBind {
+		t.Fatalf("binding = %#v, want command fallback", got)
+	}
+	hint := nestedReturnHint("Ctrl-a", got)
+	if !strings.Contains(hint, "tmux switch-client -l") {
+		t.Fatalf("hint = %q, want command fallback", hint)
+	}
+}
+
+func TestOptions_NestedUsesResolvedReturnBinding(t *testing.T) {
+	opts := optionsWithNestedReturnBinding("c-foo", "p", false, true, "Ctrl-a", NestedReturnBinding{
+		Key:     "G",
+		Display: "G",
+	})
+	for _, kv := range opts {
+		if kv[0] != "status-right" {
+			continue
+		}
+		if !strings.Contains(kv[1], "Ctrl-a then G") {
+			t.Fatalf("status-right = %q, want resolved G hint", kv[1])
 		}
 	}
 }

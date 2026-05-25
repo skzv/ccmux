@@ -64,9 +64,10 @@ type hostChoice struct {
 // newNewProjectForm builds the form. `hosts` is the live slice from
 // the App (reachable peers). If empty, the picker still shows "local"
 // so the form is always submittable. The agent picker is populated
-// with everything that's installed; if none is detected we fall back
-// to agent.All() so the form is still usable.
-func newNewProjectForm(st styles.Styles, hosts []hostStatus, defaultAgent string) newProjectFormModel {
+// with everything ccmux can launch from PATH or setup-pinned command
+// paths; if none is detected we fall back to agent.All() so the form
+// is still usable.
+func newNewProjectForm(st styles.Styles, hosts []hostStatus, defaultAgent string, commandsOpt ...agent.Commands) newProjectFormModel {
 	n := textinput.New()
 	n.Placeholder = "my-project"
 	n.CharLimit = 64
@@ -74,7 +75,11 @@ func newNewProjectForm(st styles.Styles, hosts []hostStatus, defaultAgent string
 	n.Prompt = ""
 	n.Focus()
 
-	agents := agent.AllInstalled(context.Background())
+	commands := agent.Commands{}
+	if len(commandsOpt) > 0 {
+		commands = commandsOpt[0]
+	}
+	agents := agent.AllAvailable(context.Background(), commands)
 	if len(agents) == 0 {
 		agents = agent.All()
 	}
@@ -92,8 +97,8 @@ func newNewProjectForm(st styles.Styles, hosts []hostStatus, defaultAgent string
 
 // indexOfDefaultProjectAgent picks the row in the agent picker that
 // matches the user's configured default. Falls back to row 0 (first
-// installed agent) when the default is empty, unrecognized, or names
-// an agent that isn't installed.
+// available agent) when the default is empty, unrecognized, or names
+// an agent that is not launchable.
 func indexOfDefaultProjectAgent(agents []agent.Agent, configDefault string) int {
 	def := strings.TrimSpace(configDefault)
 	if def == "" || strings.EqualFold(def, "shell") {
@@ -227,8 +232,8 @@ func (m newProjectFormModel) currentHost() hostChoice {
 
 // currentAgent returns the picker's current selection. Defensive
 // fallback to agent.Default() (claude) if the agents slice is somehow
-// empty — the constructor seeds it from AllInstalled() (or All() if
-// nothing's installed) so this is unreachable in practice.
+// empty — the constructor seeds it from available agents (or All() if
+// none are launchable) so this is unreachable in practice.
 func (m newProjectFormModel) currentAgent() agent.Agent {
 	if len(m.agents) == 0 {
 		return agent.Default()
