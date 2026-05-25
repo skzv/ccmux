@@ -124,6 +124,18 @@ func (d *tuiDriver) Output() string {
 	return d.output.String()
 }
 
+// WaitForExit waits for the PTY output loop to finish, which happens
+// when the TUI process exits and closes the terminal.
+func (d *tuiDriver) WaitForExit(timeout time.Duration) bool {
+	d.t.Helper()
+	select {
+	case <-d.copyDone:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
+}
+
 // Quit sends Ctrl-C and waits for the TUI process to exit.
 func (d *tuiDriver) Quit() {
 	d.t.Helper()
