@@ -39,9 +39,17 @@ func TestLaunchCmdForProject_PerAgent(t *testing.T) {
 				t.Errorf("launchCmdForProject(Agent=%q) = %q, expected to start with binary %q",
 					a.ID(), got, a.Binary())
 			}
-			if !strings.Contains(got, "--continue") {
-				t.Errorf("launchCmdForProject(Agent=%q) = %q, expected --continue (project attach resumes)",
-					a.ID(), got)
+			switch a.ID() {
+			case agent.IDCursor:
+				if !strings.Contains(got, " resume") {
+					t.Errorf("launchCmdForProject(Agent=%q) = %q, expected resume subcommand (project attach resumes)",
+						a.ID(), got)
+				}
+			default:
+				if !strings.Contains(got, "--continue") {
+					t.Errorf("launchCmdForProject(Agent=%q) = %q, expected --continue (project attach resumes)",
+						a.ID(), got)
+				}
 			}
 		})
 	}

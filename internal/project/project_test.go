@@ -263,7 +263,7 @@ func TestReadAgent_MissingFile(t *testing.T) {
 // disk so a future agent ID rename trips at least one test instead of
 // silently breaking sidecars in the wild.
 func TestReadAgent_AllKnownIDs(t *testing.T) {
-	for _, id := range []agent.ID{agent.IDClaude, agent.IDCodex, agent.IDAntigravity} {
+	for _, id := range []agent.ID{agent.IDClaude, agent.IDCodex, agent.IDAntigravity, agent.IDCursor} {
 		t.Run(string(id), func(t *testing.T) {
 			dir := projectScaffold(t, t.TempDir(), "p")
 			if err := SetAgent(dir, id); err != nil {

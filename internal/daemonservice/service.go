@@ -162,7 +162,7 @@ func managedPath(home string, commands agent.Commands, defaults ...string) strin
 		parts = append(parts, p)
 	}
 	add(filepath.Join(home, ".local", "bin"))
-	for _, cmd := range []string{commands.Claude, commands.Codex, commands.Antigravity} {
+	for _, cmd := range []string{commands.Claude, commands.Codex, commands.Antigravity, commands.Cursor} {
 		if cmd = strings.TrimSpace(cmd); cmd != "" {
 			add(filepath.Dir(cmd))
 		}

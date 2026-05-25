@@ -1,5 +1,5 @@
-// Package agent abstracts over Claude Code, Codex (OpenAI), and
-// Antigravity CLI (Google) — the three interactive AI coding agents
+// Package agent abstracts over Claude Code, Codex (OpenAI),
+// Antigravity CLI (Google), and Cursor — the interactive AI coding agents
 // ccmux can supervise inside a tmux session. Adding a fourth agent
 // later is a matter of dropping a new `Agent` implementation alongside
 // the existing three and registering it in All().
@@ -33,6 +33,7 @@ const (
 	IDClaude      ID = "claude"
 	IDCodex       ID = "codex"
 	IDAntigravity ID = "antigravity"
+	IDCursor      ID = "cursor"
 )
 
 // State enumerates the high-level lifecycle of an agent session, mirrored
@@ -91,14 +92,15 @@ type Commands struct {
 	Claude      string
 	Codex       string
 	Antigravity string
+	Cursor      string
 }
 
 // All returns every supported agent in canonical order
-// (claude → codex → antigravity). Order matters: pickers default to
+// (claude → codex → antigravity → cursor). Order matters: pickers default to
 // the first installed entry, and that lets us bias new users toward
 // Claude without making it special-case in UI code.
 func All() []Agent {
-	return []Agent{Claude{}, Codex{}, Antigravity{}}
+	return []Agent{Claude{}, Codex{}, Antigravity{}, Cursor{}}
 }
 
 // ByID returns the Agent for a known ID. Falls back to Default() for
@@ -117,6 +119,8 @@ func ByID(id ID) Agent {
 		// sidecar. Map it to Antigravity so those projects keep working
 		// without a migration step.
 		return Antigravity{}
+	case IDCursor:
+		return Cursor{}
 	}
 	panic("agent: unknown ID " + string(id))
 }
@@ -135,6 +139,8 @@ func ParseID(s string) (ID, bool) {
 	case IDAntigravity, "gemini":
 		// "gemini" alias retained for back-compat — see ByID.
 		return IDAntigravity, true
+	case IDCursor:
+		return IDCursor, true
 	}
 	return "", false
 }
@@ -239,6 +245,8 @@ func ResumeArgs(id ID, conversationID string, commands Commands) []string {
 		return []string{configuredBinary(IDCodex, "codex", commands), "resume", conversationID}
 	case IDAntigravity:
 		return []string{configuredBinary(IDAntigravity, "agy", commands), "--conversation", conversationID}
+	case IDCursor:
+		return []string{configuredBinary(IDCursor, "cursor-agent", commands), "--resume", conversationID}
 	}
 	return nil
 }
@@ -257,6 +265,10 @@ func configuredBinary(id ID, fallback string, commands Commands) string {
 		if strings.TrimSpace(commands.Antigravity) != "" {
 			return strings.TrimSpace(commands.Antigravity)
 		}
+	case IDCursor:
+		if strings.TrimSpace(commands.Cursor) != "" {
+			return strings.TrimSpace(commands.Cursor)
+		}
 	}
 	return fallback
 }
@@ -265,6 +277,9 @@ func launchCmdWithBinary(a Agent, binary string, continueFlag bool) string {
 	cmd := shellQuote(binary)
 	if !continueFlag {
 		return cmd
+	}
+	if a.ID() == IDCursor {
+		return cmd + " resume || " + cmd + " || zsh || bash || sh"
 	}
 	return cmd + " --continue || " + cmd + " || zsh || bash || sh"
 }

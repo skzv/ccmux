@@ -98,6 +98,7 @@ func TestNewSessionForm_SubmitCarriesAgent(t *testing.T) {
 		{ID: agent.IDClaude, Label: "Claude Code"},
 		{ID: agent.IDCodex, Label: "Codex"},
 		{ID: agent.IDAntigravity, Label: "Antigravity CLI"},
+		{ID: agent.IDCursor, Label: "Cursor"},
 		{ID: "", Label: "shell (no agent)"},
 	}
 	form.agentIdx = 0
@@ -159,6 +160,7 @@ func TestIndexOfDefaultAgent(t *testing.T) {
 		{ID: agent.IDClaude, Label: "Claude Code"},
 		{ID: agent.IDCodex, Label: "Codex"},
 		{ID: agent.IDAntigravity, Label: "Antigravity CLI"},
+		{ID: agent.IDCursor, Label: "Cursor"},
 		{ID: "", Label: "shell (no agent)"},
 	}
 	cases := []struct {
@@ -170,9 +172,10 @@ func TestIndexOfDefaultAgent(t *testing.T) {
 		{"codex", 1},           //
 		{"antigravity", 2},     //
 		{"gemini", 2},          // back-compat alias still routes to antigravity
+		{"cursor", 3},          //
 		{"  Codex  ", 1},       // case-insensitive + trimmed via ParseID
-		{"shell", 3},           // explicit no-agent
-		{"SHELL", 3},           //
+		{"shell", 4},           // explicit no-agent
+		{"SHELL", 4},           //
 		{"imaginary-llm-9", 0}, // unknown → first agent
 	}
 	for _, tc := range cases {

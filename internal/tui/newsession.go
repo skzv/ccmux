@@ -24,7 +24,7 @@ import (
 //	name      tmux session name (default: auto-generated)
 //	workdir   working directory the agent/shell opens in
 //	device    which device to spawn on
-//	agent     which AI agent to launch (claude / codex / antigravity)
+//	agent     which AI agent to launch (claude / codex / antigravity / cursor)
 //	          or "shell" for a plain $SHELL with no agent.
 //
 // The agent picker is the fix for the multi-agent regression where

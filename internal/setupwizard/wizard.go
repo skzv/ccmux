@@ -144,11 +144,9 @@ func stepDeps(ctx context.Context, out io.Writer) error {
 		}
 	}
 
-	// AI agents block — ccmux needs at least one. Detect each via
-	// exec.LookPath against agent.Binary(), report status. Install
-	// for the agent CLIs themselves is npm-based and we don't try
-	// to run npm from here (npm install -g often needs sudo and the
-	// user's npm config); we just point at the right command.
+	// AI agents block — ccmux needs at least one. Detect each via the
+	// current process PATH plus a login-shell fallback, then point at
+	// the right install command for anything still missing.
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, stEmphasis.Render("  AI agents (need at least one)"))
 	cfg, _ := config.Load()
@@ -156,7 +154,7 @@ func stepDeps(ctx context.Context, out io.Writer) error {
 	for _, a := range agent.All() {
 		configured := configuredAgentCommand(cfg, a.ID())
 		configuredExists := configured != "" && agent.Executable(configured)
-		if _, err := exec.LookPath(a.Binary()); err != nil && !configuredExists {
+		if len(setupAgentCandidates(ctx, a)) == 0 && !configuredExists {
 			fmt.Fprintf(out, "  %-7s %s   %s\n",
 				a.Binary(),
 				stWarn.Render("· not installed"),
@@ -201,7 +199,8 @@ func configureAgentCommands(out io.Writer, cfg *config.Config) (bool, error) {
 }
 
 func configureAgentCommand(out io.Writer, cfg *config.Config, a agent.Agent) (bool, error) {
-	agentCommand, shouldPrompt := defaultAgentCommandSelection(configuredAgentCommand(*cfg, a.ID()), agent.Candidates(a))
+	candidates := setupAgentCandidates(context.Background(), a)
+	agentCommand, shouldPrompt := defaultAgentCommandSelection(configuredAgentCommand(*cfg, a.ID()), candidates)
 	if configuredAgentCommand(*cfg, a.ID()) != "" {
 		fmt.Fprintf(out, "  %-7s %s   %s\n",
 			a.Binary(),
@@ -213,7 +212,6 @@ func configureAgentCommand(out io.Writer, cfg *config.Config, a agent.Agent) (bo
 		return false, nil
 	}
 	if shouldPrompt {
-		candidates := agent.Candidates(a)
 		opts := make([]huh.Option[string], 0, len(candidates))
 		for i, p := range candidates {
 			label := p
@@ -235,6 +233,36 @@ func configureAgentCommand(out io.Writer, cfg *config.Config, a agent.Agent) (bo
 	}
 	setConfiguredAgentCommand(cfg, a.ID(), agentCommand)
 	return true, nil
+}
+
+func setupAgentCandidates(ctx context.Context, a agent.Agent) []string {
+	candidates := agent.Candidates(a)
+	if p := shellResolvedAgentCandidate(ctx, a.Binary()); p != "" && agent.Executable(p) {
+		seen := false
+		for _, existing := range candidates {
+			if existing == p {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			candidates = append(candidates, p)
+		}
+	}
+	return candidates
+}
+
+func shellResolvedAgentCandidate(ctx context.Context, bin string) string {
+	shell := strings.TrimSpace(os.Getenv("SHELL"))
+	if shell == "" {
+		shell = "/bin/sh"
+	}
+	cmd := exec.CommandContext(ctx, shell, "-lc", "command -v "+agent.ShellQuote(bin))
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 func defaultAgentCommandSelection(current string, candidates []string) (selection string, shouldPrompt bool) {
@@ -259,6 +287,8 @@ func configuredAgentCommand(cfg config.Config, id agent.ID) string {
 		return strings.TrimSpace(cfg.Agents.Codex.Command)
 	case agent.IDAntigravity:
 		return strings.TrimSpace(cfg.Agents.Antigravity.Command)
+	case agent.IDCursor:
+		return strings.TrimSpace(cfg.Agents.Cursor.Command)
 	default:
 		return ""
 	}
@@ -273,6 +303,8 @@ func setConfiguredAgentCommand(cfg *config.Config, id agent.ID, command string) 
 		cfg.Agents.Codex.Command = command
 	case agent.IDAntigravity:
 		cfg.Agents.Antigravity.Command = command
+	case agent.IDCursor:
+		cfg.Agents.Cursor.Command = command
 	}
 }
 
@@ -289,6 +321,8 @@ func installHintFor(id agent.ID) string {
 		return "npm i -g @openai/codex"
 	case agent.IDAntigravity:
 		return "curl -fsSL https://antigravity.google/cli/install.sh | bash"
+	case agent.IDCursor:
+		return "curl https://cursor.com/install -fsS | bash"
 	}
 	return ""
 }
@@ -697,22 +731,12 @@ func stepConfig(ctx context.Context, out io.Writer) error {
 	listenTailnet := cfg.Daemon.ListenTailnet
 	autoCheckUpdates := cfg.Update.AutoCheck
 
-	// Build the default-agent picker dynamically from agent.AllInstalled
-	// so a user without codex / antigravity on $PATH doesn't get offered
-	// agents they can't run. Claude + the explicit "shell" opt-out are
-	// always present; codex / antigravity show when installed.
-	agentOpts := []huh.Option[string]{
-		huh.NewOption("Claude Code", "claude"),
-	}
-	installed := map[agent.ID]bool{}
-	for _, a := range agent.AllInstalled(ctx) {
-		installed[a.ID()] = true
-	}
-	if installed[agent.IDCodex] {
-		agentOpts = append(agentOpts, huh.NewOption("Codex (OpenAI)", "codex"))
-	}
-	if installed[agent.IDAntigravity] {
-		agentOpts = append(agentOpts, huh.NewOption("Antigravity CLI (Google)", "antigravity"))
+	// Build the default-agent picker dynamically so users don't get
+	// offered agents ccmux cannot launch. PATH-installed agents count,
+	// and so do executable command paths already pinned in config.
+	agentOpts := []huh.Option[string]{}
+	for _, id := range defaultAgentChoices(ctx, cfg) {
+		agentOpts = append(agentOpts, huh.NewOption(defaultAgentLabel(id), string(id)))
 	}
 	agentOpts = append(agentOpts, huh.NewOption("shell (no agent — opt out)", "shell"))
 
@@ -768,6 +792,42 @@ func stepConfig(ctx context.Context, out io.Writer) error {
 		fmt.Fprintln(out, stMuted.Render("  ccmuxd will pick this up on next restart — `ccmux update` to apply now."))
 	}
 	return nil
+}
+
+func defaultAgentChoices(ctx context.Context, cfg config.Config) []agent.ID {
+	available := map[agent.ID]bool{}
+	for _, a := range agent.All() {
+		if len(setupAgentCandidates(ctx, a)) > 0 {
+			available[a.ID()] = true
+		}
+		configured := configuredAgentCommand(cfg, a.ID())
+		if configured != "" && agent.Executable(configured) {
+			available[a.ID()] = true
+		}
+	}
+
+	choices := []agent.ID{agent.IDClaude}
+	for _, id := range []agent.ID{agent.IDCodex, agent.IDAntigravity, agent.IDCursor} {
+		if available[id] {
+			choices = append(choices, id)
+		}
+	}
+	return choices
+}
+
+func defaultAgentLabel(id agent.ID) string {
+	switch id {
+	case agent.IDClaude:
+		return "Claude Code"
+	case agent.IDCodex:
+		return "Codex (OpenAI)"
+	case agent.IDAntigravity:
+		return "Antigravity CLI (Google)"
+	case agent.IDCursor:
+		return "Cursor"
+	default:
+		return string(id)
+	}
 }
 
 func tailnetPortOrDefault(p int) int {

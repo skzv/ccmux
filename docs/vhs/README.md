@@ -36,7 +36,7 @@ CCMUX_UPDATE_DEMO=true bash docs/vhs/render.sh docs/vhs/cuj11_update.tape
 | C2 | `cuj02_dashboard.tape` | The dashboard | Sessions, status, usage panel, quota bar |
 | C3 | `cuj03_attach_detach.tape` | Attach, work, detach | Enter attaches → Ctrl-b d detaches → TUI resumes |
 | C4 | `cuj04_resume.tape` | Resume a conversation | Conversations screen → select past thread → Enter |
-| C5 | `cuj05_pick_agent.tape` | Pick your agent | New-project form → cycle Claude / Codex / Antigravity |
+| C5 | `cuj05_pick_agent.tape` | Pick your agent | New-project form → cycle Claude / Codex / Antigravity / Cursor |
 | C6 | `cuj06_notes.tape` | Project notes | Notes tab → Glamour preview → `/` ripgrep search |
 | C7 | `cuj07_multi_machine.tape` | Multi-machine | Network screen with local + remote hosts |
 | C8 | `cuj08_phone.tape` | Phone layout | Narrow-viewport (430px) dashboard |

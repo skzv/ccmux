@@ -8,8 +8,8 @@ import (
 // The contract this fuzz target enforces:
 //
 //  1. ParseID never panics, regardless of input.
-//  2. ok=true implies the returned ID is one of the three canonical
-//     values (claude / codex / antigravity). Anything else would mean
+//  2. ok=true implies the returned ID is one of the canonical values
+//     (claude / codex / antigravity / cursor). Anything else would mean
 //     ParseID is silently coining new agents that nothing else in
 //     the codebase knows how to handle. The legacy "gemini" input is
 //     allowed via the back-compat alias and resolves to antigravity.
@@ -30,6 +30,7 @@ func FuzzParseID(f *testing.F) {
 		"AnTiGrAvItY",
 		"gemini", // back-compat alias
 		"GeMiNi",
+		"cursor",
 		"",
 		"   ",
 		"opusplan",      // close to a Claude alias but not a valid id
@@ -47,10 +48,10 @@ func FuzzParseID(f *testing.F) {
 		id, ok := ParseID(s)
 		if ok {
 			switch id {
-			case IDClaude, IDCodex, IDAntigravity:
+			case IDClaude, IDCodex, IDAntigravity, IDCursor:
 				// canonical id — good
 			default:
-				t.Fatalf("ParseID(%q) returned ok=true but id=%q is not in {claude,codex,antigravity}", s, id)
+				t.Fatalf("ParseID(%q) returned ok=true but id=%q is not in {claude,codex,antigravity,cursor}", s, id)
 			}
 		} else {
 			if id != "" {

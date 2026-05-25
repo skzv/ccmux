@@ -138,6 +138,7 @@ func TestProjectLaunchCmd_ConfiguredCommands(t *testing.T) {
 		Claude:      "/tmp/claude",
 		Codex:       "/tmp/codex",
 		Antigravity: "/tmp/agy",
+		Cursor:      "/tmp/cursor-agent",
 	}
 	tests := []struct {
 		name string
@@ -147,6 +148,7 @@ func TestProjectLaunchCmd_ConfiguredCommands(t *testing.T) {
 		{name: "claude", id: agent.IDClaude, want: "/tmp/claude --continue || /tmp/claude || zsh || bash || sh"},
 		{name: "codex", id: agent.IDCodex, want: "/tmp/codex --continue || /tmp/codex || zsh || bash || sh"},
 		{name: "antigravity", id: agent.IDAntigravity, want: "/tmp/agy --continue || /tmp/agy || zsh || bash || sh"},
+		{name: "cursor", id: agent.IDCursor, want: "/tmp/cursor-agent resume || /tmp/cursor-agent || zsh || bash || sh"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -166,6 +168,7 @@ func TestBareSessionLaunchCmd_ConfiguredCommands(t *testing.T) {
 		Claude:      "/tmp/claude",
 		Codex:       "/tmp/codex",
 		Antigravity: "/tmp/agy",
+		Cursor:      "/tmp/cursor-agent",
 	}
 	tests := []struct {
 		name string
@@ -175,6 +178,7 @@ func TestBareSessionLaunchCmd_ConfiguredCommands(t *testing.T) {
 		{name: "claude", id: "claude", want: "/tmp/claude"},
 		{name: "codex", id: "codex", want: "/tmp/codex"},
 		{name: "antigravity", id: "antigravity", want: "/tmp/agy"},
+		{name: "cursor", id: "cursor", want: "/tmp/cursor-agent"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

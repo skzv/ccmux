@@ -15,10 +15,10 @@ import (
 // user's default agent.
 func TestAll_CanonicalOrder(t *testing.T) {
 	got := All()
-	if len(got) != 3 {
-		t.Fatalf("All() len = %d, want 3", len(got))
+	if len(got) != 4 {
+		t.Fatalf("All() len = %d, want 4", len(got))
 	}
-	wantIDs := []ID{IDClaude, IDCodex, IDAntigravity}
+	wantIDs := []ID{IDClaude, IDCodex, IDAntigravity, IDCursor}
 	for i, a := range got {
 		if a.ID() != wantIDs[i] {
 			t.Errorf("All()[%d].ID() = %q, want %q", i, a.ID(), wantIDs[i])
@@ -41,6 +41,7 @@ func TestParseID(t *testing.T) {
 		{"codex", IDCodex, true},
 		{"antigravity", IDAntigravity, true},
 		{"gemini", IDAntigravity, true}, // back-compat alias
+		{"cursor", IDCursor, true},
 		{"", "", false},
 		{"   ", "", false},
 		{"gpt", "", false},
@@ -69,7 +70,8 @@ func TestByID_KnownAndEmptyFallback(t *testing.T) {
 		{IDCodex, IDCodex},
 		{IDAntigravity, IDAntigravity},
 		{"gemini", IDAntigravity}, // back-compat alias for projects scaffolded before the rebrand
-		{"", IDClaude},            // back-compat
+		{IDCursor, IDCursor},
+		{"", IDClaude}, // back-compat
 	}
 	for _, tc := range cases {
 		if got := ByID(tc.in).ID(); got != tc.want {
@@ -114,6 +116,7 @@ func TestAgent_Identity_Stable(t *testing.T) {
 		{Claude{}, IDClaude, "claude", "Claude Code", ".claude", "projects"},
 		{Codex{}, IDCodex, "codex", "Codex", ".codex", "sessions"},
 		{Antigravity{}, IDAntigravity, "agy", "Antigravity CLI", ".gemini/antigravity-cli", "conversations"},
+		{Cursor{}, IDCursor, "cursor-agent", "Cursor", ".cursor", "sessions"},
 	}
 	for _, tc := range cases {
 		t.Run(string(tc.id), func(t *testing.T) {
@@ -141,7 +144,7 @@ func TestAgent_Identity_Stable(t *testing.T) {
 }
 
 // TestAgent_LaunchCmd_NewVsContinue — `continueFlag=true` must wire in
-// the `--continue` flag for every agent so resuming a project actually
+// each agent's latest-resume dialect so resuming a project actually
 // resumes the agent's prior conversation. Off-by-one here would mean
 // every "attach existing" lands the user in a brand-new chat.
 func TestAgent_LaunchCmd_NewVsContinue(t *testing.T) {
@@ -153,8 +156,15 @@ func TestAgent_LaunchCmd_NewVsContinue(t *testing.T) {
 				t.Errorf("fresh LaunchCmd = %q, expected to start with binary %q",
 					fresh, a.Binary())
 			}
-			if !strings.Contains(cont, "--continue") {
-				t.Errorf("continue LaunchCmd = %q, expected --continue", cont)
+			switch a.ID() {
+			case IDCursor:
+				if !strings.Contains(cont, " resume") {
+					t.Errorf("continue LaunchCmd = %q, expected resume subcommand", cont)
+				}
+			default:
+				if !strings.Contains(cont, "--continue") {
+					t.Errorf("continue LaunchCmd = %q, expected --continue", cont)
+				}
 			}
 			// The fallback chain must end in `|| sh` so the pane stays
 			// alive on minimal hosts without zsh (typical Linux CI). zsh
@@ -251,6 +261,19 @@ func TestAntigravity_Classify_IdleHeuristic(t *testing.T) {
 	}
 }
 
+func TestCursor_Classify_IdleHeuristic(t *testing.T) {
+	if got := (Cursor{}).Classify("", time.Now(), 3*time.Second); got != StateUnknown {
+		t.Errorf("empty pane: Cursor.Classify = %q, want unknown", got)
+	}
+	if got := (Cursor{}).Classify("recent output", time.Now(), 3*time.Second); got != StateActive {
+		t.Errorf("fresh output: Cursor.Classify = %q, want active", got)
+	}
+	stale := time.Now().Add(-10 * time.Second)
+	if got := (Cursor{}).Classify("old output", stale, 3*time.Second); got != StateNeedsInput {
+		t.Errorf("stale output: Cursor.Classify = %q, want needs_input", got)
+	}
+}
+
 // TestAllInstalled_RespectsHook injects a fake binary detector so the
 // test doesn't depend on whatever's actually on the dev machine's
 // PATH. Verifies AllInstalled returns the right subset and preserves
@@ -309,6 +332,7 @@ func TestLaunchCmd_ConfiguredCommands(t *testing.T) {
 		Claude:      "/Users/me/.nvm/versions/node/bin/claude",
 		Codex:       "/Users/me/.nvm/versions/node/bin/codex",
 		Antigravity: "/Users/me/.nvm/versions/node/bin/agy",
+		Cursor:      "/Users/me/.local/bin/cursor-agent",
 	}
 	tests := []struct {
 		name string
@@ -329,6 +353,11 @@ func TestLaunchCmd_ConfiguredCommands(t *testing.T) {
 			name: "antigravity",
 			id:   IDAntigravity,
 			want: "/Users/me/.nvm/versions/node/bin/agy --continue || /Users/me/.nvm/versions/node/bin/agy || zsh || bash || sh",
+		},
+		{
+			name: "cursor",
+			id:   IDCursor,
+			want: "/Users/me/.local/bin/cursor-agent resume || /Users/me/.local/bin/cursor-agent || zsh || bash || sh",
 		},
 	}
 	for _, tt := range tests {
@@ -353,6 +382,7 @@ func TestResumeArgs_ConfiguredCommands(t *testing.T) {
 		Claude:      "/tmp/claude",
 		Codex:       "/tmp/codex",
 		Antigravity: "/tmp/agy",
+		Cursor:      "/tmp/cursor-agent",
 	}
 	tests := []struct {
 		name string
@@ -362,6 +392,7 @@ func TestResumeArgs_ConfiguredCommands(t *testing.T) {
 		{name: "claude", id: IDClaude, want: []string{"/tmp/claude", "--resume", "abc-123"}},
 		{name: "codex", id: IDCodex, want: []string{"/tmp/codex", "resume", "abc-123"}},
 		{name: "antigravity", id: IDAntigravity, want: []string{"/tmp/agy", "--conversation", "abc-123"}},
+		{name: "cursor", id: IDCursor, want: []string{"/tmp/cursor-agent", "--resume", "abc-123"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

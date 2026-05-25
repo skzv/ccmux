@@ -230,13 +230,13 @@ func TestNewProjectForm_HasAgentRow(t *testing.T) {
 
 // TestNewProjectForm_AgentPickerCycle — when the agent row has focus,
 // ←/→ cycles through the registered agents. We force the form's
-// agents slice to the canonical three so this test isn't affected by
+// agents slice to the canonical list so this test isn't affected by
 // what's actually installed on the dev machine.
 func TestNewProjectForm_AgentPickerCycle(t *testing.T) {
 	st := styles.Default()
 	f := newNewProjectForm(st, nil, "")
 	// Pin the agents list deterministically.
-	f.agents = []agent.Agent{agent.Claude{}, agent.Codex{}, agent.Antigravity{}}
+	f.agents = []agent.Agent{agent.Claude{}, agent.Codex{}, agent.Antigravity{}, agent.Cursor{}}
 	f.agentIdx = 0
 
 	// Tab to agent row.
@@ -251,16 +251,22 @@ func TestNewProjectForm_AgentPickerCycle(t *testing.T) {
 		t.Errorf("after 2 rights agentIdx = %d, want 2 (antigravity)", f.agentIdx)
 	}
 
+	// → once more lands on cursor.
+	f, _ = runMsgs(t, f, keyMsg("right"))
+	if f.agentIdx != 3 {
+		t.Errorf("after third right agentIdx = %d, want 3 (cursor)", f.agentIdx)
+	}
+
 	// → once more wraps to claude.
 	f, _ = runMsgs(t, f, keyMsg("right"))
 	if f.agentIdx != 0 {
 		t.Errorf("after wrap-right agentIdx = %d, want 0 (claude)", f.agentIdx)
 	}
 
-	// ← from claude wraps to antigravity.
+	// ← from claude wraps to cursor.
 	f, _ = runMsgs(t, f, keyMsg("left"))
-	if f.agentIdx != 2 {
-		t.Errorf("wrap-left agentIdx = %d, want 2 (antigravity)", f.agentIdx)
+	if f.agentIdx != 3 {
+		t.Errorf("wrap-left agentIdx = %d, want 3 (cursor)", f.agentIdx)
 	}
 }
 
@@ -273,7 +279,7 @@ func TestNewProjectForm_AgentPickerCycle(t *testing.T) {
 func TestNewProjectForm_SubmitCarriesAgent(t *testing.T) {
 	st := styles.Default()
 	f := newNewProjectForm(st, nil, "")
-	f.agents = []agent.Agent{agent.Claude{}, agent.Codex{}, agent.Antigravity{}}
+	f.agents = []agent.Agent{agent.Claude{}, agent.Codex{}, agent.Antigravity{}, agent.Cursor{}}
 
 	// Type a name, tab to agent row, → twice to land on antigravity.
 	f, _ = runMsgs(t, f, keyMsg("p"), keyMsg("r"), keyMsg("o"), keyMsg("j"))
@@ -309,7 +315,7 @@ func TestNewProjectForm_PickerRowsDontConsumeTypedChars(t *testing.T) {
 }
 
 // TestNextAgent — the cycler used by the Projects-screen `a` key.
-// Going claude → codex → antigravity → claude must roundtrip through every
+// Going claude → codex → antigravity → cursor → claude must roundtrip through every
 // installed agent. The unknown-current case (someone hand-edits the
 // sidecar) defaults to the first registered agent rather than crashing.
 func TestNextAgent(t *testing.T) {
@@ -318,7 +324,8 @@ func TestNextAgent(t *testing.T) {
 	}{
 		{agent.IDClaude, agent.IDCodex},
 		{agent.IDCodex, agent.IDAntigravity},
-		{agent.IDAntigravity, agent.IDClaude},
+		{agent.IDAntigravity, agent.IDCursor},
+		{agent.IDCursor, agent.IDClaude},
 		// Edge: empty / unknown values land on the first agent.
 		{"", agent.IDClaude},
 		{agent.ID("imaginary"), agent.IDClaude},

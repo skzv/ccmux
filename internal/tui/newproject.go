@@ -15,7 +15,7 @@ import (
 // when the user presses `n` to create a new project. Three fields:
 // Name (required), Host (where to create it — local or any reachable
 // peer running ccmuxd), and Agent (which AI to launch — claude / codex
-// / antigravity).
+// / antigravity / cursor).
 //
 // Creating a project is just that: ccmux makes the directory and starts
 // the agent session. It does NOT scaffold — no CLAUDE.md, no docs/
@@ -43,7 +43,7 @@ type newProjectFormModel struct {
 	// agents is the agent picker model. Always at least one entry
 	// (claude) so the form is always submittable, even on a machine
 	// with no agent binaries installed. Order follows agent.All()'s
-	// canonical claude→codex→antigravity sequence; the default cursor
+	// canonical claude→codex→antigravity→cursor sequence; the default
 	// position is index 0 (claude) for back-compat continuity.
 	agents   []agent.Agent
 	agentIdx int

@@ -12,7 +12,7 @@ import (
 // to its position in the agents slice. If this breaks, setting a
 // default in config would silently fall back to claude (idx 0).
 func TestIndexOfDefaultProjectAgent_MatchesEachAgent(t *testing.T) {
-	agents := []agent.Agent{agent.Claude{}, agent.Codex{}, agent.Antigravity{}}
+	agents := []agent.Agent{agent.Claude{}, agent.Codex{}, agent.Antigravity{}, agent.Cursor{}}
 	cases := []struct {
 		def  string
 		want int
@@ -20,6 +20,7 @@ func TestIndexOfDefaultProjectAgent_MatchesEachAgent(t *testing.T) {
 		{"claude", 0},
 		{"codex", 1},
 		{"antigravity", 2},
+		{"cursor", 3},
 		// Back-compat alias from the rebrand — same canonical ID lookup
 		// path should resolve it.
 		{"gemini", 2},
@@ -43,7 +44,7 @@ func TestIndexOfDefaultProjectAgent_MatchesEachAgent(t *testing.T) {
 // project form doesn't carry a shell option — falling back to claude
 // is the right behavior there.
 func TestIndexOfDefaultProjectAgent_UnknownFallsBackToFirst(t *testing.T) {
-	agents := []agent.Agent{agent.Claude{}, agent.Codex{}, agent.Antigravity{}}
+	agents := []agent.Agent{agent.Claude{}, agent.Codex{}, agent.Antigravity{}, agent.Cursor{}}
 	for _, def := range []string{"", "shell", "SHELL", "imaginary-llm", "gpt-4"} {
 		t.Run(def, func(t *testing.T) {
 			if got := indexOfDefaultProjectAgent(agents, def); got != 0 {
@@ -79,6 +80,7 @@ func TestNewProjectForm_HonorsDefaultAgent(t *testing.T) {
 	}{
 		{"codex", agent.IDCodex},
 		{"antigravity", agent.IDAntigravity},
+		{"cursor", agent.IDCursor},
 		{"claude", agent.IDClaude},
 	}
 	for _, tc := range cases {
