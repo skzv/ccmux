@@ -133,3 +133,41 @@ func TestUID_NeverEmpty(t *testing.T) {
 		t.Fatal("uid() returned empty string")
 	}
 }
+
+// TestPlistTemplate_KeepAliveIsConditional locks in the conditional
+// KeepAlive shape. The plist must respawn the daemon ONLY on
+// unsuccessful exit, not on every exit. Blanket `KeepAlive=true`
+// combined with ccmuxd's "another instance already serving → exit 1"
+// path produced a 10-second respawn loop that filled the user's
+// stderr log forever. If anyone reverts this to `<true/>`, this test
+// fires.
+func TestPlistTemplate_KeepAliveIsConditional(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("plist template is darwin-only")
+	}
+	var sb strings.Builder
+	if err := plistTemplate.Execute(&sb, plistData{
+		Label: "x", Binary: "/x", StdoutPath: "/x", StderrPath: "/x",
+		HomeDir: "/x", WorkingDir: "/x", Path: "/x",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	body := sb.String()
+	// Must include the dict form and the SuccessfulExit=false condition.
+	for _, must := range []string{
+		"<key>KeepAlive</key>",
+		"<key>SuccessfulExit</key>",
+		"<false/>",
+	} {
+		if !strings.Contains(body, must) {
+			t.Errorf("plist missing %q\n--- body ---\n%s", must, body)
+		}
+	}
+	// Must NOT be the simple `<key>KeepAlive</key>\n  <true/>` form
+	// (matches collapsing whitespace). Build the bad shape and assert
+	// absence; this catches an accidental revert to blanket-true.
+	bad := "<key>KeepAlive</key>\n  <true/>"
+	if strings.Contains(body, bad) {
+		t.Errorf("plist still uses unconditional KeepAlive — would trigger respawn loop\n--- body ---\n%s", body)
+	}
+}

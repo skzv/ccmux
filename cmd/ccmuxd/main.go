@@ -12,6 +12,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -52,8 +53,24 @@ var version = "dev"
 // into a Decode call.
 const maxJSONBodyBytes = 64 * 1024
 
+// errPeerAlreadyServing is the sentinel returned by run() when another
+// ccmuxd is already bound to the Unix socket. The startup-shim in main
+// treats it as a clean exit (status 0) rather than a fatal error.
+//
+// Why this matters: the launchd plist has KeepAlive enabled. If we
+// exited non-zero on this path, launchd's KeepAlive=SuccessfulExit
+// would respawn us every ~10s (launchd's throttle), and each respawn
+// would re-trip the same conflict, log-spamming the user. By exiting
+// 0 we communicate "nothing to do, the existing daemon is serving" —
+// which is the truth.
+var errPeerAlreadyServing = errors.New("another ccmuxd is already serving")
+
 func main() {
 	if err := run(); err != nil {
+		if errors.Is(err, errPeerAlreadyServing) {
+			log.Printf("ccmuxd: %v — exiting cleanly", err)
+			return
+		}
 		log.Fatalf("ccmuxd: %v", err)
 	}
 }
@@ -116,8 +133,11 @@ func run() error {
 	// and we refuse to start. If dial fails (no socket file, or stale
 	// socket from a crash), it's safe to clean up and bind.
 	if isAnotherDaemonAlive(sockPath, 300*time.Millisecond) {
+		// Wrap the sentinel so main() can errors.Is() to it and exit 0.
+		// See errPeerAlreadyServing for why this isn't a regular error.
 		return fmt.Errorf(
-			"another ccmuxd is already listening on %s — stop it first with `ccmux daemon stop`",
+			"%w on %s — stop it first with `ccmux daemon stop`",
+			errPeerAlreadyServing,
 			sockPath,
 		)
 	}
