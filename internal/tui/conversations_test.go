@@ -41,27 +41,54 @@ func fakeConversations() []conversations.Conversation {
 	}
 }
 
+func setFocusedConversationSection(t *testing.T, m *conversationsModel, id agent.ID) {
+	t.Helper()
+	idx, ok := conversationAgentSectionIndex(id)
+	if !ok {
+		t.Fatalf("unknown conversation section for agent %q", id)
+	}
+	m.activeSection = idx
+	m.cursor = m.sectionCursors[idx]
+}
+
+func sameAgentConversations(id agent.ID, n int) []conversations.Conversation {
+	now := time.Now()
+	out := make([]conversations.Conversation, n)
+	for i := range out {
+		out[i] = conversations.Conversation{
+			ID:           fmt.Sprintf("%s-%02d", id, i),
+			Agent:        id,
+			Project:      "/Users/skz/Projects/auth-redesign",
+			LastActivity: now.Add(-time.Duration(i) * time.Hour),
+			Preview:      fmt.Sprintf("%s preview %02d", id, i),
+		}
+	}
+	return out
+}
+
 // TestConversationsModel_SetList_PreservesCursorByID — refreshes
 // happen often (re-entering the tab, hitting Refresh). The cursor
-// must follow the previously-highlighted row even when its index
-// changes — otherwise a new conversation appearing at position 0
-// would silently shift the user's selection.
+// must follow the previously-highlighted row even when its index in
+// the focused agent section changes — otherwise a new conversation
+// appearing above it would silently shift the user's selection.
 func TestConversationsModel_SetList_PreservesCursorByID(t *testing.T) {
 	m := newConversations(styles.Default(), DefaultKeymap())
 	list := fakeConversations()
 	m.SetList(list)
-	m.cursor = 1 // select codex-yesterday
+	setFocusedConversationSection(t, &m, agent.IDCodex)
+	m.cursor = 0 // select codex-yesterday
 
-	// Refresh with the same data plus a new claude row inserted at top.
+	// Refresh with the same data plus a new codex row inserted above
+	// the selected row inside the Codex section.
 	newer := append([]conversations.Conversation{{
-		ID:           "claude-just-now",
-		Agent:        agent.IDClaude,
+		ID:           "codex-just-now",
+		Agent:        agent.IDCodex,
 		LastActivity: time.Now(),
 	}}, list...)
 	m.SetList(newer)
 
-	if m.cursor != 2 {
-		t.Errorf("cursor = %d, want 2 (codex-yesterday shifted from idx 1 to 2)", m.cursor)
+	if m.cursor != 1 {
+		t.Errorf("cursor = %d, want 1 (codex-yesterday shifted from section idx 0 to 1)", m.cursor)
 	}
 	if sel := m.Selected(); sel == nil || sel.ID != "codex-yesterday" {
 		t.Errorf("selected = %+v, want id=codex-yesterday", sel)
@@ -74,11 +101,11 @@ func TestConversationsModel_SetList_PreservesCursorByID(t *testing.T) {
 // pointing into the void.
 func TestConversationsModel_SetList_ClampsOnShrinkage(t *testing.T) {
 	m := newConversations(styles.Default(), DefaultKeymap())
-	m.SetList(fakeConversations())
+	m.SetList(sameAgentConversations(agent.IDClaude, 3))
 	m.cursor = 2
 
 	// Drop the row at cursor; previously-selected ID disappears.
-	m.SetList(fakeConversations()[:2])
+	m.SetList(sameAgentConversations(agent.IDClaude, 2))
 	if m.cursor != 1 {
 		t.Errorf("cursor = %d, want 1 (clamped to last)", m.cursor)
 	}
@@ -117,17 +144,98 @@ func TestConversationsModel_Filtered_SubstringProject(t *testing.T) {
 	}
 }
 
-// TestConversationsModel_SetProjectFilter_ResetsCursor — when the
-// filter changes, a stale cursor pointing into the old filtered slice
-// would be confusing (selection appears to skip rows). Reset to top.
-func TestConversationsModel_SetProjectFilter_ResetsCursor(t *testing.T) {
+func TestConversationsModel_View_GroupsKnownAgentsInOrder(t *testing.T) {
+	now := time.Now()
+	m := newConversations(styles.Default(), DefaultKeymap())
+	m.SetList([]conversations.Conversation{
+		{ID: "codex-new", Agent: agent.IDCodex, Project: "/p", LastActivity: now, Preview: "codex newest"},
+		{ID: "claude-one", Agent: agent.IDClaude, Project: "/p", LastActivity: now.Add(-time.Hour), Preview: "claude row"},
+		{ID: "cursor-one", Agent: agent.IDCursor, Project: "/p", LastActivity: now.Add(-2 * time.Hour), Preview: "cursor row"},
+		{ID: "agy-one", Agent: agent.IDAntigravity, Project: "/p", LastActivity: now.Add(-3 * time.Hour), Preview: "agy row"},
+		{ID: "codex-old", Agent: agent.IDCodex, Project: "/p", LastActivity: now.Add(-4 * time.Hour), Preview: "codex older"},
+	})
+
+	out := m.View(140, 50)
+	claudeIdx := strings.Index(out, "Claude")
+	codexIdx := strings.Index(out, "Codex")
+	cursorIdx := strings.Index(out, "Cursor")
+	agyIdx := strings.Index(out, "Agy")
+	if claudeIdx < 0 || codexIdx < 0 || cursorIdx < 0 || agyIdx < 0 {
+		t.Fatalf("missing one or more section headings:\n%s", out)
+	}
+	if !(claudeIdx < codexIdx && codexIdx < cursorIdx && cursorIdx < agyIdx) {
+		t.Fatalf("section order = Claude:%d Codex:%d Cursor:%d Agy:%d, want Claude < Codex < Cursor < Agy\n%s",
+			claudeIdx, codexIdx, cursorIdx, agyIdx, out)
+	}
+	if !strings.Contains(out, "claude row") {
+		t.Fatalf("focused Claude section row missing:\n%s", out)
+	}
+	for _, hidden := range []string{"codex newest", "cursor row", "agy row"} {
+		if strings.Contains(out, hidden) {
+			t.Fatalf("inactive agent row %q should not render until its section is focused:\n%s", hidden, out)
+		}
+	}
+
+	m, _ = m.Update(keyMsg("tab"))
+	out = m.View(140, 50)
+	if strings.Index(out, "codex newest") > strings.Index(out, "codex older") {
+		t.Fatalf("Codex conversations are not newest-first within the section:\n%s", out)
+	}
+	if strings.Contains(out, "claude row") {
+		t.Fatalf("Claude row should not render while Codex is focused:\n%s", out)
+	}
+}
+
+func TestConversationsModel_View_HidesUnknownAgentsAndShowsEmptySections(t *testing.T) {
+	m := newConversations(styles.Default(), DefaultKeymap())
+	m.SetList([]conversations.Conversation{
+		{
+			ID:           "claude-one",
+			Agent:        agent.IDClaude,
+			Project:      "/p",
+			LastActivity: time.Now(),
+			Preview:      "known row",
+		},
+		{
+			ID:           "future-one",
+			Agent:        agent.ID("future-agent"),
+			Project:      "/p",
+			LastActivity: time.Now(),
+			Preview:      "unknown row",
+		},
+	})
+
+	out := m.View(140, 50)
+	if strings.Contains(out, "unknown row") || strings.Contains(out, "Other") {
+		t.Fatalf("unknown agent conversation should be hidden with no Other section:\n%s", out)
+	}
+	for _, tc := range []struct {
+		agent agent.ID
+		want  string
+	}{
+		{agent.IDCodex, "No conversations for Codex."},
+		{agent.IDCursor, "No conversations for Cursor."},
+		{agent.IDAntigravity, "No conversations for Agy."},
+	} {
+		setFocusedConversationSection(t, &m, tc.agent)
+		out = m.View(140, 50)
+		if !strings.Contains(out, tc.want) {
+			t.Fatalf("missing empty state %q:\n%s", tc.want, out)
+		}
+	}
+}
+
+// TestConversationsModel_SetProjectFilter_PreservesSelection — when
+// the filter changes, the selected conversation should stick when it
+// is still visible in the focused section.
+func TestConversationsModel_SetProjectFilter_PreservesSelection(t *testing.T) {
 	m := newConversations(styles.Default(), DefaultKeymap())
 	m.SetList(fakeConversations())
-	m.cursor = 2
+	setFocusedConversationSection(t, &m, agent.IDCodex)
 
-	m.SetProjectFilter("/Users/skz/Projects/auth-redesign")
-	if m.cursor != 0 {
-		t.Errorf("cursor = %d, want 0 (reset after filter change)", m.cursor)
+	m.SetProjectFilter("/Users/skz/Projects/parser")
+	if sel := m.Selected(); sel == nil || sel.ID != "codex-yesterday" {
+		t.Errorf("selected = %+v, want codex-yesterday after filter change", sel)
 	}
 }
 
@@ -151,7 +259,7 @@ func TestConversationsModel_SetProjectFilter_NoChangeKeepsCursor(t *testing.T) {
 // move the cursor through the filtered list, respecting bounds.
 func TestConversationsModel_Update_NavigatesCursor(t *testing.T) {
 	m := newConversations(styles.Default(), DefaultKeymap())
-	m.SetList(fakeConversations())
+	m.SetList(sameAgentConversations(agent.IDClaude, 3))
 
 	// Down from 0 → 1.
 	m, _ = m.Update(keyMsg("j"))
@@ -182,6 +290,66 @@ func TestConversationsModel_Update_NavigatesCursor(t *testing.T) {
 	}
 }
 
+func TestConversationsModel_Update_RowNavigationStaysInFocusedSection(t *testing.T) {
+	m := newConversations(styles.Default(), DefaultKeymap())
+	m.SetList([]conversations.Conversation{
+		{ID: "claude-0", Agent: agent.IDClaude, Project: "/p", LastActivity: time.Now(), Preview: "claude 0"},
+		{ID: "claude-1", Agent: agent.IDClaude, Project: "/p", LastActivity: time.Now().Add(-time.Hour), Preview: "claude 1"},
+		{ID: "codex-0", Agent: agent.IDCodex, Project: "/p", LastActivity: time.Now().Add(-2 * time.Hour), Preview: "codex 0"},
+	})
+	m.cursor = 1 // last row in Claude
+
+	m, _ = m.Update(keyMsg("j"))
+	if m.activeSection != 0 {
+		t.Fatalf("down moved section focus to %d, want Claude section", m.activeSection)
+	}
+	if sel := m.Selected(); sel == nil || sel.ID != "claude-1" {
+		t.Fatalf("down at section boundary selected %+v, want claude-1", sel)
+	}
+}
+
+func TestConversationsModel_Update_SwitchesFocusedSections(t *testing.T) {
+	m := newConversations(styles.Default(), DefaultKeymap())
+	m.SetList(fakeConversations())
+
+	m, _ = m.Update(keyMsg("tab"))
+	if m.activeSection != 1 {
+		t.Fatalf("tab activeSection = %d, want Codex", m.activeSection)
+	}
+	if sel := m.Selected(); sel == nil || sel.ID != "codex-yesterday" {
+		t.Fatalf("tab selected %+v, want codex-yesterday", sel)
+	}
+	m, _ = m.Update(keyMsg("right"))
+	if m.activeSection != 2 {
+		t.Fatalf("right activeSection = %d, want Cursor", m.activeSection)
+	}
+	if sel := m.Selected(); sel != nil {
+		t.Fatalf("Cursor section should be empty in fixture, selected %+v", sel)
+	}
+	m, _ = m.Update(keyMsg("shift+tab"))
+	if m.activeSection != 1 {
+		t.Fatalf("shift+tab activeSection = %d, want Codex", m.activeSection)
+	}
+	m, _ = m.Update(keyMsg("left"))
+	if m.activeSection != 0 {
+		t.Fatalf("left activeSection = %d, want Claude", m.activeSection)
+	}
+}
+
+func TestConversationsModel_Update_SectionSwitchDisarmsDelete(t *testing.T) {
+	m := newConversations(styles.Default(), DefaultKeymap())
+	m.SetList(fakeConversations())
+	m, _ = m.Update(keyMsg("x"))
+	if m.pendingDelete == "" {
+		t.Fatal("precondition: delete should be armed")
+	}
+
+	m, _ = m.Update(keyMsg("tab"))
+	if m.pendingDelete != "" {
+		t.Fatalf("section switch should disarm pending delete, got %q", m.pendingDelete)
+	}
+}
+
 // TestConversationsModel_Update_EscClearsFilter — Esc on the screen
 // drops the project filter and returns to the global view. The
 // per-project drill-down would be a trap without this exit.
@@ -209,6 +377,7 @@ func TestConversationsModel_Update_EscClearsFilter(t *testing.T) {
 func TestConversationsModel_Selected_RespectsFilter(t *testing.T) {
 	m := newConversations(styles.Default(), DefaultKeymap())
 	m.SetList(fakeConversations())
+	setFocusedConversationSection(t, &m, agent.IDCodex)
 	m.SetProjectFilter("/Users/skz/Projects/parser") // only codex-yesterday matches
 
 	sel := m.Selected()
@@ -323,7 +492,7 @@ func TestConversationsModel_DeleteArmsThenConfirms(t *testing.T) {
 // plus an `x` meant for row 3 would delete the wrong conversation.
 func TestConversationsModel_DeleteDisarmsOnCursorMove(t *testing.T) {
 	m := newConversations(styles.Default(), DefaultKeymap())
-	m.SetList(fakeConversations())
+	m.SetList(sameAgentConversations(agent.IDClaude, 2))
 
 	m, _ = m.Update(keyMsg("x")) // arm row 0
 	if m.pendingDelete == "" {
@@ -338,7 +507,7 @@ func TestConversationsModel_DeleteDisarmsOnCursorMove(t *testing.T) {
 	if cmd != nil {
 		t.Error("x after a disarm should re-arm, not fire a delete")
 	}
-	if m.pendingDelete != "codex-yesterday" {
+	if m.pendingDelete != "claude-01" {
 		t.Errorf("x should arm the new row, pendingDelete = %q", m.pendingDelete)
 	}
 }
@@ -431,6 +600,7 @@ func TestConversations_UsesSharedBreakpoint(t *testing.T) {
 func TestConversations_NarrowLayout(t *testing.T) {
 	m := newConversations(styles.Default(), DefaultKeymap())
 	m.SetList(fakeConversations())
+	m, _ = m.Update(keyMsg("tab"))
 	out := m.View(50, 40)
 	assertNoOverflow(t, out, 50)
 	if !strings.Contains(out, "[codex]") {
@@ -441,14 +611,13 @@ func TestConversations_NarrowLayout(t *testing.T) {
 	}
 }
 
-// TestConversationsModel_ToggleHeadless_FlipsAndResetsCursor — the H
-// keybind flips the headless-visibility flag, reports the new value, and
-// resets the cursor so the user lands at the top of the freshly-shaped
-// list (a stale cursor would point at a row that may no longer be
-// visible after refresh).
-func TestConversationsModel_ToggleHeadless_FlipsAndResetsCursor(t *testing.T) {
+// TestConversationsModel_ToggleHeadless_FlipsAndPreservesSelection —
+// the H keybind flips the headless-visibility flag and keeps the
+// selected conversation stable until the refresh result proves it is
+// no longer visible.
+func TestConversationsModel_ToggleHeadless_FlipsAndPreservesSelection(t *testing.T) {
 	m := newConversations(styles.Default(), DefaultKeymap())
-	m.SetList(fakeConversations())
+	m.SetList(sameAgentConversations(agent.IDClaude, 3))
 	m.cursor = 2
 
 	if m.ShowHeadless() {
@@ -458,8 +627,11 @@ func TestConversationsModel_ToggleHeadless_FlipsAndResetsCursor(t *testing.T) {
 	if !now || !m.ShowHeadless() {
 		t.Errorf("ToggleHeadless() = %v, ShowHeadless() = %v, want both true after first toggle", now, m.ShowHeadless())
 	}
-	if m.cursor != 0 {
-		t.Errorf("cursor = %d, want 0 (reset after toggle)", m.cursor)
+	if m.cursor != 2 {
+		t.Errorf("cursor = %d, want 2 (preserved after toggle)", m.cursor)
+	}
+	if sel := m.Selected(); sel == nil || sel.ID != "claude-02" {
+		t.Errorf("selected = %+v, want claude-02 after toggle", sel)
 	}
 	// Second toggle flips back.
 	now = m.ToggleHeadless()
@@ -550,6 +722,7 @@ func TestConversationsModel_View_DetailMarksHeadlessRow(t *testing.T) {
 				},
 			})
 			m.SetShowHeadless(true) // so the row is visible
+			setFocusedConversationSection(t, &m, tc.agent)
 
 			out := m.View(120, 40)
 			if !strings.Contains(out, tc.wantLabel) {
