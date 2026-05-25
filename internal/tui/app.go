@@ -133,6 +133,8 @@ type App struct {
 
 	toasts toastController // transient footer notification + the help-overlay ring buffer
 
+	confirm confirmationModal
+
 	helpOpen     bool
 	tour         tourModel // first-run interactive tour; re-openable with T
 	lastRefresh  time.Time
@@ -155,6 +157,9 @@ type App struct {
 // Listed states: the new-project / new-session form modals, the
 // notes search bar, the tour, the help overlay.
 func (a App) modalCapturingText() bool {
+	if a.confirm.open() {
+		return true
+	}
 	if a.tour.Active() || a.helpOpen {
 		return true
 	}
@@ -765,7 +770,17 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.attach.spinFrame++
 		return a, attachSpinTickCmd()
 
+	case tea.MouseMsg:
+		if a.confirm.open() {
+			return a.updateConfirmationMouse(msg)
+		}
+		return a, nil
+
 	case tea.KeyMsg:
+		if a.confirm.open() {
+			return a.updateConfirmationKey(msg)
+		}
+
 		// Matrix easter egg takes priority — when active, the overlay
 		// owns the screen until Esc dismisses it. Routed before the
 		// tour so triggering the rain while the tour is on doesn't
@@ -896,6 +911,15 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		switch {
+		case msg.String() == "ctrl+c":
+			return a, tea.Quit
+		case msg.String() == "q":
+			return a.openQuitConfirmation()
+		case keyMatches(msg, a.keys.Kill) && a.screen == ScreenSessions:
+			if sel := a.sessionsM.Selected(); sel != nil {
+				return a.openKillSessionConfirmation(sel.Name)
+			}
+			return a, nil
 		case keyMatches(msg, a.keys.Quit):
 			return a, tea.Quit
 		case keyMatches(msg, a.keys.Sessions):
@@ -1066,12 +1090,15 @@ func (a App) View() string {
 	body = clampLines(body, bodyHeight)
 
 	frame := lipgloss.JoinVertical(lipgloss.Left, header, body, statusBar, footer)
-	// Overlay precedence: tour > help > regular frame.
+	// Overlay precedence: tour > help > confirmation > regular frame.
 	if a.tour.Active() {
 		return a.tour.View(a.width, a.height)
 	}
 	if a.helpOpen {
 		return a.renderHelpOverlay(a.width, a.height)
+	}
+	if a.confirm.open() {
+		return a.renderConfirmationOverlay(a.width, a.height)
 	}
 	return frame
 }

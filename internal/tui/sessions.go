@@ -171,11 +171,6 @@ func (m sessionsModel) Update(msg tea.Msg) (sessionsModel, tea.Cmd) {
 			if m.cursor < len(m.sessions)-1 {
 				m.cursor++
 			}
-		case keyMatches(km, m.km.Kill):
-			if sel := m.Selected(); sel != nil {
-				name := sel.Name
-				return m, killSessionCmd(name)
-			}
 		}
 	}
 	return m, nil
@@ -317,7 +312,7 @@ func detectedPrefix() string {
 
 // killSessionCmd runs `tmux kill-session -t <name>` and reports the result
 // via sessionKilledMsg, which the app uses to trigger a refresh.
-func killSessionCmd(name string) tea.Cmd {
+var killSessionCmd = func(name string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()

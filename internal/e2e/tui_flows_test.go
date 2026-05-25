@@ -133,9 +133,9 @@ func TestTUIFlow_CreateBareSession(t *testing.T) {
 	d.Quit()
 }
 
-// TestTUIFlow_KillSession verifies that pressing "x" on a session in
-// the Home screen kills it in tmux immediately.
-func TestTUIFlow_KillSession(t *testing.T) {
+// TestTUIFlow_KillSessionCancel verifies that cancelling the kill
+// confirmation leaves the selected sandboxed tmux session running.
+func TestTUIFlow_KillSessionCancel(t *testing.T) {
 	e := newEnv(t)
 	cfg := e.defaultConfig()
 	cfg.Tour.Shown = true
@@ -144,11 +144,11 @@ func TestTUIFlow_KillSession(t *testing.T) {
 	e.startDaemon()
 
 	// Pre-create a session so it shows up in the list.
-	e.newTmuxSession("tui-kill-test", e.Home)
+	e.newTmuxSession("tui-kill-cancel", e.Home)
 
 	// Give the daemon a moment to observe the new session.
 	if !waitFor(5*time.Second, func() bool {
-		return e.hasSession("tui-kill-test")
+		return e.hasSession("tui-kill-cancel")
 	}) {
 		t.Fatal("pre-created session did not appear")
 	}
@@ -157,19 +157,113 @@ func TestTUIFlow_KillSession(t *testing.T) {
 	d.WaitFor("Sessions")
 
 	// Wait for the session to appear in the TUI.
-	d.WaitForTimeout("tui-kill-test", 8*time.Second)
+	d.WaitForTimeout("tui-kill-cancel", 8*time.Second)
 
-	// Kill the selected session (no confirmation required).
+	// Open and cancel the kill confirmation.
 	d.Send("x")
+	d.WaitFor("Kill session?")
+	d.WaitFor("tui-kill-cancel")
+	d.Send("n")
+	d.Send("2")
+	d.WaitForTimeout("Projects", 5*time.Second)
 
-	if !waitFor(5*time.Second, func() bool {
-		return !e.hasSession("tui-kill-test")
-	}) {
+	if !e.hasSession("tui-kill-cancel") {
 		t.Logf("TUI output:\n%s", d.Output())
-		t.Fatalf("session 'tui-kill-test' still present after kill; sessions: %v", e.sessionNames())
+		t.Fatalf("session 'tui-kill-cancel' was killed after cancel; sessions: %v", e.sessionNames())
 	}
 
 	d.Quit()
+}
+
+// TestTUIFlow_KillSessionConfirm verifies that confirming the kill modal
+// removes only the selected sandboxed tmux session.
+func TestTUIFlow_KillSessionConfirm(t *testing.T) {
+	e := newEnv(t)
+	cfg := e.defaultConfig()
+	cfg.Tour.Shown = true
+	cfg.Update.AutoCheck = false
+	e.writeConfig(cfg)
+	e.startDaemon()
+
+	e.newTmuxSession("tui-kill-a-target", e.Home)
+	e.newTmuxSession("tui-kill-z-keep", e.Home)
+
+	if !waitFor(5*time.Second, func() bool {
+		return e.hasSession("tui-kill-a-target") && e.hasSession("tui-kill-z-keep")
+	}) {
+		t.Fatal("pre-created sessions did not appear")
+	}
+
+	d := newTUIDriver(t, e, 40, 120)
+	d.WaitFor("Sessions")
+	d.WaitForTimeout("tui-kill-a-target", 8*time.Second)
+	d.WaitForTimeout("tui-kill-z-keep", 8*time.Second)
+
+	d.Send("x")
+	d.WaitFor("Kill session?")
+	d.WaitFor("tui-kill-a-target")
+	d.Send("y")
+
+	if !waitFor(5*time.Second, func() bool {
+		return !e.hasSession("tui-kill-a-target") && e.hasSession("tui-kill-z-keep")
+	}) {
+		t.Logf("TUI output:\n%s", d.Output())
+		t.Fatalf("kill confirmation affected wrong sessions; sessions: %v", e.sessionNames())
+	}
+
+	d.Quit()
+}
+
+// TestTUIFlow_QuitCancel verifies that cancelling the quit modal keeps
+// the TUI running and leaves sandboxed tmux sessions untouched.
+func TestTUIFlow_QuitCancel(t *testing.T) {
+	e := newEnv(t)
+	cfg := e.defaultConfig()
+	cfg.Tour.Shown = true
+	cfg.Update.AutoCheck = false
+	e.writeConfig(cfg)
+	e.newTmuxSession("tui-quit-cancel-keep", e.Home)
+
+	d := newTUIDriver(t, e, 40, 120)
+	d.WaitFor("Sessions")
+
+	d.Send("q")
+	d.WaitFor("Quit ccmux?")
+	d.Send("n")
+	d.Send("2")
+	d.WaitForTimeout("Projects", 5*time.Second)
+
+	if !e.hasSession("tui-quit-cancel-keep") {
+		t.Fatalf("managed session was killed after quit cancel; sessions: %v", e.sessionNames())
+	}
+
+	d.Quit()
+}
+
+// TestTUIFlow_QuitConfirm verifies that confirming quit exits ccmux
+// without killing sandboxed tmux sessions.
+func TestTUIFlow_QuitConfirm(t *testing.T) {
+	e := newEnv(t)
+	cfg := e.defaultConfig()
+	cfg.Tour.Shown = true
+	cfg.Update.AutoCheck = false
+	e.writeConfig(cfg)
+	e.newTmuxSession("tui-quit-keep", e.Home)
+
+	d := newTUIDriver(t, e, 40, 120)
+	d.WaitFor("Sessions")
+
+	d.Send("q")
+	d.WaitFor("Quit ccmux?")
+	d.Send("y")
+	if !d.WaitForExit(5 * time.Second) {
+		t.Logf("TUI output:\n%s", d.Output())
+		t.Fatal("ccmux TUI did not exit after quit confirmation")
+	}
+
+	if !e.hasSession("tui-quit-keep") {
+		t.Fatalf("managed session was killed after quit confirm; sessions: %v", e.sessionNames())
+	}
 }
 
 // TestTUIFlow_RenameSession verifies that "R" opens the rename form,
