@@ -53,10 +53,24 @@ unset TMUX_TMPDIR
 
 cleanup() {
   "$REAL_TMUX" -S "$TMUX_SOCK" kill-server 2>/dev/null || true
-  pkill -f "ccmuxd.*$root" 2>/dev/null || true
+  # Kill any sandbox ccmuxd. The sandbox path is $root/bin/ccmuxd, so the
+  # full command-line begins with $root. The previous pattern was
+  # "ccmuxd.*$root" — reversed, so it never matched a real sandbox
+  # process and rendered runs leaked daemons that survived past
+  # `rm -rf $root` (the kernel keeps the deleted binary mapped). We
+  # accumulated 68 of them in the wild before this was caught.
+  pkill -TERM -f "$root/bin/ccmuxd" 2>/dev/null || true
+  # Give the daemon ~200ms to shut down gracefully, then SIGKILL any
+  # straggler so the trap leaves a clean process table even when
+  # render.sh is interrupted mid-flight.
+  sleep 0.2
+  pkill -KILL -f "$root/bin/ccmuxd" 2>/dev/null || true
   rm -rf "$root"
 }
-trap cleanup EXIT
+# Bare EXIT misses SIGINT on some bash configs and SIGTERM (CI
+# cancellation) entirely — extend the trap so cleanup runs no matter
+# how the script terminates.
+trap cleanup EXIT INT TERM HUP
 
 # --- tmux wrapper: every process that invokes 'tmux' hits the isolated socket.
 cat > "$root/bin/tmux" <<WRAPPER

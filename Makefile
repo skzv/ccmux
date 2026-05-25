@@ -123,6 +123,14 @@ daemon: check-go
 test: check-go
 	go test ./...
 
+# Bash-level regression test for docs/vhs/render.sh's cleanup pattern.
+# Lives outside `make test` because it requires the built binary; run
+# via `make test-vhs-cleanup` after `make build`. The Go side of this
+# bug (daemon socket-conflict exit code, plist KeepAlive condition)
+# is covered by `make test` and `make test-e2e`.
+test-vhs-cleanup: build
+	@bash docs/vhs/cleanup_test.sh
+
 # Integration / e2e suite — builds the binaries and runs every
 # //go:build integration test. Requires tmux to be installed.
 # Packages covered: internal/e2e (subprocess CUJs) and cmd/ccmuxd

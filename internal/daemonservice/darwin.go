@@ -128,8 +128,21 @@ var plistTemplate = template.Must(template.New("plist").Parse(`<?xml version="1.
   </array>
   <key>RunAtLoad</key>
   <true/>
+  <!--
+    KeepAlive is conditional, not blanket-true: respawn only when the
+    last exit was unsuccessful (non-zero). The previous unconditional
+    KeepAlive=true paired with a Go-level "another ccmuxd is already
+    listening → exit 1" path made launchd respawn the daemon every
+    ~10s in a tight loop, spamming the stderr log forever. With this
+    dict and ccmuxd's matching "exit 0 when peer already serving"
+    shim in main.go, that loop is no longer possible. Crashes still
+    trigger a respawn (exit code != 0).
+  -->
   <key>KeepAlive</key>
-  <true/>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
   <key>WorkingDirectory</key>
   <string>{{.WorkingDir}}</string>
   <key>EnvironmentVariables</key>
