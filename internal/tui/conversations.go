@@ -13,10 +13,35 @@ import (
 	"github.com/skzv/ccmux/internal/tui/styles"
 )
 
-// conversationsModel is the "past conversations" browser — every
-// Claude / Codex / Antigravity session the user has had on disk,
-// regardless of whether ccmux launched it. Two entry points feed the
-// same list state:
+type conversationAgentSectionDef struct {
+	Label string
+	Agent agent.ID
+}
+
+type conversationAgentSection struct {
+	def           conversationAgentSectionDef
+	conversations []conversations.Conversation
+}
+
+var conversationAgentSections = []conversationAgentSectionDef{
+	{Label: "Claude", Agent: agent.IDClaude},
+	{Label: "Codex", Agent: agent.IDCodex},
+	{Label: "Cursor", Agent: agent.IDCursor},
+	{Label: "Agy", Agent: agent.IDAntigravity},
+}
+
+func conversationAgentSectionIndex(id agent.ID) (int, bool) {
+	for i, section := range conversationAgentSections {
+		if section.Agent == id {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+// conversationsModel is the "past conversations" browser — every known
+// agent session the user has had on disk, regardless of whether ccmux
+// launched it. Two entry points feed the same list state:
 //
 //  1. `8` from any screen → no filter, show all conversations.
 //  2. `c` on a Projects row → pre-applies `projectFilter` to the
@@ -35,10 +60,12 @@ type conversationsModel struct {
 	// rendered slice is whatever passes the filter at render time.
 	list []conversations.Conversation
 
-	// cursor is the index into the *filtered* slice (not list).
-	// Preserved across refreshes by ID rather than position so a new
-	// conversation appearing at the top doesn't shift the selection.
-	cursor int
+	// activeSection is the index into conversationAgentSections. The
+	// cursor is scoped to that section, while sectionCursors preserves
+	// each agent's row position when focus moves across sections.
+	activeSection  int
+	cursor         int
+	sectionCursors []int
 
 	// projectFilter narrows the rendered list to conversations whose
 	// Project matches this string (substring match). Empty = no
@@ -77,7 +104,9 @@ type conversationsModel struct {
 }
 
 func newConversations(st styles.Styles, km Keymap) conversationsModel {
-	return conversationsModel{st: st, km: km}
+	m := conversationsModel{st: st, km: km}
+	m.ensureSectionCursors()
+	return m
 }
 
 // SetList replaces the conversation list and preserves the cursor by
@@ -85,9 +114,8 @@ func newConversations(st styles.Styles, km Keymap) conversationsModel {
 // conversationsLoadedMsg lands.
 func (m *conversationsModel) SetList(list []conversations.Conversation) {
 	var selectedID string
-	visible := m.filtered()
-	if m.cursor >= 0 && m.cursor < len(visible) {
-		selectedID = visible[m.cursor].ID
+	if sel := m.Selected(); sel != nil {
+		selectedID = sel.ID
 	}
 	m.list = list
 	m.loading = false
@@ -96,19 +124,7 @@ func (m *conversationsModel) SetList(list []conversations.Conversation) {
 	// against is no longer the list on screen. Forcing a re-arm after
 	// every reload is the safe choice for an irreversible action.
 	m.pendingDelete = ""
-
-	visible = m.filtered()
-	if selectedID != "" {
-		for i, c := range visible {
-			if c.ID == selectedID {
-				m.cursor = i
-				return
-			}
-		}
-	}
-	if m.cursor >= len(visible) {
-		m.cursor = max0(len(visible) - 1)
-	}
+	m.preserveSelectedID(selectedID)
 }
 
 // SetLoadErr stashes a walker error so View can surface it. Empty
@@ -126,15 +142,20 @@ func (m *conversationsModel) SetLoading(b bool) {
 }
 
 // SetProjectFilter narrows the list to conversations whose Project
-// contains the given substring. Pass "" to clear. The cursor resets
-// to the top when the filter changes — a stale cursor pointing into
-// the old filtered slice would be confusing after the filter scope
-// shifts.
+// contains the given substring. Pass "" to clear. The selected
+// conversation is preserved by ID when it remains visible; otherwise
+// the cursor clamps inside the focused section.
 func (m *conversationsModel) SetProjectFilter(filter string) {
-	if m.projectFilter != filter {
-		m.cursor = 0
+	if m.projectFilter == filter {
+		return
+	}
+	var selectedID string
+	if sel := m.Selected(); sel != nil {
+		selectedID = sel.ID
 	}
 	m.projectFilter = filter
+	m.pendingDelete = ""
+	m.preserveSelectedID(selectedID)
 }
 
 // SetShowHeadless seeds the live toggle from config at startup. The
@@ -147,13 +168,16 @@ func (m *conversationsModel) SetShowHeadless(b bool) {
 
 // ToggleHeadless flips the headless-visibility flag and reports the
 // new value so the caller can rebuild the conversations list with the
-// matching filter. Cursor resets so the user lands at the top of the
-// freshly-shaped list — a stale cursor into the prior slice would
-// point at a row that may no longer be visible.
+// matching filter. Selection is preserved by ID until the refreshed
+// list proves the row is no longer visible.
 func (m *conversationsModel) ToggleHeadless() bool {
+	var selectedID string
+	if sel := m.Selected(); sel != nil {
+		selectedID = sel.ID
+	}
 	m.showHeadless = !m.showHeadless
-	m.cursor = 0
 	m.pendingDelete = ""
+	m.preserveSelectedID(selectedID)
 	return m.showHeadless
 }
 
@@ -166,7 +190,11 @@ func (m conversationsModel) ShowHeadless() bool {
 // Selected returns the conversation under the cursor, respecting the
 // current filter. Returns nil when the (filtered) list is empty.
 func (m conversationsModel) Selected() *conversations.Conversation {
-	visible := m.filtered()
+	sections := m.sections()
+	if m.activeSection < 0 || m.activeSection >= len(sections) {
+		return nil
+	}
+	visible := sections[m.activeSection].conversations
 	if m.cursor < 0 || m.cursor >= len(visible) {
 		return nil
 	}
@@ -191,23 +219,141 @@ func (m conversationsModel) filtered() []conversations.Conversation {
 	return out
 }
 
+func (m conversationsModel) sections() []conversationAgentSection {
+	sections := make([]conversationAgentSection, len(conversationAgentSections))
+	for i, def := range conversationAgentSections {
+		sections[i] = conversationAgentSection{def: def}
+	}
+	for _, c := range m.filtered() {
+		if i, ok := conversationAgentSectionIndex(c.Agent); ok {
+			sections[i].conversations = append(sections[i].conversations, c)
+		}
+	}
+	return sections
+}
+
+func (m *conversationsModel) ensureSectionCursors() {
+	if len(m.sectionCursors) == len(conversationAgentSections) {
+		if m.activeSection < 0 || m.activeSection >= len(conversationAgentSections) {
+			m.activeSection = 0
+			m.cursor = 0
+		}
+		return
+	}
+	next := make([]int, len(conversationAgentSections))
+	copy(next, m.sectionCursors)
+	m.sectionCursors = next
+	if m.activeSection < 0 || m.activeSection >= len(conversationAgentSections) {
+		m.activeSection = 0
+	}
+	m.sectionCursors[m.activeSection] = m.cursor
+}
+
+func (m *conversationsModel) preserveSelectedID(selectedID string) {
+	sections := m.sections()
+	m.ensureSectionCursors()
+	if selectedID != "" {
+		for sectionIdx, section := range sections {
+			for rowIdx, c := range section.conversations {
+				if c.ID == selectedID {
+					m.activeSection = sectionIdx
+					m.cursor = rowIdx
+					m.sectionCursors[sectionIdx] = rowIdx
+					m.clampSelection(sections)
+					return
+				}
+			}
+		}
+	}
+	m.clampSelection(sections)
+}
+
+func (m *conversationsModel) clampSelection(sections []conversationAgentSection) {
+	m.ensureSectionCursors()
+	if len(sections) == 0 {
+		m.activeSection = 0
+		m.cursor = 0
+		return
+	}
+	if m.activeSection < 0 || m.activeSection >= len(sections) {
+		m.activeSection = 0
+		m.cursor = 0
+	}
+	m.sectionCursors[m.activeSection] = m.cursor
+	for i, section := range sections {
+		last := len(section.conversations) - 1
+		switch {
+		case last < 0:
+			m.sectionCursors[i] = 0
+		case m.sectionCursors[i] < 0:
+			m.sectionCursors[i] = 0
+		case m.sectionCursors[i] > last:
+			m.sectionCursors[i] = last
+		}
+	}
+	m.cursor = m.sectionCursors[m.activeSection]
+}
+
+func (m *conversationsModel) moveFocusedRow(delta int, sections []conversationAgentSection) {
+	m.clampSelection(sections)
+	if m.activeSection < 0 || m.activeSection >= len(sections) {
+		return
+	}
+	rows := sections[m.activeSection].conversations
+	if len(rows) == 0 {
+		m.cursor = 0
+		m.sectionCursors[m.activeSection] = 0
+		return
+	}
+	next := m.cursor + delta
+	if next < 0 {
+		next = 0
+	}
+	if next >= len(rows) {
+		next = len(rows) - 1
+	}
+	m.cursor = next
+	m.sectionCursors[m.activeSection] = next
+}
+
+func (m *conversationsModel) moveFocusedSection(delta int, sections []conversationAgentSection) {
+	m.clampSelection(sections)
+	if len(conversationAgentSections) == 0 {
+		return
+	}
+	m.sectionCursors[m.activeSection] = m.cursor
+	m.activeSection = (m.activeSection + delta + len(conversationAgentSections)) % len(conversationAgentSections)
+	m.cursor = m.sectionCursors[m.activeSection]
+	m.clampSelection(sections)
+}
+
+func (m conversationsModel) focusedSectionDef() conversationAgentSectionDef {
+	if m.activeSection < 0 || m.activeSection >= len(conversationAgentSections) {
+		return conversationAgentSections[0]
+	}
+	return conversationAgentSections[m.activeSection]
+}
+
 func (m conversationsModel) Update(msg tea.Msg) (conversationsModel, tea.Cmd) {
 	km, ok := msg.(tea.KeyMsg)
 	if !ok {
 		return m, nil
 	}
+	sections := m.sections()
 	switch {
 	case keyMatches(km, m.km.Up):
-		if m.cursor > 0 {
-			m.cursor--
-		}
+		m.moveFocusedRow(-1, sections)
 		// Moving off the armed row disarms — a delete confirm must be
 		// two presses on the SAME row, never a stale arm + a fresh x.
 		m.pendingDelete = ""
 	case keyMatches(km, m.km.Down):
-		if m.cursor < len(m.filtered())-1 {
-			m.cursor++
-		}
+		m.moveFocusedRow(1, sections)
+		m.pendingDelete = ""
+	case keyMatches(km, m.km.Left) || km.String() == "shift+tab":
+		m.moveFocusedSection(-1, sections)
+		m.pendingDelete = ""
+	case keyMatches(km, m.km.Right) || km.String() == "tab":
+		m.moveFocusedSection(1, sections)
 		m.pendingDelete = ""
 	case keyMatches(km, m.km.Kill):
 		// `x`: arm-then-confirm delete of the selected conversation.
@@ -266,104 +412,143 @@ func (m conversationsModel) View(width, height int) string {
 		)
 	}
 
-	visible := m.filtered()
-	if len(visible) == 0 {
-		var body string
-		if m.projectFilter != "" {
-			body = st.Muted.Render("No conversations for project " + st.Emphasis.Render(m.projectFilter) + ".")
-		} else {
-			body = st.Muted.Render("No conversations found. Run claude / codex / agy at least once to create transcripts.")
-		}
-		return st.Pane.Width(width - 2).Height(height - 2).Render(
-			lipgloss.JoinVertical(lipgloss.Left, header, "", body),
-		)
+	sections := m.sections()
+	m.clampSelection(sections)
+	nav := m.renderAgentNav(sections)
+	contentH := height - 6
+	if contentH < 1 {
+		contentH = 1
 	}
 
 	// Narrow: list only — drop the detail pane (T2) and the inline
 	// hint line (T2). Shares the one TUI breakpoint via isNarrow.
 	if isNarrow(width) {
 		return st.Pane.Width(width - 2).Height(height - 2).Render(
-			lipgloss.JoinVertical(lipgloss.Left, header, "", m.renderList(visible, width-4, height-4)),
+			lipgloss.JoinVertical(lipgloss.Left, header, "", nav, "", m.renderList(sections, width-4, contentH)),
 		)
 	}
 
 	// Wide: two-column — list on the left, detail on the right.
 	listW := width * 5 / 8
 	detailW := width - listW - 1
-	list := m.renderList(visible, listW, height-4)
-	detail := m.renderDetail(visible[m.cursor], detailW, height-4)
+	list := m.renderList(sections, listW, contentH)
+	var detail string
+	if sel := m.Selected(); sel != nil {
+		detail = m.renderDetail(*sel, detailW, contentH)
+	} else {
+		detail = m.renderEmptyDetail(m.focusedSectionDef(), detailW, contentH)
+	}
 	body := lipgloss.JoinHorizontal(lipgloss.Top, list, " ", detail)
 	hStatus := "hidden"
 	if m.showHeadless {
 		hStatus = "shown"
 	}
-	hint := st.Muted.Render("enter resume · x delete · esc clear filter · H headless: " + hStatus + " · 1-8 switch screens")
+	hint := st.Muted.Render("enter resume · x delete · tab/shift+tab/←/→ sections · H headless: " + hStatus)
 	return st.Pane.Width(width - 2).Height(height - 2).Render(
-		lipgloss.JoinVertical(lipgloss.Left, header, "", body, hint),
+		lipgloss.JoinVertical(lipgloss.Left, header, "", nav, "", body, hint),
 	)
 }
 
-// renderList draws the scrollable conversation list. Each row shows
-// agent, relative time, project (or "—" for Antigravity rows that
-// don't carry one), and a preview snippet. Rows are windowed around the
-// cursor so a long list never scrolls the highlighted row out of view.
-func (m conversationsModel) renderList(visible []conversations.Conversation, width, height int) string {
-	if len(visible) == 0 {
-		return ""
-	}
-	start, end := windowAroundCursor(m.cursor, len(visible), height)
-	rows := make([]string, 0, end-start)
-	const (
-		agentW = 12
-		timeW  = 12
-	)
-	for i := start; i < end; i++ {
-		c := visible[i]
-		marker := "  "
-		if i == m.cursor {
-			marker = m.st.Emphasis.Render("▸ ")
-		}
-		agentLabel := string(c.Agent)
-		// Tag with brackets to match the dashboard styling for
-		// non-default agents.
-		if c.Agent != agent.IDClaude {
-			agentLabel = "[" + agentLabel + "]"
-		}
-		when := relativeTimeShort(c.LastActivity)
-		preview := c.Preview
-		if preview == "" {
-			preview = "(" + c.Project + ")"
-		}
-		// Width budget: agent + when + spaces are fixed; preview takes
-		// the rest. Truncate the preview to avoid wrap.
-		previewBudget := width - len(marker) - agentW - timeW - 4
-		if previewBudget < 10 {
-			previewBudget = 10
-		}
-		// Armed-for-delete row: replace the preview with a loud
-		// confirm prompt so the user can't miss what x-again will do.
-		if c.ID == m.pendingDelete {
-			row := fmt.Sprintf("%s%-*s  %-*s  %s",
-				marker,
-				agentW, m.st.Muted.Render(truncate(agentLabel, agentW)),
-				timeW, m.st.Muted.Render(when),
-				m.st.StatusError.Render("delete this conversation? press x to confirm · esc cancels"),
-			)
-			rows = append(rows, row)
+func (m conversationsModel) renderAgentNav(sections []conversationAgentSection) string {
+	parts := make([]string, 0, len(sections))
+	for i, section := range sections {
+		label := fmt.Sprintf("%s %d", section.def.Label, len(section.conversations))
+		if i == m.activeSection {
+			parts = append(parts, m.st.Emphasis.Render("▸ "+label))
 			continue
 		}
-		row := fmt.Sprintf("%s%-*s  %-*s  %s",
-			marker,
-			agentW, m.st.Muted.Render(truncate(agentLabel, agentW)),
-			timeW, m.st.Muted.Render(when),
-			truncate(preview, previewBudget),
-		)
-		if i == m.cursor {
+		parts = append(parts, m.st.Muted.Render("  "+label))
+	}
+	return strings.Join(parts, "  ")
+}
+
+// renderList draws only the focused agent's conversation list. The
+// agent selector above it keeps the full section map visible without
+// stacking every section into the scroll region.
+func (m conversationsModel) renderList(sections []conversationAgentSection, width, height int) string {
+	if height < 1 || len(sections) == 0 {
+		return ""
+	}
+	sectionIdx := m.activeSection
+	if sectionIdx < 0 || sectionIdx >= len(sections) {
+		sectionIdx = 0
+	}
+	section := sections[sectionIdx]
+	if len(section.conversations) == 0 {
+		return m.st.ListItemSelected.Render(m.st.Emphasis.Render("▸ ") + m.st.Muted.Render(m.emptySectionText(section.def)))
+	}
+	start, end := windowAroundCursor(m.cursor, len(section.conversations), height)
+	rows := make([]string, 0, end-start)
+	for i := start; i < end; i++ {
+		selected := i == m.cursor
+		row := m.renderConversationRow(section.conversations[i], selected, width)
+		if selected {
 			row = m.st.ListItemSelected.Render(row)
 		}
 		rows = append(rows, row)
 	}
 	return strings.Join(rows, "\n")
+}
+
+func (m conversationsModel) renderConversationRow(c conversations.Conversation, selected bool, width int) string {
+	const (
+		agentW = 12
+		timeW  = 12
+	)
+	marker := "  "
+	if selected {
+		marker = m.st.Emphasis.Render("▸ ")
+	}
+	agentLabel := conversationAgentLabel(c.Agent)
+	when := relativeTimeShort(c.LastActivity)
+	preview := c.Preview
+	if preview == "" {
+		preview = "(" + c.Project + ")"
+	}
+	// Width budget: agent + when + spaces are fixed; preview takes
+	// the rest. Truncate the preview to avoid wrap.
+	previewBudget := width - len(marker) - agentW - timeW - 4
+	if previewBudget < 10 {
+		previewBudget = 10
+	}
+	// Armed-for-delete row: replace the preview with a loud confirm
+	// prompt so the user can't miss what x-again will do.
+	if c.ID == m.pendingDelete {
+		return fmt.Sprintf("%s%-*s  %-*s  %s",
+			marker,
+			agentW, m.st.Muted.Render(truncate(agentLabel, agentW)),
+			timeW, m.st.Muted.Render(when),
+			m.st.StatusError.Render("delete this conversation? press x to confirm · esc cancels"),
+		)
+	}
+	return fmt.Sprintf("%s%-*s  %-*s  %s",
+		marker,
+		agentW, m.st.Muted.Render(truncate(agentLabel, agentW)),
+		timeW, m.st.Muted.Render(when),
+		truncate(preview, previewBudget),
+	)
+}
+
+func conversationAgentLabel(id agent.ID) string {
+	switch id {
+	case agent.IDClaude:
+		return "claude"
+	case agent.IDCodex:
+		return "[codex]"
+	case agent.IDCursor:
+		return "[cursor]"
+	case agent.IDAntigravity:
+		return "[agy]"
+	default:
+		return string(id)
+	}
+}
+
+func (m conversationsModel) emptySectionText(def conversationAgentSectionDef) string {
+	if m.projectFilter != "" {
+		return "No conversations for " + def.Label + " matching filter."
+	}
+	return "No conversations for " + def.Label + "."
 }
 
 // renderDetail draws the right-hand pane for the selected conversation.
@@ -404,6 +589,20 @@ func (m conversationsModel) renderDetail(c conversations.Conversation, width, he
 	body := strings.Join(lines, "\n")
 	_ = height // reserved for future scrolling
 	return body
+}
+
+func (m conversationsModel) renderEmptyDetail(def conversationAgentSectionDef, width, height int) string {
+	lines := []string{
+		m.st.Emphasis.Render(def.Label),
+		"",
+		m.st.Muted.Render(m.emptySectionText(def)),
+	}
+	if m.projectFilter != "" {
+		lines = append(lines, "", m.st.Key.Render("esc")+"  clear project filter")
+	}
+	_ = width
+	_ = height
+	return strings.Join(lines, "\n")
 }
 
 // relativeTimeShort is the compact form used in list rows: "5m",

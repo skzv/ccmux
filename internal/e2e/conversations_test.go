@@ -4,9 +4,11 @@ package e2e
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/skzv/ccmux/internal/conversations"
 )
@@ -37,6 +39,50 @@ func (e *Env) writeClaudeTranscript(uuid, cwd, prompt, timestamp string) string 
 	return path
 }
 
+func (e *Env) writeCodexTranscript(uuid, cwd, prompt, timestamp string) string {
+	e.t.Helper()
+	ts, err := time.Parse(time.RFC3339, timestamp)
+	if err != nil {
+		e.t.Fatalf("parse timestamp: %v", err)
+	}
+	name := "rollout-" + ts.Format("2006-01-02T15-04-05") + "-" + uuid + ".jsonl"
+	line1 := map[string]any{
+		"type":      "session_meta",
+		"timestamp": timestamp,
+		"cwd":       cwd,
+		"payload":   map[string]any{"originator": "codex-tui", "source": "cli"},
+	}
+	line2 := map[string]any{
+		"type":      "user_message",
+		"timestamp": timestamp,
+		"text":      prompt,
+	}
+	b1, err := json.Marshal(line1)
+	if err != nil {
+		e.t.Fatalf("marshal codex session_meta: %v", err)
+	}
+	b2, err := json.Marshal(line2)
+	if err != nil {
+		e.t.Fatalf("marshal codex user_message: %v", err)
+	}
+	path := filepath.Join(e.Home, ".codex", "sessions", ts.Format("2006"), ts.Format("01"), ts.Format("02"), name)
+	writeFile(e.t, path, string(b1)+"\n"+string(b2)+"\n")
+	_ = os.Chtimes(path, ts, ts)
+	return path
+}
+
+func (e *Env) writeAntigravityTranscript(uuid, timestamp string) string {
+	e.t.Helper()
+	ts, err := time.Parse(time.RFC3339, timestamp)
+	if err != nil {
+		e.t.Fatalf("parse timestamp: %v", err)
+	}
+	path := filepath.Join(e.Home, ".gemini", "antigravity-cli", "conversations", uuid+".pb")
+	writeFile(e.t, path, "opaque")
+	_ = os.Chtimes(path, ts, ts)
+	return path
+}
+
 // listConversationsJSON runs `ccmux list-conversations --json` and
 // parses its JSON-lines output.
 func (e *Env) listConversationsJSON() []conversations.Conversation {
@@ -57,6 +103,47 @@ func (e *Env) listConversationsJSON() []conversations.Conversation {
 		list = append(list, c)
 	}
 	return list
+}
+
+func TestTUIFlow_ConversationsGroupedByAgent(t *testing.T) {
+	e := newEnv(t)
+	cfg := e.defaultConfig()
+	cfg.Tour.Shown = true
+	cfg.Update.AutoCheck = false
+	e.writeConfig(cfg)
+
+	claudeProj := filepath.Join(e.Root, "claude-proj")
+	codexProj := filepath.Join(e.Root, "codex-proj")
+	mkdirAll(t, claudeProj)
+	mkdirAll(t, codexProj)
+	const claudeID = "claudeg0-1111-2222-3333-444444444444"
+	const codexID = "codexg00-aaaa-bbbb-cccc-dddddddddddd"
+	e.writeClaudeTranscript(claudeID, claudeProj, "claude grouped prompt", "2026-05-19T15:00:00Z")
+	e.writeCodexTranscript(codexID, codexProj, "codex grouped prompt", "2026-05-19T16:00:00Z")
+	e.writeAntigravityTranscript("agyg0000-aaaa-bbbb-cccc-dddddddddddd", "2026-05-19T17:00:00Z")
+
+	d := newTUIDriver(t, e, 40, 140)
+	d.WaitFor("Sessions")
+	d.Send("3")
+	for _, want := range []string{
+		"Conversations",
+		"Claude",
+		"Codex",
+		"Cursor",
+		"Agy",
+		"claude grouped prompt",
+	} {
+		d.WaitForTimeout(want, 8*time.Second)
+	}
+
+	d.Send(KeyTab)
+	d.WaitForTimeout("codex grouped prompt", 8*time.Second)
+	d.WaitForTimeout(codexID, 8*time.Second)
+	d.Send(KeyTab)
+	d.WaitForTimeout("No conversations for Cursor.", 8*time.Second)
+	d.Send(KeyTab)
+	d.WaitForTimeout("[agy]", 8*time.Second)
+	d.Quit()
 }
 
 // TestConversations_List covers the list CUJ: past transcripts are
