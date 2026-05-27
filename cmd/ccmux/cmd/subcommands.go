@@ -24,6 +24,7 @@ import (
 	"github.com/skzv/ccmux/internal/project"
 	"github.com/skzv/ccmux/internal/scaffold"
 	"github.com/skzv/ccmux/internal/setupwizard"
+	"github.com/skzv/ccmux/internal/sshsetup"
 	"github.com/skzv/ccmux/internal/tmux"
 )
 
@@ -408,6 +409,56 @@ func runDoctor() error {
 	fmt.Println("Clipboard (cross-device copy/paste via OSC 52):")
 	checkClipboardForDoctor()
 
+	// SSH bootstrap status for every configured remote host. The
+	// common failure modes are subtle ("key auth not set up yet",
+	// "sshd off on the remote", "Tailscale not routing") and the
+	// error you'd otherwise see is the raw openssh stderr — usually
+	// "Permission denied (publickey)" with no remediation. We
+	// classify and offer the one-line fix.
+	if len(cfg.Hosts) > 0 {
+		fmt.Println()
+		fmt.Println("Configured SSH hosts:")
+		probeCtx, probeCancel := context.WithTimeout(context.Background(), 12*time.Second)
+		defer probeCancel()
+		for _, h := range cfg.Hosts {
+			label := h.Name
+			if h.Name == "" {
+				label = h.Address
+			}
+			target := sshsetup.Target{User: h.User, Host: h.Address, Port: 22}
+			if target.User == "" {
+				target.User = currentUser()
+			}
+			res := sshsetup.Probe(probeCtx, target)
+			switch res {
+			case sshsetup.ProbeOK:
+				fmt.Printf("  ✓ %s (%s) — key auth ready\n", label, target.String())
+			case sshsetup.ProbeAuthFailed:
+				bad++
+				fmt.Printf("  ✗ %s (%s) — key not installed; run `ccmux host setup-ssh %s`\n",
+					label, target.String(), label)
+			case sshsetup.ProbeSshdDisabled:
+				bad++
+				fmt.Printf("  ✗ %s — sshd not running on %s. On macOS: System Settings → General → Sharing → Remote Login\n",
+					label, target.Host)
+			case sshsetup.ProbeRefused:
+				bad++
+				fmt.Printf("  ✗ %s — port %d on %s closed; check sshd binding\n", label, target.Port, target.Host)
+			case sshsetup.ProbeTimeout:
+				bad++
+				fmt.Printf("  · %s — timeout reaching %s; is Tailscale connected on both ends?\n", label, target.Host)
+			case sshsetup.ProbeNoNetwork:
+				bad++
+				fmt.Printf("  · %s — can't resolve %s; check MagicDNS or use the tailnet IP\n", label, target.Host)
+			case sshsetup.ProbeHostKeyMismatch:
+				bad++
+				fmt.Printf("  ✗ %s — ⚠ host key changed for %s; investigate (possible MITM) before re-adding\n", label, target.Host)
+			default:
+				fmt.Printf("  · %s — probe inconclusive (%s)\n", label, res.String())
+			}
+		}
+	}
+
 	if bad > 0 {
 		os.Exit(bad)
 	}
@@ -677,6 +728,7 @@ func newHostCmd() *cobra.Command {
 				return tw.Flush()
 			},
 		},
+		newHostSetupSSHCmd(),
 	)
 	return c
 }

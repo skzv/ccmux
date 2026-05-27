@@ -13,11 +13,13 @@ package tui
 
 import (
 	"fmt"
+	"os/user"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/skzv/ccmux/internal/remoteattach"
+	"github.com/skzv/ccmux/internal/sshsetup"
 	"github.com/skzv/ccmux/internal/tui/styles"
 )
 
@@ -90,6 +92,38 @@ func (m networkModel) SSHCmd() tea.Cmd {
 	return tea.ExecProcess(cmd, func(err error) tea.Msg {
 		return refreshAfterDetachMsg{}
 	})
+}
+
+// SetupSSHCmd builds the tea.Cmd that opens the SSH setup wizard
+// for the selected peer. Returns nil for unactionable rows (local,
+// mobile). For dispatch on the 's' key from the Network screen.
+// The wizard handles the rest — probe, password prompt, install,
+// validate, optionally enumerate other users on the same host.
+func (m networkModel) SetupSSHCmd() tea.Cmd {
+	sel := m.Selected()
+	if sel == nil || sel.Local || sel.Mobile {
+		return nil
+	}
+	host := sel.DialHost
+	if host == "" {
+		host = sel.Address
+	}
+	if host == "" {
+		return nil
+	}
+	target := sshsetup.Target{
+		User: sel.User,
+		Host: host,
+		Port: 22, // SSH; sel.Address may carry the ccmuxd HTTP port (7474), not the SSH port
+	}
+	if target.User == "" {
+		if u, err := user.Current(); err == nil {
+			target.User = u.Username
+		}
+	}
+	return func() tea.Msg {
+		return openSSHWizardMsg{target: target}
+	}
 }
 
 func (m networkModel) View(width, height int) string {
