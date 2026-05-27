@@ -280,8 +280,28 @@ type Host struct {
 	Name    string `toml:"name"`
 	Address string `toml:"address"`
 	User    string `toml:"user"`
-	Port    int    `toml:"port"`
-	Mosh    bool   `toml:"mosh"`
+	// Port is the ccmuxd HTTP listener port — what daemon.RemoteClient
+	// dials to read /v1/sessions, /v1/projects, etc. Defaults to 7474
+	// (the ccmuxd convention). NOT the SSH port — see SSHPort below.
+	Port int `toml:"port"`
+	// SSHPort is the port on which the remote's sshd is listening,
+	// used by ssh/mosh and by the SSH setup wizard. Defaults to 22
+	// when zero. Distinct from Port so a host running ccmuxd on
+	// 7474 AND sshd on 2222 can express both — that's exactly the
+	// case ccmux supports for users behind ISP-blocked port 22.
+	SSHPort int  `toml:"ssh_port"`
+	Mosh    bool `toml:"mosh"`
+}
+
+// EffectiveSSHPort returns the SSH port for this host, falling back
+// to the openssh default of 22 when SSHPort is unset. Use this at
+// every attach/probe/install site so the "default to 22" logic is
+// in one place and a future global default change is one line.
+func (h Host) EffectiveSSHPort() int {
+	if h.SSHPort == 0 {
+		return 22
+	}
+	return h.SSHPort
 }
 
 // Defaults returns a Config populated with default values.

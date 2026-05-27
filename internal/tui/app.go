@@ -702,7 +702,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// (the user is creating a session on a host whose key isn't
 		// installed yet) routes to the SSH setup wizard instead of
 		// silently flashing the openssh error.
-		rt := &attachRemoteTarget{User: msg.User, Host: msg.DialHost, Port: 22}
+		port := msg.SSHPort
+		if port == 0 {
+			port = 22
+		}
+		rt := &attachRemoteTarget{User: msg.User, Host: msg.DialHost, Port: port}
 		if !a.attach.active {
 			tick := a.startAttaching(attachKindRemote, msg.DialHost)
 			return a, tea.Batch(tick, tea.ExecProcess(c, func(err error) tea.Msg {
@@ -1516,6 +1520,7 @@ func (a App) refreshSessionsCmd() tea.Cmd {
 				DialHost: h.Address, // bare address without port, for ssh/mosh
 				User:     h.User,
 				Mosh:     h.Mosh,
+				SSHPort:  h.SSHPort, // 0 → default 22 at the dial site
 			}
 			if e == nil {
 				st.OK = true
@@ -1802,7 +1807,7 @@ func (a App) attachSelectedSession() (App, tea.Cmd) {
 			}
 			remoteArgs := tmux.AttachArgs(sel.Name, a.cfg.Sessions.DetachOthersOnAttach())
 			tick := a.startAttaching(attachKindRemote, sel.Host)
-			rt := &attachRemoteTarget{User: h.User, Host: h.Address, Port: 22}
+			rt := &attachRemoteTarget{User: h.User, Host: h.Address, Port: h.EffectiveSSHPort()}
 			return a, tea.Batch(tick, tea.ExecProcess(
 				remoteattach.RunArgv(target, h.Mosh, append([]string{"tmux"}, remoteArgs...)),
 				func(err error) tea.Msg { return attachExitedMsg{Err: err, RemoteSSHTarget: rt} },
@@ -1850,9 +1855,14 @@ func (a App) attachSelectedSession() (App, tea.Cmd) {
 			}
 			tick := a.startAttaching(attachKindRemote, sel.Host)
 			// Strip any "user@" prefix on dial so we can pass it
-			// as Host to the wizard. The Port falls back to SSH
-			// 22 since dial is just a hostname here.
-			rt := &attachRemoteTarget{Host: dial, Port: 22}
+			// as Host to the wizard. Honor the host row's SSHPort
+			// when set; otherwise fall back to SSH 22 since dial
+			// is just a hostname here.
+			port := hs.SSHPort
+			if port == 0 {
+				port = 22
+			}
+			rt := &attachRemoteTarget{Host: dial, Port: port}
 			if i := strings.Index(dial, "@"); i >= 0 {
 				rt.User = dial[:i]
 				rt.Host = dial[i+1:]

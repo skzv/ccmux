@@ -324,6 +324,7 @@ func spawnBareSessionCmd(submit newBareSessionSubmitMsg) tea.Cmd {
 				SessionName: res.Session,
 				DialHost:    dial,
 				User:        submit.User,
+				SSHPort:     submit.SSHPort,
 				Mosh:        submit.Mosh,
 			}
 		}

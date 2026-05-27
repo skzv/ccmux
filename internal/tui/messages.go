@@ -87,6 +87,11 @@ type hostStatus struct {
 	// "iOS", "iPadOS", "Android", …). Populated for NeedsInstall and
 	// Mobile rows so the hint can be platform-aware.
 	OS string
+	// SSHPort is the port the remote's sshd listens on. 0 means
+	// "default" — the resolver falls back to 22. Populated for
+	// configured cfg.Hosts rows that set ssh_port; auto-discovered
+	// peers leave it 0 and default-to-22 at the dial site.
+	SSHPort int
 }
 
 // tickMsg is the periodic dashboard refresh trigger.
@@ -175,6 +180,7 @@ type remoteSessionStartedMsg struct {
 	SessionName string
 	DialHost    string
 	User        string // login user; empty → client's own username
+	SSHPort     int    // sshd port; 0 → default 22 at the dial site
 	Mosh        bool   // prefer mosh over ssh
 }
 
@@ -195,6 +201,7 @@ type newBareSessionSubmitMsg struct {
 	Address  string // ccmuxd http "host:port" for remote daemon
 	DialHost string // bare hostname/IP for ssh/mosh attach
 	User     string // login user; empty → client's own username
+	SSHPort  int    // sshd port on the remote; 0 → default 22
 	Mosh     bool   // prefer mosh over ssh for this host
 
 	// Agent is the AI agent the form's picker selected. Empty means
