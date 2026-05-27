@@ -10,6 +10,7 @@ import (
 	"github.com/skzv/ccmux/internal/notes"
 	"github.com/skzv/ccmux/internal/project"
 	"github.com/skzv/ccmux/internal/selfupdate"
+	"github.com/skzv/ccmux/internal/sshsetup"
 	"github.com/skzv/ccmux/internal/usage"
 )
 
@@ -26,6 +27,17 @@ type sessionsLoadedMsg struct {
 type projectsLoadedMsg struct {
 	Projects []project.Project
 	Err      error
+}
+
+// openSSHWizardMsg asks the App to open the SSH setup wizard for a
+// specific target. Producers: the Network screen's 's' key, the
+// post-attach-failure auto-probe, future entry points. The resume
+// payload is opaque to the App until the wizard completes — at
+// which point the App reads it to decide whether to retry an
+// attach that triggered the wizard.
+type openSSHWizardMsg struct {
+	target sshsetup.Target
+	resume any
 }
 
 // hostStatus is one row in the host-health pings table.

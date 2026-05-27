@@ -148,6 +148,14 @@ type App struct {
 	// the user picks a session/conversation and the moment Bubble
 	// Tea suspends to run `tmux attach`. See attach_loading.go.
 	attach attachState
+
+	// sshWizard is the one-time setup flow for a host that fails
+	// key auth. Initialized in New() in the closed state; opened
+	// from the Network screen ('s' key), from the CLI mirror
+	// `ccmux host setup-ssh`, or automatically after a remote
+	// attach that exits with permission-denied. See
+	// sshsetup_wizard.go for the state machine.
+	sshWizard *sshWizardModel
 }
 
 // modalCapturingText returns true when the App is in a state where
@@ -158,6 +166,9 @@ type App struct {
 // notes search bar, the tour, the help overlay.
 func (a App) modalCapturingText() bool {
 	if a.confirm.open() {
+		return true
+	}
+	if a.sshWizard != nil && a.sshWizard.Active() {
 		return true
 	}
 	if a.tour.Active() || a.helpOpen {
@@ -211,6 +222,7 @@ func New(cfg config.Config, version string) App {
 		network:        newNetwork(st, km),
 		tour:           newTour(st),
 		matrix:         newMatrix(),
+		sshWizard:      newSSHWizard(st),
 	}
 	a.dashboard.SetConfig(cfg)
 	a.dashboard.SetVersion(version)
@@ -376,6 +388,54 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		a.matrix, cmd = a.matrix.Update(msg)
 		return a, cmd
+
+	case openSSHWizardMsg:
+		// The Network screen ('s' key) and the post-attach probe
+		// emit this to ask the App to open the wizard for a
+		// specific target. We instantiate-on-demand because the
+		// wizard model is heavyish and zero apps need it on first
+		// frame.
+		if a.sshWizard == nil {
+			a.sshWizard = newSSHWizard(a.styles)
+		}
+		a.sshWizard.Open(msg.target, msg.resume)
+		return a, nil
+
+	case wizardProgressMsg, wizardInstallDoneMsg, wizardEnumerateDoneMsg:
+		// Internal wizard machinery — route to the wizard, ignore
+		// when no wizard is alive (defensive against stale Cmds).
+		if a.sshWizard == nil {
+			return a, nil
+		}
+		var cmd tea.Cmd
+		a.sshWizard, cmd = a.sshWizard.Update(msg)
+		return a, cmd
+
+	case wizardCompletedMsg:
+		// Wizard finished successfully. Persist any user@host
+		// pairs the user selected on the enumerate step, then
+		// emit a toast acknowledging the success. The `resume`
+		// payload is reserved for the attach-flow integration —
+		// reattach automatically if it was an attach that
+		// triggered the wizard. Currently nil for the
+		// Network-screen and CLI-mirror paths.
+		if len(msg.added) > 0 {
+			a = persistWizardAdded(a, msg.target, msg.added)
+		}
+		until := time.Now().Add(4 * time.Second)
+		return a, func() tea.Msg {
+			return toastMsg{
+				Text:  "SSH ready for " + msg.target.String(),
+				Kind:  toastInfo,
+				Until: until,
+			}
+		}
+
+	case wizardCancelledMsg:
+		// User bailed — no toast needed unless we were
+		// auto-triggered by an attach failure (resume != nil).
+		// The wizard is already closed by the time we get here.
+		return a, nil
 
 	case tickMsg:
 		cmds := []tea.Cmd{a.refreshSessionsCmd(), tickEvery(2 * time.Second)}
@@ -754,6 +814,19 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.stopAttaching()
 		cmds := []tea.Cmd{a.refreshSessionsCmd(), a.refreshProjectsCmd()}
 		if msg.Err != nil {
+			// If the failure smells like SSH auth (ssh / mosh
+			// exit 255 with "permission denied" in the stderr-as-
+			// error), and we have an SSH target the user just
+			// tried to attach to, offer the wizard instead of a
+			// flat error toast. This is the "don't fail silently"
+			// payoff — instead of leaving the user staring at
+			// "Permission denied (publickey)" they get a 30-sec
+			// password-once flow.
+			if target := remoteAttachTargetFromErr(msg); target != nil {
+				return a, func() tea.Msg {
+					return openSSHWizardMsg{target: *target}
+				}
+			}
 			until := time.Now().Add(5 * time.Second)
 			cmds = append(cmds, func() tea.Msg {
 				return toastMsg{Text: "tmux: " + msg.Err.Error(), Kind: toastError, Until: until}
@@ -779,6 +852,17 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		if a.confirm.open() {
 			return a.updateConfirmationKey(msg)
+		}
+
+		// SSH setup wizard owns the screen when open — keystrokes
+		// go to the password field / multi-select rather than the
+		// underlying Sessions / Network screen. Routed before the
+		// matrix easter egg so 'M' typed into a password doesn't
+		// trigger the rain.
+		if a.sshWizard != nil && a.sshWizard.Active() {
+			var cmd tea.Cmd
+			a.sshWizard, cmd = a.sshWizard.Update(msg)
+			return a, cmd
 		}
 
 		// Matrix easter egg takes priority — when active, the overlay
@@ -1001,6 +1085,17 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, func() tea.Msg {
 				return toastMsg{Text: "nothing to ssh into for that row", Kind: toastInfo, Until: time.Now().Add(3 * time.Second)}
 			}
+		case msg.String() == "s" && a.screen == ScreenNetwork && !a.modalCapturingText():
+			// `s` on the Network screen opens the SSH setup wizard
+			// for the focused host. This is the proactive entry
+			// point — the user fixes auth before attempting to
+			// attach rather than after seeing Permission denied.
+			if c := a.network.SetupSSHCmd(); c != nil {
+				return a, c
+			}
+			return a, func() tea.Msg {
+				return toastMsg{Text: "nothing to set up for that row", Kind: toastInfo, Until: time.Now().Add(3 * time.Second)}
+			}
 		}
 	}
 
@@ -1099,6 +1194,12 @@ func (a App) View() string {
 	}
 	if a.confirm.open() {
 		return a.renderConfirmationOverlay(a.width, a.height)
+	}
+	if a.sshWizard != nil && a.sshWizard.Active() {
+		// Wizard overlays everything else (it owns input). Drawn
+		// on top of the still-rendered base frame, just like the
+		// other modal overlays above.
+		return a.sshWizard.View(a.width, a.height)
 	}
 	return frame
 }
@@ -1695,9 +1796,10 @@ func (a App) attachSelectedSession() (App, tea.Cmd) {
 			}
 			remoteArgs := tmux.AttachArgs(sel.Name, a.cfg.Sessions.DetachOthersOnAttach())
 			tick := a.startAttaching(attachKindRemote, sel.Host)
+			rt := &attachRemoteTarget{User: h.User, Host: h.Address, Port: 22}
 			return a, tea.Batch(tick, tea.ExecProcess(
 				remoteattach.RunArgv(target, h.Mosh, append([]string{"tmux"}, remoteArgs...)),
-				func(err error) tea.Msg { return attachExitedMsg{Err: err} },
+				func(err error) tea.Msg { return attachExitedMsg{Err: err, RemoteSSHTarget: rt} },
 			))
 		}
 	}
@@ -1741,8 +1843,16 @@ func (a App) attachSelectedSession() (App, tea.Cmd) {
 				dbg.Printf("attach discovered: ssh -t %s %q", dial, remoteCmd)
 			}
 			tick := a.startAttaching(attachKindRemote, sel.Host)
+			// Strip any "user@" prefix on dial so we can pass it
+			// as Host to the wizard. The Port falls back to SSH
+			// 22 since dial is just a hostname here.
+			rt := &attachRemoteTarget{Host: dial, Port: 22}
+			if i := strings.Index(dial, "@"); i >= 0 {
+				rt.User = dial[:i]
+				rt.Host = dial[i+1:]
+			}
 			return a, tea.Batch(tick, tea.ExecProcess(cmd, func(err error) tea.Msg {
-				return attachExitedMsg{Err: err}
+				return attachExitedMsg{Err: err, RemoteSSHTarget: rt}
 			}))
 		}
 	}

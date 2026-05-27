@@ -28,6 +28,7 @@ Components:
 - **`internal/claudeusage`** — walks `~/.claude/projects/*/*.jsonl` to aggregate per-window token usage and user-prompt counts. Drives the dashboard's usage panel + the 5-hour quota bar.
 - **`internal/config`** — `~/.config/ccmux/config.toml` for user preferences (projects dir, theme, keybindings).
 - **`internal/daemon`** — IPC client/server. TUI talks to ccmuxd over a Unix socket at `~/.local/state/ccmux/ccmuxd.sock`.
+- **`internal/sshsetup`** — one-time SSH bootstrap for new remote hosts. Probe, password-bootstrap key install via `golang.org/x/crypto/ssh`, post-auth user enumeration (`dscl`/`getent`), TOFU `known_hosts`. The TUI wizard (`internal/tui/sshsetup_wizard.go`), the `s` keybinding on the Network screen, the `ccmux host setup-ssh` CLI, the `ccmux doctor` per-host probe, and the post-attach-failure auto-route all share this package. Triggered automatically when an attach exits with `Permission denied`. See [`docs/04_Guides/SSH_Setup.md`](docs/04_Guides/SSH_Setup.md).
 
 # Build & Run
 ```bash

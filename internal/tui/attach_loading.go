@@ -50,6 +50,20 @@ type attachReadyMsg struct {
 // path so every attach callsite uses the same plumbing.
 type attachExitedMsg struct {
 	Err error
+	// RemoteSSHTarget pins the user@host:port we just tried to
+	// ssh/mosh into. When non-nil AND Err looks like a permission
+	// failure, the App swaps the error toast for an SSH setup
+	// wizard pointed at this target. Local attaches leave nil.
+	RemoteSSHTarget *attachRemoteTarget
+}
+
+// attachRemoteTarget mirrors sshsetup.Target shape. Lives here so
+// attachExitedMsg doesn't pull sshsetup into the attach-loading
+// file — the App converts to sshsetup.Target at the routing site.
+type attachRemoteTarget struct {
+	User string
+	Host string
+	Port int
 }
 
 // attachSpinTickMsg advances the spinner frame while the overlay is up.
