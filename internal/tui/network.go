@@ -73,6 +73,14 @@ func (m networkModel) Selected() *hostStatus {
 // selected peer. Returns nil when the selection isn't ssh-able
 // (local, mobile, missing dial host). Caller is responsible for
 // dispatching toasts on nil.
+//
+// Failure routing: we emit attachExitedMsg with RemoteSSHTarget
+// populated rather than the old refreshAfterDetachMsg. Two
+// reasons: (1) the App's attachExitedMsg handler surfaces the err
+// as a toast instead of silently swallowing it, and (2) when the
+// err looks like an auth failure the same handler routes to the
+// SSH setup wizard automatically — which is exactly what a user
+// hitting Enter on a not-yet-keyed peer would want.
 func (m networkModel) SSHCmd() tea.Cmd {
 	sel := m.Selected()
 	if sel == nil || sel.Local || sel.Mobile {
@@ -89,9 +97,42 @@ func (m networkModel) SSHCmd() tea.Cmd {
 	if dbg := debugLogger(); dbg != nil {
 		dbg.Printf("network ssh: %s", dial)
 	}
+	rt := remoteTargetForSSH(*sel, dial)
 	return tea.ExecProcess(cmd, func(err error) tea.Msg {
-		return refreshAfterDetachMsg{}
+		// err is nil on a clean detach (user typed `exit` on the
+		// remote shell). Pass it through unchanged — the
+		// attachExitedMsg handler treats nil-Err as success.
+		return attachExitedMsg{Err: err, RemoteSSHTarget: rt}
 	})
+}
+
+// remoteTargetForSSH derives the user/host/port the wizard would
+// need if the SSH attempt fails with auth-denied. The dial string
+// may already carry a `user@` prefix (when the row's User field
+// is set); we parse that back out so the wizard can route to the
+// right account, not just the local $USER.
+//
+// For auto-discovered peers (no configured User), we fall back to
+// the local $USER — matching what `ssh dial` would have done by
+// default. This is the right guess on personal-dev machines where
+// the local + remote usernames match; if they don't, the wizard's
+// password step will fail and the user can re-run via
+// `ccmux host setup-ssh otheruser@host` with the right account.
+func remoteTargetForSSH(sel hostStatus, dial string) *attachRemoteTarget {
+	rt := &attachRemoteTarget{Host: dial, Port: 22}
+	if i := strings.Index(dial, "@"); i >= 0 {
+		rt.User = dial[:i]
+		rt.Host = dial[i+1:]
+	}
+	if rt.User == "" && sel.User != "" {
+		rt.User = sel.User
+	}
+	if rt.User == "" {
+		if u, err := user.Current(); err == nil {
+			rt.User = u.Username
+		}
+	}
+	return rt
 }
 
 // SetupSSHCmd builds the tea.Cmd that opens the SSH setup wizard

@@ -46,14 +46,67 @@ func TestSSHWizard_OpenStartsAtConfirm(t *testing.T) {
 	}
 }
 
-// TestSSHWizard_ConfirmEnterAdvancesToPassword exercises the
-// happy-path advance through the confirm step.
-func TestSSHWizard_ConfirmEnterAdvancesToPassword(t *testing.T) {
+// TestSSHWizard_ConfirmEnterAdvancesToUserStep exercises the
+// happy-path advance through the confirm step. We now stop at the
+// User step (where the user can edit the pre-filled username)
+// before continuing to Password — Confirm + User + Password are
+// three discrete keypresses on the happy path.
+func TestSSHWizard_ConfirmEnterAdvancesToUserStep(t *testing.T) {
 	m := newSSHWizard(styles.Default())
 	m.Open(sshsetup.Target{User: "alice", Host: "sputnik"}, nil)
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.Step() != sshWizardUser {
+		t.Errorf("after Enter on confirm, Step = %v, want sshWizardUser", m.Step())
+	}
+}
+
+// TestSSHWizard_UserStepPrefillsTarget — the user field is
+// pre-populated with whatever the caller passed (so when User came
+// from the configured host's User field or from the local-$USER
+// fallback, the user just hits Enter to accept).
+func TestSSHWizard_UserStepPrefillsTarget(t *testing.T) {
+	m := newSSHWizard(styles.Default())
+	m.Open(sshsetup.Target{User: "deploy", Host: "sputnik"}, nil)
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // confirm → user
+	if got := m.userInput.Value(); got != "deploy" {
+		t.Errorf("userInput.Value() = %q, want deploy (pre-filled)", got)
+	}
+}
+
+// TestSSHWizard_UserStepEditPersists — type into the username
+// field, hit Enter, the target's User is updated and we advance
+// to password. This is the alice-locally-bob-on-the-remote fix.
+func TestSSHWizard_UserStepEditPersists(t *testing.T) {
+	m := newSSHWizard(styles.Default())
+	m.Open(sshsetup.Target{User: "alice", Host: "sputnik"}, nil)
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // confirm → user
+	// Clear pre-fill with Ctrl-U, then type the new name.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlU})
+	for _, r := range "bob" {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if m.Step() != sshWizardPassword {
-		t.Errorf("after Enter on confirm, Step = %v, want sshWizardPassword", m.Step())
+		t.Fatalf("Step = %v, want sshWizardPassword after username Enter", m.Step())
+	}
+	if m.target.User != "bob" {
+		t.Errorf("target.User = %q, want bob (the edited value)", m.target.User)
+	}
+}
+
+// TestSSHWizard_UserStepEmptyStays — empty username with Enter
+// keeps the focus on the user step with an error hint.
+func TestSSHWizard_UserStepEmptyStays(t *testing.T) {
+	m := newSSHWizard(styles.Default())
+	m.Open(sshsetup.Target{Host: "sputnik"}, nil) // no User
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlU})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.Step() != sshWizardUser {
+		t.Errorf("empty user should keep step = sshWizardUser, got %v", m.Step())
+	}
+	if !strings.Contains(m.View(80, 24), "username is required") {
+		t.Errorf("missing 'username is required' hint")
 	}
 }
 
@@ -96,7 +149,9 @@ func TestSSHWizard_PasswordFlowOK(t *testing.T) {
 	m.keyFn = fakeKey
 
 	m.Open(sshsetup.Target{User: "alice", Host: "sputnik"}, nil)
-	// confirm → password
+	// confirm → user
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	// user → password (accept pre-fill)
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	// type password
 	for _, r := range "hunter2" {
@@ -130,7 +185,8 @@ func TestSSHWizard_WrongPasswordReprompts(t *testing.T) {
 	m.installFn = fakeInstallWrongPassword
 	m.keyFn = fakeKey
 	m.Open(sshsetup.Target{User: "alice", Host: "sputnik"}, nil)
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // confirm → password
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // confirm → user
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // user → password (accept)
 	for _, r := range "bad" {
 		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 	}
@@ -157,7 +213,8 @@ func TestSSHWizard_ErrorStateRetry(t *testing.T) {
 	m.installFn = fakeInstallGenericErr
 	m.keyFn = fakeKey
 	m.Open(sshsetup.Target{User: "alice", Host: "sputnik"}, nil)
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // confirm → user
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // user → password (accept)
 	for _, r := range "x" {
 		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 	}
@@ -182,7 +239,8 @@ func TestSSHWizard_EnumerateSelection(t *testing.T) {
 	m.enumerateFn = fakeEnumerateBobCarol
 	m.keyFn = fakeKey
 	m.Open(sshsetup.Target{User: "alice", Host: "sputnik"}, nil)
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // confirm
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // confirm → user
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // user → password (accept)
 	for _, r := range "p" {
 		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 	}
@@ -216,7 +274,8 @@ func TestSSHWizard_EnumerateEscSkipsAdd(t *testing.T) {
 	m.enumerateFn = fakeEnumerateBobCarol
 	m.keyFn = fakeKey
 	m.Open(sshsetup.Target{User: "alice", Host: "sputnik"}, nil)
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // confirm → user
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // user → password (accept)
 	for _, r := range "p" {
 		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 	}

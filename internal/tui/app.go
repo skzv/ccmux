@@ -697,14 +697,20 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Flip the overlay if a producer earlier in the flow didn't
 		// already do it. attachExitedMsg is the centralized cleanup
 		// path (replaces the old direct refreshAfterDetachMsg).
+		//
+		// RemoteSSHTarget is populated so that an auth failure here
+		// (the user is creating a session on a host whose key isn't
+		// installed yet) routes to the SSH setup wizard instead of
+		// silently flashing the openssh error.
+		rt := &attachRemoteTarget{User: msg.User, Host: msg.DialHost, Port: 22}
 		if !a.attach.active {
 			tick := a.startAttaching(attachKindRemote, msg.DialHost)
 			return a, tea.Batch(tick, tea.ExecProcess(c, func(err error) tea.Msg {
-				return attachExitedMsg{Err: err}
+				return attachExitedMsg{Err: err, RemoteSSHTarget: rt}
 			}))
 		}
 		return a, tea.ExecProcess(c, func(err error) tea.Msg {
-			return attachExitedMsg{Err: err}
+			return attachExitedMsg{Err: err, RemoteSSHTarget: rt}
 		})
 
 	case newBareSessionSubmitMsg:
