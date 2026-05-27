@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os/user"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -123,7 +124,7 @@ func remoteTargetForSSH(sel hostStatus, dial string) *attachRemoteTarget {
 	if port == 0 {
 		port = 22
 	}
-	rt := &attachRemoteTarget{Host: dial, Port: port}
+	rt := &attachRemoteTarget{Host: dial, Port: port, TailscaleSSH: sel.TailscaleSSH}
 	if i := strings.Index(dial, "@"); i >= 0 {
 		rt.User = dial[:i]
 		rt.Host = dial[i+1:]
@@ -155,6 +156,18 @@ func (m networkModel) SetupSSHCmd() tea.Cmd {
 	}
 	if host == "" {
 		return nil
+	}
+	if sel.TailscaleSSH {
+		// Tailscale already handles auth via the tailnet identity —
+		// no key install required. Tell the user instead of opening
+		// a wizard that would then short-circuit on the probe.
+		return func() tea.Msg {
+			return toastMsg{
+				Text:  host + " uses Tailscale SSH — no setup needed, just attach",
+				Kind:  toastInfo,
+				Until: time.Now().Add(5 * time.Second),
+			}
+		}
 	}
 	port := sel.SSHPort
 	if port == 0 {
@@ -262,6 +275,18 @@ func (m networkModel) renderRow(h hostStatus, selected bool) string {
 		tag = st.Muted.Render(h.OS + " · " + h.Version)
 	case h.Version != "":
 		tag = st.Muted.Render(h.Version)
+	}
+	// Append a small "ts-ssh" badge when the peer has Tailscale
+	// SSH enabled — signals to the user that no key-install
+	// wizard is needed and that auth flows through their tailnet
+	// identity (governed by ACLs in the admin console).
+	if h.TailscaleSSH && !h.Local && !h.Mobile {
+		badge := st.Key.Render("ts-ssh")
+		if tag == "" {
+			tag = badge
+		} else {
+			tag = badge + "  " + tag
+		}
 	}
 	row := fmt.Sprintf("  %s %s    %s", icon, name, tag)
 	if selected {

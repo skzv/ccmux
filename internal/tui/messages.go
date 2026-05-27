@@ -92,6 +92,14 @@ type hostStatus struct {
 	// configured cfg.Hosts rows that set ssh_port; auto-discovered
 	// peers leave it 0 and default-to-22 at the dial site.
 	SSHPort int
+	// TailscaleSSH is true when the remote has Tailscale SSH
+	// enabled (per `tailscale status --json`). When set, the SSH
+	// setup wizard short-circuits — Tailscale handles auth, no
+	// key install needed. Populated from the tailnet scan for
+	// auto-discovered peers; left false for configured cfg.Hosts
+	// rows (we don't probe their TS-SSH state because that'd cost
+	// a `tailscale status` shell-out per refresh).
+	TailscaleSSH bool
 }
 
 // tickMsg is the periodic dashboard refresh trigger.

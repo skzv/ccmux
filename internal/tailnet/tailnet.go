@@ -36,6 +36,13 @@ type Peer struct {
 	Online bool
 	// Self marks this machine. Useful for skipping a self-probe.
 	Self bool
+	// TailscaleSSH reports whether this peer has Tailscale SSH
+	// enabled (`tailscale up --ssh` or the GUI toggle). Derived from
+	// the SSH_HostKeys array tailscaled populates in the status JSON
+	// for SSH-server-enabled peers. When true, the SSH setup wizard
+	// can be skipped entirely — Tailscale handles auth via the
+	// tailnet identity instead of `~/.ssh/authorized_keys`.
+	TailscaleSSH bool
 }
 
 // IsMobile reports whether this peer is a phone / tablet that wouldn't
@@ -107,6 +114,11 @@ func Peers(ctx context.Context) ([]Peer, error) {
 // parsePeers is the JSON-parsing half of Peers. Split out so tests can
 // hit it with a fixture instead of shelling to tailscale.
 func parsePeers(raw []byte) ([]Peer, error) {
+	// SSH_HostKeys is the array tailscaled populates when a peer
+	// has Tailscale SSH enabled (`tailscale up --ssh`). The wire
+	// shape is `[]string` of host-key fingerprints; presence /
+	// non-emptiness is the signal. Field name with the underscore
+	// matches the tailscale CLI JSON output verbatim.
 	var doc struct {
 		BackendState string `json:"BackendState"`
 		Self         struct {
@@ -115,6 +127,7 @@ func parsePeers(raw []byte) ([]Peer, error) {
 			OS           string   `json:"OS"`
 			TailscaleIPs []string `json:"TailscaleIPs"`
 			Online       bool     `json:"Online"`
+			SSHHostKeys  []string `json:"sshHostKeys,omitempty"`
 		} `json:"Self"`
 		Peer map[string]struct {
 			HostName     string   `json:"HostName"`
@@ -122,6 +135,7 @@ func parsePeers(raw []byte) ([]Peer, error) {
 			OS           string   `json:"OS"`
 			TailscaleIPs []string `json:"TailscaleIPs"`
 			Online       bool     `json:"Online"`
+			SSHHostKeys  []string `json:"sshHostKeys,omitempty"`
 		} `json:"Peer"`
 	}
 	if err := json.Unmarshal(raw, &doc); err != nil {
@@ -133,12 +147,13 @@ func parsePeers(raw []byte) ([]Peer, error) {
 	var peers []Peer
 	if len(doc.Self.TailscaleIPs) > 0 {
 		peers = append(peers, Peer{
-			HostName: doc.Self.HostName,
-			Addr:     doc.Self.TailscaleIPs[0],
-			DNSName:  doc.Self.DNSName,
-			OS:       doc.Self.OS,
-			Online:   true,
-			Self:     true,
+			HostName:     doc.Self.HostName,
+			Addr:         doc.Self.TailscaleIPs[0],
+			DNSName:      doc.Self.DNSName,
+			OS:           doc.Self.OS,
+			Online:       true,
+			Self:         true,
+			TailscaleSSH: len(doc.Self.SSHHostKeys) > 0,
 		})
 	}
 	for _, p := range doc.Peer {
@@ -146,11 +161,12 @@ func parsePeers(raw []byte) ([]Peer, error) {
 			continue
 		}
 		peers = append(peers, Peer{
-			HostName: p.HostName,
-			Addr:     p.TailscaleIPs[0],
-			DNSName:  p.DNSName,
-			OS:       p.OS,
-			Online:   p.Online,
+			HostName:     p.HostName,
+			Addr:         p.TailscaleIPs[0],
+			DNSName:      p.DNSName,
+			OS:           p.OS,
+			Online:       p.Online,
+			TailscaleSSH: len(p.SSHHostKeys) > 0,
 		})
 	}
 	return peers, nil
@@ -169,6 +185,10 @@ type Discovered struct {
 	DialHost string
 	Version  string // ccmuxd version reported by /v1/health
 	Sessions int
+	// TailscaleSSH is propagated from the originating Peer so the
+	// UI + the SSH setup wizard can short-circuit the password-and-
+	// key install when Tailscale already handles auth.
+	TailscaleSSH bool
 }
 
 // Scan is the full sweep result, partitioned by what the dashboard
@@ -231,11 +251,12 @@ func ScanTailnet(ctx context.Context, port int) (Scan, error) {
 				return
 			}
 			results <- result{ok: true, d: Discovered{
-				Name:     shortName(p.DisplayName()),
-				Address:  addr,
-				DialHost: dialHostFor(p),
-				Version:  info.Version,
-				Sessions: info.Sessions,
+				Name:         shortName(p.DisplayName()),
+				Address:      addr,
+				DialHost:     dialHostFor(p),
+				Version:      info.Version,
+				Sessions:     info.Sessions,
+				TailscaleSSH: p.TailscaleSSH,
 			}}
 		}(p)
 	}

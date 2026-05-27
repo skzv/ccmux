@@ -119,6 +119,51 @@ func TestParsePeers_HappyPath(t *testing.T) {
 	}
 }
 
+// TestParsePeers_TailscaleSSHDetection — `sshHostKeys` arrays are
+// non-empty on peers (and Self) where Tailscale SSH is enabled.
+// Both presence and content (we only care about non-empty) matter;
+// the parsed Peer.TailscaleSSH must reflect that.
+func TestParsePeers_TailscaleSSHDetection(t *testing.T) {
+	raw := []byte(`{
+  "BackendState": "Running",
+  "Self": {
+    "HostName": "selfhost",
+    "TailscaleIPs": ["100.75.64.20"],
+    "Online": true,
+    "sshHostKeys": ["ssh-ed25519 AAAA..."]
+  },
+  "Peer": {
+    "n1": {"HostName": "ts-ssh-on",  "TailscaleIPs": ["100.0.0.1"], "Online": true, "sshHostKeys": ["ssh-ed25519 BBBB..."]},
+    "n2": {"HostName": "ts-ssh-off", "TailscaleIPs": ["100.0.0.2"], "Online": true},
+    "n3": {"HostName": "ts-ssh-empty", "TailscaleIPs": ["100.0.0.3"], "Online": true, "sshHostKeys": []}
+  }
+}`)
+	got, err := parsePeers(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	by := map[string]Peer{}
+	for _, p := range got {
+		key := p.HostName
+		if p.Self {
+			key = "SELF"
+		}
+		by[key] = p
+	}
+	if p, ok := by["SELF"]; !ok || !p.TailscaleSSH {
+		t.Errorf("Self.TailscaleSSH = false; want true (sshHostKeys non-empty)")
+	}
+	if p, ok := by["ts-ssh-on"]; !ok || !p.TailscaleSSH {
+		t.Errorf("ts-ssh-on peer.TailscaleSSH = false; want true")
+	}
+	if p, ok := by["ts-ssh-off"]; !ok || p.TailscaleSSH {
+		t.Errorf("ts-ssh-off peer.TailscaleSSH = true; want false (no sshHostKeys field)")
+	}
+	if p, ok := by["ts-ssh-empty"]; !ok || p.TailscaleSSH {
+		t.Errorf("ts-ssh-empty peer.TailscaleSSH = true; want false (sshHostKeys: [])")
+	}
+}
+
 func TestParsePeers_TailscaleNotRunning(t *testing.T) {
 	raw := []byte(`{"BackendState":"NeedsLogin","Self":{}}`)
 	if _, err := parsePeers(raw); err == nil {
