@@ -246,9 +246,10 @@ func (m claudeModel) View(width, height int) string {
 func (m claudeModel) viewMain(width, height int) string {
 	st := m.st
 	lines := []string{st.Emphasis.Render("Claude Code Configuration")}
-	// The settings-file path is T2 — drop it on narrow.
+	// The settings-file path is T2 — drop it on narrow. Tildified
+	// so sandbox /tmp/... paths don't leak into demo GIFs.
 	if !m.narrow {
-		lines = append(lines, st.Muted.Render("settings: "+m.paths.Settings))
+		lines = append(lines, st.Muted.Render("settings: "+summarizePath(m.paths.Settings)))
 	}
 	lines = append(lines,
 		"",
@@ -586,4 +587,19 @@ func summarizePath(p string) string {
 		return "~" + cleanP[len(cleanHome):]
 	}
 	return p
+}
+
+// looksLikePath returns true when `s` is shaped like a filesystem
+// path that summarizePath could meaningfully shorten. Used by the
+// Settings screen so we only tildify string-valued rows that are
+// actually paths — not booleans, enums, or numbers that happen to
+// contain a slash by coincidence. Conservative: an absolute path
+// (`/...`), an explicit home shortcut (`~/...`), or a unix:// URL.
+func looksLikePath(s string) bool {
+	if s == "" {
+		return false
+	}
+	return strings.HasPrefix(s, "/") ||
+		strings.HasPrefix(s, "~/") ||
+		strings.HasPrefix(s, "unix://")
 }

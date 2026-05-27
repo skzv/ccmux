@@ -573,7 +573,7 @@ func (m conversationsModel) renderDetail(c conversations.Conversation, width, he
 		st.Emphasis.Render(string(c.Agent)),
 		"",
 		st.Muted.Render("ID         ") + c.ID,
-		st.Muted.Render("Project    ") + emptyOr(c.Project, "(unknown)"),
+		st.Muted.Render("Project    ") + emptyOr(summarizePath(c.Project), "(unknown)"),
 		st.Muted.Render("Last active") + "  " + c.LastActivity.Format("2006-01-02 15:04"),
 	}
 	if c.IsHeadless() {

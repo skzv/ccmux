@@ -5,9 +5,9 @@
 Output docs/vhs/out/cuj00_hero.gif
 
 Set Theme "Catppuccin Mocha"
-Set FontSize 16
-Set Width 1600
-Set Height 1000
+Set FontSize 22
+Set Width 1800
+Set Height 900
 Set Padding 20
 Set TypingSpeed 80ms
 
@@ -120,14 +120,6 @@ Sleep 400ms
 Type "1"
 Sleep 2500ms
 
-# Quit + clear: ending on a fresh prompt reads as "demo complete"; without
-# the clear the GIF's last frame is the "[detached (from session ...)]"
-# message tmux prints when ccmux exits, which looks like an error.
-Type "q"
-Sleep 600ms
-Hide
-Type "clear"
-Enter
-Sleep 200ms
-Show
-Sleep 1s
+# Hold the final TUI frame so the GIF ends on the screen content,
+# not on a `[detached ...]` line that tmux prints when ccmux exits.
+Sleep 1500ms

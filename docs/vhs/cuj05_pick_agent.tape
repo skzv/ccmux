@@ -3,9 +3,9 @@
 Output docs/vhs/out/cuj05_pick_agent.gif
 
 Set Theme "Catppuccin Mocha"
-Set FontSize 16
-Set Width 1600
-Set Height 1000
+Set FontSize 22
+Set Width 1800
+Set Height 900
 Set Padding 20
 Set TypingSpeed 80ms
 
@@ -88,14 +88,6 @@ Sleep 1500ms
 Type "1"
 Sleep 2500ms
 
-# Quit ccmux. The tmux detach prints a "[detached (from session ...)]"
-# line on the shell that ccmux quits to — looks like an error in
-# the rendered GIF. Hide+clear so the tape ends on a fresh prompt.
-Type "q"
-Sleep 600ms
-Hide
-Type "clear"
-Enter
-Sleep 200ms
-Show
-Sleep 1s
+# Hold the final TUI frame so the GIF ends on the screen content,
+# not on a `[detached ...]` line that tmux prints when ccmux exits.
+Sleep 1500ms

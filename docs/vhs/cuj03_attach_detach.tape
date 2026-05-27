@@ -3,9 +3,9 @@
 Output docs/vhs/out/cuj03_attach_detach.gif
 
 Set Theme "Catppuccin Mocha"
-Set FontSize 16
-Set Width 1600
-Set Height 1000
+Set FontSize 22
+Set Width 1800
+Set Height 900
 Set Padding 20
 Set TypingSpeed 80ms
 
@@ -43,14 +43,6 @@ Sleep 300ms
 Type "d"
 Sleep 2s
 
-# Quit ccmux. Hide+clear so the tape doesn't end on the tmux
-# "[detached (from session ...)]" line ccmux prints on exit —
-# that line reads as an error on a public demo.
-Type "q"
-Sleep 600ms
-Hide
-Type "clear"
-Enter
-Sleep 200ms
-Show
-Sleep 1s
+# Hold the final TUI frame so the GIF ends on the screen content,
+# not on a `[detached ...]` line that tmux prints when ccmux exits.
+Sleep 1500ms

@@ -93,17 +93,21 @@ func TestRenderHeader_NumbersMatchKeymap(t *testing.T) {
 	}
 }
 
-// TestRenderHeader_NarrowCollapsesToNumbers — on a sub-80-col
+// TestRenderHeader_NarrowCollapsesToNumbers — on a sub-tabBarMinWidth
 // terminal the strip collapses to numbers so it never wraps. The
 // active tab still shows its initial. This pins that the narrow path
 // also iterates every screen (a hardcoded narrow-mode slice would be
 // the same bug in a different spot).
+//
+// The threshold is computed from the actual label lengths
+// (tabBarMinWidth) — exactly the cols at which all the
+// `[N] ScreenName` segments would still fit — so a future screen
+// rename auto-adjusts both the production code and this test.
 func TestRenderHeader_NarrowCollapsesToNumbers(t *testing.T) {
-	// Every width below the 120 breakpoint collapses the tab strip to
-	// numbers; the active screen still shows its initial. 80–119 is
-	// the band that used to get the wide layout under the old < 80
-	// breakpoint — it must now be narrow too.
-	for _, w := range []int{60, 80, 100, 119} {
+	min := tabBarMinWidth()
+	// Anything below the computed threshold should collapse to
+	// numbers. Two sub-threshold samples + the boundary - 1.
+	for _, w := range []int{60, 80, min - 1} {
 		a := App{
 			styles: styles.Default(),
 			keys:   DefaultKeymap(),
@@ -126,10 +130,29 @@ func TestRenderHeader_NarrowCollapsesToNumbers(t *testing.T) {
 			t.Errorf("width %d: narrow header should collapse to numbers, not labels:\n%s", w, header)
 		}
 	}
-	// At the breakpoint (120) and above, the full labels return.
-	a := App{styles: styles.Default(), keys: DefaultKeymap(), width: 120, screen: ScreenConversations}
+	// At the breakpoint and above, the full labels return.
+	a := App{styles: styles.Default(), keys: DefaultKeymap(), width: min, screen: ScreenConversations}
 	if header := a.renderHeader(); !strings.Contains(header, "Conversations") {
-		t.Errorf("width 120: header should show full screen labels:\n%s", header)
+		t.Errorf("width %d: header should show full screen labels:\n%s", min, header)
+	}
+}
+
+// TestTabBarMinWidth_PinsExpectedValue locks in the computed
+// threshold so an accidental rename that shrinks a screen label
+// doesn't quietly shift the boundary. The arithmetic mirrors the
+// helper exactly; if you rename a screen, update both sides.
+func TestTabBarMinWidth_PinsExpectedValue(t *testing.T) {
+	// " ccmux " + " [N] Name " for each of the 7 current screens.
+	want := len(" ccmux ") +
+		len(" [1] Sessions ") +
+		len(" [2] Projects ") +
+		len(" [3] Conversations ") +
+		len(" [4] Notes ") +
+		len(" [5] Agents ") +
+		len(" [6] Settings ") +
+		len(" [7] Network ")
+	if got := tabBarMinWidth(); got != want {
+		t.Errorf("tabBarMinWidth = %d, want %d (rename a screen → update one of the sides)", got, want)
 	}
 }
 

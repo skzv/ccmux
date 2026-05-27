@@ -3,9 +3,9 @@
 Output docs/vhs/out/cuj02_dashboard.gif
 
 Set Theme "Catppuccin Mocha"
-Set FontSize 16
-Set Width 1600
-Set Height 1000
+Set FontSize 22
+Set Width 1800
+Set Height 900
 Set Padding 20
 Set TypingSpeed 80ms
 
@@ -39,6 +39,7 @@ Sleep 600ms
 Type "k"
 Sleep 800ms
 
-# Quit.
-Type "q"
-Sleep 500ms
+# Hold the final TUI frame so the GIF ends on the screen content,
+# not on a quit + shell prompt (which can flash the tmux
+# "[detached ...]" line — reads as an error on a public demo).
+Sleep 1500ms

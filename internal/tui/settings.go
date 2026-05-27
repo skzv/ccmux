@@ -424,7 +424,7 @@ func (m settingsModel) View(width, height int) string {
 		}
 		lines = append(lines,
 			fmt.Sprintf("ccmux version    %s", m.version),
-			fmt.Sprintf("config file      %s", cfgPath),
+			fmt.Sprintf("config file      %s", summarizePath(cfgPath)),
 			"",
 			m.st.Subtitle.Render("Editable (↑/↓ to move, enter to edit, e to open config in $EDITOR)"),
 		)
@@ -438,6 +438,12 @@ func (m settingsModel) View(width, height int) string {
 		display := val
 		if display == "" {
 			display = m.st.Muted.Render("(default)")
+		} else if looksLikePath(display) {
+			// Collapse $HOME to `~/` so sandbox /tmp/... paths
+			// don't leak into demo GIFs and so the user sees the
+			// short readable form they typed (or "~/Projects"
+			// rather than the absolute resolution).
+			display = summarizePath(display)
 		}
 		cursor := "  "
 		if i == m.cursor {
