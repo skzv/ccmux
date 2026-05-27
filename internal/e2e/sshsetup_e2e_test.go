@@ -301,4 +301,3 @@ func sendExit(ch ssh.Channel, code uint32) error {
 	_, err := ch.SendRequest("exit-status", false, payload)
 	return err
 }
-

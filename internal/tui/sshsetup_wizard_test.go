@@ -130,11 +130,11 @@ func TestSSHWizard_WrongPasswordReprompts(t *testing.T) {
 	m.installFn = fakeInstallWrongPassword
 	m.keyFn = fakeKey
 	m.Open(sshsetup.Target{User: "alice", Host: "sputnik"}, nil)
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})        // confirm → password
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // confirm → password
 	for _, r := range "bad" {
 		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 	}
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})    // submit → running
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // submit → running
 	doneMsg := runCmd(cmd)
 	m, _ = m.Update(doneMsg)
 	if m.Step() != sshWizardPassword {
@@ -182,13 +182,13 @@ func TestSSHWizard_EnumerateSelection(t *testing.T) {
 	m.enumerateFn = fakeEnumerateBobCarol
 	m.keyFn = fakeKey
 	m.Open(sshsetup.Target{User: "alice", Host: "sputnik"}, nil)
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})        // confirm
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // confirm
 	for _, r := range "p" {
 		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 	}
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})    // submit install
-	m, cmd = m.Update(runCmd(cmd))                          // install done → enumerate cmd
-	m, _ = m.Update(runCmd(cmd))                            // enumerate done → enumerate step
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // submit install
+	m, cmd = m.Update(runCmd(cmd))                     // install done → enumerate cmd
+	m, _ = m.Update(runCmd(cmd))                       // enumerate done → enumerate step
 	if m.Step() != sshWizardEnumerate {
 		t.Fatalf("Step = %v, want sshWizardEnumerate", m.Step())
 	}

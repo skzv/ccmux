@@ -10,22 +10,22 @@
 // Public surface:
 //
 //   - Probe()                 — non-interactive auth check, returns a
-//                                structured ProbeResult so callers can
-//                                show a specific error instead of the
-//                                raw sshd stderr.
+//     structured ProbeResult so callers can
+//     show a specific error instead of the
+//     raw sshd stderr.
 //   - EnsureLocalKey()        — reuse an existing ~/.ssh key (ed25519
-//                                preferred, then rsa); generate a
-//                                passphrase-less ed25519 only if
-//                                nothing usable is present.
+//     preferred, then rsa); generate a
+//     passphrase-less ed25519 only if
+//     nothing usable is present.
 //   - InstallKeyViaPassword() — connect once with a password, append
-//                                our pubkey to remote authorized_keys
-//                                (idempotent, dedupe by content), fix
-//                                perms, validate the install by
-//                                reconnecting with key auth.
+//     our pubkey to remote authorized_keys
+//     (idempotent, dedupe by content), fix
+//     perms, validate the install by
+//     reconnecting with key auth.
 //   - EnumerateUsers()        — after a successful install, list the
-//                                other real Unix accounts on the
-//                                remote so the UI can offer them as
-//                                additional host entries.
+//     other real Unix accounts on the
+//     remote so the UI can offer them as
+//     additional host entries.
 //
 // The package never prompts the user directly — it returns enough
 // information for the TUI wizard or the `ccmux host setup-ssh` CLI

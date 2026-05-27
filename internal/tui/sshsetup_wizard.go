@@ -55,17 +55,17 @@ const (
 // Each instance is for one Target — re-opening the wizard against
 // a different host constructs a new model.
 type sshWizardModel struct {
-	step    sshWizardStep
-	target  sshsetup.Target
-	st      styles.Styles
-	width   int
-	height  int
-	passwd  textinput.Model
-	stages  []string // accumulated progress stage:detail rows
-	err     string   // last error message rendered on the Error step
-	others  []string // users found by EnumerateUsers
+	step     sshWizardStep
+	target   sshsetup.Target
+	st       styles.Styles
+	width    int
+	height   int
+	passwd   textinput.Model
+	stages   []string        // accumulated progress stage:detail rows
+	err      string          // last error message rendered on the Error step
+	others   []string        // users found by EnumerateUsers
 	selected map[string]bool // multi-select state for enumerate
-	cursor  int      // highlighted row inside the enumerate list
+	cursor   int             // highlighted row inside the enumerate list
 	// resumeOnDone is metadata the parent app uses to know what
 	// action to perform after the wizard closes successfully. We
 	// pass it through opaquely — the wizard doesn't care.
@@ -143,9 +143,9 @@ type wizardEnumerateDoneMsg struct {
 // to skip the enumerate prompt). resume is the opaque payload the
 // caller stashed via Open.
 type wizardCompletedMsg struct {
-	target  sshsetup.Target
-	added   []string // user names accepted from the enumerate step
-	resume  any
+	target sshsetup.Target
+	added  []string // user names accepted from the enumerate step
+	resume any
 }
 
 // wizardCancelledMsg fires when the user Esc-bails out of the
