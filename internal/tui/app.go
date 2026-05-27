@@ -109,6 +109,22 @@ func allScreens() []Screen {
 	return out
 }
 
+// tabBarMinWidth is the minimum terminal cols at which the WIDE tab
+// bar (with the screen names spelled out) fits without wrapping.
+// Computed from the live label lengths so renaming a screen or
+// adding a new one automatically adjusts the threshold — no
+// magic-number to keep in sync.
+//
+// Formula: width of " ccmux " brand + sum of " [N] Name " per tab.
+// Matches renderHeader's wide-form rendering verbatim.
+func tabBarMinWidth() int {
+	width := len(" ccmux ")
+	for _, t := range allScreens() {
+		width += len(fmt.Sprintf(" [%d] %s ", int(t)+1, t.String()))
+	}
+	return width
+}
+
 // App is the root Bubble Tea model.
 type App struct {
 	cfg     config.Config
@@ -1341,8 +1357,16 @@ func (a App) homeView(width, height int) string {
 // A hardcoded list is what dropped the Conversations tab from the bar
 // for a release; deriving from the Screen enum makes that class of
 // bug structurally impossible.
+//
+// Narrow threshold for the HEADER specifically is computed from the
+// actual label lengths (tabBarMinWidth) — the bar collapses only
+// when the wide form genuinely wouldn't fit, not at the wider
+// isNarrow(120) cutoff content layouts use. This way a viewer at
+// ~110 cols still sees `[1] Sessions [2] Projects …` instead of the
+// bare numeric form, which several README GIFs were burning into
+// muscle memory as the "always" look.
 func (a App) renderHeader() string {
-	narrow := isNarrow(a.width)
+	narrow := a.width < tabBarMinWidth()
 	var parts []string
 	// The " ccmux " brand title is T2 — dropped on narrow so the tab
 	// numbers get the reclaimed width.

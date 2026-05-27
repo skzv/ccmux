@@ -98,9 +98,10 @@ func (m antigravityConfigModel) View(width, height int) string {
 	st := m.st
 	narrow := isNarrow(width)
 	rows := []string{st.Emphasis.Render("Antigravity configuration")}
-	// The settings-file path is T2 — drop it on narrow.
+	// The settings-file path is T2 — drop it on narrow. Tildified
+	// so sandbox /tmp/... paths don't leak into demo GIFs.
 	if !narrow {
-		rows = append(rows, st.Muted.Render(m.paths.Settings))
+		rows = append(rows, st.Muted.Render(summarizePath(m.paths.Settings)))
 	}
 	rows = append(rows, "")
 	if m.err != "" {

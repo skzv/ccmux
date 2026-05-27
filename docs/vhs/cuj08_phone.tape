@@ -54,13 +54,6 @@ Sleep 300ms
 Type "d"
 Sleep 2s
 
-# Quit. Hide+clear so the GIF doesn't end on the tmux
-# "[detached (from session ...)]" line printed during exit.
-Type "q"
-Sleep 600ms
-Hide
-Type "clear"
-Enter
-Sleep 200ms
-Show
-Sleep 1s
+# Hold the final TUI frame so the GIF ends on the screen content,
+# not on a `[detached ...]` line that tmux prints when ccmux exits.
+Sleep 1500ms

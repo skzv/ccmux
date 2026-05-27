@@ -3,9 +3,9 @@
 Output docs/vhs/out/cuj04_resume.gif
 
 Set Theme "Catppuccin Mocha"
-Set FontSize 16
-Set Width 1600
-Set Height 1000
+Set FontSize 22
+Set Width 1800
+Set Height 900
 Set Padding 20
 Set TypingSpeed 80ms
 

@@ -112,9 +112,10 @@ func (m codexConfigModel) View(width, height int) string {
 	st := m.st
 	narrow := isNarrow(width)
 	rows := []string{st.Emphasis.Render("Codex configuration")}
-	// The config-file path is T2 — drop it on narrow.
+	// The config-file path is T2 — drop it on narrow. Tildified
+	// so sandbox /tmp/... paths don't leak into demo GIFs.
 	if !narrow {
-		rows = append(rows, st.Muted.Render(m.paths.Config))
+		rows = append(rows, st.Muted.Render(summarizePath(m.paths.Config)))
 	}
 	rows = append(rows, "")
 	if m.err != "" {

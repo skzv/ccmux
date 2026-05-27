@@ -6,9 +6,9 @@
 Output docs/vhs/out/cuj11_update.gif
 
 Set Theme "Catppuccin Mocha"
-Set FontSize 16
-Set Width 1600
-Set Height 1000
+Set FontSize 22
+Set Width 1800
+Set Height 900
 Set Padding 20
 Set TypingSpeed 80ms
 
@@ -33,9 +33,20 @@ Screenshot docs/vhs/out/cuj11_update.png
 # Show the update banner for a moment, then show the user acting on it.
 Sleep 1500ms
 
-# Quit to shell to run the update command.
+# Quit to shell to run the update command. Hide while the tmux
+# `[detached ...]` line lands + clear it so the gif's update
+# section starts on a clean prompt instead of a "looks like an
+# error" detach message.
 Type "q"
-Sleep 500ms
+Sleep 400ms
+# Confirm the Quit modal (q only opens the prompt since v0.1.10).
+Type "y"
+Hide
+Sleep 800ms
+Type "clear"
+Enter
+Sleep 200ms
+Show
 # Use --dry-run so the demo shows the plan ccmux would execute
 # without actually running `make install` against the demo's seeded
 # checkout (whose Makefile has no install target). On a real install

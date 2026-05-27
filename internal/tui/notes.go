@@ -451,7 +451,13 @@ func (m notesModel) View(width, height int) string {
 	if m.pickingProject {
 		return m.renderProjectPicker(width, height)
 	}
-	if isNarrow(width) {
+	// Notes uses a tighter narrow threshold than the rest of the
+	// TUI: at 100+ cols the 1/3 + 2/3 split is still readable
+	// (preview gets ~66 cols), so we'd rather show the preview
+	// than collapse to list-only. Zoomed README GIFs (~116 cols)
+	// in particular need this — the previous isNarrow(120) cutoff
+	// hid the preview in every demo.
+	if width < 100 {
 		return m.renderListOnly(width, height)
 	}
 	leftW := width / 3

@@ -251,7 +251,19 @@ func (m networkModel) View(width, height int) string {
 				rows = append(rows, "  os        "+sel.OS)
 			}
 			if sel.Address != "" {
-				rows = append(rows, "  address   "+sel.Address)
+				// summarizePath collapses the user's $HOME to `~/`
+				// so a sandbox /tmp/... path doesn't leak into
+				// public-demo GIFs. The local-row Address is a
+				// unix:// socket URL — strip the scheme before
+				// matching against HOME (filepath.Clean doesn't
+				// know about URL schemes), then put it back.
+				display := sel.Address
+				if strings.HasPrefix(display, "unix://") {
+					display = "unix://" + summarizePath(strings.TrimPrefix(display, "unix://"))
+				} else {
+					display = summarizePath(display)
+				}
+				rows = append(rows, "  address   "+display)
 			}
 			if sel.DialHost != "" {
 				rows = append(rows, "  dial      "+sel.DialHost)
