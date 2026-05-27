@@ -157,7 +157,12 @@ func TestHomeView_NarrowSingleColumn(t *testing.T) {
 	}
 	// JoinVertical lays blocks top-to-bottom, so byte offset increases
 	// with row: each anchor must appear after the previous one.
-	anchors := []string{"Sessions", "Session summary", "Devices", "Claude usage"}
+	//
+	// Post-redesign tile order: Sessions (with inline state counts in
+	// the title — no standalone "Session summary" tile anymore),
+	// Devices, Usage (renamed from "Claude usage" — Claude is now a
+	// sub-section heading inside the consolidated Usage panel).
+	anchors := []string{"Sessions", "Devices", "Usage"}
 	prev := -1
 	for _, want := range anchors {
 		at := strings.Index(out, want)
@@ -175,12 +180,17 @@ func TestHomeView_NarrowSingleColumn(t *testing.T) {
 // screen is a hero banner over two columns: the sessions list on the
 // left, the session detail + stat tiles on the right. Every tile is
 // present and no line overflows.
+//
+// After the design-system redesign: the standalone "Session summary"
+// tile dissolved into the Sessions pane title (`Sessions (3 · 1
+// active · ...)`), and "Claude usage" became "Usage" with a
+// `Claude · 5h window` sub-section. We assert on the current names.
 func TestHomeView_WideTwoColumn(t *testing.T) {
 	a := newTestApp(ScreenSessions)
 	a.dashboard.SetHosts([]hostStatus{{Name: "sputnik", Local: true, OK: true}})
 	out := a.homeView(200, 60) // ≥ 120 → banner + two columns
 	assertNoOverflow(t, out, 200)
-	for _, want := range []string{"Hello.", "Sessions", "Session summary", "Devices", "Claude usage"} {
+	for _, want := range []string{"Hello.", "Sessions", "Devices", "Usage"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("wide homeView is missing %q", want)
 		}
@@ -189,14 +199,18 @@ func TestHomeView_WideTwoColumn(t *testing.T) {
 
 // TestHomeView_WideHeroIsBanner — the hero is a full-width banner
 // above both columns, so "Hello." renders before the sessions list
-// (left column) and before "Session summary" (right column).
+// (left column) and before the Usage tile (right column).
+//
+// After the redesign: "Session summary" no longer exists as a
+// standalone tile — its counts inline into the Sessions pane title.
+// The right column's primary tile is "Usage" now.
 func TestHomeView_WideHeroIsBanner(t *testing.T) {
 	a := newTestApp(ScreenSessions)
 	a.dashboard.SetHosts([]hostStatus{{Name: "sputnik", Local: true, OK: true}})
 	out := a.homeView(200, 60)
 	hello := strings.Index(out, "Hello.")
 	sessions := strings.Index(out, "Sessions")
-	summary := strings.Index(out, "Session summary")
+	summary := strings.Index(out, "Usage")
 	if hello < 0 || sessions < 0 || summary < 0 {
 		t.Fatalf("wide homeView missing an expected anchor:\n%s", out)
 	}

@@ -1,0 +1,40 @@
+   Hello.                                                                                                               
+╭─────────────────────────────────────────────────────────╮ ╭──────────────────────────────────────────────────────────╮
+│ Sessions  (3 · 1 active · 1 idle · 1 waiting)           │ │ ccmux-redesign                                           │
+│                                                         │ │ on local · ccmux                                         │
+│ ▌ ● ▶ ⊙ ccmux-redesign  attached 3m                     │ │                                                          │
+│   ● ◌ ccmux-debug  25m                                  │ │ state    ▶ active                                        │
+│   ● ! infra-watcher  5m  @atelier                       │ │ path     /Users/me/repos/ccmux                           │
+│                                                         │ │ attached ⊙ yes                                           │
+│                                                         │ │ created  2h ago                                          │
+│                                                         │ ╰──────────────────────────────────────────────────────────╯
+│                                                         │ ╭──────────────────────────────────────────────────────────╮
+│                                                         │ │ Devices   ● sputnik (this)   ● atelier                   │
+│                                                         │ ╰──────────────────────────────────────────────────────────╯
+│                                                         │ ╭──────────────────────────────────────────────────────────╮
+│                                                         │ │ Usage                                                    │
+│                                                         │ │                                                          │
+│                                                         │ │  Claude · 5h window                                      │
+│                                                         │ │    47 / 225 (est.) prompts  ·  20% used                  │
+│                                                         │ │    █████░░░░░░░░░░░░░░░░░░░░                             │
+│                                                         │ │                                                          │
+│                                                         │ │    Cost · billing block                                  │
+│                                                         │ │      $48.21 spent  ·  $9.2/hr                            │
+│                                                         │ │      projected $73.18 by 19:30                           │
+│                                                         │ │                                                          │
+│                                                         │ │    Tokens · this window                                  │
+│                                                         │ │      1.20M in  ·  380.0K out  ·  2.10M cache hit         │
+│                                                         │ │                                                          │
+│                                                         │ │  Codex · recent                                          │
+│                                                         │ │    no conversations yet                                  │
+│                                                         │ │                                                          │
+│                                                         │ │  Antigravity · recent                                    │
+│                                                         │ │    no conversations yet                                  │
+│                                                         │ │                                                          │
+│                                                         │ │  press u for top projects · cache hit rate · per-prompt  │
+│                                                         │ │ cost                                                     │
+│                                                         │ ╰──────────────────────────────────────────────────────────╯
+│                                                         │                                                             
+│                                                         │                                                             
+╰─────────────────────────────────────────────────────────╯                                                             
+? help · q quit · enter attach · n new · x kill · u usage · R rename · r refresh · 1-7 screens                          

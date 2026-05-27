@@ -14,6 +14,7 @@ import (
 	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/tmux"
 	"github.com/skzv/ccmux/internal/tmuxchrome"
+	"github.com/skzv/ccmux/internal/tui/components"
 	"github.com/skzv/ccmux/internal/tui/styles"
 )
 
@@ -207,9 +208,13 @@ func (m sessionsModel) View(width, height int, narrow bool) string {
 }
 
 func (m sessionsModel) renderList(width, height int) string {
-	header := m.st.Emphasis.Render("Sessions") + "  " + m.st.Muted.Render(
-		fmt.Sprintf("(%d total — enter: attach   x: kill   r: refresh)", len(m.sessions)),
-	)
+	// Pane chrome reservation: 2 cells of border + 2 cells of
+	// Padding(0,1) = 4 cells eaten before content. The list itself
+	// owns 2 more on the left (accent bar + space) for the
+	// components.List selection treatment, so each row's content
+	// fits in (width - 6) cells.
+	inner := width - 4
+	header := m.st.Emphasis.Render("Sessions") + "  " + m.sessionsCount()
 	if len(m.sessions) == 0 {
 		body := lipgloss.JoinVertical(lipgloss.Left,
 			header,
@@ -220,24 +225,30 @@ func (m sessionsModel) renderList(width, height int) string {
 		)
 		return m.st.Pane.Width(width - 2).Height(height - 2).Render(body)
 	}
-	rows := []string{header, ""}
-	for i, s := range m.sessions {
-		line := renderSessionLine(m.st, s, width-4)
-		if i == m.cursor {
-			line = m.st.ListItemSelected.Render(line)
-		} else {
-			line = m.st.ListItem.Render(line)
-		}
-		rows = append(rows, line)
-	}
-	return m.st.PaneFocused.Width(width - 2).Height(height - 2).Render(strings.Join(rows, "\n"))
+	rowInner := inner - 2
+	list := components.List(m.st, components.ListProps[daemon.SessionState]{
+		Items: m.sessions,
+		Render: func(s daemon.SessionState) components.ListItem {
+			return components.ListItem{Primary: renderSessionLine(m.st, s, rowInner)}
+		},
+		Cursor: m.cursor,
+		Width:  inner,
+	})
+	body := lipgloss.JoinVertical(lipgloss.Left, header, "", list)
+	return m.st.PaneFocused.Width(width - 2).Height(height - 2).Render(body)
 }
 
 // renderDetail draws the Sessions detail pane for the selected row.
 // `narrow` is the terminal's narrow state (a phone): when set the
-// pane collapses to a condensed form, otherwise it shows the full key
-// cheatsheet. It renders at its natural height so the caller can stack
-// the list above it.
+// pane collapses further via renderDetailNarrow.
+//
+// The wide layout keeps the T0/T1 identity facts (name, host,
+// project, state, path, attached, last-changed) and drops the T2
+// reference material (created time, window count, the multi-line
+// key cheatsheet, the detach-sequence instructions). The dropped
+// content is covered by the HelpBar at the bottom of the screen
+// and the `?` help overlay, so it doesn't disappear — it just stops
+// competing with the dashboard tiles for vertical real estate.
 func (m sessionsModel) renderDetail(width int, narrow bool) string {
 	sel := m.Selected()
 	if sel == nil {
@@ -246,34 +257,25 @@ func (m sessionsModel) renderDetail(width int, narrow bool) string {
 	if narrow {
 		return m.renderDetailNarrow(*sel, width)
 	}
-	attachedLine := fmt.Sprintf("attached %v", sel.Attached)
+	attachedLine := fmt.Sprintf("attached %s", m.st.Muted.Render("no"))
 	if sel.Attached {
-		attachedLine = "attached " + lipgloss.NewStyle().Foreground(m.st.P.Mauve).Bold(true).Render("⊙ YES")
+		attachedLine = "attached " + lipgloss.NewStyle().Foreground(m.st.P.Mauve).Bold(true).Render("⊙ yes")
+	}
+	subtitle := fmt.Sprintf("on %s", sel.Host)
+	if sel.Project != "" {
+		subtitle += " · " + sel.Project
 	}
 	lines := []string{
 		m.st.Emphasis.Render(sel.Name),
-		m.st.Muted.Render(fmt.Sprintf("on %s", sel.Host)),
+		m.st.Muted.Render(subtitle),
 		"",
 		fmt.Sprintf("state    %s %s", stateGlyph(m.st, sel.State), sel.State),
-		fmt.Sprintf("project  %s", sel.Project),
 		fmt.Sprintf("path     %s", truncate(summarizePath(sel.Path), width-12)),
-		fmt.Sprintf("windows  %d", sel.Windows),
 		attachedLine,
+		// "changed" duplicates the age the sessions list already shows
+		// on the row itself, so the detail pane carries "created"
+		// instead — the one timestamp the list doesn't surface.
 		fmt.Sprintf("created  %s", relTime(sel.Created)),
-		fmt.Sprintf("changed  %s", relTime(sel.LastChange)),
-		"",
-		m.st.Subtitle.Render("Keys"),
-		m.st.Key.Render("enter") + "  attach (ccmux applies a styled bar to the session)",
-		m.st.Key.Render("x") + "      kill",
-		m.st.Key.Render("R") + "      rename",
-		m.st.Key.Render("s") + "      snapshot (coming soon)",
-		"",
-		m.st.Subtitle.Render("To return after attaching"),
-		"  " + m.st.Muted.Render("press, release, then press — it's a sequence, not a key combo"),
-		"  • normal terminal:  press " + m.st.Key.Render(detectedPrefix()) + " then " + m.st.Key.Render("d"),
-		"  • from outer ccmux tmux (mobile via Moshi):  press " + m.st.Key.Render(detectedPrefix()) + " then " + m.st.Key.Render("L"),
-		"  " + m.st.Muted.Render("Cmd+D / Ctrl+D do NOT work — those are terminal/shell shortcuts."),
-		"  " + m.st.Muted.Render("ccmux's status bar inside the attached session shows the right one."),
 	}
 	return m.st.Pane.Width(width - 2).MaxWidth(width).Render(strings.Join(lines, "\n"))
 }
@@ -308,6 +310,45 @@ func detectedPrefix() string {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	return tmuxchrome.DetectedPrefix(ctx)
+}
+
+// sessionsCount renders the parenthetical breakdown shown in the
+// Sessions pane title: total count plus one segment per non-empty
+// state, each colored to match the session-state glyph used in the
+// list rows (active=green, idle=sky, waiting=yellow). E.g.:
+//
+//	(3 · 1 active · 1 idle · 1 waiting)
+//
+// Replaces the standalone "Session summary" tile that previously
+// lived in the dashboard's right column — same information, one
+// row instead of seven.
+func (m sessionsModel) sessionsCount() string {
+	total := len(m.sessions)
+	if total == 0 {
+		return m.st.Muted.Render("(0)")
+	}
+	var active, idle, waiting int
+	for _, s := range m.sessions {
+		switch s.State {
+		case "active":
+			active++
+		case "idle":
+			idle++
+		case "needs_input":
+			waiting++
+		}
+	}
+	parts := []string{m.st.Muted.Render(fmt.Sprintf("%d", total))}
+	if active > 0 {
+		parts = append(parts, m.st.StatusGood.Render(fmt.Sprintf("%d active", active)))
+	}
+	if idle > 0 {
+		parts = append(parts, m.st.StateIdle.Render(fmt.Sprintf("%d idle", idle)))
+	}
+	if waiting > 0 {
+		parts = append(parts, m.st.StateNeedsInput.Render(fmt.Sprintf("%d waiting", waiting)))
+	}
+	return m.st.Muted.Render("(") + strings.Join(parts, m.st.Muted.Render(" · ")) + m.st.Muted.Render(")")
 }
 
 // killSessionCmd runs `tmux kill-session -t <name>` and reports the result

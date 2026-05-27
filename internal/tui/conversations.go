@@ -10,6 +10,7 @@ import (
 
 	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/conversations"
+	"github.com/skzv/ccmux/internal/tui/components"
 	"github.com/skzv/ccmux/internal/tui/styles"
 )
 
@@ -439,13 +440,8 @@ func (m conversationsModel) View(width, height int) string {
 		detail = m.renderEmptyDetail(m.focusedSectionDef(), detailW, contentH)
 	}
 	body := lipgloss.JoinHorizontal(lipgloss.Top, list, " ", detail)
-	hStatus := "hidden"
-	if m.showHeadless {
-		hStatus = "shown"
-	}
-	hint := st.Muted.Render("enter resume · x delete · tab/shift+tab/←/→ sections · H headless: " + hStatus)
 	return st.Pane.Width(width - 2).Height(height - 2).Render(
-		lipgloss.JoinVertical(lipgloss.Left, header, "", nav, "", body, hint),
+		lipgloss.JoinVertical(lipgloss.Left, header, "", nav, "", body),
 	)
 }
 
@@ -475,58 +471,75 @@ func (m conversationsModel) renderList(sections []conversationAgentSection, widt
 	}
 	section := sections[sectionIdx]
 	if len(section.conversations) == 0 {
-		return m.st.ListItemSelected.Render(m.st.Emphasis.Render("▸ ") + m.st.Muted.Render(m.emptySectionText(section.def)))
+		return components.RenderListRow(m.st, m.st.Muted.Render(m.emptySectionText(section.def)), false, width)
 	}
 	start, end := windowAroundCursor(m.cursor, len(section.conversations), height)
 	rows := make([]string, 0, end-start)
+	rowInner := width - 2 // RenderListRow eats 2 cells for the prefix
 	for i := start; i < end; i++ {
 		selected := i == m.cursor
-		row := m.renderConversationRow(section.conversations[i], selected, width)
-		if selected {
-			row = m.st.ListItemSelected.Render(row)
-		}
-		rows = append(rows, row)
+		content := m.renderConversationRowContent(section.conversations[i], rowInner)
+		rows = append(rows, components.RenderListRow(m.st, content, selected, width))
 	}
 	return strings.Join(rows, "\n")
 }
 
-func (m conversationsModel) renderConversationRow(c conversations.Conversation, selected bool, width int) string {
+// renderConversationRowContent formats the inner content of a single
+// conversation row (agent label, timestamp, preview) sized to fit
+// `width` cells. Selection treatment is applied by the caller via
+// components.RenderListRow.
+func (m conversationsModel) renderConversationRowContent(c conversations.Conversation, width int) string {
 	const (
 		agentW = 12
 		timeW  = 12
 	)
-	marker := "  "
-	if selected {
-		marker = m.st.Emphasis.Render("▸ ")
-	}
 	agentLabel := conversationAgentLabel(c.Agent)
 	when := relativeTimeShort(c.LastActivity)
 	preview := c.Preview
 	if preview == "" {
 		preview = "(" + c.Project + ")"
 	}
-	// Width budget: agent + when + spaces are fixed; preview takes
-	// the rest. Truncate the preview to avoid wrap.
-	previewBudget := width - len(marker) - agentW - timeW - 4
+	previewBudget := width - agentW - timeW - 4
 	if previewBudget < 10 {
 		previewBudget = 10
 	}
 	// Armed-for-delete row: replace the preview with a loud confirm
 	// prompt so the user can't miss what x-again will do.
 	if c.ID == m.pendingDelete {
-		return fmt.Sprintf("%s%-*s  %-*s  %s",
-			marker,
+		return fmt.Sprintf("%-*s  %-*s  %s",
 			agentW, m.st.Muted.Render(truncate(agentLabel, agentW)),
 			timeW, m.st.Muted.Render(when),
 			m.st.StatusError.Render("delete this conversation? press x to confirm · esc cancels"),
 		)
 	}
-	return fmt.Sprintf("%s%-*s  %-*s  %s",
-		marker,
+	return fmt.Sprintf("%-*s  %-*s  %s",
 		agentW, m.st.Muted.Render(truncate(agentLabel, agentW)),
 		timeW, m.st.Muted.Render(when),
 		truncate(preview, previewBudget),
 	)
+}
+
+// HelpBarProps returns the screen-specific key hints for
+// Conversations. Replaces the legacy inline hint line that used to
+// hang under the body.
+func (m conversationsModel) HelpBarProps(width int) components.HelpBarProps {
+	hStatus := "hidden"
+	if m.showHeadless {
+		hStatus = "shown"
+	}
+	return components.HelpBarProps{
+		Hints: []components.KeyHint{
+			{Key: "?", Label: "help", Priority: 10},
+			{Key: "q", Label: "quit", Priority: 10},
+			{Key: "enter", Label: "resume", Priority: 8},
+			{Key: "x", Label: "delete", Priority: 6},
+			{Key: "tab", Label: "sections", Priority: 5},
+			{Key: "H", Label: "headless: " + hStatus, Priority: 4},
+			{Key: "r", Label: "refresh", Priority: 3},
+			{Key: "1-7", Label: "screens", Priority: 2},
+		},
+		Width: width,
+	}
 }
 
 func conversationAgentLabel(id agent.ID) string {

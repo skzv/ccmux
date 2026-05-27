@@ -12,6 +12,7 @@ import (
 	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/moshi"
+	"github.com/skzv/ccmux/internal/tui/components"
 	"github.com/skzv/ccmux/internal/tui/styles"
 )
 
@@ -39,7 +40,18 @@ type settingsModel struct {
 	errMsg  string
 	saveMsg string // transient "saved ✓" message
 	savedAt time.Time
+
+	// cfgPath overrides the user's actual config.Path() result.
+	// Production leaves this empty and View falls back to
+	// config.Path(); golden tests set it to a stable string so the
+	// snapshot doesn't drift across machines.
+	cfgPath string
 }
+
+// SetCfgPath overrides the path rendered in the wide-mode
+// "config file" row. Used only by golden tests; the production
+// model leaves cfgPath empty and resolves config.Path() at render.
+func (m *settingsModel) SetCfgPath(p string) { m.cfgPath = p }
 
 // editableField is one row the user can move the cursor onto. The
 // get/set closures let us model plain strings (projects.root), enum
@@ -378,6 +390,21 @@ func (m *settingsModel) SetConfig(cfg config.Config) {
 	m.cfg = cfg
 }
 
+// HelpBarProps returns the screen-specific key hints for Settings.
+// `r` (refresh) is intentionally omitted — Settings has no remote
+// state to refetch; the hint used to be a silent no-op.
+func (m settingsModel) HelpBarProps(width int) components.HelpBarProps {
+	return components.HelpBarProps{
+		Hints: []components.KeyHint{
+			{Key: "?", Label: "help", Priority: 10},
+			{Key: "q", Label: "quit", Priority: 10},
+			{Key: "e", Label: "edit config", Priority: 7},
+			{Key: "1-7", Label: "screens", Priority: 2},
+		},
+		Width: width,
+	}
+}
+
 func (m settingsModel) View(width, height int) string {
 	narrow := isNarrow(width)
 
@@ -391,7 +418,10 @@ func (m settingsModel) View(width, height int) string {
 	// on narrow. The "Editable" header keeps a short section label but
 	// sheds the (↑/↓ to move…) instructions (also T2).
 	if !narrow {
-		cfgPath, _ := config.Path()
+		cfgPath := m.cfgPath
+		if cfgPath == "" {
+			cfgPath, _ = config.Path()
+		}
 		lines = append(lines,
 			fmt.Sprintf("ccmux version    %s", m.version),
 			fmt.Sprintf("config file      %s", cfgPath),

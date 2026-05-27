@@ -15,6 +15,7 @@ import (
 	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/project"
 	"github.com/skzv/ccmux/internal/scaffold"
+	"github.com/skzv/ccmux/internal/tui/components"
 	"github.com/skzv/ccmux/internal/tui/styles"
 )
 
@@ -357,9 +358,13 @@ func (m projectsModel) View(width, height int) string {
 // narrow state (not derived from `width`, which in wide mode is only
 // the left sub-pane): on narrow the T2 key-hint is dropped.
 func (m projectsModel) renderList(width, height int, narrow bool) string {
+	// Pane chrome reservation: border (2) + Padding(0,1) (2) = 4 cells
+	// eaten before content. The components row-decorator owns 2 more
+	// on the left for the accent bar (selection treatment).
+	inner := width - 4
 	header := m.st.Emphasis.Render("Projects")
 	if !narrow {
-		header += "  " + m.st.Muted.Render("(/: filter   n: new   enter: attach)")
+		header += "  " + m.st.Muted.Render(fmt.Sprintf("(%d)", len(m.projects)))
 	}
 	if len(m.projects) == 0 {
 		body := lipgloss.JoinVertical(lipgloss.Left,
@@ -426,15 +431,28 @@ func (m projectsModel) renderList(width, height int, narrow bool) string {
 		if len(marks) > 0 {
 			tail = "   " + m.st.Muted.Render(strings.Join(marks, " · "))
 		}
-		line := "  " + p.Name + tail
-		if i == m.cursor {
-			line = m.st.ListItemSelected.Render(line)
-		} else {
-			line = m.st.ListItem.Render(line)
-		}
+		line := components.RenderListRow(m.st, p.Name+tail, i == m.cursor, inner)
 		rows = append(rows, line)
 	}
 	return m.st.PaneFocused.Width(width - 2).Height(height - 2).Render(strings.Join(rows, "\n"))
+}
+
+// HelpBarProps returns the screen-specific key hints for Projects.
+// Priorities order the collapse: ? help and q quit always survive;
+// the filter and scaffold hints come next; navigation lands last.
+func (m projectsModel) HelpBarProps(width int) components.HelpBarProps {
+	return components.HelpBarProps{
+		Hints: []components.KeyHint{
+			{Key: "?", Label: "help", Priority: 10},
+			{Key: "q", Label: "quit", Priority: 10},
+			{Key: "enter", Label: "attach", Priority: 8},
+			{Key: "n", Label: "new", Priority: 7},
+			{Key: "/", Label: "filter", Priority: 6},
+			{Key: "r", Label: "refresh", Priority: 3},
+			{Key: "1-7", Label: "screens", Priority: 2},
+		},
+		Width: width,
+	}
 }
 
 func (m projectsModel) renderDetail(width, height int) string {

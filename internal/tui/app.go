@@ -29,6 +29,7 @@ import (
 	"github.com/skzv/ccmux/internal/selfupdate"
 	"github.com/skzv/ccmux/internal/tailnet"
 	"github.com/skzv/ccmux/internal/tmux"
+	"github.com/skzv/ccmux/internal/tui/components"
 	"github.com/skzv/ccmux/internal/tui/styles"
 	"github.com/skzv/ccmux/internal/usage"
 )
@@ -136,6 +137,7 @@ type App struct {
 	confirm confirmationModal
 
 	helpOpen     bool
+	usageOpen    bool      // `u` opens the full usage overlay; esc/u closes
 	tour         tourModel // first-run interactive tour; re-openable with T
 	lastRefresh  time.Time
 	daemonOnline bool
@@ -171,7 +173,7 @@ func (a App) modalCapturingText() bool {
 	if a.sshWizard != nil && a.sshWizard.Active() {
 		return true
 	}
-	if a.tour.Active() || a.helpOpen {
+	if a.tour.Active() || a.helpOpen || a.usageOpen {
 		return true
 	}
 	if a.projectsM.form != nil || a.projectsM.menu != nil {
@@ -923,6 +925,17 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 
+		// Usage overlay — `u` or `esc` close it. Same passthrough
+		// model as the help overlay: only the close keys do
+		// anything; everything else is swallowed.
+		if a.usageOpen {
+			switch msg.String() {
+			case "u", "esc":
+				a.usageOpen = false
+			}
+			return a, nil
+		}
+
 		// Esc dismisses the current toast (when no modal is open). The
 		// projects-screen modal handles esc itself before this code runs.
 		if msg.String() == "esc" && a.toasts.Active() &&
@@ -932,8 +945,19 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// `?` opens the help overlay from any screen.
-		if msg.String() == "?" {
+		if msg.String() == "?" && !a.modalCapturingText() {
 			a.helpOpen = true
+			return a, nil
+		}
+
+		// `u` opens the usage overlay — only on the Sessions/home
+		// screen, where the inline Usage panel hints at it. On other
+		// screens `u` is free for a future per-screen binding.
+		// Modal-text guard mirrors `M`: a session named "ubuntu" or a
+		// rename like "tui-rename-dst" mustn't hijack the keystroke
+		// while the textinput has focus.
+		if msg.String() == "u" && a.screen == ScreenSessions && !a.modalCapturingText() {
+			a.usageOpen = true
 			return a, nil
 		}
 
@@ -1157,13 +1181,13 @@ func (a App) View() string {
 
 	header := a.renderHeader()
 	statusBar := a.renderStatusBar()
-	footer := a.renderFooter()
+	helpLine := a.renderHelpLine()
 
 	// Measure each chrome row's actual rendered height so we never
 	// budget too generously and let body content push the header off
 	// the top. lipgloss.Height counts \n's + 1 so it includes any
 	// invisible line breaks even if forceSingleLine didn't get them.
-	chromeH := lipgloss.Height(header) + lipgloss.Height(statusBar) + lipgloss.Height(footer)
+	chromeH := lipgloss.Height(header) + lipgloss.Height(statusBar) + lipgloss.Height(helpLine)
 	bodyHeight := a.height - chromeH
 	if bodyHeight < 5 {
 		bodyHeight = 5
@@ -1186,21 +1210,25 @@ func (a App) View() string {
 	case ScreenNetwork:
 		body = a.network.View(a.width, bodyHeight)
 	}
-	// Defensive clamp: regardless of what the screen returned, never
-	// let the body exceed its budget. Screens with content that's hard
-	// to size deterministically (single-pane screens whose Lipgloss
-	// .Height is a minimum, viewport-based screens with internal padding)
-	// can sometimes overshoot by a line; we'd rather lose a trailing
-	// empty line of body than have the header scroll off the top.
+	// Defensive clamp + pad: never let the body exceed its budget
+	// (otherwise it would push the status bar / help line off the
+	// bottom), AND never let it return SHORTER than its budget (or
+	// the status bar / help line float up and leave blank rows under
+	// the help hints — visible on screens like Agents whose body
+	// doesn't wrap in a height-padded Pane).
 	body = clampLines(body, bodyHeight)
+	body = padToHeight(body, bodyHeight)
 
-	frame := lipgloss.JoinVertical(lipgloss.Left, header, body, statusBar, footer)
+	frame := lipgloss.JoinVertical(lipgloss.Left, header, body, statusBar, helpLine)
 	// Overlay precedence: tour > help > confirmation > regular frame.
 	if a.tour.Active() {
 		return a.tour.View(a.width, a.height)
 	}
 	if a.helpOpen {
 		return a.renderHelpOverlay(a.width, a.height)
+	}
+	if a.usageOpen {
+		return a.dashboard.renderUsageOverlay(a.styles, a.width, a.height)
 	}
 	if a.confirm.open() {
 		return a.renderConfirmationOverlay(a.width, a.height)
@@ -1225,6 +1253,22 @@ func (a *App) markTourShown() {
 	a.cfg.Tour.Shown = true
 	a.cfg.Tour.ShownVersion = a.version
 	_ = config.Save(a.cfg)
+}
+
+// padToHeight extends `s` with trailing blank lines so its line
+// count is at least `n`. Screens whose body doesn't wrap in a
+// height-padded Pane (Agents, the per-agent config sub-screens)
+// otherwise leave blank rows under the help line because the chrome
+// below body floats up. No-op when `s` already has >= n lines.
+func padToHeight(s string, n int) string {
+	if n <= 0 {
+		return s
+	}
+	have := lipgloss.Height(s)
+	if have >= n {
+		return s
+	}
+	return s + strings.Repeat("\n", n-have)
 }
 
 // clampLines returns the first `n` lines of `s` verbatim. Preserves the
@@ -1372,6 +1416,20 @@ func (a App) renderStatusBar() string {
 		right = a.styles.Muted.Render(fmt.Sprintf("%d sess • %s", len(a.sessions), refreshed)) + "  " + versionChip
 	}
 
+	// Local ccmux update chip — appended to the right block when the
+	// launch-time self-update check found this checkout behind upstream.
+	// Replaces the old hero-panel update banner so the chrome doesn't
+	// compete with screen content for vertical space.
+	if r := a.dashboard.updateAvailable; r.Available() {
+		commits := "1 commit"
+		if r.Behind != 1 {
+			commits = fmt.Sprintf("%d commits", r.Behind)
+		}
+		updateChip := lipgloss.NewStyle().Foreground(a.styles.P.Yellow).Bold(true).
+			Render(fmt.Sprintf("[↑ ccmux update — %s behind %s]", commits, r.Branch))
+		right = right + "  " + updateChip
+	}
+
 	// Compute available space for the right block. The StatusBar style
 	// adds 1-col padding each side, so the composed body must target
 	// width-2 — otherwise forceSingleLine would chop the right tail
@@ -1389,20 +1447,48 @@ func (a App) renderStatusBar() string {
 	return forceSingleLine(line, a.width)
 }
 
-// renderFooter is the help line. Single-row. Toast takes precedence.
-func (a App) renderFooter() string {
+// renderHelpLine renders the screen's bottom help row. Toasts take
+// precedence — when a toast is active it fills the slot. Otherwise
+// the line is the migrated components.HelpBar driven by the current
+// screen's HelpBarProps (or a generic fallback for unmigrated
+// screens).
+func (a App) renderHelpLine() string {
 	if a.toasts.Active() {
 		return forceSingleLine(a.toasts.Render(a.styles), a.width)
 	}
-	// Hint line ordered T0-first: `? help` (the gateway to every
-	// binding) and `q quit` lead, so if forceSingleLine still has to
-	// truncate it eats the T2 action hints from the tail. On narrow
-	// only the T0/T1 pair is shown.
-	hint := "? help • q quit"
-	if !isNarrow(a.width) {
-		hint += " • r refresh • x kill • n new • 1-7 screens"
+	return forceSingleLine(components.HelpBar(a.styles, a.helpBarProps()), a.width)
+}
+
+// helpBarProps returns the components.HelpBar contract for the active
+// screen. Migrated screens drive their own; unmigrated screens get
+// the generic global hint set as a fallback.
+func (a App) helpBarProps() components.HelpBarProps {
+	switch a.screen {
+	case ScreenSessions:
+		return a.dashboard.HelpBarProps(a.width)
+	case ScreenProjects:
+		return a.projectsM.HelpBarProps(a.width)
+	case ScreenConversations:
+		return a.conversationsM.HelpBarProps(a.width)
+	case ScreenNotes:
+		return a.notes.HelpBarProps(a.width)
+	case ScreenSettings:
+		return a.settings.HelpBarProps(a.width)
+	case ScreenAgents:
+		return a.agentsM.HelpBarProps(a.width)
+	case ScreenNetwork:
+		return a.network.HelpBarProps(a.width)
+	default:
+		return components.HelpBarProps{
+			Hints: []components.KeyHint{
+				{Key: "?", Label: "help", Priority: 10},
+				{Key: "q", Label: "quit", Priority: 10},
+				{Key: "r", Label: "refresh", Priority: 6},
+				{Key: "1-7", Label: "screens", Priority: 4},
+			},
+			Width: a.width,
+		}
 	}
-	return forceSingleLine(a.styles.Muted.Render(hint), a.width)
 }
 
 // forceSingleLine guarantees the rendered string is exactly one line tall

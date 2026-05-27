@@ -7,6 +7,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/skzv/ccmux/internal/tui/styles"
 )
 
 // matrixModel is the easter-egg overlay triggered by typing "matrix"
@@ -259,10 +261,16 @@ func (m matrixModel) View(width, height int) string {
 	return ""
 }
 
-var matrixGreen = lipgloss.NewStyle().Foreground(lipgloss.Color("#00ff66"))
-var matrixGreenDim = lipgloss.NewStyle().Foreground(lipgloss.Color("#008833"))
-var matrixGreenFaint = lipgloss.NewStyle().Foreground(lipgloss.Color("#003311"))
-var matrixWhite = lipgloss.NewStyle().Foreground(lipgloss.Color("#e8ffe8")).Bold(true)
+// Matrix decoration colors live in internal/tui/styles/tokens.go so
+// the no-inline-hex lint rule covers every file. These are local
+// aliases for ergonomics — the rendering code below was written
+// against short variable names.
+var (
+	matrixGreen      = styles.MatrixGreenStyle
+	matrixGreenDim   = styles.MatrixGreenDimStyle
+	matrixGreenFaint = styles.MatrixGreenFaintStyle
+	matrixWhite      = styles.MatrixWhiteStyle
+)
 
 func (m matrixModel) viewNeo(width, height int) string {
 	// Show typed-so-far across previous lines + partial current line.

@@ -51,7 +51,6 @@ func helpForScreen(s Screen, km Keymap) []HelpItem {
 			{"/", "filter projects by name (esc to clear, enter to attach to top match)"},
 			{"enter", "attach to (or create) that project's session"},
 			{"n", "scaffold a new project (modal form)"},
-			{"u", "upgrade cwd with ccmux structure"},
 			{"a", "switch the selected project's agent (local only)"},
 		}, common...)
 	case ScreenNotes:
@@ -60,8 +59,7 @@ func helpForScreen(s Screen, km Keymap) []HelpItem {
 			{"tab", "toggle focus between list and preview"},
 			{"↑↓ / j k (list focused)", "navigate files"},
 			{"↑↓ / j k (preview focused)", "scroll within open doc"},
-			{"n", "new note picker (Agent Log / Spec / ADR)"},
-			{"e", "open selected file in $EDITOR"},
+			{"enter / e", "open selected file in $EDITOR"},
 		}, common...)
 	case ScreenAgents:
 		return append([]HelpItem{

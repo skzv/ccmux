@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/skzv/ccmux/internal/agent"
+	"github.com/skzv/ccmux/internal/tui/components"
 	"github.com/skzv/ccmux/internal/tui/styles"
 )
 
@@ -87,6 +88,23 @@ func (m agentsModel) Update(msg tea.Msg) (agentsModel, tea.Cmd) {
 		return m, nil
 	}
 	return m, nil
+}
+
+// HelpBarProps returns the screen-specific key hints for the Agents
+// screen. The tab/shift-tab sub-tab cycling is a screen-local
+// affordance so it earns a slot in the HelpBar.
+func (m agentsModel) HelpBarProps(width int) components.HelpBarProps {
+	return components.HelpBarProps{
+		Hints: []components.KeyHint{
+			{Key: "?", Label: "help", Priority: 10},
+			{Key: "q", Label: "quit", Priority: 10},
+			{Key: "tab", Label: "next agent", Priority: 6},
+			{Key: "h/l", Label: "switch", Priority: 5},
+			{Key: "e", Label: "edit", Priority: 4},
+			{Key: "1-7", Label: "screens", Priority: 2},
+		},
+		Width: width,
+	}
 }
 
 func (m agentsModel) View(width, height int) string {

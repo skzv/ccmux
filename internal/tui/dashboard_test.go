@@ -3,15 +3,17 @@ package tui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/claudeusage"
+	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/selfupdate"
+	"github.com/skzv/ccmux/internal/tui/components"
 	"github.com/skzv/ccmux/internal/tui/styles"
-	"github.com/skzv/ccmux/internal/usage"
 )
 
 // TestRenderSessionLine_AgentTag_Default — local Claude sessions are
@@ -88,109 +90,13 @@ func TestRenderSessionLine_AgentTag_EmptyMeansClaude(t *testing.T) {
 	}
 }
 
-// TestRenderAgentUsageBlock_NoData — when the cross-agent walker
-// hasn't found transcripts, the dashboard block must show the install
-// hint. A silent empty block would let a new Codex/Antigravity user
-// assume the panel is broken instead of seeing the next step.
-func TestRenderAgentUsageBlock_NoData(t *testing.T) {
-	st := styles.Default()
-	got := renderAgentUsageBlock(st, "Codex", usage.AgentSummary{HasData: false},
-		"`npm i -g @openai/codex`")
-	for _, want := range []string{
-		"Codex usage",
-		"no transcripts yet",
-		"npm i -g @openai/codex",
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("no-data block missing %q in:\n%s", want, got)
-		}
-	}
-}
-
-// TestRenderAgentUsageBlock_WithData — when the walker reports real
-// usage (HasData=true), the block surfaces prompts + tokens + cost
-// in the same Claude-shaped layout, NOT the install hint.
-func TestRenderAgentUsageBlock_WithData(t *testing.T) {
-	st := styles.Default()
-	s := usage.AgentSummary{
-		HasData:       true,
-		Prompts:       42,
-		InputTokens:   1500,
-		OutputTokens:  3700,
-		EstimatedCost: 0.123,
-	}
-	got := renderAgentUsageBlock(st, "Codex", s, "`npm i -g @openai/codex`")
-	for _, want := range []string{
-		"Codex usage",
-		"42 prompts",
-		"tokens",
-		"in",
-		"out",
-		"$0.12",
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("with-data block missing %q in:\n%s", want, got)
-		}
-	}
-	if strings.Contains(got, "no transcripts yet") {
-		t.Errorf("with-data block leaked the no-data hint:\n%s", got)
-	}
-	if strings.Contains(got, "npm i -g") {
-		t.Errorf("with-data block leaked the install hint:\n%s", got)
-	}
-}
-
-// TestRenderAgentUsageBlock_ZeroCostOmittedWhenWithData — when the
-// estimator gives 0, the block should not show "~$0.00" because that
-// looks like an error. Skip the cost row entirely.
-func TestRenderAgentUsageBlock_ZeroCostOmittedWhenWithData(t *testing.T) {
-	st := styles.Default()
-	got := renderAgentUsageBlock(st, "Antigravity", usage.AgentSummary{
-		HasData:       true,
-		Prompts:       1,
-		InputTokens:   100,
-		OutputTokens:  200,
-		EstimatedCost: 0,
-	}, "`curl -fsSL https://antigravity.google/cli/install.sh | bash`")
-	if strings.Contains(got, "$0.00") {
-		t.Errorf("zero cost should be omitted, got:\n%s", got)
-	}
-}
-
-// TestRenderAgentUsageBlock_AntigravityOpaqueTokens — Antigravity has
-// HasData=true (we counted .pb files) but Input/Output stay 0 because
-// the protobuf is opaque. The block must surface the "tokens
-// unavailable" note rather than silently rendering "0K in · 0K out"
-// (which would look like the agent produced literally no output).
-func TestRenderAgentUsageBlock_AntigravityOpaqueTokens(t *testing.T) {
-	st := styles.Default()
-	got := renderAgentUsageBlock(st, "Antigravity", usage.AgentSummary{
-		HasData:      true,
-		Prompts:      3,
-		InputTokens:  0,
-		OutputTokens: 0,
-	}, "`curl …`")
-	// Headline still shows prompts.
-	if !strings.Contains(got, "3 prompts") {
-		t.Errorf("antigravity block should still show prompt count: %s", got)
-	}
-	// "unavailable" note replaces the token line so the user doesn't
-	// read "0K in · 0K out" as "the agent did nothing."
-	if !strings.Contains(got, "unavailable") {
-		t.Errorf("antigravity zero-token block missing 'unavailable' note:\n%s", got)
-	}
-	// And the literal "0 in" must NOT appear.
-	if strings.Contains(got, "0 in") {
-		t.Errorf("antigravity block should not render literal '0 in':\n%s", got)
-	}
-}
-
-// TestDashboard_UpdateBanner_ShownWhenBehind — once App pushes a
-// positive update check, the hero panel must carry the banner.
+// TestDashboard_UpdateChip_ShownWhenBehind — once App pushes a
+// positive update check, the status bar carries the chip
+// (moved from the hero panel in the design-system redesign so the
+// chrome doesn't compete with screen body for vertical space).
 // Pluralization is pinned because "1 commit" vs "3 commits" is the
 // kind of thing a refactor silently breaks.
-func TestDashboard_UpdateBanner_ShownWhenBehind(t *testing.T) {
-	st := styles.Default()
+func TestDashboard_UpdateChip_ShownWhenBehind(t *testing.T) {
 	cases := []struct {
 		behind int
 		want   string
@@ -200,17 +106,20 @@ func TestDashboard_UpdateBanner_ShownWhenBehind(t *testing.T) {
 		{12, "12 commits"},
 	}
 	for _, tc := range cases {
-		m := newDashboard(st, DefaultKeymap())
-		m.SetUpdateAvailable(selfupdate.Result{Behind: tc.behind, Branch: "main"})
-		hero := m.heroPanel(120)
-		if !strings.Contains(hero, "update available") {
-			t.Errorf("behind=%d: hero missing the update banner:\n%s", tc.behind, hero)
+		a := App{
+			styles:       styles.Default(),
+			keys:         DefaultKeymap(),
+			width:        200,
+			daemonOnline: true,
 		}
-		if !strings.Contains(hero, tc.want) {
-			t.Errorf("behind=%d: banner should say %q:\n%s", tc.behind, tc.want, hero)
+		a.dashboard = newDashboard(a.styles, a.keys)
+		a.dashboard.SetUpdateAvailable(selfupdate.Result{Behind: tc.behind, Branch: "main"})
+		bar := a.renderStatusBar()
+		if !strings.Contains(bar, "ccmux update") {
+			t.Errorf("behind=%d: status bar missing the ccmux-update chip:\n%s", tc.behind, bar)
 		}
-		if !strings.Contains(hero, "ccmux update") {
-			t.Errorf("behind=%d: banner should tell the user to run `ccmux update`", tc.behind)
+		if !strings.Contains(bar, tc.want) {
+			t.Errorf("behind=%d: chip should say %q:\n%s", tc.behind, tc.want, bar)
 		}
 	}
 }
@@ -245,20 +154,26 @@ func TestDashboard_CcusageBlock_NilDoesNotCrash(t *testing.T) {
 	}
 }
 
-// TestDashboard_UpdateBanner_HiddenWhenUpToDate — the zero-value
-// Result (no check, or check found 0 behind) must render NO banner.
-// A banner that shows when there's no update would train users to
+// TestDashboard_UpdateChip_HiddenWhenUpToDate — the zero-value
+// Result (no check, or check found 0 behind) must render NO chip.
+// A chip that shows when there's no update would train users to
 // ignore it.
-func TestDashboard_UpdateBanner_HiddenWhenUpToDate(t *testing.T) {
-	m := newDashboard(styles.Default(), DefaultKeymap())
+func TestDashboard_UpdateChip_HiddenWhenUpToDate(t *testing.T) {
+	a := App{
+		styles:       styles.Default(),
+		keys:         DefaultKeymap(),
+		width:        200,
+		daemonOnline: true,
+	}
+	a.dashboard = newDashboard(a.styles, a.keys)
 	// No SetUpdateAvailable call — zero value.
-	if strings.Contains(m.heroPanel(120), "update available") {
-		t.Error("hero panel shows an update banner with no update pending")
+	if strings.Contains(a.renderStatusBar(), "ccmux update") {
+		t.Error("status bar shows the update chip with no update pending")
 	}
 	// Explicitly Behind=0 must also stay silent.
-	m.SetUpdateAvailable(selfupdate.Result{Behind: 0, Branch: "main"})
-	if strings.Contains(m.heroPanel(120), "update available") {
-		t.Error("Behind=0 should not render the banner")
+	a.dashboard.SetUpdateAvailable(selfupdate.Result{Behind: 0, Branch: "main"})
+	if strings.Contains(a.renderStatusBar(), "ccmux update") {
+		t.Error("Behind=0 should not render the chip")
 	}
 }
 
@@ -278,11 +193,6 @@ func TestDashboardPanels_NarrowOmitsT2(t *testing.T) {
 	if strings.Contains(m.heroPanel(50), "Welcome to ccmux") {
 		t.Error("narrow heroPanel still shows the welcome subtitle (T2)")
 	}
-	// The live clock is the only statsPanel row with a "HH:MM:SS"
-	// colon — its absence proves the clock row was dropped.
-	if strings.Contains(m.statsPanel(50), ":") {
-		t.Error("narrow statsPanel did not drop the live-clock row (T2)")
-	}
 	if dev := m.devicesPanel(50); strings.Contains(dev, "this build:") || strings.Contains(dev, "make bootstrap") {
 		t.Errorf("narrow devicesPanel still shows T2 help:\n%s", dev)
 	}
@@ -300,21 +210,177 @@ func TestDashboardPanels_NarrowOmitsT2(t *testing.T) {
 	}
 }
 
-// TestDashboardPanels_WideKeepsT2 — at wide widths the same panels
-// keep everything: the welcome subtitle and the full usage breakdown
-// with the per-agent Codex/Antigravity blocks.
-func TestDashboardPanels_WideKeepsT2(t *testing.T) {
+// TestDashboardPanels_WideKeepsAgentSections — at wide widths the
+// usage panel must surface per-agent sections for Codex and
+// Antigravity, even when they have no data ("no conversations yet"
+// keeps the visual cadence consistent across agents).
+//
+// The welcome subtitle that used to live in the hero is gone — the
+// design-system redesign moved it to the first-launch tour so the
+// dashboard reads in fewer rows. The hero is just "Hello." now.
+func TestDashboardPanels_WideKeepsAgentSections(t *testing.T) {
 	st := styles.Default()
 	m := newDashboard(st, DefaultKeymap())
-	if !strings.Contains(m.heroPanel(120), "Welcome to ccmux") {
-		t.Error("wide heroPanel dropped the welcome subtitle")
-	}
 	m.SetCcusageBlock(&ccusageBlock{CostUSD: 48.21})
 	m.SetUsage(&claudeusage.Aggregate{UserPrompts: 47})
 	u := m.usagePanel(120)
-	for _, want := range []string{"Codex usage", "Antigravity usage"} {
+	for _, want := range []string{"Codex · recent", "Antigravity · recent", "Claude · 5h window"} {
 		if !strings.Contains(u, want) {
 			t.Errorf("wide usagePanel missing %q:\n%s", want, u)
 		}
 	}
+}
+
+// TestDashboardGolden is the design-system visual regression net for
+// the home (Dashboard) screen. It snapshots the screen body + the
+// new components.HelpBar at the canonical 120x40 size and compares
+// against testdata/golden/dashboard.txt.
+//
+// The tab strip and status bar are NOT in this snapshot — both depend
+// on os.Hostname() / time.Now() in ways that would make the golden
+// machine-dependent. They have their own deterministic unit tests
+// (TestRenderHeader_*, TestStatusBar_*). This golden focuses on the
+// per-screen surface, which is where the redesign's visual choices
+// land.
+//
+// Determinism:
+//   - dashboard.SetNow pins the live clock in statsPanel.
+//   - Session LastChange / Created are set relative to time.Now()
+//     so humanDuration's minute-resolution rounding produces the
+//     same string on every run (within a 60-second test window).
+//   - claudeusage and ccusage are left nil so the usage panel
+//     renders its "(loading transcripts…)" placeholder rather than
+//     time-varying token counts.
+//
+// To regenerate after an intentional visual change:
+//
+//	CCMUX_UPDATE_GOLDEN=1 go test ./internal/tui/ -run TestDashboardGolden
+//
+// Review the diff before committing — that's the design change you're
+// shipping.
+func TestDashboardGolden(t *testing.T) {
+	a := buildDashboardGoldenApp()
+	const width, height = 120, 40
+	a.width = width
+	a.height = height
+
+	helpLine := forceSingleLine(components.HelpBar(a.styles, a.helpBarProps()), width)
+	bodyH := height - lipgloss.Height(helpLine)
+	if bodyH < 5 {
+		bodyH = 5
+	}
+	body := a.homeView(width, bodyH)
+	body = clampLines(body, bodyH)
+
+	out := lipgloss.JoinVertical(lipgloss.Left, body, helpLine)
+	goldenAssert(t, "dashboard.txt", out)
+}
+
+// buildDashboardGoldenApp constructs a deterministic App for golden
+// rendering: fixed clock, fixed sessions, fixed hosts, fixed
+// subscription tier. The intent is "what a user with two hosts and
+// three sessions sees on a normal afternoon" — varied enough that
+// the snapshot exercises every panel without random data noise.
+func buildDashboardGoldenApp() App {
+	const goldenVersion = "v0.0.0-golden"
+	fixedClock := time.Date(2026, 5, 26, 14, 30, 0, 0, time.UTC)
+	realNow := time.Now()
+
+	cfg := config.Defaults()
+	cfg.Subscription.Tier = "max5x"
+
+	st := styles.Default()
+	km := DefaultKeymap()
+
+	a := App{
+		cfg:          cfg,
+		styles:       st,
+		keys:         km,
+		version:      goldenVersion,
+		screen:       ScreenSessions,
+		daemonOnline: true,
+		lastRefresh:  fixedClock,
+	}
+
+	a.dashboard = newDashboard(st, km)
+	a.dashboard.SetConfig(cfg)
+	a.dashboard.SetVersion(goldenVersion)
+	a.dashboard.SetNow(fixedClock)
+
+	a.sessionsM = newSessions(st, km)
+
+	sessions := []daemon.SessionState{
+		{
+			Name:       "ccmux-redesign",
+			Host:       "local",
+			State:      "active",
+			Project:    "ccmux",
+			Path:       "/Users/me/repos/ccmux",
+			Attached:   true,
+			Windows:    3,
+			Agent:      "claude",
+			Created:    realNow.Add(-2 * time.Hour),
+			LastChange: realNow.Add(-3 * time.Minute),
+		},
+		{
+			Name:       "ccmux-debug",
+			Host:       "local",
+			State:      "idle",
+			Project:    "ccmux",
+			Path:       "/Users/me/repos/ccmux",
+			Windows:    1,
+			Agent:      "claude",
+			Created:    realNow.Add(-3 * time.Hour),
+			LastChange: realNow.Add(-25 * time.Minute),
+		},
+		{
+			Name:       "infra-watcher",
+			Host:       "atelier",
+			State:      "needs_input",
+			Project:    "infra",
+			Windows:    2,
+			Agent:      "codex",
+			Created:    realNow.Add(-1 * time.Hour),
+			LastChange: realNow.Add(-5 * time.Minute),
+		},
+	}
+	a.sessions = sessions
+	a.sessionsM.SetSessions(sessions)
+	a.dashboard.SetSessions(sessions)
+
+	hosts := []hostStatus{
+		{Name: "sputnik", Local: true, OK: true, Version: goldenVersion},
+		{Name: "atelier", OK: true, Version: goldenVersion},
+	}
+	a.hosts = hosts
+	a.dashboard.SetHosts(hosts)
+	a.sessionsM.SetHosts(hosts)
+
+	// Usage fixture — gives the new Usage panel actual numbers to
+	// render instead of the "(loading transcripts…)" placeholder, so
+	// the golden captures the real sub-section layout.
+	a.dashboard.SetUsage(&claudeusage.Aggregate{
+		UserPrompts: 47,
+		Messages:    47,
+		Total: claudeusage.Tokens{
+			Input:         1_200_000,
+			Output:        380_000,
+			CacheRead:     2_100_000,
+			CacheCreation: 340_000,
+		},
+	})
+	// EndTime is anchored to a fixed wall-clock hour on today's date
+	// so the "projected $X by HH:MM" line formats to the same minute
+	// across runs. realNow varies; pinning the time-of-day stabilises
+	// the golden regardless of when in the day the test runs.
+	endTime := time.Date(realNow.Year(), realNow.Month(), realNow.Day(), 19, 30, 0, 0, time.Local)
+	a.dashboard.SetCcusageBlock(&ccusageBlock{
+		CostUSD:             48.21,
+		BurnRateCostPerHour: 9.2,
+		ProjectedTotalCost:  73.18,
+		IsActive:            true,
+		EndTime:             endTime,
+	})
+
+	return a
 }

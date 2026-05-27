@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -285,14 +286,28 @@ func TestSessionsDetail_NarrowKeepsDetach(t *testing.T) {
 	assertAbsent(t, out, "/Users/skz/Projects/auth-redesign", "windows  3", "snapshot")
 }
 
-// TestSessionsDetail_WideShowsAttachKeys — when the terminal is wide
-// the detail pane must render the full Keys cheatsheet (how to attach,
-// the detach instructions), regardless of how wide the sessions
-// component's own column is.
-func TestSessionsDetail_WideShowsAttachKeys(t *testing.T) {
+// TestSessionsDetail_WideShowsIdentity — when the terminal is wide
+// the detail pane must render the session's T0/T1 identity facts
+// (state + path + attached state + changed time). The full key
+// cheatsheet was intentionally dropped from the detail pane in the
+// design-system redesign — those keys live in the HelpBar at the
+// bottom and the `?` help overlay now.
+func TestSessionsDetail_WideShowsIdentity(t *testing.T) {
 	m := newSessions(styles.Default(), DefaultKeymap())
-	m.SetSessions([]daemon.SessionState{{Name: "c-auth", Host: "local", State: "active"}})
+	m.SetSessions([]daemon.SessionState{{
+		Name:    "c-auth",
+		Host:    "local",
+		State:   "active",
+		Path:    "/Users/me/repos/auth",
+		Project: "auth",
+	}})
 	out := m.View(200, 40, false)
 	assertNoOverflow(t, out, 200)
-	assertPresent(t, out, "applies a styled bar", "To return after attaching")
+	assertPresent(t, out, "c-auth", "state", "active", "path", "/Users/me/repos/auth")
+	// The 15-line key cheatsheet must NOT be inline anymore.
+	for _, gone := range []string{"applies a styled bar", "To return after attaching"} {
+		if strings.Contains(out, gone) {
+			t.Errorf("detail pane should no longer show %q (moved to ? help overlay):\n%s", gone, out)
+		}
+	}
 }

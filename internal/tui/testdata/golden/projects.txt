@@ -1,0 +1,40 @@
+╭──────────────────────────────────────────────────────────────────────────────╮ ╭─────────────────────────────────────╮
+│ Projects  (3)                                                                │ │ ccmux   on local                    │
+│                                                                              │ │ /Users/me/repos/ccmux               │
+│ on local                                                                     │ │                                     │
+│ ▌ ccmux   git · CLAUDE · docs/                                               │ │ session name  c-ccmux               │
+│   auth-redesign   git · CLAUDE                                               │ │ agent         Claude Code           │
+│   parser   git                                                               │ │                                     │
+│                                                                              │ │ Keys                                │
+│                                                                              │ │ enter  attach or create session     │
+│                                                                              │ │ locally                             │
+│                                                                              │ │ n      new project (modal form)     │
+│                                                                              │ │ a      switch agent for this        │
+│                                                                              │ │ project (cycles                     │
+│                                                                              │ │ claude→codex→antigravity→cursor;    │
+│                                                                              │ │ local only)                         │
+│                                                                              │ │ c      show conversations for this  │
+│                                                                              │ │ project                             │
+│                                                                              │ │ 5      open Notes for this project  │
+│                                                                              │ │ (local only)                        │
+│                                                                              │ │                                     │
+│                                                                              │ │                                     │
+│                                                                              │ │                                     │
+│                                                                              │ │                                     │
+│                                                                              │ │                                     │
+│                                                                              │ │                                     │
+│                                                                              │ │                                     │
+│                                                                              │ │                                     │
+│                                                                              │ │                                     │
+│                                                                              │ │                                     │
+│                                                                              │ │                                     │
+│                                                                              │ │                                     │
+│                                                                              │ │                                     │
+│                                                                              │ │                                     │
+│                                                                              │ │                                     │
+│                                                                              │ │                                     │
+│                                                                              │ │                                     │
+│                                                                              │ │                                     │
+│                                                                              │ │                                     │
+╰──────────────────────────────────────────────────────────────────────────────╯ ╰─────────────────────────────────────╯
+? help · q quit · enter attach · n new · / filter · r refresh · 1-7 screens                                             

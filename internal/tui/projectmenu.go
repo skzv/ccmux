@@ -8,6 +8,7 @@ import (
 	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/conversations"
 	"github.com/skzv/ccmux/internal/tmux"
+	"github.com/skzv/ccmux/internal/tui/components"
 	"github.com/skzv/ccmux/internal/tui/styles"
 )
 
@@ -109,17 +110,14 @@ func (m projectMenuModel) View(width int) string {
 	// "Running sessions" / "Past conversations" appear only when those
 	// lists are non-empty.
 	lastKind := projectMenuEntryKind(-1)
+	rowW := width - 4
 	for i, e := range m.entries {
 		if e.kind != lastKind {
 			lines = append(lines, st.Subtitle.Render(menuSectionHeader(e.kind)))
 			lastKind = e.kind
 		}
 		text := m.entryLabel(e)
-		if i == m.cursor {
-			lines = append(lines, st.ListItemSelected.Render("▸ "+text))
-		} else {
-			lines = append(lines, st.ListItem.Render("  "+text))
-		}
+		lines = append(lines, components.RenderListRow(st, text, i == m.cursor, rowW))
 	}
 	lines = append(lines, "", st.Muted.Render("↑/↓: move   enter: select   esc: cancel"))
 	return st.PaneFocused.Width(width - 2).Render(strings.Join(lines, "\n"))

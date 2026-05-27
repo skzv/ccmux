@@ -8,6 +8,7 @@ import (
 
 	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/conversations"
+	"github.com/skzv/ccmux/internal/tui/components"
 	"github.com/skzv/ccmux/internal/tui/styles"
 )
 
@@ -580,17 +581,24 @@ func TestConversationsModel_View_ArmedRowShowsConfirm(t *testing.T) {
 
 // TestConversations_UsesSharedBreakpoint — the screen now branches on
 // the shared isNarrow (width < 120), not its old derived detail-pane
-// width. Narrow drops the detail pane and the inline hint; wide keeps
-// both.
+// width. Narrow drops the detail pane; wide keeps it. The "ID  …"
+// row only appears in the detail pane, so its presence is a stable
+// proxy for "wide layout with detail pane rendered."
 func TestConversations_UsesSharedBreakpoint(t *testing.T) {
 	m := newConversations(styles.Default(), DefaultKeymap())
 	m.SetList(fakeConversations())
-	const hint = "enter resume"
-	if narrow := m.View(119, 40); strings.Contains(narrow, hint) {
-		t.Errorf("width 119 should render the narrow layout (no detail/hint):\n%s", narrow)
+	const detailMarker = "ID"
+	narrow := m.View(119, 40)
+	wide := m.View(120, 40)
+	// Both layouts contain rows with the agent labels and so on; the
+	// detail-pane's "ID         <id>" row is the unique marker.
+	narrowHasDetail := strings.Contains(narrow, "ID         ")
+	wideHasDetail := strings.Contains(wide, "ID         ")
+	if narrowHasDetail {
+		t.Errorf("width 119 should render the narrow layout (no %s row from detail pane):\n%s", detailMarker, narrow)
 	}
-	if wide := m.View(120, 40); !strings.Contains(wide, hint) {
-		t.Errorf("width 120 should render the wide layout (detail + hint):\n%s", wide)
+	if !wideHasDetail {
+		t.Errorf("width 120 should render the wide layout (with detail pane %s row):\n%s", detailMarker, wide)
 	}
 }
 
@@ -673,23 +681,36 @@ func TestConversationsModel_SetShowHeadless_SeedsFromConfig(t *testing.T) {
 	}
 }
 
-// TestConversationsModel_View_HintShowsToggleStatus — the inline hint
-// line at the bottom of the wide layout has to surface the current
+// TestConversationsModel_HelpBarShowsToggleStatus — the HelpBar
+// produced for the Conversations screen has to surface the current
 // headless visibility (and the H keybind that flips it). Otherwise
 // the toggle is invisible and discoverable only via the help overlay.
-func TestConversationsModel_View_HintShowsToggleStatus(t *testing.T) {
+// The hint moved from the inline View row into HelpBarProps when the
+// app footer was unified onto components.HelpBar.
+func TestConversationsModel_HelpBarShowsToggleStatus(t *testing.T) {
 	m := newConversations(styles.Default(), DefaultKeymap())
 	m.SetList(fakeConversations())
 
-	out := m.View(120, 40)
-	if !strings.Contains(out, "H headless: hidden") {
-		t.Errorf("hint should show 'H headless: hidden' by default, got:\n%s", out)
+	hints := m.HelpBarProps(200).Hints
+	if got := findHint(hints, "H"); got == nil || !strings.Contains(got.Label, "hidden") {
+		t.Errorf("default HelpBar should carry an H hint showing 'hidden', got: %+v", hints)
 	}
 	m.ToggleHeadless()
-	out = m.View(120, 40)
-	if !strings.Contains(out, "H headless: shown") {
-		t.Errorf("after toggle, hint should show 'H headless: shown', got:\n%s", out)
+	hints = m.HelpBarProps(200).Hints
+	if got := findHint(hints, "H"); got == nil || !strings.Contains(got.Label, "shown") {
+		t.Errorf("after toggle, HelpBar's H hint should show 'shown', got: %+v", hints)
 	}
+}
+
+// findHint is a small test helper that walks a HelpBarProps Hints
+// slice and returns the entry whose Key matches `key`, or nil.
+func findHint(hints []components.KeyHint, key string) *components.KeyHint {
+	for i := range hints {
+		if hints[i].Key == key {
+			return &hints[i]
+		}
+	}
+	return nil
 }
 
 // TestConversationsModel_View_DetailMarksHeadlessRow — when a headless

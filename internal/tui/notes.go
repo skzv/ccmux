@@ -14,6 +14,7 @@ import (
 
 	"github.com/skzv/ccmux/internal/notes"
 	"github.com/skzv/ccmux/internal/project"
+	"github.com/skzv/ccmux/internal/tui/components"
 	"github.com/skzv/ccmux/internal/tui/styles"
 )
 
@@ -338,7 +339,10 @@ func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
 					m.refreshPreview()
 				}
 				return m, nil
-			case keyMatches(msg, m.km.EditInEd):
+			case keyMatches(msg, m.km.EditInEd), keyMatches(msg, m.km.Enter):
+				// enter and e both open the selected file in $EDITOR.
+				// The previous behaviour left `enter` unhandled, which
+				// the HelpBar's "enter open" hint advertised as broken.
 				if path := m.selectedPath(); path != "" {
 					return m, openInEditor(m.editor, path)
 				}
@@ -412,6 +416,27 @@ func (m notesModel) runSearch(query string) tea.Cmd {
 	}
 }
 
+// HelpBarProps returns the screen-specific key hints for Notes.
+// Replaces the legacy inline hint row that used to sit under the
+// project name in renderList. `n` (new note) is intentionally omitted
+// — it's a planned feature (see Feature Catalog) and the hint used to
+// promise behaviour that didn't exist.
+func (m notesModel) HelpBarProps(width int) components.HelpBarProps {
+	return components.HelpBarProps{
+		Hints: []components.KeyHint{
+			{Key: "?", Label: "help", Priority: 10},
+			{Key: "q", Label: "quit", Priority: 10},
+			{Key: "enter", Label: "open", Priority: 8},
+			{Key: "e", Label: "edit", Priority: 7},
+			{Key: "/", Label: "search", Priority: 6},
+			{Key: "p", Label: "switch project", Priority: 5},
+			{Key: "tab", Label: "focus preview", Priority: 4},
+			{Key: "1-7", Label: "screens", Priority: 2},
+		},
+		Width: width,
+	}
+}
+
 func (m notesModel) View(width, height int) string {
 	if m.project == nil {
 		body := strings.Join([]string{
@@ -448,9 +473,6 @@ func (m notesModel) renderList(width, height int, narrow bool) string {
 	}
 	header := m.st.Emphasis.Render(m.project.Name) + focusMark
 	lines := []string{header}
-	if !narrow {
-		lines = append(lines, m.st.Muted.Render("p: switch project   /: search   tab: focus preview   e: edit"))
-	}
 
 	// Search box / search-results banner.
 	if m.searching && m.searchInput.Focused() {
@@ -500,14 +522,15 @@ func (m notesModel) renderList(width, height int, narrow bool) string {
 // window the rows around it.
 func (m notesModel) noteRows(width int) (rows []string, cursorRow int) {
 	cursorRow = -1
+	// Row width matches the pane interior (width - 4 for border + Padding(0,1)).
+	rowW := width - 4
 	if m.hasActiveSearch() {
 		for i, h := range m.searchResults {
-			label := fmt.Sprintf("%s:%d  %s", h.Rel, h.LineNum, truncateSearchSnippet(h.Snippet, width-12))
+			content := fmt.Sprintf("%s:%d  %s", h.Rel, h.LineNum, truncateSearchSnippet(h.Snippet, width-14))
 			if i == m.cursor {
 				cursorRow = len(rows)
-				label = m.st.ListItemSelected.Render(label)
 			}
-			rows = append(rows, "  "+label)
+			rows = append(rows, components.RenderListRow(m.st, content, i == m.cursor, rowW))
 		}
 		return rows, cursorRow
 	}
@@ -520,12 +543,10 @@ func (m notesModel) noteRows(width int) (rows []string, cursorRow int) {
 			rows = append(rows, m.st.Subtitle.Render(folderHeader(e.Dir)))
 			lastDir = e.Dir
 		}
-		row := "  " + e.Display
 		if i == m.cursor {
 			cursorRow = len(rows)
-			row = m.st.ListItemSelected.Render(row)
 		}
-		rows = append(rows, row)
+		rows = append(rows, components.RenderListRow(m.st, e.Display, i == m.cursor, rowW))
 	}
 	return rows, cursorRow
 }
@@ -659,11 +680,7 @@ func (m notesModel) renderProjectPicker(width, height int) string {
 	}
 	for i := start; i < end; i++ {
 		p := m.projects[i]
-		row := "  " + p.Name
-		if i == m.projCursor {
-			row = m.st.ListItemSelected.Render(row)
-		}
-		lines = append(lines, row)
+		lines = append(lines, components.RenderListRow(m.st, p.Name, i == m.projCursor, minInt(70, width-4)-2))
 	}
 	if end < len(m.projects) {
 		lines = append(lines, m.st.Muted.Render(fmt.Sprintf("  … %d more (scroll with j/k)", len(m.projects)-end)))

@@ -65,11 +65,11 @@ func (t *toastController) Render(st styles.Styles) string {
 	base := st.Toast
 	switch t.kind {
 	case toastError:
-		base = lipgloss.NewStyle().Background(st.P.Red).Foreground(st.P.BG).Padding(0, 1)
+		base = lipgloss.NewStyle().Background(st.Semantic.Danger).Foreground(st.P.BG).Padding(st.Spacing.XS, st.Spacing.SM)
 	case toastSuccess:
-		base = lipgloss.NewStyle().Background(st.P.Green).Foreground(st.P.BG).Padding(0, 1)
+		base = lipgloss.NewStyle().Background(st.Semantic.Success).Foreground(st.P.BG).Padding(st.Spacing.XS, st.Spacing.SM)
 	case toastWarning:
-		base = lipgloss.NewStyle().Background(st.P.Yellow).Foreground(st.P.BG).Padding(0, 1)
+		base = lipgloss.NewStyle().Background(st.Semantic.Warning).Foreground(st.P.BG).Padding(st.Spacing.XS, st.Spacing.SM)
 	}
 	return base.Render(t.current)
 }

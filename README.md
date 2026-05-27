@@ -169,13 +169,14 @@ make setup
 `make setup` builds, installs `ccmux` + `ccmuxd` into `~/.local/bin/`, then runs the wizard. Idempotent — re-run any time.
 
 Requirements:
+
 - Go 1.26+ (source builds only — `brew install` and `install.sh` don't need it)
 - macOS, Linux, or Windows via WSL2 (see [Windows guide](docs/04_Guides/Windows.md) — native Windows tracks as an open TODO)
 - `~/.local/bin` on your PATH (for source / install-script paths)
 
 > 🤖 **Built with ccmux.** Almost every commit in this repo was produced by a Claude Code session managed through the very TUI you're about to install — kept alive across laptop lid-closes by the daemon, attached from iOS over Mosh when away from the desk, supervised from the dashboard. It's the kind of tool you only really validate by living inside it; that's what we did.
 
-> **macOS, raw release tarballs:** if you grab a binary tarball directly from [Releases](https://github.com/skzv/ccmux/releases) instead of going through `brew install` / `make setup` / `scripts/install.sh`, macOS may refuse to open it (*"cannot verify the developer"*). Strip the quarantine attribute once: `xattr -d com.apple.quarantine ./ccmux ./ccmuxd`. All three supported install paths handle this for you.
+> **macOS, raw release tarballs:** if you grab a binary tarball directly from [Releases](https://github.com/skzv/ccmux/releases) instead of going through `brew install` / `make setup` / `scripts/install.sh`, macOS may refuse to open it (_"cannot verify the developer"_). Strip the quarantine attribute once: `xattr -d com.apple.quarantine ./ccmux ./ccmuxd`. All three supported install paths handle this for you.
 
 ---
 
@@ -242,11 +243,13 @@ bell = true                          # ring local terminal BEL on needs_input
 > **Notifications:** the bell always rings on `needs_input` transitions when `bell = true`, regardless of whether moshi-hook is paired. The audible chime at your desk and the push on your phone are complementary, not duplicates. Set `bell = false` if you'd rather rely on phone pushes alone.
 
 > **Sleep-mode notes:**
+>
 > - `safe` — `caffeinate -s` on macOS (Apple's policy keeps it AC-only). `systemd-inhibit --what=sleep:idle` on Linux.
 > - `dangerous` — `caffeinate -d -i -m -s` on macOS, works on battery too. Daemon polls battery once a minute and downgrades to `safe` when below `low_battery_cutoff` (so a forgotten laptop doesn't run flat).
 > - `very_dangerous` — adds `sudo -n pmset -a disablesleep 1` (macOS) / `sudo -n systemctl mask sleep.target …` (Linux). Requires passwordless sudo for the specific command; silently degrades to `dangerous` if sudo prompts. Always reverted when ccmuxd exits cleanly.
 >
 > Example sudoers entry (run `sudo visudo -f /etc/sudoers.d/ccmux`):
+>
 > ```
 > # macOS
 > %admin ALL=(ALL) NOPASSWD: /usr/bin/pmset -a disablesleep *
@@ -264,19 +267,22 @@ bell = true                          # ring local terminal BEL on needs_input
 <summary>Click to expand</summary>
 
 ### 🎛️ Session management
+
 - Live dashboard of every agent session across every project, with state (active / idle / **needs_input**) and per-row agent tags
 - One-key attach, kill, rename — applies a styled tmux status bar so you always know where you are
 - Per-session "keep awake" pin — the daemon holds a sleep-prevention lock while any pinned or active session is alive
 - **Three sleep-prevention modes** — `safe`, `dangerous`, `very_dangerous` (sudo-gated; system-wide override that survives lid-close)
 
 ### 🏗️ New projects
+
 - `ccmux new <name>` — creates the directory + starts the agent. **No CLAUDE.md, no docs/ tree, no git init.** Bootstrapping is the agent's job.
-- **Open a project = see its history.** Enter on a project lists running sessions *and* past conversations.
+- **Open a project = see its history.** Enter on a project lists running sessions _and_ past conversations.
 - **Conversations list hides automation noise.** Headless `claude -p` / SDK runs and `codex exec` invocations are filtered by default. Press `H` to toggle. Antigravity transcripts carry no headless tag, so those are always shown.
 - **Create on any device.** Press `n` in Projects, pick a host, the remote daemon does the work.
 - **Every subdirectory of your projects root shows up** — no marker file required. `git · CLAUDE · docs/` tags tell you which dirs are real software projects vs scratch dirs.
 
 ### 🤝 Multi-agent (Claude, Codex, Antigravity)
+
 - Per-project agent stored in `<project>/.ccmux/agent` — sticky across sessions
 - New-project form cycles Claude / Codex / Antigravity / Cursor with `←/→`
 - Press `a` in Projects to switch the selected project's agent
@@ -286,6 +292,7 @@ bell = true                          # ring local terminal BEL on needs_input
 - Moshi push integration is currently Claude-only — Codex / Antigravity sessions get the audible terminal bell (still triggers a generic iOS push). Phase-2 work tracked in [`docs/01_Specs/02_Multi_Agent.md`](docs/01_Specs/02_Multi_Agent.md)
 
 ### 🤖 Claude Code config management
+
 - Dedicated "Claude" screen for everything in `~/.claude/`
 - Model picker (Opus 4.7 / Sonnet 4.6 / Haiku 4.5 / opusplan / custom) — global or per-project
 - Reasoning-effort picker (`low` / `medium` / `high` / `xhigh` / `max`) + `alwaysThinkingEnabled` toggle. Writes `effortLevel` to `~/.claude/settings.json` so every new Claude Code session inherits your default.
@@ -293,34 +300,39 @@ bell = true                          # ring local terminal BEL on needs_input
 - View & edit global and per-project `CLAUDE.md` from the TUI
 
 ### 📝 Notes, terminal-native
+
 - Per-project Notes tab — every `.md` file in the project, grouped by folder, rendered by Glamour
 - Ripgrep-backed `/` search; plain markdown on disk is the source of truth (no required cloud)
 - Browse, preview, edit-in-`$EDITOR` — ccmux reads your notes; writing them is the agent's job
 
 ### 📲 Mobile workflow (Moshi / iOS / Android)
+
 - **Easy Pair via QR code** — `ccmux moshi-setup`; scan the QR code with the Moshi app, you're paired. No token paste.
 - **Categorized push notifications** via `moshi-hook` plugging into Claude Code's hooks system (approval_required, task_complete)
 - **In-app session picker** — the Moshi app lists every tmux session on the paired host
 - **Auto-detection** — ccmuxd suppresses its BEL trigger when moshi-hook is paired so you don't get duplicate notifications
 
 ### 🌐 Local & remote modes
+
 - **Local** — manages tmux sessions on this machine; prevents sleep while sessions are active
 - **Server** — daemon binds an HTTP API to your Tailscale interface for remote ccmux clients
 - **Mixed** — dashboard shows local + remote sessions, color-coded by origin
 
 ### 🩺 Setup, doctor, update
+
 - `ccmux setup` — interactive wizard, checks every dep, offers `brew install` for missing pieces
 - `ccmux doctor` — non-interactive health check (great for scripting)
 - `ccmux update` — pulls the git checkout, rebuilds, reloads ccmuxd
 - `ccmux uninstall` — clean removal, never touches your projects or `~/.claude/`
 
 ### 🎨 Quality of life
+
 - Catppuccin Mocha by default; Dracula / Nord / Gruvbox / Tokyo Night planned
 - `?` opens contextual key help on every screen
 - Vim-style (`h/j/k/l`) and arrow keys both work
 - Auto-switches to a curated narrow-terminal layout under 120 cols (phone mode) — reference detail is dropped so the essentials fit a phone screen
 - Mouse support on by default (hold **Option (⌥)** while dragging to bypass tmux mouse reporting in iTerm2 / Terminal.app)
-- **Cross-device clipboard via OSC 52** — selecting text inside a remote tmux pane lands on your *local* clipboard. Works in iTerm2, Ghostty, WezTerm, Alacritty, kitty. Terminal.app does NOT support OSC 52 writes. `ccmux doctor` tells you exactly which side is missing.
+- **Cross-device clipboard via OSC 52** — selecting text inside a remote tmux pane lands on your _local_ clipboard. Works in iTerm2, Ghostty, WezTerm, Alacritty, kitty. Terminal.app does NOT support OSC 52 writes. `ccmux doctor` tells you exactly which side is missing.
 - **No telemetry. Ever.**
 
 </details>
@@ -340,6 +352,7 @@ ccmux new auth-redesign            # or: ccmux new auth-redesign --agent codex
 ```
 
 That command does two things, and **only** two things:
+
 1. Creates `~/Projects/auth-redesign/` — an empty directory.
 2. Opens a tmux session named `c-auth-redesign` and starts your agent inside it (Claude by default).
 
@@ -362,6 +375,7 @@ The Dashboard shows all sessions, color-coded by state:
 When a session transitions to `needs_input`, ccmuxd injects a terminal BEL. Any iOS terminal client that maps BEL→notification raises a push.
 
 Useful keys on the Sessions screen:
+
 - `Enter` — attach
 - `x` — kill the highlighted session
 - `R` — rename
@@ -400,6 +414,7 @@ ccmux uninstall --dry-run  # preview only
 ```
 
 What gets removed:
+
 - Running `ccmuxd` (SIGTERM)
 - `~/.local/bin/ccmux` and `~/.local/bin/ccmuxd`
 - `~/.local/state/ccmux/` (socket, logs)
@@ -408,6 +423,7 @@ What gets removed:
 - The ccmux-styled tmux status bar on every `c-*` session (unless `--keep-chrome`)
 
 What is **never** touched:
+
 - Your project directories
 - Notes under `<project>/docs/`
 - `~/.claude/` (Claude Code state + moshi-hook entries)
@@ -440,6 +456,7 @@ To also remove `moshi-hook`: `brew services stop moshi-hook && brew uninstall mo
 ```
 
 Full design: [`docs/02_Architecture/00_System_Design.md`](docs/02_Architecture/00_System_Design.md).
+TUI design system: [`docs/02_Architecture/04_TUI_Design_System.md`](docs/02_Architecture/04_TUI_Design_System.md).
 
 ---
 
