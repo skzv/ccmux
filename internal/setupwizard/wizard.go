@@ -78,7 +78,7 @@ func Run(ctx context.Context, out io.Writer) error {
 		{"Tailscale", stepTailscale},
 		{"GitHub CLI", stepGitHubAuth},
 		{"Moshi (mobile push)", stepMoshi},
-		{"SSH key for phone", stepSSHKey},
+		{"Local SSH key (~/.ssh/id_ed25519)", stepSSHKey},
 		{"ccmux config", stepConfig},
 		{"ccmuxd autostart", stepDaemonService},
 	}
@@ -657,9 +657,11 @@ func promptMoshiRecovery(fix moshi.HostSetupFix, hasFix bool) (string, error) {
 	return choice, nil
 }
 
-// stepSSHKey: ensure ~/.ssh/id_ed25519 exists. The phone's Moshi app
-// will store its own SSH key in iOS Keychain; this step is about the
-// host's outbound key (to push to GitHub, etc.).
+// stepSSHKey: ensure ~/.ssh/id_ed25519 exists. This is the local
+// machine's outbound SSH key — used to push to GitHub, to ssh into
+// remote hosts (including ccmux's host setup-ssh wizard), and to
+// mosh from this machine to others. The phone's Moshi app stores
+// its OWN key in iOS Keychain and doesn't need this one.
 func stepSSHKey(_ context.Context, out io.Writer) error {
 	home, err := os.UserHomeDir()
 	if err != nil {

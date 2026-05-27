@@ -31,6 +31,13 @@ const (
 	// detected AuthFailed" path because the user already knows
 	// what's about to happen.
 	sshWizardConfirm
+	// sshWizardUser — confirm/edit the remote username before the
+	// password prompt. Pre-filled with whatever the caller passed
+	// (configured User on the host, parsed user@ prefix, or the
+	// local $USER as a last-resort guess). Catches the
+	// alice-locally / bob-on-the-remote mismatch instead of
+	// burning the password attempt.
+	sshWizardUser
 	// sshWizardPassword — masked textinput for the SSH password.
 	// Re-entered on ErrWrongPassword without losing wizard state.
 	sshWizardPassword
@@ -55,17 +62,18 @@ const (
 // Each instance is for one Target — re-opening the wizard against
 // a different host constructs a new model.
 type sshWizardModel struct {
-	step     sshWizardStep
-	target   sshsetup.Target
-	st       styles.Styles
-	width    int
-	height   int
-	passwd   textinput.Model
-	stages   []string        // accumulated progress stage:detail rows
-	err      string          // last error message rendered on the Error step
-	others   []string        // users found by EnumerateUsers
-	selected map[string]bool // multi-select state for enumerate
-	cursor   int             // highlighted row inside the enumerate list
+	step      sshWizardStep
+	target    sshsetup.Target
+	st        styles.Styles
+	width     int
+	height    int
+	userInput textinput.Model // remote username field for sshWizardUser
+	passwd    textinput.Model
+	stages    []string        // accumulated progress stage:detail rows
+	err       string          // last error message rendered on the Error step
+	others    []string        // users found by EnumerateUsers
+	selected  map[string]bool // multi-select state for enumerate
+	cursor    int             // highlighted row inside the enumerate list
 	// resumeOnDone is metadata the parent app uses to know what
 	// action to perform after the wizard closes successfully. We
 	// pass it through opaquely — the wizard doesn't care.
@@ -92,7 +100,14 @@ func newSSHWizard(st styles.Styles) *sshWizardModel {
 	ti.CharLimit = 256
 	ti.Width = 32
 	ti.Prompt = ""
-	return &sshWizardModel{st: st, passwd: ti, selected: map[string]bool{}}
+
+	ui := textinput.New()
+	ui.Placeholder = "username"
+	ui.CharLimit = 64
+	ui.Width = 32
+	ui.Prompt = ""
+
+	return &sshWizardModel{st: st, passwd: ti, userInput: ui, selected: map[string]bool{}}
 }
 
 // Open kicks the wizard onto its first screen with the supplied
@@ -108,6 +123,10 @@ func (m *sshWizardModel) Open(target sshsetup.Target, resume any) tea.Cmd {
 	m.cursor = 0
 	m.resumeOnDone = resume
 	m.passwd.Reset()
+	// Pre-fill the username field with whatever the caller resolved
+	// — explicit, parsed, or local-fallback. The user just hits
+	// Enter to accept, or edits if it's wrong.
+	m.userInput.SetValue(target.User)
 	return nil
 }
 
@@ -207,12 +226,34 @@ func (m *sshWizardModel) updateKey(msg tea.KeyMsg) (*sshWizardModel, tea.Cmd) {
 	case sshWizardConfirm:
 		switch msg.String() {
 		case "enter":
+			m.step = sshWizardUser
+			m.userInput.Focus()
+			m.passwd.Blur()
+			return m, textinput.Blink
+		case "esc":
+			return m, m.emitCancel()
+		}
+	case sshWizardUser:
+		switch msg.String() {
+		case "enter":
+			u := strings.TrimSpace(m.userInput.Value())
+			if u == "" {
+				m.err = "username is required"
+				return m, nil
+			}
+			m.err = ""
+			// Persist back to target so install/enumerate use it.
+			m.target.User = u
 			m.step = sshWizardPassword
+			m.userInput.Blur()
 			m.passwd.Focus()
 			return m, textinput.Blink
 		case "esc":
 			return m, m.emitCancel()
 		}
+		var cmd tea.Cmd
+		m.userInput, cmd = m.userInput.Update(msg)
+		return m, cmd
 	case sshWizardPassword:
 		switch msg.String() {
 		case "enter":
@@ -411,6 +452,18 @@ func (m *sshWizardModel) View(w, h int) string {
 			m.st.Key.Render("•")+" password is used once, never stored",
 			m.st.Key.Render("•")+" idempotent — safe to re-run",
 		)
+		lines = append(lines, "")
+		lines = append(lines, m.st.Muted.Render("[Enter] continue   [Esc] cancel"))
+	case sshWizardUser:
+		lines = append(lines, title.Render("Username on "+m.target.Host))
+		lines = append(lines, "")
+		lines = append(lines, "We'll install your key for this user. Edit if needed.")
+		lines = append(lines, "")
+		lines = append(lines, "Username:  "+m.userInput.View())
+		if m.err != "" {
+			lines = append(lines, "")
+			lines = append(lines, m.st.Title.Foreground(m.st.P.Red).Render(m.err))
+		}
 		lines = append(lines, "")
 		lines = append(lines, m.st.Muted.Render("[Enter] continue   [Esc] cancel"))
 	case sshWizardPassword:
