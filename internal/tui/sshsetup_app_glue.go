@@ -78,11 +78,18 @@ func hostExistsByName(cfg config.Config, name string) bool {
 // remoteAttachTargetFromErr classifies an attachExitedMsg error and
 // returns a sshsetup.Target when the failure looks like SSH auth.
 // Returns nil for any of: nil error, local attach (no target on
-// the msg), or an error that doesn't smell like auth (e.g. tmux
-// "session not found"). Callers only invoke the wizard on a
-// non-nil return.
+// the msg), an error that doesn't smell like auth (e.g. tmux
+// "session not found"), or a Tailscale-SSH peer (where installing
+// a key wouldn't help — that's an ACL problem, not a missing key).
+// Callers only invoke the wizard on a non-nil return.
 func remoteAttachTargetFromErr(msg attachExitedMsg) *sshsetup.Target {
 	if msg.Err == nil || msg.RemoteSSHTarget == nil {
+		return nil
+	}
+	// Tailscale SSH peers don't need the wizard: auth is identity-
+	// based, no authorized_keys to install. A failure here is an
+	// ACL or session-policy issue and needs human attention.
+	if msg.RemoteSSHTarget.TailscaleSSH {
 		return nil
 	}
 	// ssh / mosh both surface auth failures as exit 255 with

@@ -64,6 +64,12 @@ type attachRemoteTarget struct {
 	User string
 	Host string
 	Port int
+	// TailscaleSSH marks a peer where Tailscale handles SSH auth via
+	// the tailnet identity. When set, the post-attach auth-failure
+	// auto-route does NOT open the SSH setup wizard — installing a
+	// key wouldn't fix a Tailscale-SSH rejection (that's an ACL
+	// issue), so we surface a more targeted hint instead.
+	TailscaleSSH bool
 }
 
 // attachSpinTickMsg advances the spinner frame while the overlay is up.

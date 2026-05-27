@@ -1564,6 +1564,7 @@ func (a App) refreshSessionsCmd() tea.Cmd {
 					Name: d.Name, Address: d.Address,
 					Discovered: true, DialHost: d.DialHost,
 					Version: d.Version, OK: true,
+					TailscaleSSH: d.TailscaleSSH,
 				}
 				if ss, e := cli.Sessions(ctx); e == nil {
 					st.Sessions = len(ss)
@@ -1857,12 +1858,14 @@ func (a App) attachSelectedSession() (App, tea.Cmd) {
 			// Strip any "user@" prefix on dial so we can pass it
 			// as Host to the wizard. Honor the host row's SSHPort
 			// when set; otherwise fall back to SSH 22 since dial
-			// is just a hostname here.
+			// is just a hostname here. Propagate TailscaleSSH so
+			// the post-attach auto-route skips the wizard for
+			// TS-SSH peers (where installing a key wouldn't help).
 			port := hs.SSHPort
 			if port == 0 {
 				port = 22
 			}
-			rt := &attachRemoteTarget{Host: dial, Port: port}
+			rt := &attachRemoteTarget{Host: dial, Port: port, TailscaleSSH: hs.TailscaleSSH}
 			if i := strings.Index(dial, "@"); i >= 0 {
 				rt.User = dial[:i]
 				rt.Host = dial[i+1:]
