@@ -124,9 +124,12 @@ func TestNotesGolden(t *testing.T) {
 	goldenAssert(t, "notes.txt", out)
 }
 
-// TestSettingsGolden snapshots the Settings screen at 120x40. The
-// cfgPath is pinned via SetCfgPath so the snapshot doesn't drift
-// across machines. Version is set to a fixed v0.0.0-golden string.
+// TestSettingsGolden snapshots the Settings screen at 120x40. Both
+// the config path and the Projects.Root default are pinned to fixed
+// values so the snapshot doesn't drift across machines (config.Defaults
+// computes Projects.Root from $HOME, which is /Users/<user>/ on a Mac
+// and /home/runner/ on the Ubuntu CI runner). Version is set to a
+// fixed v0.0.0-golden string.
 func TestSettingsGolden(t *testing.T) {
 	const width, height = 120, 40
 	st := styles.Default()
@@ -134,6 +137,7 @@ func TestSettingsGolden(t *testing.T) {
 
 	cfg := config.Defaults()
 	cfg.Subscription.Tier = "max5x"
+	cfg.Projects.Root = "/Users/me/Projects"
 	m := newSettings(st, km, cfg, "v0.0.0-golden")
 	m.SetCfgPath("/Users/me/.config/ccmux/config.toml")
 

@@ -9,7 +9,7 @@
 │ config file      /Users/me/.config/ccmux/config.toml                                                                 │
 │                                                                                                                      │
 │ Editable (↑/↓ to move, enter to edit, e to open config in $EDITOR)                                                   │
-│ ▸ projects.root          /Users/mchoi/Projects                                                                       │
+│ ▸ projects.root          /Users/me/Projects                                                                          │
 │   Where ccmux looks for projects (~/Projects default).                                                               │
 │   subscription.tier      max5x                                                                                       │
 │   agents.default         claude                                                                                      │
