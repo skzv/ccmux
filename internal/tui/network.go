@@ -119,7 +119,11 @@ func (m networkModel) SSHCmd() tea.Cmd {
 // password step will fail and the user can re-run via
 // `ccmux host setup-ssh otheruser@host` with the right account.
 func remoteTargetForSSH(sel hostStatus, dial string) *attachRemoteTarget {
-	rt := &attachRemoteTarget{Host: dial, Port: 22}
+	port := sel.SSHPort
+	if port == 0 {
+		port = 22
+	}
+	rt := &attachRemoteTarget{Host: dial, Port: port}
 	if i := strings.Index(dial, "@"); i >= 0 {
 		rt.User = dial[:i]
 		rt.Host = dial[i+1:]
@@ -152,10 +156,14 @@ func (m networkModel) SetupSSHCmd() tea.Cmd {
 	if host == "" {
 		return nil
 	}
+	port := sel.SSHPort
+	if port == 0 {
+		port = 22
+	}
 	target := sshsetup.Target{
 		User: sel.User,
 		Host: host,
-		Port: 22, // SSH; sel.Address may carry the ccmuxd HTTP port (7474), not the SSH port
+		Port: port,
 	}
 	if target.User == "" {
 		if u, err := user.Current(); err == nil {

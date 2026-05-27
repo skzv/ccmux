@@ -186,13 +186,15 @@ func resolveTarget(arg string, cfg config.Config) (sshsetup.Target, string, erro
 			if user == "" {
 				user = currentUser()
 			}
-			port := h.Port
-			if port == 0 || port == 7474 {
-				// 7474 is the ccmuxd tailnet port; the SSH
-				// listener is separate (22 by default). Fall
-				// back to 22 unless the user explicitly set a
-				// non-7474 port (in which case we honor it).
-				port = 22
+			// Prefer the explicit SSHPort field (added so a host can
+			// store BOTH the ccmuxd HTTP port and the SSH port). For
+			// older configs that only set Port to a non-7474 value
+			// (the legacy "port is the SSH port" interpretation),
+			// honor that too — backwards-compat for any hand-edited
+			// hosts.toml predating this change.
+			port := h.EffectiveSSHPort()
+			if h.SSHPort == 0 && h.Port != 0 && h.Port != 7474 {
+				port = h.Port
 			}
 			return sshsetup.Target{User: user, Host: h.Address, Port: port}, h.Name, nil
 		}

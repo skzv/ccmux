@@ -76,6 +76,8 @@ type sshWizardModel struct {
 	width     int
 	height    int
 	userInput textinput.Model // remote username field for sshWizardUser
+	portInput textinput.Model // remote SSH port field for sshWizardUser
+	userFocus int             // 0 → userInput focused, 1 → portInput focused
 	passwd    textinput.Model
 	stages    []string        // accumulated progress stage:detail rows
 	err       string          // last error message rendered on the Error step
@@ -115,7 +117,13 @@ func newSSHWizard(st styles.Styles) *sshWizardModel {
 	ui.Width = 32
 	ui.Prompt = ""
 
-	return &sshWizardModel{st: st, passwd: ti, userInput: ui, selected: map[string]bool{}}
+	pi := textinput.New()
+	pi.Placeholder = "22"
+	pi.CharLimit = 6
+	pi.Width = 6
+	pi.Prompt = ""
+
+	return &sshWizardModel{st: st, passwd: ti, userInput: ui, portInput: pi, selected: map[string]bool{}}
 }
 
 // Open kicks the wizard onto its first screen with the supplied
@@ -135,6 +143,14 @@ func (m *sshWizardModel) Open(target sshsetup.Target, resume any) tea.Cmd {
 	// — explicit, parsed, or local-fallback. The user just hits
 	// Enter to accept, or edits if it's wrong.
 	m.userInput.SetValue(target.User)
+	// Pre-fill the port. 0/22 displays as "22" so the user sees a
+	// concrete default and isn't surprised when the wizard dials it.
+	port := target.Port
+	if port == 0 {
+		port = 22
+	}
+	m.portInput.SetValue(fmt.Sprintf("%d", port))
+	m.userFocus = 0
 	return nil
 }
 
@@ -243,7 +259,9 @@ func (m *sshWizardModel) updateKey(msg tea.KeyMsg) (*sshWizardModel, tea.Cmd) {
 		switch msg.String() {
 		case "enter":
 			m.step = sshWizardUser
+			m.userFocus = 0
 			m.userInput.Focus()
+			m.portInput.Blur()
 			m.passwd.Blur()
 			return m, textinput.Blink
 		case "esc":
@@ -251,24 +269,51 @@ func (m *sshWizardModel) updateKey(msg tea.KeyMsg) (*sshWizardModel, tea.Cmd) {
 		}
 	case sshWizardUser:
 		switch msg.String() {
+		case "tab", "shift+tab":
+			// Toggle focus between Username and Port fields. Tab
+			// is the standard convention for two-field forms;
+			// supports the 1% of users who need to override the
+			// SSH port without forcing it on everyone else as a
+			// separate step.
+			if m.userFocus == 0 {
+				m.userFocus = 1
+				m.userInput.Blur()
+				m.portInput.Focus()
+			} else {
+				m.userFocus = 0
+				m.portInput.Blur()
+				m.userInput.Focus()
+			}
+			return m, textinput.Blink
 		case "enter":
 			u := strings.TrimSpace(m.userInput.Value())
 			if u == "" {
 				m.err = "username is required"
 				return m, nil
 			}
+			p, perr := parseWizardPort(m.portInput.Value())
+			if perr != nil {
+				m.err = perr.Error()
+				return m, nil
+			}
 			m.err = ""
-			// Persist back to target so install/enumerate use it.
+			// Persist edits back to target so install/enumerate use them.
 			m.target.User = u
+			m.target.Port = p
 			m.step = sshWizardPassword
 			m.userInput.Blur()
+			m.portInput.Blur()
 			m.passwd.Focus()
 			return m, textinput.Blink
 		case "esc":
 			return m, m.emitCancel()
 		}
 		var cmd tea.Cmd
-		m.userInput, cmd = m.userInput.Update(msg)
+		if m.userFocus == 1 {
+			m.portInput, cmd = m.portInput.Update(msg)
+		} else {
+			m.userInput, cmd = m.userInput.Update(msg)
+		}
 		return m, cmd
 	case sshWizardPassword:
 		switch msg.String() {
@@ -501,12 +546,13 @@ func (m *sshWizardModel) View(w, h int) string {
 		lines = append(lines, "We'll install your key for this user. Edit if needed.")
 		lines = append(lines, "")
 		lines = append(lines, "Username:  "+m.userInput.View())
+		lines = append(lines, "Port:      "+m.portInput.View()+m.st.Muted.Render("   (Tab to edit if non-default)"))
 		if m.err != "" {
 			lines = append(lines, "")
 			lines = append(lines, m.st.Title.Foreground(m.st.P.Red).Render(m.err))
 		}
 		lines = append(lines, "")
-		lines = append(lines, m.st.Muted.Render("[Enter] continue   [Esc] cancel"))
+		lines = append(lines, m.st.Muted.Render("[Tab] switch field   [Enter] continue   [Esc] cancel"))
 	case sshWizardPassword:
 		lines = append(lines, title.Render("Password for "+m.target.String()))
 		lines = append(lines, "")
@@ -588,6 +634,31 @@ func (m *sshWizardModel) View(w, h int) string {
 		Width(cardW).
 		Render(body)
 	return lipgloss.Place(w, h, lipgloss.Center, lipgloss.Center, card)
+}
+
+// parseWizardPort validates the Port textinput's value. Empty
+// (after Tab-typing-clear) means "default to 22"; a non-empty
+// value must parse as an int in 1..65535. Returns the resolved
+// port int and a user-facing error string on failure.
+func parseWizardPort(raw string) (int, error) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return 22, nil
+	}
+	n := 0
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return 0, fmt.Errorf("port must be a number (got %q)", s)
+		}
+		n = n*10 + int(r-'0')
+		if n > 65535 {
+			return 0, fmt.Errorf("port must be 1..65535")
+		}
+	}
+	if n < 1 {
+		return 0, fmt.Errorf("port must be at least 1")
+	}
+	return n, nil
 }
 
 // wizardWrap is a trivial column wrapper for the error step. The
