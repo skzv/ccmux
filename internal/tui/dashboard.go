@@ -13,6 +13,7 @@ import (
 	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/selfupdate"
+	"github.com/skzv/ccmux/internal/tui/components"
 	"github.com/skzv/ccmux/internal/tui/styles"
 	"github.com/skzv/ccmux/internal/usage"
 )
@@ -54,6 +55,26 @@ type dashboardModel struct {
 	// the last call failed — the usage panel silently skips the block
 	// summary when nil.
 	ccusage *ccusageBlock
+
+	// now is a deterministic clock injection used by golden tests so
+	// the wall-clock render in statsPanel doesn't vary by run. Zero
+	// value falls back to time.Now() — production code never sets it.
+	now time.Time
+}
+
+// SetNow injects a deterministic clock so the dashboard renders the
+// same output across runs. Tests set this before snapshotting; the
+// production launch path leaves it zero and the dashboard falls back
+// to time.Now().
+func (m *dashboardModel) SetNow(t time.Time) { m.now = t }
+
+// clock returns the dashboard's current time — the injected value if
+// set, else time.Now(). Internal helper for time-dependent renders.
+func (m dashboardModel) clock() time.Time {
+	if m.now.IsZero() {
+		return time.Now()
+	}
+	return m.now
 }
 
 func newDashboard(st styles.Styles, km Keymap) dashboardModel {
@@ -112,197 +133,133 @@ func (m *dashboardModel) SetVersion(v string) {
 	m.version = v
 }
 
-func (m dashboardModel) View(width, height int) string {
-	if isNarrow(width) {
-		return m.viewNarrow(width, height)
+// HelpBarProps returns the screen-level HelpBar contract for the
+// home screen — the union of global keys (?, q, screen numbers)
+// and the home-screen actions (attach, new, kill, rename, refresh,
+// u for the usage-detail overlay).
+// Priorities order the collapse: ? and q survive at any width.
+func (m dashboardModel) HelpBarProps(width int) components.HelpBarProps {
+	return components.HelpBarProps{
+		Hints: []components.KeyHint{
+			{Key: "?", Label: "help", Priority: 10},
+			{Key: "q", Label: "quit", Priority: 10},
+			{Key: "enter", Label: "attach", Priority: 8},
+			{Key: "n", Label: "new", Priority: 7},
+			{Key: "x", Label: "kill", Priority: 6},
+			{Key: "u", Label: "usage", Priority: 5},
+			{Key: "R", Label: "rename", Priority: 4},
+			{Key: "r", Label: "refresh", Priority: 3},
+			{Key: "1-7", Label: "screens", Priority: 2},
+		},
+		Width: width,
 	}
-	return m.viewWide(width, height)
 }
 
-// StatsView renders the dashboard's stat tiles — session summary,
-// devices, and usage — stacked in a single column. The hero panel and
-// the sessions list are rendered separately by homeView() in app.go:
-// the hero spans the full width above, and the sessions list occupies
-// the column to the left of these tiles.
+// StatsView renders the dashboard's stat tiles — devices and usage
+// — stacked in a single column. The legacy session-summary tile
+// dissolved into the Sessions pane title (sessionsModel.sessionsCount
+// produces the `(3 · 1 active · 1 idle · 1 waiting)` inline count
+// breakdown) so the tile no longer earns its vertical real estate.
+// The hero panel and the sessions list are rendered separately by
+// homeView() in app.go.
 func (m dashboardModel) StatsView(width int) string {
-	stats := m.statsPanel(width)
 	devices := m.devicesPanel(width)
 	usage := m.usagePanel(width)
-	return lipgloss.JoinVertical(lipgloss.Left, stats, devices, usage)
+	return lipgloss.JoinVertical(lipgloss.Left, devices, usage)
 }
 
-func (m dashboardModel) viewWide(width, height int) string {
-	hero := m.heroPanel(width)
-	heroH := lipgloss.Height(hero)
-	rowH := height - heroH
-	if rowH < 8 {
-		rowH = 8
-	}
-
-	// Layout: left column carries Sessions, right column carries the
-	// stack of Session-summary + Devices + Usage. The previous 2:1
-	// split made Sessions dominant and squeezed the Devices panel,
-	// which has the most information density per row (name + version
-	// + tags + warnings). Reweighting to 1:1 (with a 1-col gutter)
-	// gives Devices room to breathe; Sessions still fits comfortably
-	// since most rows are short.
-	gutter := 1
-	leftW := (width - gutter) / 2
-	rightW := width - leftW - gutter
-
-	sessions := m.topSessions(leftW, rowH)
-
-	stats := m.statsPanel(rightW)
-	devices := m.devicesPanel(rightW)
-	usage := m.usagePanel(rightW)
-	right := lipgloss.JoinVertical(lipgloss.Left, stats, devices, usage)
-
-	row := lipgloss.JoinHorizontal(lipgloss.Top, sessions, " ", right)
-	return lipgloss.JoinVertical(lipgloss.Left, hero, row)
-}
-
-func (m dashboardModel) viewNarrow(width, height int) string {
-	hero := m.heroPanel(width)
-	stats := m.statsPanel(width)
-	devices := m.devicesPanel(width)
-	usage := m.usagePanel(width)
-	heroH := lipgloss.Height(hero)
-	statsH := lipgloss.Height(stats)
-	devicesH := lipgloss.Height(devices)
-	usageH := lipgloss.Height(usage)
-	listH := height - heroH - statsH - devicesH - usageH
-	if listH < 5 {
-		listH = 5
-	}
-	sessions := m.topSessions(width, listH)
-	return lipgloss.JoinVertical(lipgloss.Left, hero, stats, devices, usage, sessions)
-}
-
+// heroPanel renders the minimal screen-top greeting. The previous
+// welcome subtitle ("Welcome to ccmux. One TUI for every agent
+// session …") was screen-redesign-checkpoint feedback as too much
+// chrome for repeat opens, so it's gone — first-launch users see it
+// in the tour instead. The inline update banner also moved out of
+// the hero into the status bar so it doesn't compete with screen
+// content for vertical real estate (see renderStatusBar).
 func (m dashboardModel) heroPanel(width int) string {
-	parts := []string{m.st.Title.Render("Hello.")}
-	// The welcome subtitle is T2 — decoration. Drop it on narrow so a
-	// phone gets straight to the hero and the (T1) update banner.
-	if !m.narrow {
-		parts = append(parts, m.st.Subtitle.Render("Welcome to ccmux. One TUI for every agent session — Claude, Codex, Antigravity — every project, every device."))
-	}
-	// Auto-update banner: only when the launch check found the
-	// checkout behind upstream. Phrased as a nudge, not an alarm —
-	// nothing is broken, there's just newer code. The action is an
-	// explicit `ccmux update` (check-and-notify only).
-	if m.updateAvailable.Available() {
-		parts = append(parts, "", m.updateBanner())
-	}
-	body := lipgloss.JoinVertical(lipgloss.Left, parts...)
-	return m.st.Pane.Width(width - 2).MaxWidth(width).Render(body)
+	_ = width
+	return "   " + m.st.Title.Render("Hello.")
 }
 
-// updateBanner renders the one-line "update available" nudge. Pulled
-// out so the dashboard test can assert its wording without rendering
-// the whole hero panel.
-func (m dashboardModel) updateBanner() string {
-	r := m.updateAvailable
-	commits := "1 commit"
-	if r.Behind != 1 {
-		commits = fmt.Sprintf("%d commits", r.Behind)
-	}
-	return m.st.StatusWarning.Render(
-		fmt.Sprintf("↑ update available — %s behind on %s. Run `ccmux update`.", commits, r.Branch),
-	)
-}
-
-func (m dashboardModel) statsPanel(width int) string {
-	active := 0
-	idle := 0
-	waiting := 0
-	for _, s := range m.sessions {
-		switch s.State {
-		case "active":
-			active++
-		case "idle":
-			idle++
-		case "needs_input":
-			waiting++
-		}
-	}
-	rows := []string{
-		m.st.Emphasis.Render("Session summary"),
-		"",
-		fmt.Sprintf("%s  %d active", m.st.StateActive.Render("●"), active),
-		fmt.Sprintf("%s  %d idle", m.st.StateIdle.Render("●"), idle),
-		fmt.Sprintf("%s  %d waiting for input", m.st.StateNeedsInput.Render("●"), waiting),
-	}
-	// The live clock is T2 — a phone already has one. Drop it on narrow.
-	if !m.narrow {
-		rows = append(rows, "", m.st.Muted.Render(time.Now().Format("Mon Jan 2 — 15:04:05")))
-	}
-	return m.st.Pane.Width(width - 2).MaxWidth(width).Render(strings.Join(rows, "\n"))
-}
-
-// devicesPanel renders the tailnet/network view. One row per device,
-// two columns: [icon + name] | [info]. The info column is whichever
-// single fact is most useful for that row:
+// devicesPanel renders the tailnet/network view. Two layouts:
 //
-//   - Reachable ccmuxd: version, with " · update available" if it
-//     differs from this build's version.
-//   - NeedsInstall:     "ccmuxd unreachable".
-//   - Mobile:           "via Moshi app".
+//   - One-line strip when there are 3 or fewer devices and they fit
+//     the pane's inner width: "Devices  ● sputnik (this)  ● atelier".
+//   - Multi-row list otherwise (4+ devices, or strip overflowed):
+//     each device on its own row with the same row renderer.
 //
-// Local row gets a muted "(this)" suffix on the name so the user can
-// tell which row is which when multiple machines share the dashboard.
-//
-// Width-aware: the name column scales with the panel's inner width,
-// capped at 28 chars so very wide terminals don't strand info too far
-// right. Truncates names with an ellipsis rather than overflowing.
-//
-// Empty state hides the panel entirely so the dashboard stays tidy on
-// single-machine setups.
+// Per-device chips signal action: "[↑ update]" when a remote peer's
+// ccmuxd version differs from this build, "(unreachable)" muted when
+// the peer's ccmuxd isn't responding. The local row never carries an
+// update chip. Reference detail (this build version, install help)
+// moved out — the status bar carries the local-update chip and the
+// `?` help overlay carries the install instructions.
 func (m dashboardModel) devicesPanel(width int) string {
 	if len(m.hosts) == 0 {
 		return ""
 	}
 	st := m.st
-
-	// Pane has a 1-col border on each side + 1-col padding = 4 chars
-	// of chrome around the body. Stay safe on tiny terminals.
 	inner := width - 4
-	if inner < 30 {
-		inner = 30
+
+	// Adaptive layout: try a one-line strip when the device count is
+	// small AND the rendered strip fits the inner width.
+	if len(m.hosts) <= 3 {
+		strip := m.renderDevicesStrip()
+		heading := st.Emphasis.Render("Devices")
+		oneLine := heading + "   " + strip
+		if lipgloss.Width(oneLine) <= inner {
+			return st.Pane.Width(width - 2).MaxWidth(width).Render(oneLine)
+		}
 	}
-	nameW := inner * 2 / 5
-	if nameW > 28 {
-		nameW = 28
-	}
-	if nameW < 12 {
-		nameW = 12
-	}
-	rows := []string{st.Emphasis.Render("Devices")}
+
+	// Multi-row list. Header + blank + one row per device.
+	rows := []string{st.Emphasis.Render("Devices"), ""}
 	for _, h := range m.hosts {
-		icon := iconForHost(h, st)
-		name := nameForHost(h, nameW)
-		info := infoForHost(h, m.version, st)
-		rows = append(rows, fmt.Sprintf("%s %s %s",
-			icon, padRight(name, nameW), info))
-	}
-	// "this build:" and the unreachable-peer help are T2 reference
-	// detail — drop them on narrow so the device rows stand alone.
-	if !m.narrow {
-		if m.version != "" {
-			rows = append(rows, "", st.Muted.Render("this build: "+m.version))
-		}
-		hasMissing := false
-		for _, h := range m.hosts {
-			if h.NeedsInstall {
-				hasMissing = true
-				break
-			}
-		}
-		if hasMissing {
-			rows = append(rows,
-				st.Muted.Render("unreachable peer? install ccmux there with `make bootstrap`,"),
-				st.Muted.Render("or run `ccmux setup` on it to enable server mode."))
-		}
+		rows = append(rows, "  "+m.renderDeviceRow(h))
 	}
 	return st.Pane.Width(width - 2).MaxWidth(width).Render(strings.Join(rows, "\n"))
+}
+
+// renderDevicesStrip joins each device row with a small gap. Used
+// only by the one-line layout in devicesPanel.
+func (m dashboardModel) renderDevicesStrip() string {
+	parts := make([]string, 0, len(m.hosts))
+	for _, h := range m.hosts {
+		parts = append(parts, m.renderDeviceRow(h))
+	}
+	return strings.Join(parts, "   ")
+}
+
+// renderDeviceRow renders a single device entry: status dot + name
+// (host-colored) + optional "(this)" suffix on the local row +
+// optional "[↑ update]" chip when the peer's ccmuxd is on a different
+// build than the local ccmux.
+func (m dashboardModel) renderDeviceRow(h hostStatus) string {
+	st := m.st
+	var dot string
+	switch {
+	case h.Mobile:
+		dot = "📱"
+	case h.NeedsInstall:
+		dot = st.Muted.Render("○")
+	case !h.OK:
+		dot = st.StateError.Render("●")
+	default:
+		dot = st.HostColor(h.Name).Render("●")
+	}
+	name := st.HostColor(h.Name).Render(h.Name)
+	if h.Local {
+		name += " " + st.Muted.Render("(this)")
+	}
+	row := dot + " " + name
+	switch {
+	case h.Mobile:
+		row += " " + st.Muted.Render("(Moshi)")
+	case h.NeedsInstall:
+		row += " " + st.Muted.Render("(unreachable)")
+	case !h.Local && h.Version != "" && m.version != "" && versionsDiffer(m.version, h.Version):
+		row += " " + lipgloss.NewStyle().Foreground(st.P.Yellow).Bold(true).Render("[↑ update]")
+	}
+	return row
 }
 
 // iconForHost returns the colored status indicator for a row.
@@ -318,40 +275,6 @@ func iconForHost(h hostStatus, st styles.Styles) string {
 	default:
 		return st.StateActive.Render("●")
 	}
-}
-
-// nameForHost is the row's primary label. For the local row we
-// append a muted "(this)" marker so it's obvious which one is the
-// current machine. Truncation respects nameW so the column stays
-// aligned.
-func nameForHost(h hostStatus, nameW int) string {
-	if h.Local {
-		const marker = " (this)"
-		room := nameW - len(marker)
-		if room < 4 {
-			room = 4
-		}
-		return truncatePeerName(h.Name, room) + marker
-	}
-	return truncatePeerName(h.Name, nameW)
-}
-
-// infoForHost returns the right-hand column: one fact per row.
-func infoForHost(h hostStatus, localVersion string, st styles.Styles) string {
-	switch {
-	case h.Mobile:
-		return st.Muted.Render("via Moshi app")
-	case h.NeedsInstall:
-		return st.Muted.Render("ccmuxd unreachable")
-	}
-	ver := h.Version
-	if ver == "" {
-		ver = st.Muted.Render("?")
-	}
-	if localVersion != "" && h.Version != "" && versionsDiffer(localVersion, h.Version) {
-		return ver + "  " + st.StatusWarning.Render("update available")
-	}
-	return ver
 }
 
 // truncatePeerName cuts a name to fit `n` visible columns, replacing
@@ -391,145 +314,438 @@ func normalizeVersion(v string) string {
 	return strings.TrimSpace(v)
 }
 
-// usagePanel renders the Claude Code usage block: messages in the 5-hour
-// subscription window, reset time, token totals, top projects, estimated
-// $cost. Falls back gracefully when no data is available yet.
+// usagePanel renders the redesigned consolidated usage block.
+//
+// Layout (wide):
+//
+//	Usage
+//
+//	  Claude · 5h window
+//	    47 / 225 (est.) prompts  ·  21% used
+//	    █████░░░░░░░░░░░░░░░░░░░░
+//	    resets in 4h 57m
+//
+//	  Cost · billing block
+//	    $48.21 spent  ·  $9.20/hr
+//	    projected $73 by 22:30
+//
+//	  Tokens · this window
+//	    1.2M in  ·  380K out  ·  2.1M cache hit
+//
+//	  Codex · recent
+//	    no conversations yet              (or live numbers when HasData)
+//
+//	  Antigravity · recent
+//	    no conversations yet
+//
+//	  press u for top projects · costs · per-agent
+//
+// Section headings are agent-colored so the eye learns which agent
+// is which (Claude=mauve, Codex=sky, Antigravity=peach). Headline
+// numbers are lavender bold; supporting text is muted; cache hit is
+// green. The Anthropic per-window limit is rendered with "(est.)"
+// because Anthropic does not publish exact per-tier caps — we use
+// the soft defaults from planMessageLimit. On narrow terminals the
+// whole panel collapses to a single line via usageSummaryLine.
 func (m dashboardModel) usagePanel(width int) string {
 	st := m.st
-	// Narrow: the whole panel collapses to one headline line. The
-	// cache/token detail, top projects, and Codex/Antigravity blocks
-	// (all T2) are dropped — the CLI surfaces the full picture.
 	if m.narrow {
 		return st.Pane.Width(width - 2).MaxWidth(width).Render(m.usageSummaryLine())
 	}
-	rows := []string{st.Emphasis.Render("Claude usage")}
-
-	// Billing-block summary from ccusage (most accurate source for
-	// real-time burn rate and end-of-block projection).
-	if b := m.ccusage; b != nil {
-		costChip := lipgloss.NewStyle().Foreground(st.P.Lavender).Bold(true).Render(
-			fmt.Sprintf("$%.2f", b.CostUSD),
-		)
-		var blockRow string
-		if b.BurnRateCostPerHour > 0 {
-			blockRow = fmt.Sprintf("block      %s  @ $%.1f/hr", costChip, b.BurnRateCostPerHour)
-		} else {
-			blockRow = fmt.Sprintf("block      %s", costChip)
-		}
-		rows = append(rows, "", blockRow)
-		if b.ProjectedTotalCost > 0 && b.IsActive {
-			local := b.EndTime.Local()
-			rows = append(rows, st.Muted.Render(
-				fmt.Sprintf("projected  $%.2f by %s", b.ProjectedTotalCost, local.Format("15:04")),
-			))
-		}
-	}
-
-	if m.usage == nil {
-		rows = append(rows,
+	if m.usage == nil && m.ccusage == nil {
+		return st.Pane.Width(width - 2).MaxWidth(width).Render(strings.Join([]string{
+			st.Emphasis.Render("Usage"),
 			"",
 			st.Muted.Render("(loading transcripts…)"),
-		)
-		return st.Pane.Width(width - 2).MaxWidth(width).Render(strings.Join(rows, "\n"))
+		}, "\n"))
 	}
-	a := m.usage
-	rows = append(rows, "")
 
-	// Subscription window summary. ResetAt is in UTC (timestamps in
-	// Claude Code's transcripts are UTC); convert to the user's local
-	// zone before formatting so "06:02" shows as "23:02" on the West
-	// Coast, not in zulu time.
+	rows := []string{st.Emphasis.Render("Usage"), ""}
+
+	// Indent hierarchy is 4 levels:
 	//
-	// Use UserPrompts (not Messages) for the headline count because
-	// that's what Anthropic's per-window quota actually counts. The
-	// Messages number lumps in every tool-result follow-up which would
-	// inflate the visible total ~10-30x.
+	//   Usage                            (0 — panel title)
+	//    Claude · 5h window              (1 — agent heading)
+	//      47 / 225 (est.) prompts...    (3 — agent body)
+	//      Cost · billing block          (3 — Claude sub-section heading)
+	//        $48.21 spent ...            (5 — Claude sub-section body)
+	//      Tokens · this window          (3 — Claude sub-section heading)
+	//        1.2M in · 380K out ...      (5 — Claude sub-section body)
+	//    Codex · recent                  (1 — peer agent heading)
+	//      no conversations yet          (3 — peer agent body)
+	//
+	// Cost and Tokens nest UNDER Claude because both are Claude-
+	// specific data (ccusage scrapes Anthropic's billing block,
+	// claudeusage walks Claude's transcripts). Codex and Antigravity
+	// don't have an equivalent so they stay as flat peer sections.
+	if m.usage != nil {
+		rows = append(rows, " "+agentSectionHeading(st, agentClaude, "Claude · 5h window"))
+		rows = append(rows, m.renderClaudeWindowSection()...)
+		if m.ccusage != nil {
+			rows = append(rows, "")
+			rows = append(rows, "   "+st.Subtitle.Render("Cost · billing block"))
+			rows = append(rows, m.renderCostSection()...)
+		}
+		rows = append(rows, "")
+		rows = append(rows, "   "+st.Subtitle.Render("Tokens · this window"))
+		rows = append(rows, m.renderTokensSection()...)
+		rows = append(rows, "")
+	} else if m.ccusage != nil {
+		// Edge case: ccusage block arrived before transcripts. Render
+		// Cost as its own top-level section (no Claude heading to
+		// nest under).
+		rows = append(rows, " "+st.Subtitle.Render("Cost · billing block"))
+		rows = append(rows, m.renderCostSection()...)
+		rows = append(rows, "")
+	}
+
+	rows = append(rows, " "+agentSectionHeading(st, agentCodex, "Codex · recent"))
+	rows = append(rows, m.renderOtherAgentSection(m.codexUsage)...)
+	rows = append(rows, "")
+	rows = append(rows, " "+agentSectionHeading(st, agentAntigravity, "Antigravity · recent"))
+	rows = append(rows, m.renderOtherAgentSection(m.antigravityUsage)...)
+	rows = append(rows, "")
+	rows = append(rows, " "+st.Muted.Render("press ")+st.Key.Render("u")+
+		st.Muted.Render(" for top projects · cache hit rate · per-prompt cost"))
+
+	return st.Pane.Width(width - 2).MaxWidth(width).Render(strings.Join(rows, "\n"))
+}
+
+// agentID is the small enum the dashboard uses to pick a section
+// accent color for Claude / Codex / Antigravity headings. Lives
+// here (rather than internal/agent) because it's purely about how
+// the Usage panel colors its sub-section labels.
+type agentID int
+
+const (
+	agentClaude agentID = iota
+	agentCodex
+	agentAntigravity
+)
+
+// agentSectionHeading renders the per-agent sub-section title in
+// the agent's accent color (Claude=mauve, Codex=sky, Antigravity=
+// peach). The "non-Claude" agents are sometimes empty; coloring
+// the heading even in that case keeps the visual cadence consistent
+// across the panel.
+func agentSectionHeading(st styles.Styles, id agentID, text string) string {
+	var color lipgloss.Color
+	switch id {
+	case agentCodex:
+		color = st.P.Sky
+	case agentAntigravity:
+		color = st.P.Peach
+	default:
+		color = st.P.Mauve
+	}
+	return lipgloss.NewStyle().Foreground(color).Bold(true).Render(text)
+}
+
+// renderClaudeWindowSection produces the indented body rows of the
+// "Claude · 5h window" section: headline + bar + reset.
+func (m dashboardModel) renderClaudeWindowSection() []string {
+	st := m.st
+	a := m.usage
+
 	headlineCount := a.UserPrompts
 	headlineLabel := "prompts"
 	if headlineCount == 0 {
-		// Fall back gracefully if the JSONL didn't expose the user-
-		// prompt shape we expect.
 		headlineCount = a.Messages
 		headlineLabel = "msgs"
 	}
-	msgChip := lipgloss.NewStyle().Foreground(st.P.Lavender).Bold(true).Render(
-		fmt.Sprintf("%d %s", headlineCount, headlineLabel),
-	)
-	resetLine := ""
+	limit := planMessageLimit(m.cfg.Subscription.Tier)
+
+	count := lipgloss.NewStyle().Foreground(st.P.Lavender).Bold(true).
+		Render(fmt.Sprintf("%d", headlineCount))
+	headline := "   " + count
+	if limit > 0 {
+		headline += " " + st.Muted.Render(fmt.Sprintf("/ %d (est.) %s", limit, headlineLabel))
+		ratio := float64(headlineCount) / float64(limit)
+		if ratio > 1 {
+			ratio = 1
+		}
+		pct := int(ratio * 100)
+		pctStyle := lipgloss.NewStyle().Foreground(st.P.Green).Bold(true)
+		switch {
+		case ratio >= 0.9:
+			pctStyle = lipgloss.NewStyle().Foreground(st.P.Red).Bold(true)
+		case ratio >= 0.7:
+			pctStyle = lipgloss.NewStyle().Foreground(st.P.Yellow).Bold(true)
+		}
+		headline += st.Muted.Render("  ·  ") + pctStyle.Render(fmt.Sprintf("%d%% used", pct))
+	} else {
+		headline += " " + st.Muted.Render(headlineLabel)
+	}
+
+	lines := []string{headline}
+	if bar := m.renderUsageBar(headlineCount, limit, 25); bar != "" {
+		lines = append(lines, "   "+bar)
+	}
 	if reset := a.ResetAt(5 * time.Hour); !reset.IsZero() {
-		local := reset.Local()
-		remaining := time.Until(reset)
-		if remaining > 0 {
-			resetLine = st.Muted.Render(fmt.Sprintf("resets %s (in %s)",
-				local.Format("15:04"), humanDuration(remaining)))
+		if remaining := time.Until(reset); remaining > 0 {
+			lines = append(lines, "   "+st.Muted.Render("resets in "+humanDuration(remaining)))
 		} else {
-			resetLine = st.Muted.Render(fmt.Sprintf("resetting now (next: %s)",
-				local.Format("15:04")))
+			lines = append(lines, "   "+st.Muted.Render("resetting now"))
 		}
 	}
-	rows = append(rows, fmt.Sprintf("5h window  %s  %s", msgChip, resetLine))
+	return lines
+}
 
-	// Quota bar if a known subscription tier is configured. Always feed
-	// the bar the user-prompt count rather than raw message count so it
-	// approximates the same number Anthropic uses to enforce the limit.
-	if bar := m.quotaBar(headlineCount, width-6); bar != "" {
-		rows = append(rows, bar)
+// renderUsageBar produces a fixed-width ASCII progress bar colored
+// by ratio (green / yellow / red). Empty string when there's no
+// limit configured for this tier.
+func (m dashboardModel) renderUsageBar(count, limit, width int) string {
+	if limit <= 0 || width <= 0 {
+		return ""
+	}
+	ratio := float64(count) / float64(limit)
+	if ratio > 1 {
+		ratio = 1
+	}
+	filled := int(float64(width) * ratio)
+	if filled > width {
+		filled = width
+	}
+	color := m.st.P.Green
+	switch {
+	case ratio >= 0.9:
+		color = m.st.P.Red
+	case ratio >= 0.7:
+		color = m.st.P.Yellow
+	}
+	return lipgloss.NewStyle().Foreground(color).Render(strings.Repeat("█", filled)) +
+		m.st.Muted.Render(strings.Repeat("░", width-filled))
+}
+
+// renderCostSection produces the body rows for the billing-block
+// section: spent · burn rate, optionally projected total.
+//
+// Format choices: spent and projected use %.2f (cents matter — that's
+// what the user is comparing across sessions). Burn rate uses %.1f
+// because hourly rates aren't precise to the cent anyway and one
+// decimal reads cleaner.
+func (m dashboardModel) renderCostSection() []string {
+	st := m.st
+	b := m.ccusage
+	spent := lipgloss.NewStyle().Foreground(st.P.Lavender).Bold(true).Render(fmt.Sprintf("$%.2f", b.CostUSD))
+	line := "     " + spent + " " + st.Muted.Render("spent")
+	if b.BurnRateCostPerHour > 0 {
+		rate := lipgloss.NewStyle().Foreground(st.P.Lavender).Bold(true).
+			Render(fmt.Sprintf("$%.1f", b.BurnRateCostPerHour))
+		line += st.Muted.Render("  ·  ") + rate + st.Muted.Render("/hr")
+	}
+	lines := []string{line}
+	if b.ProjectedTotalCost > 0 && b.IsActive {
+		projection := lipgloss.NewStyle().Foreground(st.P.Peach).Bold(true).
+			Render(fmt.Sprintf("$%.2f", b.ProjectedTotalCost))
+		local := b.EndTime.Local()
+		lines = append(lines, "     "+st.Muted.Render("projected ")+projection+
+			st.Muted.Render(" by "+local.Format("15:04")))
+	}
+	return lines
+}
+
+// renderTokensSection produces the one-line tokens summary:
+// input · output · cache (cache highlighted green when nonzero).
+func (m dashboardModel) renderTokensSection() []string {
+	st := m.st
+	a := m.usage
+	in := lipgloss.NewStyle().Foreground(st.P.Lavender).Bold(true).Render(claudeusage.HumanCount(a.Total.Input))
+	out := lipgloss.NewStyle().Foreground(st.P.Lavender).Bold(true).Render(claudeusage.HumanCount(a.Total.Output))
+	line := "     " + in + st.Muted.Render(" in  ·  ") + out + st.Muted.Render(" out")
+	if a.Total.CacheRead > 0 {
+		cache := lipgloss.NewStyle().Foreground(st.P.Green).Bold(true).
+			Render(claudeusage.HumanCount(a.Total.CacheRead))
+		line += st.Muted.Render("  ·  ") + cache + st.Muted.Render(" cache hit")
+	}
+	return []string{line}
+}
+
+// renderUsageOverlay produces the full-detail usage modal opened by
+// pressing `u` on the home screen. It surfaces the data the inline
+// Usage panel deferred — top projects in the 5-hour window, cache
+// efficiency, cost-per-prompt, and explicit notes about which
+// figures are estimates vs. measured. The dashboard's inline panel
+// is the "at a glance"; this overlay is the "deep dive."
+func (m dashboardModel) renderUsageOverlay(st styles.Styles, width, height int) string {
+	lines := []string{
+		st.Emphasis.Render("Usage detail"),
+		st.Subtitle.Render("Pressed-u expansion of the dashboard's Usage panel — top projects, cache efficiency, cost-per-prompt, and the data gaps the inline panel papers over."),
+		"",
 	}
 
-	// Token breakdown — emphasize cache_read since that's where the
-	// session-level efficiency shows up.
-	rows = append(rows, "")
-	rows = append(rows, fmt.Sprintf("tokens     %s in · %s out",
-		st.Emphasis.Render(claudeusage.HumanCount(a.Total.Input)),
-		st.Emphasis.Render(claudeusage.HumanCount(a.Total.Output)),
-	))
-	rows = append(rows, fmt.Sprintf("cache      %s create · %s read",
-		st.Muted.Render(claudeusage.HumanCount(a.Total.CacheCreation)),
-		st.StateActive.Render(claudeusage.HumanCount(a.Total.CacheRead)),
-	))
-	// API-rate cost estimate is informational only for subscription users.
-	if cost := a.EstimatedCost(); cost > 0 {
-		rows = append(rows, st.Muted.Render(
-			fmt.Sprintf("~ $%.2f at API rates (subs = $0 beyond plan)", cost),
-		))
+	if m.usage == nil && m.ccusage == nil {
+		lines = append(lines, st.Muted.Render("(loading transcripts…)"))
 	}
 
-	// Top projects.
-	if tp := a.TopProjects(3); len(tp) > 0 {
-		rows = append(rows, "")
-		rows = append(rows, st.Subtitle.Render("top projects this window"))
-		for _, p := range tp {
-			rows = append(rows, fmt.Sprintf("  %s   %s",
-				p.Project,
-				st.Muted.Render(claudeusage.HumanCount(p.Tokens.Total())),
+	// Subscription tier + the (est.) caveat.
+	if tier := m.cfg.Subscription.Tier; tier != "" {
+		limit := planMessageLimit(tier)
+		lines = append(lines, st.Subtitle.Render("Subscription"))
+		lines = append(lines, fmt.Sprintf("  tier            %s", tier))
+		if limit > 0 {
+			lines = append(lines,
+				fmt.Sprintf("  per-window cap  %d prompts (est.)", limit),
+				st.Muted.Render("                  Anthropic does not publish exact caps;"),
+				st.Muted.Render("                  ccmux uses a soft default per tier."),
+			)
+		}
+		lines = append(lines, "")
+	}
+
+	// Claude detail: prompts, tokens, cache, cost-per-prompt.
+	if a := m.usage; a != nil {
+		lines = append(lines, st.Subtitle.Render("Claude · 5h window"))
+		lines = append(lines, fmt.Sprintf("  prompts         %d (user) · %d (total messages)",
+			a.UserPrompts, a.Messages))
+		lines = append(lines, fmt.Sprintf("  input tokens    %s",
+			claudeusage.HumanCount(a.Total.Input)))
+		lines = append(lines, fmt.Sprintf("  output tokens   %s",
+			claudeusage.HumanCount(a.Total.Output)))
+		lines = append(lines, fmt.Sprintf("  cache create    %s",
+			claudeusage.HumanCount(a.Total.CacheCreation)))
+		lines = append(lines, fmt.Sprintf("  cache read      %s",
+			claudeusage.HumanCount(a.Total.CacheRead)))
+		// Cache efficiency: how much of the input came from cache reads.
+		// 0..1 ratio. Useful signal of whether prompt caching is working.
+		if a.Total.Input > 0 {
+			total := a.Total.Input + a.Total.CacheRead + a.Total.CacheCreation
+			if total > 0 {
+				ratio := float64(a.Total.CacheRead) / float64(total)
+				lines = append(lines, fmt.Sprintf("  cache hit rate  %.0f%%", ratio*100))
+			}
+		}
+		if cost := a.EstimatedCost(); cost > 0 {
+			lines = append(lines, fmt.Sprintf("  est. cost       $%.2f at API rates", cost))
+			if a.UserPrompts > 0 {
+				lines = append(lines, fmt.Sprintf("  per-prompt avg  $%.4f",
+					cost/float64(a.UserPrompts)))
+			}
+			lines = append(lines, st.Muted.Render("                  subscription users pay $0 in-plan;"))
+			lines = append(lines, st.Muted.Render("                  the figure is what the same usage"))
+			lines = append(lines, st.Muted.Render("                  would cost on the pay-per-token API."))
+		}
+		lines = append(lines, "")
+
+		// Top projects.
+		if tp := a.TopProjects(5); len(tp) > 0 {
+			lines = append(lines, st.Subtitle.Render("Top projects · this 5h window"))
+			for _, p := range tp {
+				lines = append(lines, fmt.Sprintf("  %-32s %s",
+					truncate(p.Project, 32),
+					st.Muted.Render(claudeusage.HumanCount(p.Tokens.Total())+" tokens"),
+				))
+			}
+			lines = append(lines, "")
+		}
+	}
+
+	// Billing-block (ccusage) detail.
+	if b := m.ccusage; b != nil {
+		lines = append(lines, st.Subtitle.Render("Cost · billing block (via ccusage)"))
+		lines = append(lines, fmt.Sprintf("  spent           $%.2f", b.CostUSD))
+		if b.BurnRateCostPerHour > 0 {
+			lines = append(lines, fmt.Sprintf("  burn rate       $%.2f/hr", b.BurnRateCostPerHour))
+		}
+		if b.ProjectedTotalCost > 0 && b.IsActive {
+			local := b.EndTime.Local()
+			lines = append(lines, fmt.Sprintf("  projected       $%.2f by %s",
+				b.ProjectedTotalCost, local.Format("15:04")))
+		}
+		lines = append(lines, "")
+	}
+
+	// Per-agent.
+	lines = append(lines, st.Subtitle.Render("Other agents"))
+	for _, ag := range []struct {
+		id   agentID
+		name string
+		s    usage.AgentSummary
+	}{
+		{agentCodex, "Codex", m.codexUsage},
+		{agentAntigravity, "Antigravity", m.antigravityUsage},
+	} {
+		heading := agentSectionHeading(st, ag.id, "  "+ag.name)
+		if !ag.s.HasData {
+			lines = append(lines, heading+"  "+st.Muted.Render("— no conversations yet"))
+			continue
+		}
+		parts := []string{fmt.Sprintf("%d prompts", ag.s.Prompts)}
+		if ag.s.InputTokens > 0 || ag.s.OutputTokens > 0 {
+			parts = append(parts, fmt.Sprintf("%s in · %s out",
+				claudeusage.HumanCount(ag.s.InputTokens),
+				claudeusage.HumanCount(ag.s.OutputTokens),
 			))
+		} else {
+			parts = append(parts, "tokens unavailable (opaque transcript format)")
 		}
+		if ag.s.EstimatedCost > 0 {
+			parts = append(parts, fmt.Sprintf("~$%.2f est.", ag.s.EstimatedCost))
+		} else {
+			parts = append(parts, "no cost estimate (no ccusage-equivalent for this agent)")
+		}
+		lines = append(lines, heading+"  "+st.Muted.Render(strings.Join(parts, "  ·  ")))
 	}
+	lines = append(lines, "")
 
-	// Rich per-agent blocks for Codex and Antigravity follow. Each
-	// block uses the same shape as the Claude block above (headline
-	// count, token/activity details, cost where known) so the three
-	// agents read as peers rather than "Claude + two also-rans."
-	// Antigravity's transcripts are opaque protobuf, so its block
-	// surfaces conversation count + recency — honest about the data
-	// gap rather than pretending to have token detail.
-	rows = append(rows, "")
-	rows = append(rows, renderAgentUsageBlock(st, "Codex", m.codexUsage,
-		"`npm i -g @openai/codex`"))
-	rows = append(rows, "")
-	rows = append(rows, renderAgentUsageBlock(st, "Antigravity", m.antigravityUsage,
-		"`curl -fsSL https://antigravity.google/cli/install.sh | bash`"))
+	lines = append(lines, st.Muted.Render("press u or esc to close"))
 
-	return st.Pane.Width(width - 2).MaxWidth(width).Render(strings.Join(rows, "\n"))
+	modalW := minInt(96, width-4)
+	body := strings.Join(lines, "\n")
+	modal := st.PaneFocused.Width(modalW).Render(body)
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, modal)
+}
+
+// renderOtherAgentSection produces the body rows for a non-Claude
+// agent (Codex / Antigravity). When the agent has no data yet, the
+// section renders a single muted "no conversations yet" — install
+// hints are deliberately omitted.
+//
+// When the agent has data, the section is explicit about what we can
+// and can't compute. Non-Claude agents don't have a ccusage equivalent
+// scraping Anthropic-style billing blocks, so cost is rarely populated;
+// when it isn't, the row says "no cost estimate" rather than silently
+// omitting (asymmetry users notice on a side-by-side comparison).
+// Antigravity's protobuf transcripts are opaque, so when prompts are
+// counted but tokens aren't, the row says "tokens unavailable" for
+// the same reason.
+func (m dashboardModel) renderOtherAgentSection(s usage.AgentSummary) []string {
+	st := m.st
+	if !s.HasData {
+		return []string{"   " + st.Muted.Render("no conversations yet")}
+	}
+	prompts := lipgloss.NewStyle().Foreground(st.P.Lavender).Bold(true).
+		Render(fmt.Sprintf("%d", s.Prompts))
+	line := "   " + prompts + " " + st.Muted.Render("prompts")
+	if s.InputTokens > 0 || s.OutputTokens > 0 {
+		in := lipgloss.NewStyle().Foreground(st.P.Lavender).Bold(true).
+			Render(claudeusage.HumanCount(s.InputTokens))
+		out := lipgloss.NewStyle().Foreground(st.P.Lavender).Bold(true).
+			Render(claudeusage.HumanCount(s.OutputTokens))
+		line += st.Muted.Render("  ·  ") + in + st.Muted.Render(" in  ·  ") +
+			out + st.Muted.Render(" out")
+	} else {
+		line += st.Muted.Render("  ·  tokens unavailable")
+	}
+	if s.EstimatedCost > 0 {
+		cost := lipgloss.NewStyle().Foreground(st.P.Lavender).Bold(true).
+			Render(fmt.Sprintf("$%.2f", s.EstimatedCost))
+		line += st.Muted.Render("  ·  ~") + cost + st.Muted.Render(" est.")
+	} else {
+		line += st.Muted.Render("  ·  no cost estimate")
+	}
+	return []string{line}
 }
 
 // usageSummaryLine is the one-line collapse of usagePanel for narrow
 // terminals: the Claude headline only — prompt count, block cost, and
 // reset time. Everything the wide panel adds (cache, tokens, top
 // projects, the Codex/Antigravity blocks) is T2 and dropped here.
+// Panel title is "Usage" (matching the wide layout's panel heading)
+// so the narrow and wide phrasings stay consistent.
 func (m dashboardModel) usageSummaryLine() string {
 	st := m.st
-	parts := []string{st.Emphasis.Render("Claude usage")}
+	parts := []string{st.Emphasis.Render("Usage")}
 	if a := m.usage; a != nil {
 		count, label := a.UserPrompts, "prompts"
 		if count == 0 {
@@ -564,79 +780,6 @@ func (m dashboardModel) usageSummaryLine() string {
 // nil-checks. Easier to keep two functions and audit the markup
 // drift via TestRenderAgentUsageBlock_ShapeMatchesClaude (no such
 // test yet — covered structurally by the existing shape tests).
-func renderAgentUsageBlock(st styles.Styles, label string, s usage.AgentSummary, installHint string) string {
-	heading := st.Emphasis.Render(label + " usage")
-	if !s.HasData {
-		return heading + "\n" + st.Muted.Render(
-			"  no transcripts yet — install: "+installHint,
-		)
-	}
-
-	lines := []string{heading}
-	// Headline count: prompts is the cross-agent equivalent of
-	// Claude's "5h window N prompts". No reset time because OpenAI /
-	// Antigravity don't have subscription-window semantics.
-	chip := lipgloss.NewStyle().Foreground(st.P.Lavender).Bold(true).Render(
-		fmt.Sprintf("%d prompts", s.Prompts),
-	)
-	lines = append(lines, fmt.Sprintf("recent     %s", chip))
-
-	// Token row. Antigravity has no parser → both 0 here; surface a
-	// "tokens unavailable" note so the user doesn't think the agent
-	// produced zero output.
-	if s.InputTokens > 0 || s.OutputTokens > 0 {
-		lines = append(lines, fmt.Sprintf("tokens     %s in · %s out",
-			st.Emphasis.Render(claudeusage.HumanCount(s.InputTokens)),
-			st.Emphasis.Render(claudeusage.HumanCount(s.OutputTokens)),
-		))
-	} else {
-		lines = append(lines, st.Muted.Render(
-			"tokens     (unavailable — opaque transcript format)",
-		))
-	}
-	// Cost row (where known).
-	if s.EstimatedCost > 0 {
-		lines = append(lines, st.Muted.Render(
-			fmt.Sprintf("~ $%.2f at API rates", s.EstimatedCost),
-		))
-	}
-	return strings.Join(lines, "\n")
-}
-
-// quotaBar renders a 1-line progress bar when the user has declared a
-// subscription tier in config. Empty string when tier is "api" or unset.
-func (m dashboardModel) quotaBar(messages, width int) string {
-	limit := planMessageLimit(m.cfg.Subscription.Tier)
-	if limit <= 0 {
-		return ""
-	}
-	ratio := float64(messages) / float64(limit)
-	if ratio > 1 {
-		ratio = 1
-	}
-	barW := width - 12
-	if barW < 10 {
-		barW = 10
-	}
-	filled := int(float64(barW) * ratio)
-	if filled > barW {
-		filled = barW
-	}
-	bar := strings.Repeat("█", filled) + strings.Repeat("░", barW-filled)
-
-	color := m.st.StateActive
-	switch {
-	case ratio >= 0.9:
-		color = m.st.StateError
-	case ratio >= 0.7:
-		color = m.st.StateNeedsInput
-	}
-	return fmt.Sprintf("%s  %s",
-		color.Render(bar),
-		m.st.Muted.Render(fmt.Sprintf("%d / %d", messages, limit)),
-	)
-}
-
 // planMessageLimit returns Anthropic's documented soft cap on
 // messages per 5-hour window for each subscription tier. The actual
 // limits vary by traffic and model mix; these are sane defaults that
@@ -651,70 +794,6 @@ func planMessageLimit(tier string) int {
 		return 900
 	}
 	return 0 // api / unset → no quota bar
-}
-
-// topSessions produces a pane exactly `height` lines tall and `width` cells
-// wide. We clamp the content to (height - 2) lines so Lipgloss's
-// minimum-height semantics doesn't push the pane taller than requested.
-func (m dashboardModel) topSessions(width, height int) string {
-	if width < 16 {
-		width = 16
-	}
-	if height < 5 {
-		height = 5
-	}
-	// Pane border accounts for 2 lines; padding is 0 vertically.
-	contentLines := height - 2
-
-	header := m.st.Emphasis.Render("Sessions") + "  " + m.st.Muted.Render(fmt.Sprintf("(%d)", len(m.sessions)))
-	rows := []string{header, ""}
-	remaining := contentLines - len(rows)
-	if remaining < 0 {
-		remaining = 0
-	}
-
-	if len(m.sessions) == 0 {
-		if remaining > 0 {
-			rows = append(rows, m.st.Muted.Render("No active sessions."))
-			remaining--
-		}
-		if remaining > 0 {
-			rows = append(rows, "Press "+m.st.Key.Render("3")+" to start one.")
-			remaining--
-		}
-	} else {
-		inner := width - 4
-		if inner < 10 {
-			inner = 10
-		}
-		// If we have more sessions than rows, reserve one line for "and N more".
-		maxSessions := remaining
-		needsTail := len(m.sessions) > maxSessions
-		if needsTail {
-			maxSessions = remaining - 1
-		}
-		if maxSessions < 1 {
-			maxSessions = 1
-		}
-		for i := 0; i < maxSessions && i < len(m.sessions); i++ {
-			rows = append(rows, renderSessionLine(m.st, m.sessions[i], inner))
-		}
-		if needsTail {
-			rows = append(rows, m.st.Muted.Render(fmt.Sprintf("… and %d more", len(m.sessions)-maxSessions)))
-		}
-	}
-
-	// Pad to exactly contentLines so the pane renders at the target height.
-	for len(rows) < contentLines {
-		rows = append(rows, "")
-	}
-	if len(rows) > contentLines {
-		rows = rows[:contentLines]
-	}
-
-	// Lipgloss Width/Height set CONTENT dimensions; border adds +2 to each.
-	// To produce a pane exactly height x width cells, pass (width-2, height-2).
-	return m.st.Pane.Width(width - 2).Height(contentLines).Render(strings.Join(rows, "\n"))
 }
 
 // renderSessionLine produces one line per session: host dot, state glyph,

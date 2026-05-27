@@ -1,0 +1,40 @@
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Settings                                                                                                             │
+│                                                                                                                      │
+│ Moshi (mobile push)                                                                                                  │
+│   · moshi-hook not installed.                                                                                        │
+│   Run ccmux moshi-setup in a shell to install + pair.                                                                │
+│                                                                                                                      │
+│ ccmux version    v0.0.0-golden                                                                                       │
+│ config file      /Users/me/.config/ccmux/config.toml                                                                 │
+│                                                                                                                      │
+│ Editable (↑/↓ to move, enter to edit, e to open config in $EDITOR)                                                   │
+│ ▸ projects.root          /Users/me/Projects                                                                          │
+│   Where ccmux looks for projects (~/Projects default).                                                               │
+│   subscription.tier      max5x                                                                                       │
+│   agents.default         claude                                                                                      │
+│   sessions.attach_mode   mirror                                                                                      │
+│   update.auto_check      on                                                                                          │
+│   theme                  catppuccin-mocha  (read-only)                                                               │
+│                                                                                                                      │
+│ Sleep prevention                                                                                                     │
+│   mode           safe                                                                                                │
+│   idle release   10 minutes                                                                                          │
+│   low-batt cutoff 20% (dangerous auto-downgrades below this)                                                         │
+│                                                                                                                      │
+│ Daemon                                                                                                               │
+│   poll interval  2s                                                                                                  │
+│   needs-input idle 3s                                                                                                │
+│   tailnet listen false (port 7474)                                                                                   │
+│                                                                                                                      │
+│ Remote hosts                                                                                                         │
+│   (none pinned — tailnet peers running ccmuxd are auto-discovered.                                                   │
+│    Use `ccmux host add` only for non-Tailscale hosts or non-default ports.)                                          │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+? help · q quit · e edit config · 1-7 screens                                                                           

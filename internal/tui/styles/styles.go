@@ -1,136 +1,122 @@
-// Package styles holds every color and Lipgloss style ccmux renders with.
-// No screen file should hard-code a color — pull from here so themes work.
+// Package styles is ccmux's TUI design-system source of truth.
+//
+// Layout:
+//
+//   - palette.go — Palette type + the project's DefaultPalette.
+//   - tokens.go  — non-color tokens (Spacing, Radius) plus
+//     palette-derived TypographyRoles and SemanticColors, plus the
+//     theme-invariant Matrix overlay decoration styles.
+//   - styles.go  — the Styles aggregate every screen consumes,
+//     plus FromPalette / Default / HostColor.
+//
+// The contract: every TUI screen MUST source every color, spacing
+// value, border, and styled run from a Styles value (or the matrix
+// overlay styles exposed alongside). Files outside
+// internal/tui/styles/ and internal/tui/components/ MUST NOT
+// reference lipgloss.Color("#...") or hand-rolled padding / margin
+// integers; see TestNoInlineStyleLiteralsInScreens for the lint
+// enforcement.
 package styles
 
 import "github.com/charmbracelet/lipgloss"
 
-// Palette is a small set of semantic colors used across the TUI.
-// Built from Catppuccin Mocha; future themes implement the same Palette.
-type Palette struct {
-	Name string
-
-	BG       lipgloss.Color
-	BGAlt    lipgloss.Color
-	FG       lipgloss.Color
-	FGMuted  lipgloss.Color
-	Border   lipgloss.Color
-	Selected lipgloss.Color
-
-	Pink     lipgloss.Color
-	Mauve    lipgloss.Color
-	Red      lipgloss.Color
-	Peach    lipgloss.Color
-	Yellow   lipgloss.Color
-	Green    lipgloss.Color
-	Teal     lipgloss.Color
-	Sky      lipgloss.Color
-	Sapphire lipgloss.Color
-	Blue     lipgloss.Color
-	Lavender lipgloss.Color
-}
-
-// CatppuccinMocha is the default theme.
-// Color values are the canonical hex codes from
-// https://github.com/catppuccin/catppuccin (the Mocha flavor).
-var CatppuccinMocha = Palette{
-	Name:     "catppuccin-mocha",
-	BG:       "#1e1e2e",
-	BGAlt:    "#181825",
-	FG:       "#cdd6f4",
-	FGMuted:  "#7f849c",
-	Border:   "#45475a",
-	Selected: "#313244",
-	Pink:     "#f5c2e7",
-	Mauve:    "#cba6f7",
-	Red:      "#f38ba8",
-	Peach:    "#fab387",
-	Yellow:   "#f9e2af",
-	Green:    "#a6e3a1",
-	Teal:     "#94e2d5",
-	Sky:      "#89dceb",
-	Sapphire: "#74c7ec",
-	Blue:     "#89b4fa",
-	Lavender: "#b4befe",
-}
-
-// Styles is the full Lipgloss style set, derived from a Palette.
+// Styles is the full ccmux style set, derived from a Palette. Every
+// screen reads from a Styles value passed in via its model, or from
+// Default() at program start.
 type Styles struct {
+	// P exposes the raw palette for the few callers that need a
+	// palette-only lookup (HostColor's hash ramp, gradient ramps).
+	// Screens MUST NOT pass P colors through lipgloss.Color literals;
+	// pulling a value off P is consuming a token, which is fine.
 	P Palette
 
-	// Layout
+	// Design-system tokens (see tokens.go).
+	Spacing  SpacingScale
+	Radius   RadiusSet
+	Type     TypographyRoles
+	Semantic SemanticColors
+
+	// Layout primitives.
 	App         lipgloss.Style
 	Pane        lipgloss.Style
 	PaneFocused lipgloss.Style
 	Title       lipgloss.Style
 	Subtitle    lipgloss.Style
 
-	// Status
+	// Status chips and banners.
 	StatusBar     lipgloss.Style
 	StatusGood    lipgloss.Style
 	StatusWarning lipgloss.Style
 	StatusError   lipgloss.Style
 	StatusDanger  lipgloss.Style // for Mode 2 / Mode 3 banners
 
-	// Lists
+	// Lists.
 	ListItem         lipgloss.Style
 	ListItemSelected lipgloss.Style
 	ListItemFaded    lipgloss.Style
 
-	// Session states
+	// Session-state glyphs.
 	StateActive     lipgloss.Style
 	StateIdle       lipgloss.Style
 	StateNeedsInput lipgloss.Style
 	StateError      lipgloss.Style
 	StateUnknown    lipgloss.Style
 
-	// Host origin (color-codes "local" vs each remote)
+	// Host-origin badge color for "local" rows. Remote hosts hash
+	// through HostColor.
 	HostLocal lipgloss.Style
 
-	// Misc
+	// Misc.
 	Key      lipgloss.Style
 	Toast    lipgloss.Style
 	Muted    lipgloss.Style
 	Emphasis lipgloss.Style
 }
 
-// FromPalette builds a Styles set from a Palette.
+// FromPalette builds a Styles aggregate from a Palette.
 func FromPalette(p Palette) Styles {
-	s := Styles{P: p}
+	s := Styles{
+		P:        p,
+		Spacing:  DefaultSpacing(),
+		Radius:   DefaultRadius(),
+		Type:     typographyForPalette(p),
+		Semantic: semanticForPalette(p),
+	}
 
 	s.App = lipgloss.NewStyle().Background(p.BG).Foreground(p.FG)
 	s.Pane = lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
+		Border(s.Radius.Soft).
 		BorderForeground(p.Border).
-		Padding(0, 1)
+		Padding(s.Spacing.XS, s.Spacing.SM)
 	s.PaneFocused = s.Pane.BorderForeground(p.Mauve)
-	s.Title = lipgloss.NewStyle().Foreground(p.Mauve).Bold(true)
-	s.Subtitle = lipgloss.NewStyle().Foreground(p.FGMuted)
+	s.Title = s.Type.Title
+	s.Subtitle = s.Type.Subtitle
 
 	s.StatusBar = lipgloss.NewStyle().
 		Background(p.BGAlt).
 		Foreground(p.FG).
-		Padding(0, 1)
-	s.StatusGood = lipgloss.NewStyle().Foreground(p.Green)
-	s.StatusWarning = lipgloss.NewStyle().Foreground(p.Yellow)
-	s.StatusError = lipgloss.NewStyle().Foreground(p.Red)
+		Padding(s.Spacing.XS, s.Spacing.SM)
+	s.StatusGood = lipgloss.NewStyle().Foreground(s.Semantic.Success)
+	s.StatusWarning = lipgloss.NewStyle().Foreground(s.Semantic.Warning)
+	s.StatusError = lipgloss.NewStyle().Foreground(s.Semantic.Danger)
 	s.StatusDanger = lipgloss.NewStyle().
-		Background(p.Red).
+		Background(s.Semantic.Danger).
 		Foreground(p.BG).
 		Bold(true).
-		Padding(0, 1)
+		Padding(s.Spacing.XS, s.Spacing.SM)
 
-	s.ListItem = lipgloss.NewStyle().Padding(0, 1)
+	s.ListItem = lipgloss.NewStyle().Padding(s.Spacing.XS, s.Spacing.SM)
 	s.ListItemSelected = lipgloss.NewStyle().
 		Background(p.Selected).
-		Foreground(p.Lavender).
+		Foreground(s.Semantic.Accent).
 		Bold(true).
-		Padding(0, 1)
+		Padding(s.Spacing.XS, s.Spacing.SM)
 	s.ListItemFaded = s.ListItem.Foreground(p.FGMuted)
 
-	s.StateActive = lipgloss.NewStyle().Foreground(p.Green).Bold(true)
-	s.StateIdle = lipgloss.NewStyle().Foreground(p.Sky)
-	s.StateNeedsInput = lipgloss.NewStyle().Foreground(p.Yellow).Bold(true)
-	s.StateError = lipgloss.NewStyle().Foreground(p.Red).Bold(true)
+	s.StateActive = lipgloss.NewStyle().Foreground(s.Semantic.Success).Bold(true)
+	s.StateIdle = lipgloss.NewStyle().Foreground(s.Semantic.Info)
+	s.StateNeedsInput = lipgloss.NewStyle().Foreground(s.Semantic.Warning).Bold(true)
+	s.StateError = lipgloss.NewStyle().Foreground(s.Semantic.Danger).Bold(true)
 	s.StateUnknown = lipgloss.NewStyle().Foreground(p.FGMuted)
 
 	s.HostLocal = lipgloss.NewStyle().Foreground(p.Teal)
@@ -139,21 +125,21 @@ func FromPalette(p Palette) Styles {
 	s.Toast = lipgloss.NewStyle().
 		Background(p.Mauve).
 		Foreground(p.BG).
-		Padding(0, 1)
-	s.Muted = lipgloss.NewStyle().Foreground(p.FGMuted)
-	s.Emphasis = lipgloss.NewStyle().Foreground(p.Lavender).Bold(true)
+		Padding(s.Spacing.XS, s.Spacing.SM)
+	s.Muted = lipgloss.NewStyle().Foreground(s.Semantic.Muted)
+	s.Emphasis = lipgloss.NewStyle().Foreground(s.Semantic.Accent).Bold(true)
 
 	return s
 }
 
-// Default returns the default Styles (Catppuccin Mocha).
+// Default returns the default Styles built from DefaultPalette.
 func Default() Styles {
-	return FromPalette(CatppuccinMocha)
+	return FromPalette(DefaultPalette)
 }
 
-// HostColor returns a deterministic color for a remote host name so the
-// dashboard can color-code which sessions came from where. "local" is teal,
-// others hash to one of the accent colors.
+// HostColor returns a deterministic color for a remote host name so
+// the dashboard can color-code which sessions came from where.
+// "local" is teal; others hash to one of the accent colors.
 func (s Styles) HostColor(host string) lipgloss.Style {
 	if host == "" || host == "local" {
 		return s.HostLocal

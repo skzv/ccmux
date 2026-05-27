@@ -526,36 +526,6 @@ func TestUniqueSessionName_NamingAlgorithm(t *testing.T) {
 	}
 }
 
-func TestInfoForHost(t *testing.T) {
-	st := mustStyles(t)
-	const localVer = "abc1234"
-
-	mobile := infoForHost(hostStatus{Mobile: true}, localVer, st)
-	if !strings.Contains(mobile, "Moshi") {
-		t.Errorf("mobile row info missing 'Moshi': %q", mobile)
-	}
-
-	needs := infoForHost(hostStatus{NeedsInstall: true}, localVer, st)
-	if !strings.Contains(needs, "unreachable") {
-		t.Errorf("needs-install row info missing 'unreachable': %q", needs)
-	}
-
-	same := infoForHost(hostStatus{Version: localVer}, localVer, st)
-	if strings.Contains(same, "update available") {
-		t.Errorf("matching version should NOT flag update: %q", same)
-	}
-
-	old := infoForHost(hostStatus{Version: "old1234"}, localVer, st)
-	if !strings.Contains(old, "update available") {
-		t.Errorf("differing version should flag update: %q", old)
-	}
-
-	missing := infoForHost(hostStatus{Version: ""}, localVer, st)
-	if missing == "" {
-		t.Errorf("missing version should still produce some info: %q", missing)
-	}
-}
-
 // TestStatusBar_NarrowKeepsDaemonAndBattery — the safety-critical
 // chrome (battery-danger banner, daemon status) is T0 and survives at
 // phone width.
@@ -579,33 +549,44 @@ func TestStatusBar_NarrowDropsClockAndVersion(t *testing.T) {
 	assertPresent(t, a.renderStatusBar(), "14:30:45", "v9.9.9")
 }
 
-// TestFooter_NarrowKeepsHelp — the footer collapses to the T0/T1 pair
-// `? help • q quit` on narrow; the T2 action hints are dropped.
-func TestFooter_NarrowKeepsHelp(t *testing.T) {
-	a := App{styles: styles.Default(), width: 50}
-	footer := a.renderFooter()
-	assertNoOverflow(t, footer, 50)
-	assertPresent(t, footer, "? help", "q quit")
-	assertAbsent(t, footer, "n new", "x kill")
+// TestHelpLine_AlwaysShowsHelpAndQuit — `? help` and `q quit` are the
+// top-priority hints (P=10) in every screen's HelpBarProps; they
+// MUST survive at any width, including extreme narrow phones.
+func TestHelpLine_AlwaysShowsHelpAndQuit(t *testing.T) {
+	for _, w := range []int{20, 40, 50, 80, 120, 200} {
+		a := App{styles: styles.Default(), width: w}
+		line := a.renderHelpLine()
+		assertNoOverflow(t, line, w)
+		assertPresent(t, line, "? help", "q quit")
+	}
 }
 
-// TestFooter_TruncationKeepsHelpOverActionHints — the hint line is
-// ordered T0-first so any truncation eats the action hints from the
-// tail; `? help` always leads and survives even an extreme width.
-func TestFooter_TruncationKeepsHelpOverActionHints(t *testing.T) {
-	wide := App{styles: styles.Default(), width: 200}
-	footer := wide.renderFooter()
-	help := strings.Index(footer, "? help")
-	newHint := strings.Index(footer, "n new")
+// TestHelpLine_DropsActionHintsAtNarrowWidth — at a width tight
+// enough that only the high-priority pair fits, the lower-priority
+// action hints MUST drop. The exact threshold is implementation
+// detail; this test pins the behavior at a known-tight width.
+func TestHelpLine_DropsActionHintsAtNarrowWidth(t *testing.T) {
+	a := App{styles: styles.Default(), width: 18}
+	line := a.renderHelpLine()
+	assertNoOverflow(t, line, 18)
+	assertPresent(t, line, "? help", "q quit")
+	assertAbsent(t, line, "n new", "x kill", "r refresh")
+}
+
+// TestHelpLine_PreservesInputOrder — when multiple hints fit, they
+// render in the order provided by HelpBarProps. `? help` precedes
+// `n new` because it's first in the slice, not just because it
+// has higher priority.
+func TestHelpLine_PreservesInputOrder(t *testing.T) {
+	a := App{styles: styles.Default(), width: 200}
+	line := a.renderHelpLine()
+	help := strings.Index(line, "? help")
+	newHint := strings.Index(line, "n new")
 	if help < 0 || newHint < 0 {
-		t.Fatalf("wide footer missing expected hints:\n%s", footer)
+		t.Fatalf("wide help line missing expected hints:\n%s", line)
 	}
 	if help > newHint {
-		t.Errorf("`? help` must precede `n new` so truncation eats action hints first:\n%s", footer)
-	}
-	tiny := App{styles: styles.Default(), width: 10}
-	if f := tiny.renderFooter(); !strings.Contains(f, "? help") {
-		t.Errorf("at width 10 the footer must still show `? help`:\n%s", f)
+		t.Errorf("`? help` must precede `n new` (input-order render):\n%s", line)
 	}
 }
 

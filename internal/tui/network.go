@@ -21,6 +21,7 @@ import (
 
 	"github.com/skzv/ccmux/internal/remoteattach"
 	"github.com/skzv/ccmux/internal/sshsetup"
+	"github.com/skzv/ccmux/internal/tui/components"
 	"github.com/skzv/ccmux/internal/tui/styles"
 )
 
@@ -41,6 +42,21 @@ func (m *networkModel) SetHosts(hs []hostStatus) {
 	m.hosts = hs
 	if m.cursor >= len(hs) {
 		m.cursor = max0(len(hs) - 1)
+	}
+}
+
+// HelpBarProps returns the screen-specific key hints for the
+// Network screen.
+func (m networkModel) HelpBarProps(width int) components.HelpBarProps {
+	return components.HelpBarProps{
+		Hints: []components.KeyHint{
+			{Key: "?", Label: "help", Priority: 10},
+			{Key: "q", Label: "quit", Priority: 10},
+			{Key: "enter", Label: "ssh", Priority: 7},
+			{Key: "r", Label: "refresh", Priority: 4},
+			{Key: "1-7", Label: "screens", Priority: 2},
+		},
+		Width: width,
 	}
 }
 

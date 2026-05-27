@@ -28,12 +28,10 @@ type Keymap struct {
 	Refresh key.Binding
 
 	// Session actions
-	NewItem   key.Binding
-	Kill      key.Binding
-	Rename    key.Binding
-	Snapshot  key.Binding
-	OpenInApp key.Binding
-	EditInEd  key.Binding
+	NewItem  key.Binding
+	Kill     key.Binding
+	Rename   key.Binding
+	EditInEd key.Binding
 
 	// Conversations-screen actions
 	ToggleHeadless key.Binding
@@ -61,12 +59,10 @@ func DefaultKeymap() Keymap {
 		Quit:    key.NewBinding(key.WithKeys("ctrl+c", "q"), key.WithHelp("q", "quit")),
 		Refresh: key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh")),
 
-		NewItem:   key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new")),
-		Kill:      key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "kill")),
-		Rename:    key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "rename")),
-		Snapshot:  key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "snapshot")),
-		OpenInApp: key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "open")),
-		EditInEd:  key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit")),
+		NewItem:  key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new")),
+		Kill:     key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "kill")),
+		Rename:   key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "rename")),
+		EditInEd: key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit")),
 
 		ToggleHeadless: key.NewBinding(key.WithKeys("H"), key.WithHelp("H", "toggle headless")),
 	}

@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/skzv/ccmux/internal/claudeconfig"
+	"github.com/skzv/ccmux/internal/tui/components"
 	"github.com/skzv/ccmux/internal/tui/styles"
 )
 
@@ -501,12 +502,10 @@ func (m claudeModel) viewPicker(width, height int) string {
 		))
 	}
 	lines = append(lines, "")
+	pickerW := minInt(96, width-4) - 2
 	for i, o := range rows {
-		row := fmt.Sprintf("  %-40s %s", o.Label, st.Muted.Render(o.Desc))
-		if i == m.pickerCursor {
-			row = st.ListItemSelected.Render(row)
-		}
-		lines = append(lines, row)
+		row := fmt.Sprintf("%-40s %s", o.Label, st.Muted.Render(o.Desc))
+		lines = append(lines, components.RenderListRow(st, row, i == m.pickerCursor, pickerW))
 	}
 	lines = append(lines, "",
 		st.Muted.Render("↑↓ navigate  enter: choose  esc: cancel"),
