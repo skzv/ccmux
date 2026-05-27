@@ -217,15 +217,19 @@ func classifyProbeStderr(stderr string, port int) ProbeResult {
 // pay the cost of running the ssh binary. Returns ProbeOK iff the
 // TCP handshake completes; any other ProbeResult means the caller
 // should short-circuit and return that value.
+//
+// Uses dialFilteredTCP so non-routable IPv6 link-local addresses
+// don't get tried — they reliably fail with ENETUNREACH and would
+// otherwise mask the real reachability state behind a confusing
+// "no network" result.
 func probeTCP(ctx context.Context, t Target) ProbeResult {
 	port := t.Port
 	if port == 0 {
 		port = 22
 	}
-	d := net.Dialer{Timeout: 2 * time.Second}
 	cctx, cancel := context.WithTimeout(ctx, 2500*time.Millisecond)
 	defer cancel()
-	conn, err := d.DialContext(cctx, "tcp", fmt.Sprintf("%s:%d", t.Host, port))
+	conn, err := dialFilteredTCP(cctx, fmt.Sprintf("%s:%d", t.Host, port), 2*time.Second)
 	if err == nil {
 		_ = conn.Close()
 		return ProbeOK

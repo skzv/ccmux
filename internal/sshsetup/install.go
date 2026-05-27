@@ -295,9 +295,20 @@ func parseEtcPasswd(s string) string {
 // shape possible. We catch the well-known "unable to authenticate"
 // string from x/crypto/ssh and wrap it with a sentinel so callers
 // (CLI + TUI) can show "wrong password?" instead of the raw error.
+//
+// Host-key mismatch is a special case: tofuHostKeyCallback already
+// returns ErrHostKeyMismatch unwrapped, and ssh.Dial threads it
+// through as the connection error. We DON'T re-wrap here because
+// that produced the double-printed "sshsetup: host key mismatch:
+// ssh: handshake failed: sshsetup: host key mismatch" string that
+// users saw in the wild — preserve the single sentinel so
+// errors.Is still works AND the rendered text reads once.
 func classifyConnectErr(err error) error {
 	if err == nil {
 		return nil
+	}
+	if errors.Is(err, ErrHostKeyMismatch) {
+		return ErrHostKeyMismatch
 	}
 	msg := strings.ToLower(err.Error())
 	switch {
@@ -306,8 +317,9 @@ func classifyConnectErr(err error) error {
 		strings.Contains(msg, "permission denied"):
 		return fmt.Errorf("%w: %v", ErrWrongPassword, err)
 	case strings.Contains(msg, "knownhosts"),
-		strings.Contains(msg, "key mismatch"):
-		return fmt.Errorf("%w: %v", ErrHostKeyMismatch, err)
+		strings.Contains(msg, "key mismatch"),
+		strings.Contains(msg, "host key mismatch"):
+		return ErrHostKeyMismatch
 	}
 	return err
 }
@@ -325,11 +337,13 @@ var ErrHostKeyMismatch = errors.New("sshsetup: host key mismatch")
 
 // defaultSSHDial is the production SSH dial. Separate function so
 // tests can substitute a same-shape dial that points at an in-process
-// server without touching the network. Uses a plain TCP dial with
-// the context's deadline.
+// server without touching the network. Uses dialFilteredTCP so
+// non-routable IPv6 link-local addresses (`fe80::...`) — which
+// macOS's mDNS resolver sometimes hands back for a Tailscale-named
+// peer — never get attempted. A beta tester hit "no route to host"
+// dialing exactly that case before this filter existed.
 func defaultSSHDial(ctx context.Context, addr string, cfg *ssh.ClientConfig) (*ssh.Client, error) {
-	d := net.Dialer{Timeout: cfg.Timeout}
-	conn, err := d.DialContext(ctx, "tcp", addr)
+	conn, err := dialFilteredTCP(ctx, addr, cfg.Timeout)
 	if err != nil {
 		return nil, err
 	}
@@ -339,6 +353,52 @@ func defaultSSHDial(ctx context.Context, addr string, cfg *ssh.ClientConfig) (*s
 		return nil, err
 	}
 	return ssh.NewClient(cconn, chans, reqs), nil
+}
+
+// dialFilteredTCP resolves addr, drops IPv6 link-local (`fe80::/10`)
+// candidates, and dials the remaining addresses in order. Keeps the
+// HOSTNAME (not the IP) as the dial argument to ssh.NewClientConn
+// later so known_hosts lookups match what the user thinks of.
+//
+// We also drop IPv4 link-local (`169.254.0.0/16`) because that's
+// what macOS auto-assigns when DHCP fails — also non-routable for
+// the SSH use case here.
+func dialFilteredTCP(ctx context.Context, addr string, timeout time.Duration) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	var candidates []net.IPAddr
+	for _, ip := range ips {
+		if ip.IP.IsLinkLocalUnicast() {
+			continue
+		}
+		candidates = append(candidates, ip)
+	}
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("no routable address for %s (resolved only link-local: %v)", host, ips)
+	}
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	d := net.Dialer{Timeout: timeout}
+	var lastErr error
+	for _, ip := range candidates {
+		target := net.JoinHostPort(ip.IP.String(), port)
+		conn, err := d.DialContext(ctx, "tcp", target)
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("dial %s: no routable candidate succeeded", host)
+	}
+	return nil, lastErr
 }
 
 // tofuHostKeyCallback returns a HostKeyCallback that:
