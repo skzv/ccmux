@@ -52,6 +52,14 @@ const (
 	// one between retries). Shows the message + an instruction
 	// line on what to do.
 	sshWizardError
+	// sshWizardHostKeyMismatch — dedicated step for the
+	// known_hosts mismatch case. Offers a one-keystroke "remove
+	// the stale entry and retry" path so the user doesn't have
+	// to drop to a shell and run `ssh-keygen -R <host>`. Routes
+	// here automatically when install fails with
+	// sshsetup.ErrHostKeyMismatch (which is the wizard's TOFU
+	// guard refusing to silently re-trust a changed host key).
+	sshWizardHostKeyMismatch
 	// sshWizardDone — install + enumerate complete. One Enter
 	// closes the wizard and (if there's one) resumes whatever
 	// triggered the wizard.
@@ -197,6 +205,14 @@ func (m *sshWizardModel) Update(msg tea.Msg) (*sshWizardModel, tea.Cmd) {
 			m.passwd.Focus()
 			return m, nil
 		}
+		// Host-key mismatch → dedicated recovery step. We keep the
+		// already-typed password in m.passwd so the [y] retry path
+		// can resubmit without re-prompting.
+		if errors.Is(msg.err, sshsetup.ErrHostKeyMismatch) {
+			m.step = sshWizardHostKeyMismatch
+			m.err = ""
+			return m, nil
+		}
 		m.step = sshWizardError
 		m.err = msg.err.Error()
 		return m, nil
@@ -324,6 +340,31 @@ func (m *sshWizardModel) updateKey(msg tea.KeyMsg) (*sshWizardModel, tea.Cmd) {
 			m.passwd.Reset()
 			m.passwd.Focus()
 			return m, textinput.Blink
+		}
+	case sshWizardHostKeyMismatch:
+		switch msg.String() {
+		case "y", "Y":
+			// Remove the stale known_hosts entry and re-run
+			// install with the SAME password the user already
+			// typed — saves them re-prompting. The remove is
+			// done synchronously (it's just a file rewrite) so
+			// we can bail loudly if it fails.
+			n, err := sshsetup.RemoveKnownHostEntries(m.target.Host, m.target.Port)
+			if err != nil {
+				m.step = sshWizardError
+				m.err = fmt.Sprintf("couldn't update ~/.ssh/known_hosts: %v", err)
+				return m, nil
+			}
+			if n == 0 {
+				m.step = sshWizardError
+				m.err = "no matching entry found in ~/.ssh/known_hosts — investigate manually"
+				return m, nil
+			}
+			m.step = sshWizardRunning
+			m.stages = nil
+			return m, m.startInstall(m.passwd.Value())
+		case "n", "N", "esc":
+			return m, m.emitCancel()
 		}
 	case sshWizardDone:
 		if msg.String() == "enter" || msg.String() == "esc" {
@@ -512,6 +553,25 @@ func (m *sshWizardModel) View(w, h int) string {
 		lines = append(lines, wizardWrap(m.err, cardW-6)...)
 		lines = append(lines, "")
 		lines = append(lines, m.st.Muted.Render("[r] retry password   [Esc] cancel"))
+	case sshWizardHostKeyMismatch:
+		lines = append(lines, title.Foreground(m.st.P.Yellow).Render("⚠ Host key changed"))
+		lines = append(lines, "")
+		lines = append(lines,
+			fmt.Sprintf("The host key for %s doesn't match the one", m.target.Host),
+			"recorded in ~/.ssh/known_hosts.",
+			"",
+			"Most common innocent causes:",
+		)
+		lines = append(lines,
+			"  "+m.st.Key.Render("•")+" the remote was reinstalled / sshd regenerated keys",
+			"  "+m.st.Key.Render("•")+" a different machine now answers to this hostname",
+		)
+		lines = append(lines, "",
+			"If you trust the new key (you reinstalled, you expect it),",
+			"ccmux can drop the stale entry and retry. Otherwise — investigate.",
+		)
+		lines = append(lines, "")
+		lines = append(lines, m.st.Muted.Render("[y] remove + retry   [n / Esc] cancel"))
 	case sshWizardDone:
 		lines = append(lines, title.Foreground(m.st.P.Green).Render("Setup complete"))
 		lines = append(lines, "")
