@@ -12,6 +12,8 @@ One TUI for every Claude / Codex / Antigravity / Cursor / pi session across ever
 [![Status: alpha](https://img.shields.io/badge/status-alpha-orange.svg)](#status)
 [![Made with Charm](https://img.shields.io/badge/made_with-Charm-FF66CC.svg)](https://charm.sh/)
 
+<img src="docs/vhs/out/cuj00_hero.gif" alt="ccmux full tour: dashboard with five parallel agent sessions, attach to Claude Code, then tour Conversations, Notes, Agents, Settings, Network." width="900" />
+
 </div>
 
 ## 🚀 Install
@@ -29,12 +31,6 @@ Other paths:
 - From source: `git clone https://github.com/skzv/ccmux.git && cd ccmux && make setup`.
 
 Works on macOS, Linux, and Windows via WSL2. Source builds require Go 1.26+.
-
-<div align="center">
-
-<img src="docs/vhs/out/cuj00_hero.gif" alt="ccmux full tour: dashboard with five parallel agent sessions, attach to Claude Code, then tour Conversations, Notes, Agents, Settings, Network." width="900" />
-
-</div>
 
 ---
 
