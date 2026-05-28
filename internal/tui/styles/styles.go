@@ -75,6 +75,17 @@ type Styles struct {
 	Toast    lipgloss.Style
 	Muted    lipgloss.Style
 	Emphasis lipgloss.Style
+
+	// Tab strip (top-of-screen navigation). TabActive is the
+	// currently-focused screen tab; TabInactive is every other
+	// screen. Active uses bold + underlined FG (no purple
+	// background) so the visual emphasis comes from weight and
+	// underline rather than a colored block — the previous
+	// lavender-bold treatment read as a "purple background" to
+	// some users and the accent color clashed with the bold
+	// rendering of certain terminals.
+	TabActive   lipgloss.Style
+	TabInactive lipgloss.Style
 }
 
 // FromPalette builds a Styles aggregate from a Palette.
@@ -92,7 +103,13 @@ func FromPalette(p Palette) Styles {
 		Border(s.Radius.Soft).
 		BorderForeground(p.Border).
 		Padding(s.Spacing.XS, s.Spacing.SM)
-	s.PaneFocused = s.Pane.BorderForeground(p.Mauve)
+	// Focused pane uses Sapphire (soft blue) instead of the vivid
+	// Mauve previously here. The mauve border read as a heavy
+	// "purple block" once two focused panes were on screen and
+	// competed with the rest of the chrome. Sapphire is the
+	// established "focus" color across most terminal UIs — calmer
+	// while still unambiguous.
+	s.PaneFocused = s.Pane.BorderForeground(p.Sapphire)
 	s.Title = s.Type.Title
 	s.Subtitle = s.Type.Subtitle
 
@@ -132,6 +149,14 @@ func FromPalette(p Palette) Styles {
 		Padding(s.Spacing.XS, s.Spacing.SM)
 	s.Muted = lipgloss.NewStyle().Foreground(s.Semantic.Muted)
 	s.Emphasis = lipgloss.NewStyle().Foreground(s.Semantic.Accent).Bold(true)
+
+	// Tab strip. Active tab: bright FG + bold. Inactive: muted
+	// gray. Emphasis comes from weight + brightness contrast
+	// against the muted siblings — no underline (visual noise
+	// that doubled up with the existing tab label brackets) and
+	// no colored block.
+	s.TabActive = lipgloss.NewStyle().Foreground(p.FG).Bold(true)
+	s.TabInactive = lipgloss.NewStyle().Foreground(p.FGMuted)
 
 	return s
 }

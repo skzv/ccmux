@@ -49,6 +49,23 @@ func keyMatches(msg tea.KeyMsg, b key.Binding) bool {
 	return key.Matches(msg, b)
 }
 
+// isWheelMsg reports whether a mouse event is a scroll-wheel
+// notification. Bubble Tea defines IsWheel on tea.MouseEvent, not
+// tea.MouseMsg (the two are distinct types via Go's type-definition
+// rules), so the convenient receiver-method form isn't reachable
+// from a *MouseMsg. We check the Button explicitly for the four
+// wheel directions instead.
+func isWheelMsg(m tea.MouseMsg) bool {
+	switch m.Button {
+	case tea.MouseButtonWheelUp,
+		tea.MouseButtonWheelDown,
+		tea.MouseButtonWheelLeft,
+		tea.MouseButtonWheelRight:
+		return true
+	}
+	return false
+}
+
 // tickEvery is the Bubble Tea pattern for "send tickMsg in d, then again,
 // and again." Each tickMsg arrival reschedules itself.
 func tickEvery(d time.Duration) tea.Cmd {

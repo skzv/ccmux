@@ -1,17 +1,15 @@
 ╭──────────────────────────────────────╮ ╭─────────────────────────────────────────────────────────────────────────────╮
-│ ccmux ◀                              │ │ README.md                                                                   │
-│                                      │ │ ─────────────────────────────────────────────────────────────────────────── │
-│ ● (project root)                     │ │                                                                             │
-│  ▌ README.md                         │ │                                                                             │
-│    CLAUDE.md                         │ │                                                                             │
+│ ccmux ◀                              │ │ No selection.                                                               │
 │                                      │ │                                                                             │
-│     01_Specs/                        │ │                                                                             │
-│      00_Vision.md                    │ │                                                                             │
+│ search: "refresh"                    │ │                                                                             │
+│ 3 hit(s) — esc clears, enter opens   │ │                                                                             │
 │                                      │ │                                                                             │
-│     02_Architecture/                 │ │                                                                             │
-│      00_System_Design.md             │ │                                                                             │
-│                                      │ │                                                                             │
-│                                      │ │                                                                             │
+│ ▌ [docs/api.md:12]  The old refresh  │ │                                                                             │
+│ token is …                           │ │                                                                             │
+│   [CLAUDE.md:47]  run `make refresh` │ │                                                                             │
+│ after …                              │ │                                                                             │
+│   [internal/daemon/auth.go:88]  //   │ │                                                                             │
+│ refresh: rotate the be…              │ │                                                                             │
 │                                      │ │                                                                             │
 │                                      │ │                                                                             │
 │                                      │ │                                                                             │
@@ -35,6 +33,8 @@
 │                                      │ │                                                                             │
 │                                      │ │                                                                             │
 │                                      │ │                                                                             │
-│                                      │ │ tab: focus list   j/k: scroll (currently focused: list)   100%              │
+│                                      │ │                                                                             │
+│                                      │ │                                                                             │
+│                                      │ │                                                                             │
 ╰──────────────────────────────────────╯ ╰─────────────────────────────────────────────────────────────────────────────╯
 ? help · q quit · enter open · n new note · e edit · / search · i info · p / space switch project · tab focus preview   

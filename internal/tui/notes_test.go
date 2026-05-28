@@ -4,13 +4,51 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/skzv/ccmux/internal/notes"
 	"github.com/skzv/ccmux/internal/project"
 	"github.com/skzv/ccmux/internal/tui/styles"
 )
+
+// flattenCmd materializes a tea.Cmd into the flat list of tea.Msg
+// values it produces. tea.BatchMsg holds a slice of further cmds, so
+// we recurse to keep flattening. Nil cmds and nil messages are
+// dropped. Lives alongside the existing single-message runCmd in
+// sshsetup_wizard_test.go, which can't represent batched results.
+func flattenCmd(cmd tea.Cmd) []tea.Msg {
+	if cmd == nil {
+		return nil
+	}
+	msg := cmd()
+	if msg == nil {
+		return nil
+	}
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		var out []tea.Msg
+		for _, c := range batch {
+			out = append(out, flattenCmd(c)...)
+		}
+		return out
+	}
+	return []tea.Msg{msg}
+}
+
+// findMsg picks the first message in `msgs` whose concrete type is T,
+// returning the zero value when none match.
+func findMsg[T tea.Msg](msgs []tea.Msg) (T, bool) {
+	var zero T
+	for _, m := range msgs {
+		if t, ok := m.(T); ok {
+			return t, true
+		}
+	}
+	return zero, false
+}
 
 // TestNotes_NarrowLayout — at phone width the Notes screen keeps its
 // header (T0) but drops the inline key-hint line (T2), with no line
@@ -41,6 +79,8 @@ func notesWith(entries []notes.Entry, cursor int) notesModel {
 // TestNotes_ListsFilesOutsideDocs — the list now surfaces markdown
 // anywhere in the project, grouped by folder, with the project root
 // labelled explicitly so README.md / CLAUDE.md aren't headerless.
+// Each row sits one design-system step (2 cells) inside its folder
+// header per the redesign-tui-notes sub-section indent rule.
 func TestNotes_ListsFilesOutsideDocs(t *testing.T) {
 	m := notesWith([]notes.Entry{
 		{Rel: "README.md", Dir: "", Display: "README"},
@@ -52,9 +92,76 @@ func TestNotes_ListsFilesOutsideDocs(t *testing.T) {
 
 	// Files from the project root and from non-docs/ folders both show.
 	assertPresent(t, out, "README", "CLAUDE", "Vision", "spec")
-	// Folder headers, including the explicit project-root label.
-	assertPresent(t, out, "(project root)", "docs/01_Specs/", "openspec/specs/")
+	// Folder headers show only the last segment plus the explicit
+	// (project root) label. The depth-based indent conveys the
+	// hierarchy, so parent prefixes aren't repeated on every header.
+	assertPresent(t, out, "(project root)", "01_Specs/", "specs/")
+
+	// Depth-scaled sub-section indent: each path segment shifts both
+	// the folder header and its files by one design-system step
+	// (s.Spacing.SM = 1 cell — tight because the left pane is
+	// narrow). So project-root files indent 1, docs/01_Specs/
+	// (depth 2) files indent 3, etc. The plain-ANSI search lets us
+	// pin exact column positions independent of SGR escape sequences.
+	plain := stripGoldenANSI(out)
+	step := styles.Default().Spacing.SM
+	wantPrefix := func(depth int, label string) string {
+		// Each row also carries the unselected list-row prefix
+		// (2 spaces). Selected rows replace those with "▌ "; we
+		// pick non-selected labels for these assertions.
+		return strings.Repeat(" ", (depth+1)*step) + "  " + label
+	}
+	if !strings.Contains(plain, wantPrefix(0, "CLAUDE")) {
+		t.Errorf("expected CLAUDE at indent for depth 0 (project root):\n%s", plain)
+	}
+	if !strings.Contains(plain, wantPrefix(2, "Vision")) {
+		t.Errorf("expected Vision at indent for depth 2 (docs/01_Specs):\n%s", plain)
+	}
+	if !strings.Contains(plain, wantPrefix(2, "spec")) {
+		t.Errorf("expected spec at indent for depth 2 (openspec/specs):\n%s", plain)
+	}
+
+	// Headers show only the last path segment, not the full path —
+	// the depth-based indent already conveys hierarchy, so repeating
+	// `docs/` on every header wastes column space.
+	if !strings.Contains(plain, "01_Specs/") {
+		t.Errorf("expected last-segment header `01_Specs/`:\n%s", plain)
+	}
+	if strings.Contains(plain, "docs/01_Specs/") {
+		t.Errorf("header should not include parent path `docs/`:\n%s", plain)
+	}
+	if !strings.Contains(plain, "specs/") {
+		t.Errorf("expected last-segment header `specs/` for openspec/specs:\n%s", plain)
+	}
+	if strings.Contains(plain, "openspec/specs/") {
+		t.Errorf("header should not include parent path `openspec/`:\n%s", plain)
+	}
 }
+
+// TestFolderHeader_LastSegmentOnly pins the behaviour the row
+// rendering depends on: nested headers show only the last segment.
+func TestFolderHeader_LastSegmentOnly(t *testing.T) {
+	cases := []struct{ dir, want string }{
+		{"", "(project root)"},
+		{"docs", "docs/"},
+		{"docs/01_Specs", "01_Specs/"},
+		{"docs/02_Architecture", "02_Architecture/"},
+		{"openspec/specs", "specs/"},
+		{"internal/tui/styles", "styles/"},
+	}
+	for _, tc := range cases {
+		if got := folderHeader(tc.dir); got != tc.want {
+			t.Errorf("folderHeader(%q) = %q, want %q", tc.dir, got, tc.want)
+		}
+	}
+}
+
+// stripGoldenANSI removes SGR escape sequences so a row's column
+// position can be asserted with raw spaces. Mirrors the helper in
+// styles/glamour_test.go (kept local to avoid an unexported export).
+var goldenANSIRE = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+func stripGoldenANSI(s string) string { return goldenANSIRE.ReplaceAllString(s, "") }
 
 // TestNotes_LongListWindowsAroundCursor — a list longer than the pane
 // is windowed: the cursor row stays visible, off-screen rows are
@@ -120,8 +227,10 @@ func TestFolderHeader(t *testing.T) {
 	if got := folderHeader(""); got != "(project root)" {
 		t.Errorf("folderHeader(\"\") = %q, want (project root)", got)
 	}
-	if got := folderHeader("docs/01_Specs"); got != "docs/01_Specs/" {
-		t.Errorf("folderHeader(docs/01_Specs) = %q, want docs/01_Specs/", got)
+	// Nested folders show the last segment only — the depth-based
+	// indent in noteRows carries the hierarchy.
+	if got := folderHeader("docs/01_Specs"); got != "01_Specs/" {
+		t.Errorf("folderHeader(docs/01_Specs) = %q, want 01_Specs/", got)
 	}
 }
 
@@ -166,9 +275,12 @@ func TestNotes_AsyncLoad_CachesAndDiscardsStale(t *testing.T) {
 		t.Errorf("entries=%d before the walk completes, want 0", len(m.entries))
 	}
 
-	loaded, ok := cmd().(notesEntriesLoadedMsg)
+	// SetProject now returns tea.Batch(loadCmd, spinnerTick); flatten
+	// the batch and pick the notesEntriesLoadedMsg out so the test
+	// doesn't care which slot it sits in.
+	loaded, ok := findMsg[notesEntriesLoadedMsg](flattenCmd(cmd))
 	if !ok {
-		t.Fatalf("Cmd produced unexpected message type")
+		t.Fatalf("batched Cmd produced no notesEntriesLoadedMsg")
 	}
 	if loaded.Path != dir {
 		t.Errorf("loaded.Path = %q, want %q", loaded.Path, dir)
@@ -199,6 +311,141 @@ func TestNotes_AsyncLoad_CachesAndDiscardsStale(t *testing.T) {
 	if len(m3.entries) > 0 {
 		t.Errorf("stale msg for %q leaked into m.entries (now project %q): %d items",
 			dir, other, len(m3.entries))
+	}
+}
+
+// TestNotes_NewNote_NoProject — pressing `n` without a project
+// selected must not open the form; it surfaces a toast instead.
+func TestNotes_NewNote_NoProject(t *testing.T) {
+	m := newNotes(styles.Default(), DefaultKeymap())
+
+	m2, cmd := m.Update(keyMsg("n"))
+	if m2.newNoteForm != nil {
+		t.Error("`n` opened the form without a project — should be gated")
+	}
+	if cmd == nil {
+		t.Fatal("expected toast cmd when `n` pressed without project")
+	}
+	toast, ok := cmd().(toastMsg)
+	if !ok {
+		t.Fatalf("expected toastMsg, got %T", cmd())
+	}
+	if !strings.Contains(toast.Text, "project") {
+		t.Errorf("toast didn't mention project: %q", toast.Text)
+	}
+}
+
+// TestNotes_NewNote_CreatesAndOpens — the full happy path: open the
+// form, submit a filename + title, and confirm the file is written
+// to disk with the `# {title}\n\n` body. The editor handoff is
+// exercised by createAndOpenNote returning a non-nil cmd; we don't
+// actually run an editor in the test (that would spawn a real
+// subprocess).
+func TestNotes_NewNote_CreatesAndOpens(t *testing.T) {
+	dir := t.TempDir()
+	m := newNotes(styles.Default(), DefaultKeymap())
+	m.project = &project.Project{Name: "p", Path: dir}
+
+	// Submit through the form's Update so we exercise the full
+	// validator chain (filename trim, .md suffix add).
+	m2, _ := m.Update(newNoteSubmitMsg{
+		Filename: "docs/test-note.md",
+		Title:    "My Test Note",
+	})
+	if m2.newNoteForm != nil {
+		t.Error("form should be closed after submit")
+	}
+
+	wantPath := filepath.Join(dir, "docs", "test-note.md")
+	body, err := os.ReadFile(wantPath)
+	if err != nil {
+		t.Fatalf("note not written to disk: %v", err)
+	}
+	want := "# My Test Note\n\n"
+	if string(body) != want {
+		t.Errorf("note body = %q, want %q", body, want)
+	}
+}
+
+// TestNotes_NewNote_NoTitleProducesEmptyBody — submitting with an
+// empty title creates the file with no leading H1, so the user can
+// start typing whatever they want as the first line.
+func TestNotes_NewNote_NoTitleProducesEmptyBody(t *testing.T) {
+	dir := t.TempDir()
+	m := newNotes(styles.Default(), DefaultKeymap())
+	m.project = &project.Project{Name: "p", Path: dir}
+
+	m.Update(newNoteSubmitMsg{Filename: "blank.md", Title: ""})
+
+	body, err := os.ReadFile(filepath.Join(dir, "blank.md"))
+	if err != nil {
+		t.Fatalf("note not written: %v", err)
+	}
+	if len(body) != 0 {
+		t.Errorf("expected empty body when title is empty, got %q", body)
+	}
+}
+
+// TestNotes_NewNote_CollisionToasts — submitting a filename that
+// already exists surfaces a toast and leaves the existing file
+// untouched.
+func TestNotes_NewNote_CollisionToasts(t *testing.T) {
+	dir := t.TempDir()
+	existing := filepath.Join(dir, "existing.md")
+	if err := os.WriteFile(existing, []byte("original"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := newNotes(styles.Default(), DefaultKeymap())
+	m.project = &project.Project{Name: "p", Path: dir}
+
+	_, cmd := m.Update(newNoteSubmitMsg{Filename: "existing.md", Title: "hi"})
+	if cmd == nil {
+		t.Fatal("expected toast cmd for collision")
+	}
+	toast, ok := cmd().(toastMsg)
+	if !ok {
+		t.Fatalf("expected toastMsg, got %T", cmd())
+	}
+	if !strings.Contains(toast.Text, "exists") {
+		t.Errorf("toast didn't mention file exists: %q", toast.Text)
+	}
+	body, _ := os.ReadFile(existing)
+	if string(body) != "original" {
+		t.Errorf("existing file was overwritten: %q", body)
+	}
+}
+
+// TestNotes_InfoOverlay_Opens — pressing `i` opens the overlay
+// populated with the selected note's metadata.
+func TestNotes_InfoOverlay_Opens(t *testing.T) {
+	dir := t.TempDir()
+	notePath := filepath.Join(dir, "demo.md")
+	body := "---\ntitle: x\n---\n\n# Demo Title\n\none two three four\n"
+	if err := os.WriteFile(notePath, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := newNotes(styles.Default(), DefaultKeymap())
+	m.project = &project.Project{Name: "p", Path: dir}
+	m.entries = []notes.Entry{{Path: notePath, Rel: "demo.md", Dir: "", Display: "demo"}}
+
+	m2, _ := m.Update(noteInfoOpenMsg{})
+	if !m2.noteInfo.open {
+		t.Fatal("overlay did not open")
+	}
+	if m2.noteInfo.h1 != "Demo Title" {
+		t.Errorf("h1 = %q, want %q", m2.noteInfo.h1, "Demo Title")
+	}
+	if m2.noteInfo.wordCount == 0 {
+		t.Error("word count should be > 0")
+	}
+	if !strings.Contains(m2.noteInfo.frontmatter, "title: x") {
+		t.Errorf("frontmatter = %q, want it to contain `title: x`", m2.noteInfo.frontmatter)
+	}
+
+	// Esc closes it.
+	m3, _ := m2.Update(keyMsg("esc"))
+	if m3.noteInfo.open {
+		t.Error("esc should close the overlay")
 	}
 }
 

@@ -207,6 +207,12 @@ func (a App) modalCapturingText() bool {
 	if a.notes.searching {
 		return true
 	}
+	if a.notes.newNoteForm != nil {
+		return true
+	}
+	if a.notes.noteInfo.open {
+		return true
+	}
 	return false
 }
 
@@ -409,6 +415,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		a.width, a.height = msg.Width, msg.Height
 		a.matrix.SetSize(msg.Width, msg.Height)
+		a.notes.SetSize(msg.Width, msg.Height)
 		return a, nil
 
 	case matrixTickMsg:
@@ -911,6 +918,19 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.confirm.open() {
 			return a.updateConfirmationMouse(msg)
 		}
+		// Forward wheel events to the active screen so its
+		// scrollable regions (notes preview viewport, etc.) can
+		// respond. Non-wheel mouse events are intentionally
+		// swallowed — clicks/drags don't drive navigation here,
+		// and absorbing them keeps the rest of the app pointer-free.
+		if isWheelMsg(msg) {
+			var cmd tea.Cmd
+			switch a.screen {
+			case ScreenNotes:
+				a.notes, cmd = a.notes.Update(msg)
+			}
+			return a, cmd
+		}
 		return a, nil
 
 	case tea.KeyMsg:
@@ -1060,6 +1080,14 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 
+		// `i` opens the note-info overlay on the Notes screen. Guard
+		// against the modal-text trap: if the user is typing into the
+		// search field or the new-note form, the `i` keystroke goes
+		// to the input rather than opening the overlay.
+		if msg.String() == "i" && a.screen == ScreenNotes && !a.modalCapturingText() {
+			return a, func() tea.Msg { return noteInfoOpenMsg{} }
+		}
+
 		// `T` re-opens the first-run tour at step 0. Capital so it doesn't
 		// collide with vim-style `t` someone might add to a per-screen
 		// nav binding later.
@@ -1119,6 +1147,18 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Notes search mode: the search textinput owns every keystroke so
 		// global bindings like "r" (refresh) don't swallow characters mid-query.
 		if a.screen == ScreenNotes && a.notes.searching {
+			if msg.String() == "ctrl+c" {
+				return a, tea.Quit
+			}
+			var cmd tea.Cmd
+			a.notes, cmd = a.notes.Update(msg)
+			return a, cmd
+		}
+
+		// Notes new-note form: the modal owns every keystroke so the
+		// filename / title fields don't have their characters
+		// swallowed by global bindings (e.g. "r" → refresh).
+		if a.screen == ScreenNotes && a.notes.newNoteForm != nil {
 			if msg.String() == "ctrl+c" {
 				return a, tea.Quit
 			}
@@ -1540,9 +1580,9 @@ func (a App) renderHeader() string {
 			label = " " + label + " "
 		}
 		if t == a.screen {
-			parts = append(parts, a.styles.Emphasis.Render(label))
+			parts = append(parts, a.styles.TabActive.Render(label))
 		} else {
-			parts = append(parts, a.styles.Muted.Render(label))
+			parts = append(parts, a.styles.TabInactive.Render(label))
 		}
 	}
 	line := lipgloss.NewStyle().Background(a.styles.P.BGAlt).Render(strings.Join(parts, ""))

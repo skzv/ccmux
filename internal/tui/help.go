@@ -72,11 +72,15 @@ func helpForScreen(s Screen, km Keymap) []HelpItem {
 		}
 	case ScreenNotes:
 		return []HelpItem{
-			{"p", "switch project (picker modal)"},
-			{"tab", "toggle focus between list and preview"},
-			{"↑↓ / j k (list focused)", "navigate files"},
+			{"p / space", "switch project (picker modal)"},
+			{"tab / h / l / ←→", "toggle focus between list and preview"},
+			{"↑↓ / j k (list focused)", "navigate files (wraps around)"},
 			{"↑↓ / j k (preview focused)", "scroll within open doc"},
+			{"mouse wheel", "scroll list (left) or doc (right)"},
 			{"enter / e", "open selected file in $EDITOR"},
+			{"n", "new note (asks for filename + optional title, then $EDITOR)"},
+			{"i", "show selected note's info (path, frontmatter, counts)"},
+			{"/", "search notes in this project"},
 		}
 	case ScreenAgents:
 		return []HelpItem{

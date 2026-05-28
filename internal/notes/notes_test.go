@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func makeProject(t *testing.T) (project string, v Vault) {
@@ -43,7 +44,7 @@ func TestSkipDir(t *testing.T) {
 	}
 }
 
-func TestDisplayFor(t *testing.T) {
+func TestFilenameLabel(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"01_Specs/00_Vision.md", "Vision"},
 		{"01_Specs/01_Feature_Catalog.md", "Feature Catalog"},
@@ -53,9 +54,64 @@ func TestDisplayFor(t *testing.T) {
 		{"README.md", "README"},
 	}
 	for _, tc := range cases {
-		if got := displayFor(tc.in); got != tc.want {
-			t.Errorf("displayFor(%q) = %q, want %q", tc.in, got, tc.want)
+		if got := filenameLabel(tc.in); got != tc.want {
+			t.Errorf("filenameLabel(%q) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+// TestDisplayFor_H1Fallback covers the three H1-discovery cases the
+// row-label rule has to handle: a plain ATX H1, no H1 at all (fall
+// back to the filename), and an H1 buried after a YAML frontmatter
+// block (which the scanner must skip past). Cache invalidation by
+// mtime is verified by a follow-up write that changes the H1.
+func TestDisplayFor_H1Fallback(t *testing.T) {
+	dir := t.TempDir()
+
+	writeNote := func(name, body string) (absPath string, mod time.Time) {
+		t.Helper()
+		full := filepath.Join(dir, name)
+		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		info, err := os.Stat(full)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return full, info.ModTime()
+	}
+
+	// Plain H1 → row label is the heading text, not the filename.
+	withH1, mod := writeNote("with-h1.md", "# My Project Vision\n\nbody\n")
+	if got := displayFor("with-h1.md", withH1, mod); got != "My Project Vision" {
+		t.Errorf("displayFor(with H1) = %q, want %q", got, "My Project Vision")
+	}
+
+	// No H1 → fall back to the cleaned filename.
+	noH1, mod := writeNote("01_no-heading.md", "Just a paragraph with no heading.\n")
+	if got := displayFor("01_no-heading.md", noH1, mod); got != "no-heading" {
+		t.Errorf("displayFor(no H1) = %q, want %q", got, "no-heading")
+	}
+
+	// H1 buried under long YAML frontmatter still surfaces.
+	yamlBody := "---\n" + strings.Repeat("key: value with some padding\n", 30) + "---\n\n# After Frontmatter\n\nbody\n"
+	withYAML, mod := writeNote("yaml.md", yamlBody)
+	if got := displayFor("yaml.md", withYAML, mod); got != "After Frontmatter" {
+		t.Errorf("displayFor(yaml + H1) = %q, want %q", got, "After Frontmatter")
+	}
+
+	// Cache invalidates on mtime change: rewriting the file with a
+	// different H1 must reflect immediately when called with the new
+	// mtime, not stick to the cached value.
+	withH1, mod2 := writeNote("with-h1.md", "# Updated Title\n\nbody\n")
+	if mod2.Equal(mod) {
+		// Touch the file forward by 1 second so mtime changes deterministically.
+		_ = os.Chtimes(withH1, mod.Add(time.Second), mod.Add(time.Second))
+		info, _ := os.Stat(withH1)
+		mod2 = info.ModTime()
+	}
+	if got := displayFor("with-h1.md", withH1, mod2); got != "Updated Title" {
+		t.Errorf("displayFor(updated H1) = %q, want %q", got, "Updated Title")
 	}
 }
 

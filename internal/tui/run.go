@@ -47,13 +47,17 @@ func Run(version string, projectsOverride string) error {
 	}
 
 	app := New(cfg, version)
-	// Important: do NOT enable mouse capture. Bubble Tea's mouse modes
-	// intercept native terminal selection in most clients (iTerm, Blink,
-	// Terminal.app), which breaks copy/paste — especially inside tmux+Mosh
-	// where users expect to select text with the mouse or via tmux copy
-	// mode. Keyboard navigation is enough; the TUI is intentionally
-	// pointer-free.
-	p := tea.NewProgram(app, tea.WithAltScreen())
+	// Mouse cell-motion mode is enabled so wheel events reach the
+	// program (the Notes preview viewport and other scrollable
+	// regions forward them to their bubbles/viewport handlers).
+	// Tradeoff: most terminal clients capture mouse events
+	// themselves, so native click-drag text selection no longer
+	// works as-is — users hold Shift while selecting (iTerm,
+	// Terminal.app, Blink, kitty, wezterm all honor this) to bypass
+	// the program's mouse reporting and copy text the usual way.
+	// Inside tmux, the regular tmux copy-mode keybindings still
+	// work without any selection workaround.
+	p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {
 		return err
 	}
