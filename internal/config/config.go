@@ -147,6 +147,7 @@ type AgentsConfig struct {
 	Antigravity AgentCommandConfig `toml:"antigravity"`
 	Cursor      AgentCommandConfig `toml:"cursor"`
 	Pi          AgentCommandConfig `toml:"pi"`
+	Grok        AgentCommandConfig `toml:"grok"`
 }
 
 // AgentCommandConfig stores an optional explicit executable path for
@@ -166,6 +167,7 @@ func (c Config) AgentCommands() agent.Commands {
 		Antigravity: strings.TrimSpace(c.Agents.Antigravity.Command),
 		Cursor:      strings.TrimSpace(c.Agents.Cursor.Command),
 		Pi:          strings.TrimSpace(c.Agents.Pi.Command),
+		Grok:        strings.TrimSpace(c.Agents.Grok.Command),
 	}
 }
 

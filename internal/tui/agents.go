@@ -84,9 +84,9 @@ func (m agentsModel) Update(msg tea.Msg) (agentsModel, tea.Cmd) {
 		g, cmd := m.antigravity.Update(msg)
 		m.antigravity = g
 		return m, cmd
-	case agent.IDCursor, agent.IDPi:
-		// Cursor + pi are AGENTS.md-centric and manage their own
-		// config via their CLI — no editable surface in ccmux.
+	case agent.IDCursor, agent.IDPi, agent.IDGrok:
+		// Cursor, pi, and grok are AGENTS.md-centric and manage their
+		// own config via their CLI — no editable surface in ccmux.
 		return m, nil
 	}
 	return m, nil
@@ -133,6 +133,8 @@ func (m agentsModel) View(width, height int) string {
 		body = m.st.Muted.Render("Cursor settings are managed by Cursor CLI.")
 	case agent.IDPi:
 		body = m.st.Muted.Render("pi settings are managed by the pi CLI (~/.pi + AGENTS.md).")
+	case agent.IDGrok:
+		body = m.st.Muted.Render("Grok settings are managed by the grok CLI (~/.grok/config.toml + AGENTS.md).")
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, header, body)
 }

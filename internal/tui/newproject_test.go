@@ -327,7 +327,8 @@ func TestNextAgent(t *testing.T) {
 		{agent.IDCodex, agent.IDAntigravity},
 		{agent.IDAntigravity, agent.IDCursor},
 		{agent.IDCursor, agent.IDPi},
-		{agent.IDPi, agent.IDClaude},
+		{agent.IDPi, agent.IDGrok},
+		{agent.IDGrok, agent.IDClaude},
 		// Edge: empty / unknown values land on the first agent.
 		{"", agent.IDClaude},
 		{agent.ID("imaginary"), agent.IDClaude},

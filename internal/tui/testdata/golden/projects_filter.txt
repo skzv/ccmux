@@ -1,7 +1,7 @@
 ╭──────────────────────────────────────────────────────────╮ ╭─────────────────────────────────────────────────────────╮
 │ Projects  (4)                                            │ │ ccmux   ● local                                         │
 │ agents:  ● claude  ● codex  ● antigravity  ● cursor  ●   │ │ /Users/me/repos/ccmux                                   │
-│ pi                                                       │ │                                                         │
+│ pi  ● grok                                               │ │                                                         │
 │ / ccmux                                      (2/4)       │ │ session   c-ccmux                                       │
 │                                                          │ │ agent     ● Claude Code                                 │
 │ on local                                                 │ │ detected  [git] [CLAUDE] [docs/]                        │

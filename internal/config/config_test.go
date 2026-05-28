@@ -81,6 +81,7 @@ func TestSaveLoad_RoundTrip(t *testing.T) {
 	in.Agents.Codex.Command = "/tmp/codex"
 	in.Agents.Antigravity.Command = "/tmp/agy"
 	in.Agents.Cursor.Command = "/tmp/cursor-agent"
+	in.Agents.Grok.Command = "/tmp/grok"
 	in.Hosts = []Host{
 		{Name: "mac-mini", Address: "100.64.0.5", User: "skz", Port: 22, Mosh: true},
 		{Name: "laptop", Address: "100.64.0.6", User: "skz"},
@@ -103,6 +104,7 @@ func TestAgentCommands_CommandOverrides(t *testing.T) {
 	cfg.Agents.Codex.Command = "  /tmp/codex  "
 	cfg.Agents.Antigravity.Command = "  /tmp/agy  "
 	cfg.Agents.Cursor.Command = "  /tmp/cursor-agent  "
+	cfg.Agents.Grok.Command = "  /tmp/grok  "
 	if got := cfg.AgentCommands().Claude; got != "/tmp/claude" {
 		t.Errorf("AgentCommands().Claude = %q, want /tmp/claude", got)
 	}
@@ -114,6 +116,9 @@ func TestAgentCommands_CommandOverrides(t *testing.T) {
 	}
 	if got := cfg.AgentCommands().Cursor; got != "/tmp/cursor-agent" {
 		t.Errorf("AgentCommands().Cursor = %q, want /tmp/cursor-agent", got)
+	}
+	if got := cfg.AgentCommands().Grok; got != "/tmp/grok" {
+		t.Errorf("AgentCommands().Grok = %q, want /tmp/grok", got)
 	}
 }
 

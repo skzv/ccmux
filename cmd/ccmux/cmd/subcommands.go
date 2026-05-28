@@ -113,7 +113,7 @@ func newNewCmd() *cobra.Command {
 			if agentFlag != "" {
 				id, ok := agent.ParseID(agentFlag)
 				if !ok {
-					return fmt.Errorf("unknown agent %q (want claude, codex, antigravity, cursor, or pi)", agentFlag)
+					return fmt.Errorf("unknown agent %q (want claude, codex, antigravity, cursor, pi, or grok)", agentFlag)
 				}
 				opts.Agent = id
 			}
@@ -125,7 +125,7 @@ func newNewCmd() *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&agentFlag, "agent", "",
-		"agent to launch: claude, codex, antigravity, cursor, or pi (default claude)")
+		"agent to launch: claude, codex, antigravity, cursor, pi, or grok (default claude)")
 	return c
 }
 
@@ -241,6 +241,8 @@ func configuredDoctorCommand(cfg config.Config, id agent.ID) string {
 		return strings.TrimSpace(cfg.Agents.Cursor.Command)
 	case agent.IDPi:
 		return strings.TrimSpace(cfg.Agents.Pi.Command)
+	case agent.IDGrok:
+		return strings.TrimSpace(cfg.Agents.Grok.Command)
 	default:
 		return ""
 	}
@@ -483,6 +485,8 @@ func agentInstallHint(id agent.ID) string {
 		return "`curl https://cursor.com/install -fsS | bash` (or see cursor docs)"
 	case agent.IDPi:
 		return "`curl -fsSL https://pi.dev/install.sh | sh` (or `npm i -g @earendil-works/pi-coding-agent`)"
+	case agent.IDGrok:
+		return "`curl -fsSL https://x.ai/cli/install.sh | bash` (or `npm i -g @xai-official/grok`)"
 	}
 	return ""
 }

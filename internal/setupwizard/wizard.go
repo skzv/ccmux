@@ -291,6 +291,8 @@ func configuredAgentCommand(cfg config.Config, id agent.ID) string {
 		return strings.TrimSpace(cfg.Agents.Cursor.Command)
 	case agent.IDPi:
 		return strings.TrimSpace(cfg.Agents.Pi.Command)
+	case agent.IDGrok:
+		return strings.TrimSpace(cfg.Agents.Grok.Command)
 	default:
 		return ""
 	}
@@ -309,6 +311,8 @@ func setConfiguredAgentCommand(cfg *config.Config, id agent.ID, command string) 
 		cfg.Agents.Cursor.Command = command
 	case agent.IDPi:
 		cfg.Agents.Pi.Command = command
+	case agent.IDGrok:
+		cfg.Agents.Grok.Command = command
 	}
 }
 
@@ -329,6 +333,8 @@ func installHintFor(id agent.ID) string {
 		return "curl https://cursor.com/install -fsS | bash"
 	case agent.IDPi:
 		return "curl -fsSL https://pi.dev/install.sh | sh"
+	case agent.IDGrok:
+		return "curl -fsSL https://x.ai/cli/install.sh | bash  (or npm i -g @xai-official/grok)"
 	}
 	return ""
 }

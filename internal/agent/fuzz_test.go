@@ -31,6 +31,8 @@ func FuzzParseID(f *testing.F) {
 		"gemini", // back-compat alias
 		"GeMiNi",
 		"cursor",
+		"pi",
+		"grok",
 		"",
 		"   ",
 		"opusplan",      // close to a Claude alias but not a valid id
@@ -48,10 +50,10 @@ func FuzzParseID(f *testing.F) {
 		id, ok := ParseID(s)
 		if ok {
 			switch id {
-			case IDClaude, IDCodex, IDAntigravity, IDCursor, IDPi:
+			case IDClaude, IDCodex, IDAntigravity, IDCursor, IDPi, IDGrok:
 				// canonical id — good
 			default:
-				t.Fatalf("ParseID(%q) returned ok=true but id=%q is not in {claude,codex,antigravity,cursor,pi}", s, id)
+				t.Fatalf("ParseID(%q) returned ok=true but id=%q is not in {claude,codex,antigravity,cursor,pi,grok}", s, id)
 			}
 		} else {
 			if id != "" {
