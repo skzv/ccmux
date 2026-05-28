@@ -59,19 +59,31 @@ func (t *toastController) Active() bool {
 	return t.current != "" && time.Now().Before(t.until)
 }
 
-// Render returns the styled toast for the footer. Caller is
-// responsible for line-truncating to the terminal width.
+// Render returns the styled toast — a rounded-border bubble in the
+// kind's accent color with a glyph prefix (✓ ! ✗ ⓘ). Caller is
+// responsible for line-truncating to the terminal width and placing
+// the bubble in the frame (currently overlaid at the top via
+// app.renderTopToast).
 func (t *toastController) Render(st styles.Styles) string {
-	base := st.Toast
+	var fg lipgloss.Color
+	var glyph string
 	switch t.kind {
 	case toastError:
-		base = lipgloss.NewStyle().Background(st.Semantic.Danger).Foreground(st.P.BG).Padding(st.Spacing.XS, st.Spacing.SM)
+		fg, glyph = st.Semantic.Danger, "✗"
 	case toastSuccess:
-		base = lipgloss.NewStyle().Background(st.Semantic.Success).Foreground(st.P.BG).Padding(st.Spacing.XS, st.Spacing.SM)
+		fg, glyph = st.Semantic.Success, "✓"
 	case toastWarning:
-		base = lipgloss.NewStyle().Background(st.Semantic.Warning).Foreground(st.P.BG).Padding(st.Spacing.XS, st.Spacing.SM)
+		fg, glyph = st.Semantic.Warning, "!"
+	default:
+		fg, glyph = st.Semantic.Info, "ⓘ"
 	}
-	return base.Render(t.current)
+	box := lipgloss.NewStyle().
+		Border(st.Radius.Soft).
+		BorderForeground(fg).
+		Foreground(st.P.FG).
+		Padding(st.Spacing.XS, st.Spacing.SM)
+	prefix := lipgloss.NewStyle().Foreground(fg).Bold(true).Render(glyph)
+	return box.Render(prefix + " " + t.current)
 }
 
 // Log returns the ring buffer (newest first). Read-only — callers

@@ -1,11 +1,11 @@
 ╭──────────────────────────────────────────────────────────╮ ╭─────────────────────────────────────────────────────────╮
-│ Projects  (3)                                            │ │ ccmux   ● local                                         │
+│ Projects  (4)                                            │ │ ccmux   ● local                                         │
 │ agents:  ● claude  ● codex  ● antigravity  ● cursor      │ │ /Users/me/repos/ccmux                                   │
-│                                                          │ │                                                         │
-│ on local                                                 │ │ session   c-ccmux                                       │
-│ ▌ ● ccmux   [git] [CLAUDE] [docs/]                       │ │ agent     ● Claude Code                                 │
-│   ● auth-redesign   [git] [CLAUDE]                       │ │ detected  [git] [CLAUDE] [docs/]                        │
-│   ● parser   [git]                                       │ │                                                         │
+│ / ccmux                                      (2/4)       │ │                                                         │
+│                                                          │ │ session   c-ccmux                                       │
+│ on local                                                 │ │ agent     ● Claude Code                                 │
+│ ▌ ● ccmux   [git] [CLAUDE] [docs/]                       │ │ detected  [git] [CLAUDE] [docs/]                        │
+│   ● ccmux-website   [git] [CLAUDE]                       │ │                                                         │
 │                                                          │ │ a switch agent   i full project info                    │
 │                                                          │ │                                                         │
 │                                                          │ │                                                         │

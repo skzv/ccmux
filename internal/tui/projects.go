@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -52,6 +53,16 @@ type projectsModel struct {
 	// Selected() reflects what the user sees.
 	filter       textinput.Model
 	filterActive bool
+
+	// loaded flips true on the first projectsLoadedMsg, regardless of
+	// whether the discovered slice was empty. Lets the renderer tell
+	// "no projects found yet" (spinner) from "scan finished, the
+	// projects root genuinely has none" (empty-state placeholder).
+	loaded bool
+
+	// spin animates while the projects refresh is in flight. Started
+	// in newProjects so the very first frame already has motion.
+	spin spinner.Model
 }
 
 func newProjects(st styles.Styles, km Keymap) projectsModel {
@@ -60,11 +71,15 @@ func newProjects(st styles.Styles, km Keymap) projectsModel {
 	ti.Prompt = "/ "
 	ti.CharLimit = 64
 	ti.Width = 40
-	return projectsModel{st: st, km: km, filter: ti}
+	sp := spinner.New()
+	sp.Spinner = spinner.Dot
+	sp.Style = lipgloss.NewStyle().Foreground(st.Semantic.Accent)
+	return projectsModel{st: st, km: km, filter: ti, spin: sp}
 }
 
 func (m *projectsModel) SetProjects(p []project.Project) {
 	m.projects = p
+	m.loaded = true
 	m.clampCursor()
 }
 
@@ -173,7 +188,21 @@ func (m *projectsModel) SetHosts(h []hostStatus) {
 	m.hosts = h
 }
 
+// Init kicks the spinner so the very first frame animates while the
+// initial refreshProjectsCmd is in flight.
+func (m projectsModel) Init() tea.Cmd { return m.spin.Tick }
+
 func (m projectsModel) Update(msg tea.Msg) (projectsModel, tea.Cmd) {
+	// Spinner advances on its own tick. Forwarding only the spinner
+	// message (not all messages) keeps the spinner self-driving
+	// without polluting the rest of the model's Update with batch
+	// commands every keystroke.
+	if _, ok := msg.(spinner.TickMsg); ok {
+		var cmd tea.Cmd
+		m.spin, cmd = m.spin.Update(msg)
+		return m, cmd
+	}
+
 	// Menu modal: lists the project's sessions + conversations. App
 	// intercepts the pick/cancel messages before they reach here, so we
 	// only forward unrecognized messages to the menu's own Update.
@@ -305,7 +334,11 @@ func nextAgent(cur agent.ID) agent.ID {
 }
 
 // switchAgentCmd is the projects-detail-pane "a" action. Writes the
-// sidecar, emits a toast, and signals the in-memory list to update.
+// sidecar, signals the in-memory list to update, and emits a success
+// toast. The toast renders at the top of the frame (see
+// renderTopToast in app.go) so it doesn't compete with the bottom
+// HelpBar for the user's attention.
+//
 // Local-only — remote agent switching would need a daemon endpoint
 // (POST /v1/projects/<name>/agent) that we haven't built yet.
 func switchAgentCmd(p project.Project) tea.Cmd {
@@ -322,8 +355,7 @@ func switchAgentCmd(p project.Project) tea.Cmd {
 			func() tea.Msg { return projectAgentSwitchedMsg{Path: p.Path, Agent: next} },
 			func() tea.Msg {
 				return toastMsg{
-					Text: p.Name + ": agent → " + string(next) +
-						" (next session uses this agent)",
+					Text:  p.Name + ": agent → " + string(next) + " (next session uses this)",
 					Kind:  toastSuccess,
 					Until: time.Now().Add(5 * time.Second),
 				}
@@ -345,7 +377,10 @@ func (m projectsModel) View(width, height int) string {
 	if isNarrow(width) {
 		return m.renderList(width, height, true)
 	}
-	leftW := width * 2 / 3
+	// 50/50 split. The right (detail) pane carries the absolute path
+	// and the chip line `[git] [CLAUDE] [docs/]`; both wrap on
+	// narrower allocations like the previous 1/3 split.
+	leftW := width / 2
 	rightW := width - leftW - 1
 	return lipgloss.JoinHorizontal(lipgloss.Top,
 		m.renderList(leftW, height, false),
@@ -367,18 +402,32 @@ func (m projectsModel) renderList(width, height int, narrow bool) string {
 		header += "  " + m.st.Muted.Render(fmt.Sprintf("(%d)", len(m.projects)))
 	}
 	if len(m.projects) == 0 {
-		body := lipgloss.JoinVertical(lipgloss.Left,
-			header,
-			"",
-			m.st.Muted.Render("No projects found under your projects root."),
-			"",
-			"Press "+m.st.Key.Render("n")+" to scaffold a new one.",
-		)
+		var body string
+		if !m.loaded {
+			body = lipgloss.JoinVertical(lipgloss.Left,
+				header,
+				"",
+				m.spin.View()+" "+m.st.Muted.Render("Discovering projects…"),
+			)
+		} else {
+			body = lipgloss.JoinVertical(lipgloss.Left,
+				header,
+				"",
+				m.st.Muted.Render("No projects found under your projects root."),
+				"",
+				"Press "+m.st.Key.Render("n")+" to scaffold a new one.",
+			)
+		}
 		return m.st.Pane.Width(width - 2).Height(height - 2).Render(body)
 	}
 
 	vis := m.visibleProjects()
 	rows := []string{header}
+	// Agent-color legend. One line directly under the title so the
+	// user can correlate the per-row dots to the agent that runs
+	// each project. Only emitted when the list has rows — the
+	// legend is meaningless against an empty pane.
+	rows = append(rows, renderAgentLegend(m.st))
 	if m.filterActive || m.filter.Value() != "" {
 		// Filter prompt line lives beneath the header. Show the live
 		// match count so the user can tell whether they need to keep
@@ -417,21 +466,15 @@ func (m projectsModel) renderList(width, height int, narrow bool) string {
 			rows = append(rows, m.st.Subtitle.Render("on "+host))
 			currentHost = host
 		}
-		marks := []string{}
-		if p.HasGit {
-			marks = append(marks, "git")
-		}
-		if p.HasCM {
-			marks = append(marks, "CLAUDE")
-		}
-		if p.HasDocs {
-			marks = append(marks, "docs/")
-		}
-		tail := ""
-		if len(marks) > 0 {
-			tail = "   " + m.st.Muted.Render(strings.Join(marks, " · "))
-		}
-		line := components.RenderListRow(m.st, p.Name+tail, i == m.cursor, inner)
+		selected := i == m.cursor
+		// The dot encodes the project's *agent* (claude, codex,
+		// antigravity, cursor). Host identity is preserved in the
+		// `on <host>` subheader above and in the detail pane.
+		// Pressing `a` cycles the agent on the focused row and the
+		// dot's color follows on the next frame.
+		dot := m.st.AgentAccent(p.Agent).Render("●")
+		content := dot + " " + p.Name + renderScaffoldChips(m.st, p, selected)
+		line := components.RenderListRow(m.st, content, selected, inner)
 		rows = append(rows, line)
 	}
 	return m.st.PaneFocused.Width(width - 2).Height(height - 2).Render(strings.Join(rows, "\n"))
@@ -447,7 +490,10 @@ func (m projectsModel) HelpBarProps(width int) components.HelpBarProps {
 			{Key: "q", Label: "quit", Priority: 10},
 			{Key: "enter", Label: "attach", Priority: 8},
 			{Key: "n", Label: "new", Priority: 7},
+			{Key: "i", Label: "info", Priority: 7},
 			{Key: "/", Label: "filter", Priority: 6},
+			{Key: "a", Label: "switch agent", Priority: 5},
+			{Key: "c", Label: "conversations", Priority: 4},
 			{Key: "r", Label: "refresh", Priority: 3},
 			{Key: "1-7", Label: "screens", Priority: 2},
 		},
@@ -462,26 +508,25 @@ func (m projectsModel) renderDetail(width, height int) string {
 	}
 	p := *sel
 	host := projectHost(p)
-	enterDesc := "attach or create session locally"
-	if host != "local" {
-		enterDesc = "create session on " + host + " (via ccmuxd), then ssh-attach"
-	}
 	// Resolve the agent's display name through the registry so a future
 	// rename of ID strings doesn't break the detail pane.
 	agentDisplay := agent.ByID(p.Agent).DisplayName()
+	detected := renderScaffoldChips(m.st, p, false)
+	if detected == "" {
+		detected = m.st.Muted.Render("(none)")
+	} else {
+		detected = strings.TrimLeft(detected, " ")
+	}
 	lines := []string{
-		m.st.Emphasis.Render(p.Name) + "   " + m.st.Muted.Render("on "+host),
+		m.st.Emphasis.Render(p.Name) + "   " + m.st.HostColor(host).Render("● "+host),
 		m.st.Muted.Render(summarizePath(p.Path)),
 		"",
-		"session name  " + m.st.Emphasis.Render(p.SessionName()),
-		"agent         " + m.st.Emphasis.Render(agentDisplay),
+		"session   " + m.st.Emphasis.Render(p.SessionName()),
+		"agent     " + m.st.AgentAccent(p.Agent).Render("● ") + m.st.Emphasis.Render(agentDisplay),
+		"detected  " + detected,
 		"",
-		m.st.Subtitle.Render("Keys"),
-		m.st.Key.Render("enter") + "  " + enterDesc,
-		m.st.Key.Render("n") + "      new project (modal form)",
-		m.st.Key.Render("a") + "      switch agent for this project (cycles claude→codex→antigravity→cursor; local only)",
-		m.st.Key.Render("c") + "      show conversations for this project",
-		m.st.Key.Render("5") + "      open Notes for this project (local only)",
+		m.st.Key.Render("a") + " " + m.st.Muted.Render("switch agent") + "   " +
+			m.st.Key.Render("i") + " " + m.st.Muted.Render("full project info"),
 	}
 	return m.st.Pane.Width(width - 2).Height(height - 2).Render(strings.Join(lines, "\n"))
 }
@@ -494,6 +539,53 @@ func projectHost(p project.Project) string {
 		return "local"
 	}
 	return p.Host
+}
+
+// renderAgentLegend renders the per-agent color key shown at the top
+// of the Projects list. It enumerates agent.All() so a future agent
+// addition appears in the legend without touching this file. Format:
+// `agents:  ● claude  ● codex  ● antigravity  ● cursor`. The dots are
+// rendered through Styles.AgentAccent so the legend and per-row dots
+// always agree on the same color for the same agent.
+func renderAgentLegend(st styles.Styles) string {
+	parts := []string{st.Muted.Render("agents:")}
+	for _, a := range agent.All() {
+		dot := st.AgentAccent(a.ID()).Render("●")
+		// Lowercase agent ID (not DisplayName) — the IDs are short
+		// enough to fit on one line in a 60-cell pane, and they're
+		// already the canonical strings the rest of the codebase
+		// uses (the `.ccmux/agent` sidecar, the CLI, the toast).
+		parts = append(parts, dot+" "+st.Muted.Render(string(a.ID())))
+	}
+	return strings.Join(parts, "  ")
+}
+
+// renderScaffoldChips renders the bracketed `[git] [CLAUDE] [docs/]`
+// chips for the project row. Selected rows use the accent foreground;
+// off-row stays muted. Returns "" when the project has no scaffolding
+// flags so callers don't render a leading gap for nothing.
+func renderScaffoldChips(st styles.Styles, p project.Project, selected bool) string {
+	labels := []string{}
+	if p.HasGit {
+		labels = append(labels, "[git]")
+	}
+	if p.HasCM {
+		labels = append(labels, "[CLAUDE]")
+	}
+	if p.HasAgents {
+		labels = append(labels, "[AGENTS]")
+	}
+	if p.HasDocs {
+		labels = append(labels, "[docs/]")
+	}
+	if len(labels) == 0 {
+		return ""
+	}
+	style := st.Muted
+	if selected {
+		style = lipgloss.NewStyle().Foreground(st.Semantic.Accent)
+	}
+	return "   " + style.Render(strings.Join(labels, " "))
 }
 
 // createProjectCmd creates a new project — its directory plus an agent

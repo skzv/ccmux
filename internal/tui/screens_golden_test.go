@@ -113,6 +113,48 @@ func TestProjectsGolden(t *testing.T) {
 	goldenAssert(t, "projects.txt", out)
 }
 
+// TestProjectsFilterGolden snapshots the Projects screen at 120x40
+// in filter-active state. The filter prompt + match count line, the
+// narrowed visible set, and the help bar all differ from the no-
+// filter golden — this catches drift in either surface.
+func TestProjectsFilterGolden(t *testing.T) {
+	const width, height = 120, 40
+	st := styles.Default()
+	km := DefaultKeymap()
+
+	m := newProjects(st, km)
+	m.projects = []project.Project{
+		{
+			Name: "ccmux", Path: "/Users/me/repos/ccmux",
+			HasGit: true, HasCM: true, HasDocs: true,
+			Agent: agent.IDClaude,
+		},
+		{
+			Name: "ccmux-website", Path: "/Users/me/repos/ccmux-website",
+			HasGit: true, HasCM: true,
+			Agent: agent.IDClaude,
+		},
+		{
+			Name: "auth-redesign", Path: "/Users/me/repos/auth-redesign",
+			HasGit: true, HasCM: true,
+			Agent: agent.IDClaude,
+		},
+		{
+			Name: "parser", Path: "/Users/me/repos/parser",
+			HasGit: true,
+			Agent:  agent.IDCodex,
+		},
+	}
+	m.loaded = true
+	m.enterFilter()
+	m.filter.SetValue("ccmux")
+
+	helpLine := renderHelpBarFor(st, m.HelpBarProps(width), width)
+	body := m.View(width, height-lipgloss.Height(helpLine))
+	out := composeScreen(body, helpLine, height)
+	goldenAssert(t, "projects_filter.txt", out)
+}
+
 // TestNotesGolden snapshots the Notes screen at 120x40 with a
 // project that has a handful of fake entries. The preview pane will
 // render the placeholder (no file actually loaded) so the snapshot

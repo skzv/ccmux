@@ -150,14 +150,15 @@ type NewProjectResponse struct {
 // merging projects from multiple ccmuxds can tag each row with its
 // origin. The remaining fields mirror internal/project.Project.
 type ProjectInfo struct {
-	Name     string    `json:"name"`
-	Host     string    `json:"host"`
-	Path     string    `json:"path"` // absolute path on the daemon's host
-	HasGit   bool      `json:"has_git"`
-	HasCM    bool      `json:"has_cm"`
-	HasDocs  bool      `json:"has_docs"`
-	Agent    string    `json:"agent,omitempty"`
-	Modified time.Time `json:"modified"`
+	Name      string    `json:"name"`
+	Host      string    `json:"host"`
+	Path      string    `json:"path"` // absolute path on the daemon's host
+	HasGit    bool      `json:"has_git"`
+	HasCM     bool      `json:"has_cm"`
+	HasAgents bool      `json:"has_agents,omitempty"`
+	HasDocs   bool      `json:"has_docs"`
+	Agent     string    `json:"agent,omitempty"`
+	Modified  time.Time `json:"modified"`
 }
 
 // PeerInfo is one row in the GET /v1/peers response. Maps the daemon's

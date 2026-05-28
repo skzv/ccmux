@@ -6,9 +6,9 @@
 // but that left directories like a worktree without `CLAUDE.md` or a
 // freshly-cloned repo invisible, with no in-app fix. The simpler rule
 // matches what users actually mean by "everything in my projects
-// folder," and the HasGit/HasCM/HasDocs flags still surface as visual
-// tags on the Projects screen for the eye to tell apart "real
-// software project" vs "scratch directory I happened to put here."
+// folder," and the HasGit/HasCM/HasAgents/HasDocs flags still surface
+// as visual tags on the Projects screen for the eye to tell apart
+// "real software project" vs "scratch directory I happened to put here."
 package project
 
 import (
@@ -36,12 +36,13 @@ type Project struct {
 	// the remote ccmuxd we fetched it from. The TUI uses this to
 	// route attach actions (local: scaffold + tmux locally; remote:
 	// POST /v1/sessions to the peer and ssh-attach).
-	Host     string
-	Path     string    // absolute path on the project's host
-	HasGit   bool      // .git exists
-	HasCM    bool      // CLAUDE.md exists
-	HasDocs  bool      // docs/ exists (the notes vault)
-	Modified time.Time // most-recent mtime among CLAUDE.md / README.md / docs/
+	Host      string
+	Path      string    // absolute path on the project's host
+	HasGit    bool      // .git exists
+	HasCM     bool      // CLAUDE.md exists
+	HasAgents bool      // AGENTS.md exists (Codex/agnostic agent instructions convention)
+	HasDocs   bool      // docs/ exists (the notes vault)
+	Modified  time.Time // most-recent mtime among CLAUDE.md / AGENTS.md / README.md / docs/
 
 	// Agent is the AI agent this project runs (claude, codex, antigravity).
 	// Sourced from <project>/.ccmux/agent on Discover; missing file or
@@ -138,6 +139,12 @@ func inspect(path string) (Project, bool) {
 	}
 	if fi, err := os.Stat(filepath.Join(path, "CLAUDE.md")); err == nil && !fi.IsDir() {
 		p.HasCM = true
+		if fi.ModTime().After(p.Modified) {
+			p.Modified = fi.ModTime()
+		}
+	}
+	if fi, err := os.Stat(filepath.Join(path, "AGENTS.md")); err == nil && !fi.IsDir() {
+		p.HasAgents = true
 		if fi.ModTime().After(p.Modified) {
 			p.Modified = fi.ModTime()
 		}

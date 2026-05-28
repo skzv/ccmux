@@ -1031,7 +1031,7 @@ func (s *server) listProjects(w http.ResponseWriter, _ *http.Request) {
 	for _, p := range ps {
 		out = append(out, daemon.ProjectInfo{
 			Name: p.Name, Host: host, Path: p.Path,
-			HasGit: p.HasGit, HasCM: p.HasCM, HasDocs: p.HasDocs,
+			HasGit: p.HasGit, HasCM: p.HasCM, HasAgents: p.HasAgents, HasDocs: p.HasDocs,
 			Agent: string(p.Agent), Modified: p.Modified,
 		})
 	}

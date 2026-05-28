@@ -14,96 +14,144 @@ type HelpItem struct {
 	Desc string
 }
 
-// helpForScreen returns the contextual key reference for `s`. Each
-// screen's bindings live here in one place rather than scattered
-// across the screen files — it's easier to keep in sync with the
-// actual implementation when there's a single source.
-//
-// km is the keymap; we derive the first and last screen key from it
-// so the "switch screens" help entry updates automatically when screens
-// are added or removed.
-func helpForScreen(s Screen, km Keymap) []HelpItem {
+// globalHelp returns the keybindings that work on every screen.
+// Rendered as the bottom section of the help overlay so per-screen
+// listings stay tight and the user can see at a glance what's
+// universal vs scoped.
+func globalHelp(km Keymap) []HelpItem {
 	first := km.Sessions.Keys()[0]
 	last := km.Network.Keys()[0]
 	switchHint := first + "-" + last + " / F" + first + "-F" + last
-	common := []HelpItem{
+	return []HelpItem{
 		{switchHint, "switch screens"},
-		{"r", "refresh now"},
 		{"?", "this help"},
 		{"T", "re-open the first-run tour"},
 		{"M", "matrix 🐇"},
 		{"esc", "dismiss toast"},
 		{"q / Ctrl-c", "quit"},
 	}
+}
+
+// helpForScreen returns the keybindings *specific to* `s`. These are
+// merged with globalHelp() at render time into two labeled sections,
+// so this list intentionally excludes anything in globalHelp.
+//
+// Each screen's bindings live here in one place rather than scattered
+// across the screen files — it's easier to keep in sync with the
+// actual implementation when there's a single source.
+func helpForScreen(s Screen, km Keymap) []HelpItem {
+	_ = km // currently unused for per-screen items; reserved for future per-screen-keymap variants
 	switch s {
 	case ScreenSessions:
-		return append([]HelpItem{
+		return []HelpItem{
 			{"↑↓ / j k", "navigate session list"},
 			{"enter", "attach (Ctrl-b then d to detach back to ccmux)"},
 			{"n", "new session"},
 			{"x", "kill selected session"},
 			{"R", "rename selected session"},
+			{"u", "open the full usage overlay"},
 			{"r", "refresh sessions + usage"},
-		}, common...)
+		}
 	case ScreenProjects:
-		return append([]HelpItem{
+		return []HelpItem{
 			{"↑↓ / j k", "navigate project list"},
 			{"/", "filter projects by name (esc to clear, enter to attach to top match)"},
 			{"enter", "attach to (or create) that project's session"},
 			{"n", "scaffold a new project (modal form)"},
 			{"a", "switch the selected project's agent (local only)"},
-		}, common...)
+			{"i", "open the full project-info overlay"},
+			{"c", "show conversations for this project"},
+			{"r", "refresh projects + sessions"},
+		}
+	case ScreenConversations:
+		return []HelpItem{
+			{"↑↓ / j k", "navigate conversation list"},
+			{"enter", "resume the selected conversation"},
+			{"H", "toggle headless / SDK conversations"},
+			{"r", "refresh conversation list"},
+		}
 	case ScreenNotes:
-		return append([]HelpItem{
+		return []HelpItem{
 			{"p", "switch project (picker modal)"},
 			{"tab", "toggle focus between list and preview"},
 			{"↑↓ / j k (list focused)", "navigate files"},
 			{"↑↓ / j k (preview focused)", "scroll within open doc"},
 			{"enter / e", "open selected file in $EDITOR"},
-		}, common...)
+		}
 	case ScreenAgents:
-		return append([]HelpItem{
+		return []HelpItem{
 			{"m", "pick default model (modal)"},
 			{"e", "pick reasoning effort (modal)"},
 			{"a", "toggle alwaysThinkingEnabled on/off"},
 			{"y", "toggle yolo mode (permissions.defaultMode = bypassPermissions)"},
 			{"c", "edit global ~/.claude/CLAUDE.md in $EDITOR"},
 			{"j", "edit ~/.claude/settings.json directly"},
-		}, common...)
+		}
 	case ScreenSettings:
-		return append([]HelpItem{
+		return []HelpItem{
 			{"(read-only for now)", "edit ~/.config/ccmux/config.toml manually"},
-		}, common...)
+		}
 	case ScreenNetwork:
-		return append([]HelpItem{
+		return []HelpItem{
 			{"↑↓ / j k", "navigate device list"},
 			{"enter", "plain `ssh -t <host>` into the selected peer"},
+			{"s", "open the SSH setup wizard for the focused host"},
 			{"r", "refresh tailnet scan + ccmuxd probes"},
-		}, common...)
+		}
 	}
-	return common
+	return nil
 }
 
-// renderHelpOverlay produces the centered help modal showing the
-// current screen's keybindings plus the most recent toasts (so a
-// blink-past error can be recalled).
+// (renderHelpOverlay continues below; the toast no longer competes
+// for the bottom help line — it floats at the top-right now, see
+// app.View's toastRow insertion.)
+
+// renderHelpOverlay produces the centered help modal. Two clearly
+// labeled sections — "On this screen" (per-screen bindings) and
+// "Anywhere" (globals) — followed by the recent toast log so a
+// blink-past error can still be recalled.
 func (a App) renderHelpOverlay(width, height int) string {
 	st := a.styles
 	screenName := a.screen.String()
 
-	lines := []string{
-		st.Emphasis.Render("Help — " + screenName),
-		st.Subtitle.Render("Per-screen bindings + recent activity."),
-		"",
-	}
+	perScreen := helpForScreen(a.screen, a.keys)
+	global := globalHelp(a.keys)
+
+	// Pad the key column to the widest key across BOTH sections so
+	// the two tables line up visually — otherwise the per-screen
+	// section's narrow keys would left-align differently from the
+	// globals' wider hints.
 	maxKeyW := 0
-	items := helpForScreen(a.screen, a.keys)
-	for _, it := range items {
+	for _, it := range perScreen {
 		if w := lipgloss.Width(it.Key); w > maxKeyW {
 			maxKeyW = w
 		}
 	}
-	for _, it := range items {
+	for _, it := range global {
+		if w := lipgloss.Width(it.Key); w > maxKeyW {
+			maxKeyW = w
+		}
+	}
+
+	lines := []string{
+		st.Emphasis.Render("Help — " + screenName),
+		st.Subtitle.Render("Bindings on this screen, then globals."),
+		"",
+	}
+
+	if len(perScreen) > 0 {
+		lines = append(lines, st.Subtitle.Render("On this screen"))
+		for _, it := range perScreen {
+			lines = append(lines, fmt.Sprintf("  %s   %s",
+				st.Key.Render(padRight(it.Key, maxKeyW)),
+				st.Muted.Render(it.Desc),
+			))
+		}
+		lines = append(lines, "")
+	}
+
+	lines = append(lines, st.Subtitle.Render("Anywhere"))
+	for _, it := range global {
 		lines = append(lines, fmt.Sprintf("  %s   %s",
 			st.Key.Render(padRight(it.Key, maxKeyW)),
 			st.Muted.Render(it.Desc),
