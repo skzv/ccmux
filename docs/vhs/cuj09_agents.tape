@@ -1,5 +1,5 @@
 # CUJ C9 — Tune Claude Code itself: the Agents screen.
-# Shows the Claude / Codex / Antigravity sub-tabs and global CLAUDE.md.
+# Shows the Claude / Codex / Antigravity / Cursor / pi / Grok sub-tabs and global CLAUDE.md.
 # Render: docs/vhs/render.sh docs/vhs/cuj09_agents.tape
 Output docs/vhs/out/cuj09_agents.gif
 
@@ -33,13 +33,25 @@ Sleep 2s
 
 # Tab to the Codex sub-tab.
 Tab
-Sleep 1500ms
+Sleep 1200ms
 
 # Tab to the Antigravity sub-tab.
 Tab
-Sleep 1500ms
+Sleep 1200ms
 
-# Tab back to Claude (wraps around).
+# Tab to the Cursor sub-tab.
+Tab
+Sleep 1200ms
+
+# Tab to the pi sub-tab.
+Tab
+Sleep 1200ms
+
+# Tab to the Grok sub-tab — xAI's Grok Build CLI.
+Tab
+Sleep 1800ms
+
+# Tab once more to wrap back to Claude (6 agents → full cycle).
 Tab
 Sleep 1s
 
