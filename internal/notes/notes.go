@@ -7,11 +7,14 @@
 package notes
 
 import (
+	"bufio"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -77,7 +80,7 @@ func (v Vault) List() ([]Entry, error) {
 			Path:     path,
 			Rel:      rel,
 			Dir:      dirOf(rel),
-			Display:  displayFor(rel),
+			Display:  displayFor(rel, path, mod),
 			Modified: mod,
 		})
 		return nil
@@ -130,14 +133,123 @@ func dirOf(rel string) string {
 	return d
 }
 
-// displayFor strips the directory and (where helpful) the leading NN_
-// from a filename so the TUI list reads cleanly.
-func displayFor(rel string) string {
+// displayFor returns the row label for a note: the leading H1 text
+// when the file has one within the first 4 KiB, otherwise the
+// cleaned-up filename. The H1 lookup is memoized per `(absPath,
+// mtime)` so the list doesn't re-read every file on every render.
+// `absPath` and `mod` may be zero for callers that only have a
+// relative path; in that case the filename fallback is used.
+func displayFor(rel, absPath string, mod time.Time) string {
+	if absPath != "" {
+		if h1 := cachedH1(absPath, mod); h1 != "" {
+			return h1
+		}
+	}
+	return filenameLabel(rel)
+}
+
+// filenameLabel returns the cleaned-up filename label: strip the .md
+// suffix, drop the leading "NN_" sort prefix when present, and turn
+// underscores into spaces.
+func filenameLabel(rel string) string {
 	base := filepath.Base(rel)
 	base = strings.TrimSuffix(base, ".md")
-	// Strip leading "NN_" if present.
 	rx := regexp.MustCompile(`^\d{2,}_`)
 	base = rx.ReplaceAllString(base, "")
 	base = strings.ReplaceAll(base, "_", " ")
 	return base
+}
+
+// h1ScanBytes caps how much of a file we read looking for the leading
+// H1. 4 KiB covers any realistic frontmatter block + first heading
+// without pulling whole long notes into memory at list time.
+const h1ScanBytes = 4 * 1024
+
+// h1HeadingRE matches an ATX-style H1: a line starting with exactly
+// one '#', a space, then heading text. Optional trailing '#' closers
+// (per CommonMark) are stripped by the caller.
+var h1HeadingRE = regexp.MustCompile(`^#\s+(.+?)\s*#*\s*$`)
+
+// h1CacheEntry is one row in the H1 memo: the discovered heading
+// text (empty when none was found in the scan window) keyed by file
+// mtime, so a write to the same path bypasses the cache.
+type h1CacheEntry struct {
+	mtime time.Time
+	h1    string
+}
+
+var (
+	h1CacheMu sync.RWMutex
+	h1Cache   = map[string]h1CacheEntry{}
+)
+
+// cachedH1 returns the leading H1 text for `absPath` at `mtime`,
+// reading and memoizing on miss. An empty return means the file
+// has no H1 in its first h1ScanBytes (or couldn't be opened).
+func cachedH1(absPath string, mtime time.Time) string {
+	h1CacheMu.RLock()
+	hit, ok := h1Cache[absPath]
+	h1CacheMu.RUnlock()
+	if ok && hit.mtime.Equal(mtime) {
+		return hit.h1
+	}
+	h1 := extractH1(absPath)
+	h1CacheMu.Lock()
+	h1Cache[absPath] = h1CacheEntry{mtime: mtime, h1: h1}
+	h1CacheMu.Unlock()
+	return h1
+}
+
+// extractH1 reads up to h1ScanBytes from `path` and returns the first
+// ATX-style H1 heading line's text, or "" when none is present in
+// that window. YAML/TOML frontmatter (delimited by `---` or `+++` at
+// the top of the file) is skipped over so an H1 buried under
+// frontmatter still surfaces. The reader is bounded so a binary
+// (e.g. someone named a .md after a generated artifact) can't
+// blow memory.
+func extractH1(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(io.LimitReader(f, h1ScanBytes))
+	scanner.Buffer(make([]byte, 0, 4096), h1ScanBytes)
+
+	inFrontmatter := false
+	frontDelim := ""
+	firstLine := true
+	for scanner.Scan() {
+		line := scanner.Text()
+		trimmed := strings.TrimRight(line, "\r")
+		if firstLine {
+			firstLine = false
+			if trimmed == "---" {
+				inFrontmatter = true
+				frontDelim = "---"
+				continue
+			}
+			if trimmed == "+++" {
+				inFrontmatter = true
+				frontDelim = "+++"
+				continue
+			}
+		}
+		if inFrontmatter {
+			if trimmed == frontDelim {
+				inFrontmatter = false
+			}
+			continue
+		}
+		if strings.TrimSpace(trimmed) == "" {
+			continue
+		}
+		if m := h1HeadingRE.FindStringSubmatch(trimmed); m != nil {
+			return strings.TrimSpace(m[1])
+		}
+		// First non-empty, non-frontmatter line that isn't an H1 —
+		// stop looking; this isn't a "title at top" doc.
+		return ""
+	}
+	return ""
 }

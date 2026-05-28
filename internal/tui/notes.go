@@ -3,9 +3,12 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -43,8 +46,20 @@ type notesModel struct {
 	cursor       int
 	focus        notesFocus
 	preview      viewport.Model
-	rendered     string
+	previewSrc   string // raw markdown bytes; glamour-rendered into the viewport whenever the source or size changes
+	previewRel   string // rel-path of the file backing previewSrc (so we don't re-read the same file)
 	editor       string
+
+	// termWidth / termHeight cache the last WindowSizeMsg that
+	// reached the App. We need them in refreshPreview to wrap
+	// Glamour to the actual right-column width, and in
+	// renderPreview to size the viewport persistently. Without
+	// this the viewport's Width stays at its New(80, 20) default
+	// in the stored model, which both wraps prose incorrectly and
+	// breaks tab+j/k scrolling (the viewport has no persistent
+	// content to scroll over).
+	termWidth  int
+	termHeight int
 
 	// project picker
 	pickingProject bool
@@ -58,6 +73,20 @@ type notesModel struct {
 	searchInput   textinput.Model
 	searchResults []notes.SearchHit
 	searchQuery   string
+
+	// new-note form. When non-nil the modal owns input; submit emits
+	// newNoteSubmitMsg, esc emits newNoteCancelMsg.
+	newNoteForm *newNoteFormModel
+
+	// loadingSpinner animates the "Loading notes…" placeholder so a
+	// slow walk surfaces as motion rather than a static line. Only
+	// rendered while m.loading is true.
+	loadingSpinner spinner.Model
+
+	// noteInfo is the `i` overlay's state. When open is true the
+	// overlay paints over the notes layout; the App routes `i`/esc
+	// to close it.
+	noteInfo noteInfoOverlay
 }
 
 // notesFocus tracks which pane receives navigation keys.
@@ -74,13 +103,17 @@ func newNotes(st styles.Styles, km Keymap) notesModel {
 	ti.Prompt = "/ "
 	ti.Placeholder = "search this project's notes…"
 	ti.CharLimit = 200
+	sp := spinner.New()
+	sp.Spinner = spinner.Dot
+	sp.Style = lipgloss.NewStyle().Foreground(st.Semantic.Accent)
 	return notesModel{
-		st:           st,
-		km:           km,
-		preview:      vp,
-		editor:       pickEditor(),
-		searchInput:  ti,
-		entriesCache: make(map[string][]notes.Entry),
+		st:             st,
+		km:             km,
+		preview:        vp,
+		editor:         pickEditor(),
+		searchInput:    ti,
+		entriesCache:   make(map[string][]notes.Entry),
+		loadingSpinner: sp,
 	}
 }
 
@@ -94,7 +127,9 @@ func (m *notesModel) SetProject(p *project.Project) tea.Cmd {
 	if p == nil {
 		m.project = nil
 		m.entries = nil
-		m.rendered = ""
+		m.previewSrc = ""
+		m.previewRel = ""
+		m.preview.SetContent("")
 		m.loading = false
 		return nil
 	}
@@ -113,7 +148,100 @@ func (m *notesModel) SetProject(p *project.Project) tea.Cmd {
 	m.entries = nil
 	m.loading = true
 	m.refreshPreview()
-	return m.loadEntriesCmd(p.Path)
+	return tea.Batch(m.loadEntriesCmd(p.Path), m.loadingSpinner.Tick)
+}
+
+// SetSize records the terminal size so refreshPreview can render
+// Glamour at the actual right-column width. The App should call
+// this on every tea.WindowSizeMsg. When the column width changes
+// and a note is already loaded, the preview is re-rendered so the
+// scrollable viewport always holds content sized to the visible
+// pane.
+func (m *notesModel) SetSize(w, h int) {
+	if w == m.termWidth && h == m.termHeight {
+		return
+	}
+	m.termWidth = w
+	m.termHeight = h
+	pw, ph := m.previewPaneSize()
+	m.preview.Width = pw
+	m.preview.Height = ph
+	if m.previewSrc != "" {
+		m.preview.SetContent(m.renderPreviewContent(pw))
+	}
+}
+
+// previewPaneSize returns (viewportWidth, viewportHeight) for the
+// right-side preview given the cached terminal size. Mirrors the
+// arithmetic in View / renderPreview: right column = total -
+// left/3 - 1; viewport interior = column - 4 (border + padding);
+// viewport reserves 6 inner lines for the header + scroll hint.
+func (m notesModel) previewPaneSize() (int, int) {
+	tw, th := m.termWidth, m.termHeight
+	if tw < 20 {
+		tw = 20
+	}
+	if th < 10 {
+		th = 10
+	}
+	leftW := tw / 3
+	rightW := tw - leftW - 1
+	pw := rightW - 4
+	if pw < 10 {
+		pw = 10
+	}
+	ph := th - 6
+	if ph < 3 {
+		ph = 3
+	}
+	return pw, ph
+}
+
+// projectRoot returns the absolute path of the focused project, or
+// "" when no project is set. Used by the note-info overlay to build
+// relative-path display strings.
+func (m notesModel) projectRoot() string {
+	if m.project == nil {
+		return ""
+	}
+	return m.project.Path
+}
+
+// createAndOpenNote writes the new file under the project root and
+// opens it in $EDITOR. The body is `# {title}\n\n` when a title is
+// supplied; otherwise the file is created empty. Errors (collision,
+// permission, etc.) surface as toasts; success chains into
+// openInEditor, which itself dispatches notesReloadMsg on editor
+// close so the new file shows up in the list.
+func (m notesModel) createAndOpenNote(filename, title string) tea.Cmd {
+	if m.project == nil {
+		return func() tea.Msg {
+			return toastMsg{Text: "no project selected", Kind: toastError, Until: time.Now().Add(5 * time.Second)}
+		}
+	}
+	full := filepath.Join(m.project.Path, filepath.FromSlash(filename))
+	if _, err := os.Stat(full); err == nil {
+		return func() tea.Msg {
+			return toastMsg{Text: "file already exists: " + filename, Kind: toastError, Until: time.Now().Add(5 * time.Second)}
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		msg := "mkdir failed: " + err.Error()
+		return func() tea.Msg {
+			return toastMsg{Text: msg, Kind: toastError, Until: time.Now().Add(5 * time.Second)}
+		}
+	}
+	body := ""
+	if title != "" {
+		body = "# " + title + "\n\n"
+	}
+	if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+		msg := "write failed: " + err.Error()
+		return func() tea.Msg {
+			return toastMsg{Text: msg, Kind: toastError, Until: time.Now().Add(5 * time.Second)}
+		}
+	}
+	return openInEditor(m.editor, full)
 }
 
 // SetProjects pushes the full discovered-projects list to the screen so
@@ -140,57 +268,106 @@ func (m notesModel) loadEntriesCmd(path string) tea.Cmd {
 	}
 }
 
+// refreshPreview loads the selected note's markdown bytes into
+// previewSrc and renders them into the viewport at the current
+// column width. Both the source string and the rendered viewport
+// content are stored on the model so a later viewport.Update (scroll
+// keypress) has something to operate on — without persistent
+// SetContent the focused-pane j/k keys would no-op against an
+// empty viewport.
 func (m *notesModel) refreshPreview() {
 	if m.project == nil {
-		m.rendered = ""
+		m.previewSrc = ""
+		m.previewRel = ""
+		m.preview.SetContent("")
+		m.preview.GotoTop()
+		return
+	}
+	rel := ""
+	if m.hasActiveSearch() {
+		if m.cursor >= 0 && m.cursor < len(m.searchResults) {
+			rel = m.searchResults[m.cursor].Rel
+		}
+	} else {
+		if len(m.entries) > 0 && m.cursor >= 0 && m.cursor < len(m.entries) {
+			rel = m.entries[m.cursor].Rel
+		}
+	}
+	if rel == "" {
+		m.previewSrc = ""
+		m.previewRel = ""
 		m.preview.SetContent("")
 		return
 	}
-	// Pick whichever cursor target is active.
-	rel := ""
-	if m.hasActiveSearch() {
-		if m.cursor < 0 || m.cursor >= len(m.searchResults) {
-			m.rendered = ""
-			m.preview.SetContent("")
-			return
-		}
-		rel = m.searchResults[m.cursor].Rel
-	} else {
-		if len(m.entries) == 0 || m.cursor < 0 || m.cursor >= len(m.entries) {
-			m.rendered = ""
-			m.preview.SetContent("")
-			return
-		}
-		rel = m.entries[m.cursor].Rel
+	pw, ph := m.previewPaneSize()
+	m.preview.Width = pw
+	m.preview.Height = ph
+	// Skip the disk read when the selection didn't move (cursor +
+	// project unchanged) and the viewport already holds rendered
+	// content sized for the current column.
+	if rel == m.previewRel && m.previewSrc != "" {
+		return
 	}
 	vault := notes.Open(m.project.Path)
 	data, err := vault.Read(rel)
 	if err != nil {
-		m.rendered = m.st.StatusError.Render(err.Error())
-		m.preview.SetContent(m.rendered)
+		m.previewSrc = m.st.StatusError.Render(err.Error())
+		m.previewRel = rel
+		m.preview.SetContent(m.previewSrc)
 		return
 	}
-	// Glamour rendering. Width 0 means use the renderer's default; we
-	// pass the viewport width so wrapping is correct.
-	r, err := glamour.NewTermRenderer(
-		glamour.WithStandardStyle("dark"),
-		glamour.WithWordWrap(m.preview.Width-4),
-	)
-	if err == nil {
-		out, rerr := r.Render(string(data))
-		if rerr == nil {
-			m.rendered = out
-		} else {
-			m.rendered = string(data)
-		}
-	} else {
-		m.rendered = string(data)
-	}
-	m.preview.SetContent(m.rendered)
+	m.previewSrc = string(data)
+	m.previewRel = rel
+	m.preview.SetContent(m.renderPreviewContent(pw))
 	m.preview.GotoTop()
 }
 
+// renderPreviewContent runs Glamour at `wrap` cells wide and returns
+// the rendered output ready to feed into the viewport. Falls back to
+// the raw markdown when the renderer fails to build.
+func (m notesModel) renderPreviewContent(wrap int) string {
+	if m.previewSrc == "" {
+		return ""
+	}
+	if wrap < 10 {
+		wrap = 10
+	}
+	r, err := glamour.NewTermRenderer(
+		glamour.WithStyles(styles.GlamourStyle(m.st)),
+		glamour.WithWordWrap(wrap),
+	)
+	if err != nil {
+		return m.previewSrc
+	}
+	out, rerr := r.Render(m.previewSrc)
+	if rerr != nil {
+		return m.previewSrc
+	}
+	return out
+}
+
 func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
+	// New-note form takes priority — when open it owns input until
+	// Enter (submit) or Esc (cancel) closes it via newNoteSubmitMsg /
+	// newNoteCancelMsg.
+	if m.newNoteForm != nil {
+		if _, ok := msg.(tea.KeyMsg); ok {
+			form, cmd := m.newNoteForm.Update(msg)
+			m.newNoteForm = &form
+			return m, cmd
+		}
+	}
+	// Note-info overlay takes input next — it accepts `i`/`esc` to
+	// close and consumes nothing else.
+	if m.noteInfo.open {
+		if km, ok := msg.(tea.KeyMsg); ok {
+			switch km.String() {
+			case "i", "esc":
+				m.noteInfo = noteInfoOverlay{}
+			}
+		}
+		return m, nil
+	}
 	// Project picker modal.
 	if m.pickingProject {
 		var cmd tea.Cmd
@@ -199,12 +376,22 @@ func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
 			case "esc":
 				m.pickingProject = false
 			case "up", "k":
-				if m.projCursor > 0 {
-					m.projCursor--
+				// Wrap-around so a long project list is
+				// reachable from either end.
+				if n := len(m.projects); n > 0 {
+					if m.projCursor <= 0 {
+						m.projCursor = n - 1
+					} else {
+						m.projCursor--
+					}
 				}
 			case "down", "j":
-				if m.projCursor < len(m.projects)-1 {
-					m.projCursor++
+				if n := len(m.projects); n > 0 {
+					if m.projCursor >= n-1 {
+						m.projCursor = 0
+					} else {
+						m.projCursor++
+					}
 				}
 			case "enter":
 				if m.projCursor >= 0 && m.projCursor < len(m.projects) {
@@ -247,13 +434,66 @@ func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
 	}
 
 	switch msg := msg.(type) {
+	case tea.MouseMsg:
+		// Wheel events scroll whichever pane the user is hovering
+		// over: x < leftW = file list (move the cursor up/down),
+		// otherwise = preview viewport (forward to viewport.Update
+		// which handles wheel scrolling natively). Without
+		// coordinate routing the wheel would only ever scroll the
+		// preview and the list would feel inert.
+		if !isWheelMsg(msg) {
+			return m, nil
+		}
+		leftW := m.termWidth / 3
+		if msg.X < leftW {
+			rowCount := m.listLen()
+			if rowCount == 0 {
+				return m, nil
+			}
+			switch msg.Button {
+			case tea.MouseButtonWheelUp:
+				if m.cursor > 0 {
+					m.cursor--
+					m.refreshPreview()
+				}
+			case tea.MouseButtonWheelDown:
+				if m.cursor < rowCount-1 {
+					m.cursor++
+					m.refreshPreview()
+				}
+			}
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.preview, cmd = m.preview.Update(msg)
+		return m, cmd
+	case spinner.TickMsg:
+		if !m.loading {
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.loadingSpinner, cmd = m.loadingSpinner.Update(msg)
+		return m, cmd
+	case newNoteSubmitMsg:
+		m.newNoteForm = nil
+		return m, m.createAndOpenNote(msg.Filename, msg.Title)
+	case newNoteCancelMsg:
+		m.newNoteForm = nil
+		return m, nil
+	case noteInfoOpenMsg:
+		path := m.selectedPath()
+		if path == "" {
+			return m, nil
+		}
+		m.noteInfo = buildNoteInfoOverlay(path, m.projectRoot())
+		return m, nil
 	case notesReloadMsg:
 		if m.project == nil {
 			return m, nil
 		}
 		delete(m.entriesCache, m.project.Path)
 		m.loading = true
-		return m, m.loadEntriesCmd(m.project.Path)
+		return m, tea.Batch(m.loadEntriesCmd(m.project.Path), m.loadingSpinner.Tick)
 	case notesEntriesLoadedMsg:
 		// Discard stale results — the user may have switched projects
 		// between the Cmd dispatching and the walk returning.
@@ -277,6 +517,19 @@ func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
 	case tea.KeyMsg:
 		// Global Notes keys (don't depend on which pane has focus).
 		switch msg.String() {
+		case "n":
+			if m.project == nil {
+				return m, func() tea.Msg {
+					return toastMsg{
+						Text:  "select a project first (press p)",
+						Kind:  toastInfo,
+						Until: time.Now().Add(3 * time.Second),
+					}
+				}
+			}
+			form := newNewNoteForm(m.st, time.Now())
+			m.newNoteForm = &form
+			return m, textinput.Blink
 		case "/":
 			if m.project == nil {
 				return m, nil
@@ -296,7 +549,11 @@ func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
 				m.refreshPreview()
 				return m, nil
 			}
-		case "p":
+		case "p", " ":
+			// Both `p` and space open the project picker. Space is
+			// the easier muscle-memory key (mirrors many file
+			// managers), `p` stays for discoverability and HelpBar
+			// listing.
 			if len(m.projects) > 0 {
 				m.pickingProject = true
 				// Position cursor on the current project if known.
@@ -322,20 +579,52 @@ func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
 				m.focus = focusList
 			}
 			return m, nil
+		case "right", "l":
+			// Right/l from the file list moves focus into the
+			// preview pane (mirrors tab). Already there? No-op.
+			// Intercepted at the global level so the viewport's
+			// own right-key handling doesn't swallow it. `l` mirrors
+			// vim's right-motion key.
+			if m.focus == focusList {
+				m.focus = focusPreview
+				return m, nil
+			}
+		case "left", "h":
+			// Left/h from the preview pane moves focus back to
+			// the file list (mirrors tab). Already on the list?
+			// No-op so left in the list doesn't steal a future
+			// per-screen binding.
+			if m.focus == focusPreview {
+				m.focus = focusList
+				return m, nil
+			}
 		}
 
 		if m.focus == focusList {
 			rowCount := m.listLen()
 			switch {
 			case keyMatches(msg, m.km.Up):
-				if m.cursor > 0 {
-					m.cursor--
+				// Wrap-around: up at the first row jumps to the
+				// last so the user can reach the bottom of a
+				// long list without holding down j.
+				if rowCount > 0 {
+					if m.cursor <= 0 {
+						m.cursor = rowCount - 1
+					} else {
+						m.cursor--
+					}
 					m.refreshPreview()
 				}
 				return m, nil
 			case keyMatches(msg, m.km.Down):
-				if m.cursor < rowCount-1 {
-					m.cursor++
+				// Wrap-around: down at the last row jumps to the
+				// first.
+				if rowCount > 0 {
+					if m.cursor >= rowCount-1 {
+						m.cursor = 0
+					} else {
+						m.cursor++
+					}
 					m.refreshPreview()
 				}
 				return m, nil
@@ -418,18 +707,19 @@ func (m notesModel) runSearch(query string) tea.Cmd {
 
 // HelpBarProps returns the screen-specific key hints for Notes.
 // Replaces the legacy inline hint row that used to sit under the
-// project name in renderList. `n` (new note) is intentionally omitted
-// — it's a planned feature (see Feature Catalog) and the hint used to
-// promise behaviour that didn't exist.
+// project name in renderList. `n` is now wired (creates a note in
+// the project and opens $EDITOR); `i` opens the note-info overlay.
 func (m notesModel) HelpBarProps(width int) components.HelpBarProps {
 	return components.HelpBarProps{
 		Hints: []components.KeyHint{
 			{Key: "?", Label: "help", Priority: 10},
 			{Key: "q", Label: "quit", Priority: 10},
 			{Key: "enter", Label: "open", Priority: 8},
+			{Key: "n", Label: "new note", Priority: 8},
 			{Key: "e", Label: "edit", Priority: 7},
 			{Key: "/", Label: "search", Priority: 6},
-			{Key: "p", Label: "switch project", Priority: 5},
+			{Key: "i", Label: "info", Priority: 6},
+			{Key: "p / space", Label: "switch project", Priority: 5},
 			{Key: "tab", Label: "focus preview", Priority: 4},
 			{Key: "1-7", Label: "screens", Priority: 2},
 		},
@@ -447,6 +737,14 @@ func (m notesModel) View(width, height int) string {
 			"Press " + m.st.Key.Render("p") + " here to pick one, or " + m.st.Key.Render("3") + " to go to the Projects tab.",
 		}, "\n")
 		return m.st.Pane.Width(width - 2).Height(height - 2).Render(body)
+	}
+	if m.newNoteForm != nil {
+		modalW := minInt(80, width-4)
+		modal := m.newNoteForm.View(modalW)
+		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, modal)
+	}
+	if m.noteInfo.open {
+		return m.renderNoteInfoOverlay(width, height)
 	}
 	if m.pickingProject {
 		return m.renderProjectPicker(width, height)
@@ -496,14 +794,14 @@ func (m notesModel) renderList(width, height int, narrow bool) string {
 		var empty string
 		switch {
 		case m.loading:
-			empty = "Loading notes…"
+			empty = m.loadingSpinner.View() + m.st.Muted.Render(" scanning project for markdown…")
 		case m.hasActiveSearch():
-			empty = "(no matches)"
+			empty = m.st.Muted.Render("(no matches)")
 		default:
-			empty = "(empty — press n to create a note)"
+			empty = m.st.Muted.Render("(no markdown files yet — press n to create one)")
 		}
-		lines = append(lines, m.st.Muted.Render(empty))
-		return m.st.PaneFocused.Width(width - 2).Height(height - 2).Render(strings.Join(lines, "\n"))
+		lines = append(lines, empty)
+		return m.listPaneStyle().Width(width - 2).Height(height - 2).Render(strings.Join(lines, "\n"))
 	}
 
 	// Window the (potentially long) file list to whatever vertical room
@@ -518,7 +816,18 @@ func (m notesModel) renderList(width, height int, narrow bool) string {
 	if above > 0 || below > 0 {
 		lines = append(lines, m.st.Muted.Render(scrollHintText(above, below)))
 	}
-	return m.st.PaneFocused.Width(width - 2).Height(height - 2).Render(strings.Join(lines, "\n"))
+	return m.listPaneStyle().Width(width - 2).Height(height - 2).Render(strings.Join(lines, "\n"))
+}
+
+// listPaneStyle returns the pane chrome for the left (list) column.
+// Focused only when m.focus == focusList so the highlighted border
+// follows the user's active pane — tabbing right unfocuses this
+// pane and the border drops back to the muted Pane treatment.
+func (m notesModel) listPaneStyle() lipgloss.Style {
+	if m.focus == focusList {
+		return m.st.PaneFocused
+	}
+	return m.st.Pane
 }
 
 // noteRows builds the scrollable region of the Notes list — the
@@ -532,7 +841,9 @@ func (m notesModel) noteRows(width int) (rows []string, cursorRow int) {
 	rowW := width - 4
 	if m.hasActiveSearch() {
 		for i, h := range m.searchResults {
-			content := fmt.Sprintf("%s:%d  %s", h.Rel, h.LineNum, truncateSearchSnippet(h.Snippet, width-14))
+			chip := m.st.Muted.Render(fmt.Sprintf("[%s:%d]", h.Rel, h.LineNum))
+			snippet := truncateSearchSnippet(h.Snippet, width-14)
+			content := chip + "  " + snippet
 			if i == m.cursor {
 				cursorRow = len(rows)
 			}
@@ -540,31 +851,81 @@ func (m notesModel) noteRows(width int) (rows []string, cursorRow int) {
 		}
 		return rows, cursorRow
 	}
+	// Sub-section indent scales with folder depth so docs/01_Specs/
+	// sits visually beneath docs/, not flush-left with it. The
+	// left pane is only ~width/3 cells wide so we use the tight SM
+	// step (1 cell) — the hierarchy reads clearly without eating
+	// the visible filename column. Files indent one step further
+	// than their containing folder; the project-root group (Dir
+	// == "") sits at depth 0.
+	step := m.st.Spacing.SM
+	// currentDir is the folder the cursor is in — its header gets
+	// the "active" treatment (Sapphire dot + bold bright FG) so
+	// the user can see at a glance which group they're navigating
+	// through. Other headers stay muted.
+	currentDir := ""
+	if m.cursor >= 0 && m.cursor < len(m.entries) {
+		currentDir = m.entries[m.cursor].Dir
+	}
+	activeHeaderStyle := lipgloss.NewStyle().Foreground(m.st.P.FG).Bold(true)
+	dotStyle := lipgloss.NewStyle().Foreground(m.st.P.Sapphire)
 	lastDir := "\x00" // sentinel: no real Dir equals this
 	for i, e := range m.entries {
 		if e.Dir != lastDir {
 			if len(rows) > 0 {
 				rows = append(rows, "")
 			}
-			rows = append(rows, m.st.Subtitle.Render(folderHeader(e.Dir)))
+			headerIndent := strings.Repeat(" ", folderDepth(e.Dir)*step)
+			label := folderHeader(e.Dir)
+			var headerLine string
+			if e.Dir == currentDir {
+				headerLine = headerIndent + dotStyle.Render("● ") + activeHeaderStyle.Render(label)
+			} else {
+				headerLine = headerIndent + "  " + m.st.Subtitle.Render(label)
+			}
+			rows = append(rows, headerLine)
 			lastDir = e.Dir
 		}
 		if i == m.cursor {
 			cursorRow = len(rows)
 		}
-		rows = append(rows, components.RenderListRow(m.st, e.Display, i == m.cursor, rowW))
+		fileIndentN := (folderDepth(e.Dir) + 1) * step
+		fileIndent := strings.Repeat(" ", fileIndentN)
+		rowBodyW := rowW - fileIndentN
+		if rowBodyW < 1 {
+			rowBodyW = 1
+		}
+		rows = append(rows, fileIndent+components.RenderListRow(m.st, e.Display, i == m.cursor, rowBodyW))
 	}
 	return rows, cursorRow
 }
 
+// folderDepth returns the depth (number of slash-separated path
+// segments) for a folder Dir. The project root (Dir == "") is depth
+// 0; "docs" is depth 1; "docs/01_Specs" is depth 2.
+func folderDepth(dir string) int {
+	if dir == "" {
+		return 0
+	}
+	return strings.Count(dir, "/") + 1
+}
+
 // folderHeader renders the group header for a folder of notes. The
-// project root (Dir == "") is labelled explicitly so root-level files
-// like README.md don't sit under a blank heading.
+// project root (Dir == "") is labelled explicitly so root-level
+// files like README.md don't sit under a blank heading. For nested
+// folders the header shows only the last path segment (`docs/01_Specs`
+// → `01_Specs/`) — the depth-based indent conveys where the folder
+// sits, so repeating the parent path on every header is redundant
+// and eats column space in the narrow left pane.
 func folderHeader(dir string) string {
 	if dir == "" {
 		return "(project root)"
 	}
-	return dir + "/"
+	last := dir
+	if i := strings.LastIndex(dir, "/"); i >= 0 {
+		last = dir[i+1:]
+	}
+	return last + "/"
 }
 
 // windowLines returns the slice of `rows` to display given a vertical
@@ -621,8 +982,10 @@ func truncateSearchSnippet(s string, n int) string {
 }
 
 func (m notesModel) renderPreview(width, height int) string {
-	// Reserve 3 inner lines: title (1) + blank (1) + scroll hint (1).
-	// Viewport eats the rest.
+	// Reserve 3 inner lines: header (1) + blank (1) + scroll hint (1).
+	// Viewport eats the rest. The viewport itself was sized + content-
+	// loaded persistently in refreshPreview / SetSize so scrolling
+	// works; here we just lay it into the pane.
 	m.preview.Width = width - 4
 	m.preview.Height = height - 6
 	if m.preview.Height < 3 {
@@ -633,16 +996,21 @@ func (m notesModel) renderPreview(width, height int) string {
 		if m.focus == focusPreview {
 			focusMark = " " + m.st.Emphasis.Render("◀ scrolling")
 		}
-		title := m.st.Emphasis.Render(e.Display)
-		path := m.st.Muted.Render(e.Rel)
-		header := title + "   " + path + focusMark
+		// The H1 (when present) sits at the top of the rendered
+		// body, so the header above shows only the file location
+		// plus the focus mark — no separate title row to duplicate
+		// the H1. A muted horizontal rule sits below it as a
+		// visual separator between the path and the rendered
+		// content (replaces the previous filled-background block).
+		header := m.st.Muted.Render(e.Rel) + focusMark
+		separator := m.st.Muted.Render(strings.Repeat("─", m.preview.Width))
 		// Scroll-position indicator like "  35% ↓"
 		pct := int(m.preview.ScrollPercent() * 100)
 		scrollHint := m.st.Muted.Render(fmt.Sprintf(
 			"tab: focus list   j/k: scroll (currently focused: %s)   %d%%",
 			focusLabel(m.focus), pct,
 		))
-		body := lipgloss.JoinVertical(lipgloss.Left, header, "", m.preview.View(), "", scrollHint)
+		body := lipgloss.JoinVertical(lipgloss.Left, header, separator, m.preview.View(), "", scrollHint)
 		paneStyle := m.st.Pane
 		if m.focus == focusPreview {
 			paneStyle = m.st.PaneFocused
@@ -703,4 +1071,181 @@ func (m notesModel) renderProjectPicker(width, height int) string {
 // implementation.
 func openInEditor(editor, path string) tea.Cmd {
 	return openEditorCmd(editor, path, notesReloadMsg{})
+}
+
+// noteInfoOverlay is the `i`-key info modal. Closed by default; the
+// app routes `i` (when no text field has focus) into a noteInfoOpenMsg
+// to populate it from disk. Renders the selected note's metadata:
+// absolute path, frontmatter (if any), H1 (if any), line/word counts,
+// and modified time.
+type noteInfoOverlay struct {
+	open        bool
+	absPath     string
+	relPath     string
+	h1          string
+	frontmatter string
+	lineCount   int
+	wordCount   int
+	modified    time.Time
+	readErr     string
+}
+
+// buildNoteInfoOverlay reads `absPath` (capped at 1 MiB so an enormous
+// markdown file can't hang the overlay) and pulls out the rendered
+// fields. The returned overlay has open=true even when the read
+// fails — the modal shows the error so the user knows what went
+// wrong rather than silently no-op'ing.
+func buildNoteInfoOverlay(absPath, projectRoot string) noteInfoOverlay {
+	o := noteInfoOverlay{open: true, absPath: absPath}
+	if projectRoot != "" {
+		if rel, err := filepath.Rel(projectRoot, absPath); err == nil {
+			o.relPath = filepath.ToSlash(rel)
+		}
+	}
+	info, statErr := os.Stat(absPath)
+	if statErr == nil {
+		o.modified = info.ModTime()
+	}
+	const readCap = 1 << 20
+	data, err := os.ReadFile(absPath)
+	if err != nil {
+		o.readErr = err.Error()
+		return o
+	}
+	if len(data) > readCap {
+		data = data[:readCap]
+	}
+	body := string(data)
+	o.lineCount = strings.Count(body, "\n")
+	if len(body) > 0 && !strings.HasSuffix(body, "\n") {
+		o.lineCount++
+	}
+	o.wordCount = len(strings.Fields(body))
+	o.frontmatter = extractFrontmatter(body)
+	o.h1 = cachedH1ForOverlay(absPath, o.modified)
+	return o
+}
+
+// cachedH1ForOverlay returns the leading H1 text for the file at
+// `absPath`, or "" when none is present in the first 4 KiB. Mirrors
+// notes.extractH1 so the overlay sees the same heading the row label
+// does, including the YAML/TOML frontmatter-skip behaviour.
+func cachedH1ForOverlay(absPath string, mod time.Time) string {
+	f, err := os.Open(absPath)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	buf := make([]byte, 4096)
+	n, _ := f.Read(buf)
+	src := string(buf[:n])
+	lines := strings.Split(src, "\n")
+
+	inFrontmatter := false
+	frontDelim := ""
+	firstLine := true
+	for _, raw := range lines {
+		line := strings.TrimRight(raw, "\r")
+		if firstLine {
+			firstLine = false
+			if line == "---" {
+				inFrontmatter = true
+				frontDelim = "---"
+				continue
+			}
+			if line == "+++" {
+				inFrontmatter = true
+				frontDelim = "+++"
+				continue
+			}
+		}
+		if inFrontmatter {
+			if line == frontDelim {
+				inFrontmatter = false
+			}
+			continue
+		}
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "# ") && !strings.HasPrefix(trimmed, "## ") {
+			return strings.TrimSpace(strings.TrimPrefix(trimmed, "# "))
+		}
+		// First non-empty, non-frontmatter line that isn't an H1 → stop looking.
+		break
+	}
+	return ""
+}
+
+// extractFrontmatter returns the YAML/TOML frontmatter block (without
+// the delimiters) when the file starts with one, otherwise "". The
+// scan is bounded to the first 64 lines so a "doc that looks like
+// frontmatter forever" can't blow the buffer.
+func extractFrontmatter(body string) string {
+	lines := strings.Split(body, "\n")
+	if len(lines) < 2 {
+		return ""
+	}
+	delim := ""
+	switch lines[0] {
+	case "---":
+		delim = "---"
+	case "+++":
+		delim = "+++"
+	default:
+		return ""
+	}
+	const scanLines = 64
+	end := scanLines
+	if end > len(lines) {
+		end = len(lines)
+	}
+	for i := 1; i < end; i++ {
+		if lines[i] == delim {
+			return strings.Join(lines[1:i], "\n")
+		}
+	}
+	return ""
+}
+
+// renderNoteInfoOverlay draws the centered note-info modal.
+func (m notesModel) renderNoteInfoOverlay(width, height int) string {
+	st := m.st
+	o := m.noteInfo
+	lines := []string{
+		st.Emphasis.Render("Note info"),
+		st.Subtitle.Render("Press i or esc to close."),
+		"",
+	}
+	if o.readErr != "" {
+		lines = append(lines, st.StatusError.Render("⚠ "+o.readErr))
+	}
+	row := func(k, v string) string {
+		return st.Muted.Render(k+": ") + v
+	}
+	if o.relPath != "" {
+		lines = append(lines, row("relative", o.relPath))
+	}
+	lines = append(lines, row("path", o.absPath))
+	if o.h1 != "" {
+		lines = append(lines, row("title (H1)", st.Emphasis.Render(o.h1)))
+	}
+	lines = append(lines,
+		row("lines", fmt.Sprintf("%d", o.lineCount)),
+		row("words", fmt.Sprintf("%d", o.wordCount)),
+	)
+	if !o.modified.IsZero() {
+		lines = append(lines, row("modified", o.modified.Format("2006-01-02 15:04:05")))
+	}
+	if o.frontmatter != "" {
+		lines = append(lines, "", st.Subtitle.Render("frontmatter"))
+		for _, l := range strings.Split(o.frontmatter, "\n") {
+			lines = append(lines, "  "+l)
+		}
+	}
+	modalW := minInt(96, width-4)
+	body := strings.Join(lines, "\n")
+	modal := st.PaneFocused.Width(modalW).Render(body)
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, modal)
 }

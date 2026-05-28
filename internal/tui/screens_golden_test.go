@@ -187,6 +187,33 @@ func TestNotesGolden(t *testing.T) {
 	goldenAssert(t, "notes.txt", out)
 }
 
+// TestNotesSearchGolden snapshots the Notes screen at 120x40 with
+// an active search query so the muted [Rel:N] chip + snippet column
+// renders. The pane shows the "N hit(s)" banner under the project
+// name and lists three fake hits with the new chip treatment.
+func TestNotesSearchGolden(t *testing.T) {
+	const width, height = 120, 40
+	st := styles.Default()
+	km := DefaultKeymap()
+
+	m := newNotes(st, km)
+	m.project = &project.Project{Name: "ccmux", Path: "/Users/me/repos/ccmux"}
+	m.searchQuery = "refresh"
+	m.searchResults = []notes.SearchHit{
+		{Path: "/Users/me/repos/ccmux/docs/api.md", Rel: "docs/api.md", LineNum: 12,
+			Snippet: "The old refresh token is invalidated."},
+		{Path: "/Users/me/repos/ccmux/CLAUDE.md", Rel: "CLAUDE.md", LineNum: 47,
+			Snippet: "run `make refresh` after every config change"},
+		{Path: "/Users/me/repos/ccmux/internal/daemon/auth.go", Rel: "internal/daemon/auth.go", LineNum: 88,
+			Snippet: "// refresh: rotate the bearer token every 30s"},
+	}
+
+	helpLine := renderHelpBarFor(st, m.HelpBarProps(width), width)
+	body := m.View(width, height-lipgloss.Height(helpLine))
+	out := composeScreen(body, helpLine, height)
+	goldenAssert(t, "notes_search.txt", out)
+}
+
 // TestSettingsGolden snapshots the Settings screen at 120x40. Both
 // the config path and the Projects.Root default are pinned to fixed
 // values so the snapshot doesn't drift across machines (config.Defaults

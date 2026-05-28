@@ -271,6 +271,25 @@ type openEditorMsg struct {
 // file was created/edited externally.
 type notesReloadMsg struct{}
 
+// New-note flow (Notes tab `n` key).
+
+// newNoteSubmitMsg is emitted by newNoteFormModel on Enter. Filename
+// is the chosen path relative to the project root (with a guaranteed
+// `.md` suffix); Title is the optional H1 text — empty means the
+// file is created with no leading heading.
+type newNoteSubmitMsg struct {
+	Filename string
+	Title    string
+}
+
+// newNoteCancelMsg is emitted by newNoteFormModel on Esc.
+type newNoteCancelMsg struct{}
+
+// noteInfoOpenMsg asks the app to open the note-info overlay for
+// the currently-selected note. The notes screen's selection cursor
+// determines which note's metadata is rendered.
+type noteInfoOpenMsg struct{}
+
 // notesEntriesLoadedMsg carries the result of an async Vault.List walk.
 // The path is echoed so the handler can discard stale results when the
 // user has already switched projects while the walk was in flight.
