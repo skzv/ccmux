@@ -15,10 +15,10 @@ import (
 // user's default agent.
 func TestAll_CanonicalOrder(t *testing.T) {
 	got := All()
-	if len(got) != 5 {
-		t.Fatalf("All() len = %d, want 5", len(got))
+	if len(got) != 6 {
+		t.Fatalf("All() len = %d, want 6", len(got))
 	}
-	wantIDs := []ID{IDClaude, IDCodex, IDAntigravity, IDCursor, IDPi}
+	wantIDs := []ID{IDClaude, IDCodex, IDAntigravity, IDCursor, IDPi, IDGrok}
 	for i, a := range got {
 		if a.ID() != wantIDs[i] {
 			t.Errorf("All()[%d].ID() = %q, want %q", i, a.ID(), wantIDs[i])
@@ -45,6 +45,9 @@ func TestParseID(t *testing.T) {
 		{"pi", IDPi, true},
 		{"PI", IDPi, true},
 		{"  Pi  ", IDPi, true},
+		{"grok", IDGrok, true},
+		{"GROK", IDGrok, true},
+		{"  Grok  ", IDGrok, true},
 		{"", "", false},
 		{"   ", "", false},
 		{"gpt", "", false},
@@ -75,6 +78,7 @@ func TestByID_KnownAndEmptyFallback(t *testing.T) {
 		{"gemini", IDAntigravity}, // back-compat alias for projects scaffolded before the rebrand
 		{IDCursor, IDCursor},
 		{IDPi, IDPi},
+		{IDGrok, IDGrok},
 		{"", IDClaude}, // back-compat
 	}
 	for _, tc := range cases {
@@ -122,6 +126,7 @@ func TestAgent_Identity_Stable(t *testing.T) {
 		{Antigravity{}, IDAntigravity, "agy", "Antigravity CLI", ".gemini/antigravity-cli", "conversations"},
 		{Cursor{}, IDCursor, "cursor-agent", "Cursor", ".cursor", "projects"},
 		{Pi{}, IDPi, "pi", "Pi", ".pi/agent", "sessions"},
+		{Grok{}, IDGrok, "grok", "Grok", ".grok", "sessions"},
 	}
 	for _, tc := range cases {
 		t.Run(string(tc.id), func(t *testing.T) {
@@ -369,6 +374,7 @@ func TestLaunchCmd_ConfiguredCommands(t *testing.T) {
 		Antigravity: "/Users/me/.nvm/versions/node/bin/agy",
 		Cursor:      "/Users/me/.local/bin/cursor-agent",
 		Pi:          "/Users/me/.local/bin/pi",
+		Grok:        "/Users/me/.local/bin/grok",
 	}
 	tests := []struct {
 		name string
@@ -401,6 +407,12 @@ func TestLaunchCmd_ConfiguredCommands(t *testing.T) {
 			id:   IDPi,
 			want: "/Users/me/.local/bin/pi --continue || /Users/me/.local/bin/pi || zsh || bash || sh",
 		},
+		{
+			// grok takes --continue (docs.x.ai/build/cli/headless-scripting: -c/--continue).
+			name: "grok",
+			id:   IDGrok,
+			want: "/Users/me/.local/bin/grok --continue || /Users/me/.local/bin/grok || zsh || bash || sh",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -426,6 +438,7 @@ func TestResumeArgs_ConfiguredCommands(t *testing.T) {
 		Antigravity: "/tmp/agy",
 		Cursor:      "/tmp/cursor-agent",
 		Pi:          "/tmp/pi",
+		Grok:        "/tmp/grok",
 	}
 	tests := []struct {
 		name string
@@ -438,6 +451,8 @@ func TestResumeArgs_ConfiguredCommands(t *testing.T) {
 		{name: "cursor", id: IDCursor, want: []string{"/tmp/cursor-agent", "--resume", "abc-123"}},
 		// pi resumes a specific session by partial UUID via --session.
 		{name: "pi", id: IDPi, want: []string{"/tmp/pi", "--session", "abc-123"}},
+		// grok resumes a specific session via -r/--resume <ID>.
+		{name: "grok", id: IDGrok, want: []string{"/tmp/grok", "--resume", "abc-123"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

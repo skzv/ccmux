@@ -45,6 +45,7 @@ Forms:
   ccmux resume --agent antigravity# most recent Antigravity conversation
   ccmux resume --agent cursor     # most recent Cursor conversation
   ccmux resume --agent pi         # most recent pi conversation
+  ccmux resume --agent grok       # most recent Grok conversation
 
 Use ` + "`ccmux list-conversations`" + ` to discover IDs.`,
 		Args: cobra.MaximumNArgs(1),
@@ -93,7 +94,7 @@ Use ` + "`ccmux list-conversations`" + ` to discover IDs.`,
 				if agentFilter != "" {
 					want, ok := agent.ParseID(agentFilter)
 					if !ok {
-						return fmt.Errorf("unknown agent %q (claude, codex, antigravity, cursor, pi)", agentFilter)
+						return fmt.Errorf("unknown agent %q (claude, codex, antigravity, cursor, pi, grok)", agentFilter)
 					}
 					target = pickMostRecentByAgent(list, want)
 					if target.ID == "" {
@@ -107,7 +108,7 @@ Use ` + "`ccmux list-conversations`" + ` to discover IDs.`,
 			return resumeNow(target)
 		},
 	}
-	cmd.Flags().StringVar(&agentFilter, "agent", "", "restrict to a specific agent (claude / codex / antigravity / cursor / pi)")
+	cmd.Flags().StringVar(&agentFilter, "agent", "", "restrict to a specific agent (claude / codex / antigravity / cursor / pi / grok)")
 	return cmd
 }
 

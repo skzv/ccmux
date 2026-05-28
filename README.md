@@ -4,7 +4,7 @@
 
 **Start on your Mac. Continue on your phone. Resume on your laptop.**
 
-One TUI for every Claude / Codex / Antigravity / Cursor / pi session across every device on your tailnet. No tmux session names to memorize, no `claude --resume <hash>` to type, no SSH-then-attach gymnastics when you pick up on your phone. Your work follows you between devices — frictionless.
+One TUI for every Claude / Codex / Antigravity / Cursor / pi / Grok session across every device on your tailnet. No tmux session names to memorize, no `claude --resume <hash>` to type, no SSH-then-attach gymnastics when you pick up on your phone. Your work follows you between devices — frictionless.
 
 [![CI](https://github.com/skzv/ccmux/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/skzv/ccmux/actions/workflows/ci.yml)
 [![Go Version](https://img.shields.io/badge/go-1.26+-00ADD8.svg)](https://go.dev/)
@@ -108,9 +108,9 @@ Headless agent runs (`claude -p`, `codex exec`, SDK invocations) are filtered ou
 <img src="docs/vhs/out/cuj05_pick_agent.gif" alt="ccmux new-project form: cycle Claude / Codex / Antigravity / Cursor with arrow keys, the agent picker writes the per-project choice into .ccmux/agent." width="900" />
 </div>
 
-Pick per project which AI runs it — [Claude Code](https://claude.ai/code), [Codex](https://github.com/openai/codex), [Antigravity CLI](https://antigravity.google/download), [Cursor](https://cursor.com/cli), or [pi](https://pi.dev). The choice is sticky, stored at `<project>/.ccmux/agent`. The dashboard, daemon state-detection, and dispatch all follow per-project. Press `a` in the Projects tab to switch the selected project's agent (cycles claude → codex → antigravity → cursor → pi).
+Pick per project which AI runs it — [Claude Code](https://claude.ai/code), [Codex](https://github.com/openai/codex), [Antigravity CLI](https://antigravity.google/download), [Cursor](https://cursor.com/cli), [pi](https://pi.dev), or [Grok](https://x.ai/cli). The choice is sticky, stored at `<project>/.ccmux/agent`. The dashboard, daemon state-detection, and dispatch all follow per-project. Press `a` in the Projects tab to switch the selected project's agent (cycles claude → codex → antigravity → cursor → pi → grok).
 
-Dashboard rows on non-default agents get a small `[codex]`, `[antigravity]`, `[cursor]`, or `[pi]` tag so a single glance tells you what's running where.
+Dashboard rows on non-default agents get a small `[codex]`, `[antigravity]`, `[cursor]`, `[pi]`, or `[grok]` tag so a single glance tells you what's running where.
 
 ---
 
@@ -258,9 +258,9 @@ bell = true                          # ring local terminal BEL on needs_input
 ### 🤝 Multi-agent (Claude, Codex, Antigravity)
 
 - Per-project agent stored in `<project>/.ccmux/agent` — sticky across sessions
-- New-project form cycles Claude / Codex / Antigravity / Cursor / pi with `←/→`
+- New-project form cycles Claude / Codex / Antigravity / Cursor / pi / Grok with `←/→`
 - Press `a` in Projects to switch the selected project's agent
-- Dashboard rows on non-default agents get a small `[codex]`, `[antigravity]`, `[cursor]`, or `[pi]` tag
+- Dashboard rows on non-default agents get a small `[codex]`, `[antigravity]`, `[cursor]`, `[pi]`, or `[grok]` tag
 - Daemon state-detection (active / idle / needs_input) dispatches per agent for correct heuristics
 - `ccmux doctor` enumerates installed agents; setup wizard points at the right install command for each
 - Moshi push integration is currently Claude-only — Codex / Antigravity sessions get the audible terminal bell (still triggers a generic iOS push). Phase-2 work tracked in [`docs/01_Specs/02_Multi_Agent.md`](docs/01_Specs/02_Multi_Agent.md)

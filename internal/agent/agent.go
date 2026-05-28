@@ -36,6 +36,7 @@ const (
 	IDAntigravity ID = "antigravity"
 	IDCursor      ID = "cursor"
 	IDPi          ID = "pi"
+	IDGrok        ID = "grok"
 )
 
 // State enumerates the high-level lifecycle of an agent session, mirrored
@@ -96,6 +97,7 @@ type Commands struct {
 	Antigravity string
 	Cursor      string
 	Pi          string
+	Grok        string
 }
 
 // All returns every supported agent in canonical order
@@ -103,7 +105,7 @@ type Commands struct {
 // the first installed entry, and that lets us bias new users toward
 // Claude without making it special-case in UI code.
 func All() []Agent {
-	return []Agent{Claude{}, Codex{}, Antigravity{}, Cursor{}, Pi{}}
+	return []Agent{Claude{}, Codex{}, Antigravity{}, Cursor{}, Pi{}, Grok{}}
 }
 
 // ByID returns the Agent for a known ID. Falls back to Default() for
@@ -126,6 +128,8 @@ func ByID(id ID) Agent {
 		return Cursor{}
 	case IDPi:
 		return Pi{}
+	case IDGrok:
+		return Grok{}
 	}
 	panic("agent: unknown ID " + string(id))
 }
@@ -148,6 +152,8 @@ func ParseID(s string) (ID, bool) {
 		return IDCursor, true
 	case IDPi:
 		return IDPi, true
+	case IDGrok:
+		return IDGrok, true
 	}
 	return "", false
 }
@@ -282,6 +288,10 @@ func ResumeArgs(id ID, conversationID string, commands Commands) []string {
 		// pi resumes a specific session by partial UUID via
 		// `--session <id>` (`pi --help`).
 		return []string{configuredBinary(IDPi, "pi", commands), "--session", conversationID}
+	case IDGrok:
+		// grok resumes a specific session via `-r, --resume <ID>`
+		// (docs.x.ai/build/cli/headless-scripting).
+		return []string{configuredBinary(IDGrok, "grok", commands), "--resume", conversationID}
 	}
 	return nil
 }
@@ -314,6 +324,10 @@ func commandOverride(id ID, commands Commands) string {
 	case IDPi:
 		if strings.TrimSpace(commands.Pi) != "" {
 			return strings.TrimSpace(commands.Pi)
+		}
+	case IDGrok:
+		if strings.TrimSpace(commands.Grok) != "" {
+			return strings.TrimSpace(commands.Grok)
 		}
 	}
 	return ""

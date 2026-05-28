@@ -47,8 +47,9 @@ func TestManagedPath_IncludesConfiguredCommandBeforeDefaults(t *testing.T) {
 		Codex:       "/Users/me/.nvm/versions/node/v23.9.0/bin/codex",
 		Antigravity: "/Users/me/.local/share/antigravity/bin/agy",
 		Cursor:      "/Users/me/.cursor/bin/cursor-agent",
+		Grok:        "/Users/me/.grok/bin/grok",
 	}, "/opt/homebrew/bin", "/usr/bin")
-	wantPrefix := "/Users/me/.local/bin:/Users/me/.nvm/versions/node/v23.9.0/bin:/Users/me/.local/share/antigravity/bin:/Users/me/.cursor/bin:/opt/homebrew/bin"
+	wantPrefix := "/Users/me/.local/bin:/Users/me/.nvm/versions/node/v23.9.0/bin:/Users/me/.local/share/antigravity/bin:/Users/me/.cursor/bin:/Users/me/.grok/bin:/opt/homebrew/bin"
 	if !strings.HasPrefix(got, wantPrefix) {
 		t.Fatalf("managedPath = %q, want prefix %q", got, wantPrefix)
 	}

@@ -10,8 +10,9 @@ import (
 )
 
 // TestAgentAccentMapping verifies the design-system single source of
-// truth: Claude=Mauve, Codex=Sky, Antigravity=Peach, Cursor=Teal, with
-// an unknown ID falling back to the muted style.
+// truth: Claude=Mauve, Codex=Sky, Antigravity=Peach, Cursor=Teal,
+// Pi=Green, Grok=Blue, with an unknown ID falling back to the muted
+// style.
 func TestAgentAccentMapping(t *testing.T) {
 	s := Default()
 	cases := []struct {
@@ -23,6 +24,8 @@ func TestAgentAccentMapping(t *testing.T) {
 		{"codex", agent.IDCodex, s.P.Sky},
 		{"antigravity", agent.IDAntigravity, s.P.Peach},
 		{"cursor", agent.IDCursor, s.P.Teal},
+		{"pi", agent.IDPi, s.P.Green},
+		{"grok", agent.IDGrok, s.P.Blue},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

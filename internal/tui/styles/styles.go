@@ -173,8 +173,8 @@ func Default() Styles {
 // column, the Agents sub-tab row) reads from this method.
 //
 // Mapping: Claude=Mauve, Codex=Sky, Antigravity=Peach, Cursor=Teal,
-// Pi=Green. Unknown IDs fall back to the muted style so a future
-// agent without a colour assignment still renders.
+// Pi=Green, Grok=Blue. Unknown IDs fall back to the muted style so a
+// future agent without a colour assignment still renders.
 //
 // The returned style sets the foreground only; callers add Bold (or
 // other modifiers) themselves so the same accent can be reused for
@@ -192,6 +192,8 @@ func (s Styles) AgentAccent(id agent.ID) lipgloss.Style {
 		color = s.P.Teal
 	case agent.IDPi:
 		color = s.P.Green
+	case agent.IDGrok:
+		color = s.P.Blue
 	default:
 		return s.Muted
 	}
