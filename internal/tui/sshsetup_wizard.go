@@ -38,6 +38,16 @@ const (
 	// alice-locally / bob-on-the-remote mismatch instead of
 	// burning the password attempt.
 	sshWizardUser
+	// sshWizardProbing — transient "checking <user>@<host>…" state
+	// entered after the user confirms the username. We re-probe the
+	// corrected target: if key auth ALREADY works (the user has
+	// passwordless login configured for this account — agent, an
+	// existing key, or a jump-host config), we skip the password +
+	// install entirely and go straight to success. Only when the
+	// re-probe still reports AuthFailed do we fall through to the
+	// password step. Other results (sshd off, host-key mismatch,
+	// unreachable) route to the matching error/recovery screen.
+	sshWizardProbing
 	// sshWizardPassword — masked textinput for the SSH password.
 	// Re-entered on ErrWrongPassword without losing wizard state.
 	sshWizardPassword
@@ -94,6 +104,10 @@ type sshWizardModel struct {
 	installFn func(ctx context.Context, t sshsetup.Target, password string, key sshsetup.LocalKey, p sshsetup.Progress) error
 	// enumerate seam — same idea for EnumerateUsers.
 	enumerateFn func(ctx context.Context, t sshsetup.Target, key sshsetup.LocalKey) ([]string, error)
+	// probe seam — re-probes the corrected target after the Username
+	// step so passwordless-already-configured accounts skip the
+	// password+install. Production uses nil → sshsetup.Probe.
+	probeFn func(ctx context.Context, t sshsetup.Target) sshsetup.ProbeResult
 	// local key resolution — also a seam so the test doesn't have
 	// to manage a real ~/.ssh.
 	keyFn func() (sshsetup.LocalKey, error)
@@ -176,6 +190,9 @@ type wizardProgressMsg struct{ stage, detail string }
 // wizardInstallDoneMsg fires when the install goroutine returns.
 type wizardInstallDoneMsg struct{ err error }
 
+// wizardProbeDoneMsg carries the result of the post-username re-probe.
+type wizardProbeDoneMsg struct{ result sshsetup.ProbeResult }
+
 // wizardEnumerateDoneMsg fires when EnumerateUsers returns.
 type wizardEnumerateDoneMsg struct {
 	users []string
@@ -243,8 +260,71 @@ func (m *sshWizardModel) Update(msg tea.Msg) (*sshWizardModel, tea.Cmd) {
 		m.cursor = 0
 		m.step = sshWizardEnumerate
 		return m, nil
+	case wizardProbeDoneMsg:
+		return m.afterProbe(msg.result)
 	}
 	return m, nil
+}
+
+// afterProbe routes the post-username re-probe result. The win case
+// is ProbeOK: key auth already works for the corrected user (the
+// user had passwordless login configured), so there's nothing to
+// install and no password to ask for — straight to the enumerate /
+// done path. AuthFailed means we genuinely need to install a key,
+// so prompt for the password. Everything else is a reachability /
+// host-key problem the password step can't fix.
+func (m *sshWizardModel) afterProbe(res sshsetup.ProbeResult) (*sshWizardModel, tea.Cmd) {
+	switch res {
+	case sshsetup.ProbeOK:
+		// Already authenticated — skip password + install.
+		m.stages = nil
+		return m, m.startEnumerate()
+	case sshsetup.ProbeAuthFailed:
+		m.step = sshWizardPassword
+		m.err = ""
+		m.passwd.Reset()
+		m.passwd.Focus()
+		return m, textinput.Blink
+	case sshsetup.ProbeHostKeyMismatch:
+		m.step = sshWizardHostKeyMismatch
+		m.err = ""
+		return m, nil
+	case sshsetup.ProbeSshdDisabled:
+		m.step = sshWizardError
+		m.err = fmt.Sprintf("sshd isn't accepting connections on %s. On macOS enable System Settings → General → Sharing → Remote Login.", m.target.Host)
+		return m, nil
+	case sshsetup.ProbeRefused:
+		m.step = sshWizardError
+		m.err = fmt.Sprintf("port %d on %s is closed — check that sshd is bound there.", m.target.Port, m.target.Host)
+		return m, nil
+	case sshsetup.ProbeTimeout, sshsetup.ProbeNoNetwork:
+		m.step = sshWizardError
+		m.err = fmt.Sprintf("can't reach %s — is Tailscale connected on both ends?", m.target.Host)
+		return m, nil
+	default:
+		// Unknown probe outcome: fall back to the password path so
+		// the user can still try to install a key.
+		m.step = sshWizardPassword
+		m.err = ""
+		m.passwd.Reset()
+		m.passwd.Focus()
+		return m, textinput.Blink
+	}
+}
+
+// startProbe re-checks the (corrected) target's auth state off the
+// UI goroutine. Result arrives as wizardProbeDoneMsg.
+func (m *sshWizardModel) startProbe() tea.Cmd {
+	probeFn := m.probeFn
+	if probeFn == nil {
+		probeFn = sshsetup.Probe
+	}
+	target := m.target
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		return wizardProbeDoneMsg{result: probeFn(ctx, target)}
+	}
 }
 
 // updateKey routes a keypress to the per-step handler. Each step's
@@ -297,14 +377,19 @@ func (m *sshWizardModel) updateKey(msg tea.KeyMsg) (*sshWizardModel, tea.Cmd) {
 				return m, nil
 			}
 			m.err = ""
-			// Persist edits back to target so install/enumerate use them.
+			// Persist edits back to target so probe/install/enumerate
+			// use them.
 			m.target.User = u
 			m.target.Port = p
-			m.step = sshWizardPassword
 			m.userInput.Blur()
 			m.portInput.Blur()
-			m.passwd.Focus()
-			return m, textinput.Blink
+			// Re-probe the corrected target BEFORE asking for a
+			// password: if key auth already works for this user
+			// (passwordless login already configured), we skip the
+			// password + install entirely. afterProbe routes the
+			// result.
+			m.step = sshWizardProbing
+			return m, m.startProbe()
 		case "esc":
 			return m, m.emitCancel()
 		}
@@ -333,9 +418,9 @@ func (m *sshWizardModel) updateKey(msg tea.KeyMsg) (*sshWizardModel, tea.Cmd) {
 		var cmd tea.Cmd
 		m.passwd, cmd = m.passwd.Update(msg)
 		return m, cmd
-	case sshWizardRunning:
-		// Block keys during the install — Esc still allows a soft
-		// cancel by short-circuiting back to a "cancelled" close.
+	case sshWizardRunning, sshWizardProbing:
+		// Block keys during the install / re-probe — Esc still
+		// allows a soft cancel by short-circuiting to a close.
 		if msg.String() == "esc" {
 			return m, m.emitCancel()
 		}
@@ -563,6 +648,12 @@ func (m *sshWizardModel) View(w, h int) string {
 		}
 		lines = append(lines, "")
 		lines = append(lines, m.st.Muted.Render("[Enter] install key   [Esc] cancel"))
+	case sshWizardProbing:
+		lines = append(lines, title.Render("Checking "+m.target.String()))
+		lines = append(lines, "")
+		lines = append(lines, m.st.Muted.Render("Testing key auth — if you're already set up, no password needed…"))
+		lines = append(lines, "")
+		lines = append(lines, m.st.Muted.Render("[Esc] cancel"))
 	case sshWizardRunning:
 		lines = append(lines, title.Render("Installing on "+m.target.String()))
 		lines = append(lines, "")

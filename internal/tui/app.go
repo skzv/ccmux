@@ -441,7 +441,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.sshWizard.Open(msg.target, msg.resume)
 		return a, nil
 
-	case wizardProgressMsg, wizardInstallDoneMsg, wizardEnumerateDoneMsg:
+	case wizardProgressMsg, wizardInstallDoneMsg, wizardEnumerateDoneMsg, wizardProbeDoneMsg:
 		// Internal wizard machinery — route to the wizard, ignore
 		// when no wizard is alive (defensive against stale Cmds).
 		if a.sshWizard == nil {

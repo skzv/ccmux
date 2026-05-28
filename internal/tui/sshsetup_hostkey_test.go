@@ -22,8 +22,7 @@ func TestSSHWizard_HostKeyMismatch_RoutesToDedicatedStep(t *testing.T) {
 	m.installFn = fakeInstallHostKeyMismatch
 	m.keyFn = fakeKey
 	m.Open(sshsetup.Target{User: "alice", Host: "sputnik", Port: 22}, nil)
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // confirm → user
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // user → password
+	m = advanceUserToPassword(t, m)
 	for _, r := range "hunter2" {
 		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 	}
@@ -78,8 +77,7 @@ func TestSSHWizard_HostKeyMismatch_YRemovesAndRetries(t *testing.T) {
 	m.enumerateFn = fakeEnumerateNone
 	m.keyFn = fakeKey
 	m.Open(sshsetup.Target{User: "alice", Host: "sputnik", Port: 22}, nil)
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = advanceUserToPassword(t, m)
 	for _, r := range "hunter2" {
 		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 	}
@@ -131,8 +129,7 @@ func TestSSHWizard_HostKeyMismatch_NCancels(t *testing.T) {
 	m.installFn = fakeInstallHostKeyMismatch
 	m.keyFn = fakeKey
 	m.Open(sshsetup.Target{User: "alice", Host: "sputnik", Port: 22}, nil)
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = advanceUserToPassword(t, m)
 	for _, r := range "p" {
 		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 	}

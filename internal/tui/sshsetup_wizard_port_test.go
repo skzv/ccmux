@@ -59,6 +59,7 @@ func TestSSHWizard_TabSwitchesFocus(t *testing.T) {
 // downstream install.
 func TestSSHWizard_EditedPortPersistsToTarget(t *testing.T) {
 	m := newSSHWizard(styles.Default())
+	m.probeFn = fakeProbeAuthFailed
 	m.Open(sshsetup.Target{User: "alice", Host: "sputnik"}, nil)
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // confirm → user
 	// Tab to port field, clear, type new port.
@@ -67,12 +68,13 @@ func TestSSHWizard_EditedPortPersistsToTarget(t *testing.T) {
 	for _, r := range "2222" {
 		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 	}
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if m.Step() != sshWizardPassword {
-		t.Fatalf("Step = %v, want sshWizardPassword", m.Step())
-	}
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // user → probing
 	if m.target.Port != 2222 {
 		t.Errorf("target.Port = %d, want 2222", m.target.Port)
+	}
+	m, _ = m.Update(runCmd(cmd)) // probe(AuthFailed) → password
+	if m.Step() != sshWizardPassword {
+		t.Fatalf("Step = %v, want sshWizardPassword", m.Step())
 	}
 }
 
