@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -511,6 +513,75 @@ func checkClipboardForDoctor() {
 	}
 }
 
+// daemonStartDeps groups the side-effecting bits of `ccmux daemon
+// start` so the command stays a thin wrapper and the start logic is
+// unit-testable without pgrep'ing or spawning a real process.
+type daemonStartDeps struct {
+	// running reports whether a ccmuxd is already up, and its pid.
+	// Checked first so `daemon start` never spawns a doomed second
+	// daemon (the newcomer would just lose the socket race and exit,
+	// but the user still saw a confusing "started pid N" line — and
+	// against a *wedged* daemon it could even bind a fresh socket
+	// and become a persistent rogue).
+	running func() (pid int, ok bool)
+	// spawn launches a detached ccmuxd and returns its pid.
+	spawn func() (pid int, err error)
+}
+
+// defaultDaemonStartDeps wires the production pgrep + spawn.
+func defaultDaemonStartDeps() daemonStartDeps {
+	return daemonStartDeps{
+		running: runningCcmuxdPID,
+		spawn: func() (int, error) {
+			bin, err := exec.LookPath("ccmuxd")
+			if err != nil {
+				return 0, fmt.Errorf("ccmuxd not on PATH: %w (run `make install`?)", err)
+			}
+			dCmd := exec.Command(bin)
+			detachProcess(dCmd) // OS-specific: setsid on unix, DETACHED_PROCESS on windows
+			if err := dCmd.Start(); err != nil {
+				return 0, err
+			}
+			return dCmd.Process.Pid, nil
+		},
+	}
+}
+
+// runDaemonStart is the testable core of `ccmux daemon start`. It
+// no-ops (exit 0) when a daemon is already running rather than
+// spawning a duplicate — see daemonStartDeps.running for why.
+func runDaemonStart(out io.Writer, deps daemonStartDeps) error {
+	if pid, ok := deps.running(); ok {
+		fmt.Fprintf(out, "ccmuxd already running (pid %d) — nothing to do\n", pid)
+		return nil
+	}
+	pid, err := deps.spawn()
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "ccmuxd started (pid %d)\n", pid)
+	return nil
+}
+
+// runningCcmuxdPID returns the pid of a live ccmuxd via `pgrep -x`,
+// or ok=false when none is running. `-x` matches the exact process
+// name so it can't be confused by, say, `ccmux daemon start` itself
+// (that process is "ccmux", not "ccmuxd"). When several match (a
+// pre-existing rogue pair) we report the first — enough for the
+// "already running" message.
+func runningCcmuxdPID() (int, bool) {
+	out, err := exec.Command("pgrep", "-x", "ccmuxd").Output()
+	if err != nil {
+		return 0, false // non-zero exit = no match
+	}
+	for _, line := range strings.Fields(string(out)) {
+		if pid, perr := strconv.Atoi(line); perr == nil && pid > 0 {
+			return pid, true
+		}
+	}
+	return 0, false
+}
+
 // newDaemonCmd: `ccmux daemon ...` — start/stop, persistent install/
 // uninstall, and status.
 func newDaemonCmd() *cobra.Command {
@@ -523,17 +594,7 @@ func newDaemonCmd() *cobra.Command {
 			Use:   "start",
 			Short: "Start ccmuxd in the background for this login session",
 			RunE: func(_ *cobra.Command, _ []string) error {
-				bin, err := exec.LookPath("ccmuxd")
-				if err != nil {
-					return fmt.Errorf("ccmuxd not on PATH: %w (run `make install`?)", err)
-				}
-				dCmd := exec.Command(bin)
-				detachProcess(dCmd) // OS-specific: setsid on unix, DETACHED_PROCESS on windows
-				if err := dCmd.Start(); err != nil {
-					return err
-				}
-				fmt.Printf("ccmuxd started (pid %d)\n", dCmd.Process.Pid)
-				return nil
+				return runDaemonStart(os.Stdout, defaultDaemonStartDeps())
 			},
 		},
 		&cobra.Command{
