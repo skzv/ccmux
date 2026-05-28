@@ -2,11 +2,64 @@ package tui
 
 import (
 	"fmt"
+	"os/exec"
 	"strings"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/skzv/ccmux/internal/config"
+	"github.com/skzv/ccmux/internal/remoteattach"
 	"github.com/skzv/ccmux/internal/sshsetup"
 )
+
+// sshWizardResume is the opaque payload the SSH setup wizard carries
+// from open to completion (openSSHWizardMsg.resume → wizardCompletedMsg.resume).
+// It tells the App what the user was actually trying to do, so a
+// successful setup can finish the job rather than just toasting.
+type sshWizardResume struct {
+	// OpenShell, when true, means "drop into an interactive ssh
+	// shell on the target after setup succeeds." This is the
+	// Network-tab intent: the user picked a device to get into it,
+	// and the wizard was only the auth detour. Without this the
+	// wizard installed the key and then stranded the user on the
+	// Network screen — the reported bug.
+	OpenShell bool
+}
+
+// shouldOpenShell reports whether a wizard-completion resume payload
+// asks for an interactive shell, returning the target to connect to.
+// Split out so the decision is unit-testable without driving
+// tea.ExecProcess.
+func shouldOpenShell(resume any, target sshsetup.Target) (sshsetup.Target, bool) {
+	r, ok := resume.(sshWizardResume)
+	if !ok || !r.OpenShell {
+		return sshsetup.Target{}, false
+	}
+	return target, true
+}
+
+// sshShellCommand builds the `ssh -t [-p port] user@host` argv for
+// dropping into an interactive shell on `target`. Pure + exported to
+// the package so a test can assert the exact argv (the bit that
+// actually matters); the App wraps it in tea.ExecProcess.
+func sshShellCommand(target sshsetup.Target) *exec.Cmd {
+	dial := target.Host
+	if u := strings.TrimSpace(target.User); u != "" {
+		dial = u + "@" + target.Host
+	}
+	return remoteattach.SSHInteractivePort(dial, target.Port)
+}
+
+// sshShellExec wraps sshShellCommand in a tea.ExecProcess so the App
+// can hand it back as a command. On return from the shell it emits
+// attachExitedMsg (nil err) to clear any overlay + refresh, matching
+// the Network screen's own SSHCmd.
+func sshShellExec(target sshsetup.Target) tea.Cmd {
+	cmd := sshShellCommand(target)
+	return tea.ExecProcess(cmd, func(err error) tea.Msg {
+		return attachExitedMsg{Err: err}
+	})
+}
 
 // persistWizardAdded writes new user@host entries to hosts.toml
 // after the user confirmed the multi-select on the wizard's

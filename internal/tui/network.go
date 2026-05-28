@@ -140,7 +140,10 @@ func remoteTargetForSSH(sel hostStatus, dial string) *attachRemoteTarget {
 	if port == 0 {
 		port = 22
 	}
-	rt := &attachRemoteTarget{Host: dial, Port: port, TailscaleSSH: sel.TailscaleSSH}
+	// OpenShellOnSetup: the Network-tab Enter flow is "get me into
+	// this device", so a post-failure SSH setup should finish by
+	// opening the shell, not stranding the user on the list.
+	rt := &attachRemoteTarget{Host: dial, Port: port, TailscaleSSH: sel.TailscaleSSH, OpenShellOnSetup: true}
 	if i := strings.Index(dial, "@"); i >= 0 {
 		rt.User = dial[:i]
 		rt.Host = dial[i+1:]
@@ -200,7 +203,10 @@ func (m networkModel) SetupSSHCmd() tea.Cmd {
 		}
 	}
 	return func() tea.Msg {
-		return openSSHWizardMsg{target: target}
+		// OpenShell: the user picked a device on the Network tab to
+		// get INTO it. Once setup succeeds, drop them into the shell
+		// rather than stranding them back on the list.
+		return openSSHWizardMsg{target: target, resume: sshWizardResume{OpenShell: true}}
 	}
 }
 
