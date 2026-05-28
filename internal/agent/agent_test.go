@@ -15,10 +15,10 @@ import (
 // user's default agent.
 func TestAll_CanonicalOrder(t *testing.T) {
 	got := All()
-	if len(got) != 4 {
-		t.Fatalf("All() len = %d, want 4", len(got))
+	if len(got) != 5 {
+		t.Fatalf("All() len = %d, want 5", len(got))
 	}
-	wantIDs := []ID{IDClaude, IDCodex, IDAntigravity, IDCursor}
+	wantIDs := []ID{IDClaude, IDCodex, IDAntigravity, IDCursor, IDPi}
 	for i, a := range got {
 		if a.ID() != wantIDs[i] {
 			t.Errorf("All()[%d].ID() = %q, want %q", i, a.ID(), wantIDs[i])
@@ -42,6 +42,9 @@ func TestParseID(t *testing.T) {
 		{"antigravity", IDAntigravity, true},
 		{"gemini", IDAntigravity, true}, // back-compat alias
 		{"cursor", IDCursor, true},
+		{"pi", IDPi, true},
+		{"PI", IDPi, true},
+		{"  Pi  ", IDPi, true},
 		{"", "", false},
 		{"   ", "", false},
 		{"gpt", "", false},
@@ -71,6 +74,7 @@ func TestByID_KnownAndEmptyFallback(t *testing.T) {
 		{IDAntigravity, IDAntigravity},
 		{"gemini", IDAntigravity}, // back-compat alias for projects scaffolded before the rebrand
 		{IDCursor, IDCursor},
+		{IDPi, IDPi},
 		{"", IDClaude}, // back-compat
 	}
 	for _, tc := range cases {
@@ -117,6 +121,7 @@ func TestAgent_Identity_Stable(t *testing.T) {
 		{Codex{}, IDCodex, "codex", "Codex", ".codex", "sessions"},
 		{Antigravity{}, IDAntigravity, "agy", "Antigravity CLI", ".gemini/antigravity-cli", "conversations"},
 		{Cursor{}, IDCursor, "cursor-agent", "Cursor", ".cursor", "projects"},
+		{Pi{}, IDPi, "pi", "Pi", ".pi/agent", "sessions"},
 	}
 	for _, tc := range cases {
 		t.Run(string(tc.id), func(t *testing.T) {
@@ -162,6 +167,8 @@ func TestAgent_LaunchCmd_NewVsContinue(t *testing.T) {
 					t.Errorf("continue LaunchCmd = %q, expected resume subcommand", cont)
 				}
 			default:
+				// claude / codex / antigravity / pi all take --continue
+				// (verified against `pi --help`: pi has --continue/-c).
 				if !strings.Contains(cont, "--continue") {
 					t.Errorf("continue LaunchCmd = %q, expected --continue", cont)
 				}
@@ -274,6 +281,19 @@ func TestCursor_Classify_IdleHeuristic(t *testing.T) {
 	}
 }
 
+func TestPi_Classify_IdleHeuristic(t *testing.T) {
+	if got := (Pi{}).Classify("", time.Now(), 3*time.Second); got != StateUnknown {
+		t.Errorf("empty pane: Pi.Classify = %q, want unknown", got)
+	}
+	if got := (Pi{}).Classify("recent output", time.Now(), 3*time.Second); got != StateActive {
+		t.Errorf("fresh output: Pi.Classify = %q, want active", got)
+	}
+	stale := time.Now().Add(-10 * time.Second)
+	if got := (Pi{}).Classify("old output", stale, 3*time.Second); got != StateNeedsInput {
+		t.Errorf("stale output: Pi.Classify = %q, want needs_input", got)
+	}
+}
+
 // TestAllInstalled_RespectsHook injects a fake binary detector so the
 // test doesn't depend on whatever's actually on the dev machine's
 // PATH. Verifies AllInstalled returns the right subset and preserves
@@ -348,6 +368,7 @@ func TestLaunchCmd_ConfiguredCommands(t *testing.T) {
 		Codex:       "/Users/me/.nvm/versions/node/bin/codex",
 		Antigravity: "/Users/me/.nvm/versions/node/bin/agy",
 		Cursor:      "/Users/me/.local/bin/cursor-agent",
+		Pi:          "/Users/me/.local/bin/pi",
 	}
 	tests := []struct {
 		name string
@@ -374,6 +395,12 @@ func TestLaunchCmd_ConfiguredCommands(t *testing.T) {
 			id:   IDCursor,
 			want: "/Users/me/.local/bin/cursor-agent resume || /Users/me/.local/bin/cursor-agent || zsh || bash || sh",
 		},
+		{
+			// pi takes --continue like claude/codex (verified via `pi --help`).
+			name: "pi",
+			id:   IDPi,
+			want: "/Users/me/.local/bin/pi --continue || /Users/me/.local/bin/pi || zsh || bash || sh",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -398,6 +425,7 @@ func TestResumeArgs_ConfiguredCommands(t *testing.T) {
 		Codex:       "/tmp/codex",
 		Antigravity: "/tmp/agy",
 		Cursor:      "/tmp/cursor-agent",
+		Pi:          "/tmp/pi",
 	}
 	tests := []struct {
 		name string
@@ -408,6 +436,8 @@ func TestResumeArgs_ConfiguredCommands(t *testing.T) {
 		{name: "codex", id: IDCodex, want: []string{"/tmp/codex", "resume", "abc-123"}},
 		{name: "antigravity", id: IDAntigravity, want: []string{"/tmp/agy", "--conversation", "abc-123"}},
 		{name: "cursor", id: IDCursor, want: []string{"/tmp/cursor-agent", "--resume", "abc-123"}},
+		// pi resumes a specific session by partial UUID via --session.
+		{name: "pi", id: IDPi, want: []string{"/tmp/pi", "--session", "abc-123"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

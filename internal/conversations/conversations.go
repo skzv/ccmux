@@ -158,6 +158,8 @@ func (c Conversation) ResumeArgsWithCommands(commands agent.Commands) []string {
 		return agent.ResumeArgs(agent.IDAntigravity, c.ID, commands)
 	case agent.IDCursor:
 		return agent.ResumeArgs(agent.IDCursor, c.ID, commands)
+	case agent.IDPi:
+		return agent.ResumeArgs(agent.IDPi, c.ID, commands)
 	}
 	// Unknown agent — empty argv; caller should treat as "can't
 	// resume" rather than spawn something bogus.
@@ -220,6 +222,14 @@ func RecentMessages(c Conversation, limit int) ([]Message, error) {
 	case agent.IDCursor:
 		for _, path := range paths {
 			msgs, err := readCursorMessages(path, limit)
+			if err != nil {
+				return nil, err
+			}
+			all = append(all, msgs...)
+		}
+	case agent.IDPi:
+		for _, path := range paths {
+			msgs, err := readPiMessages(path, limit)
 			if err != nil {
 				return nil, err
 			}
@@ -436,6 +446,14 @@ func CountMessages(c Conversation) (int, error) {
 			}
 			total += n
 		}
+	case agent.IDPi:
+		for _, path := range paths {
+			n, err := countPiMessages(path)
+			if err != nil {
+				return 0, err
+			}
+			total += n
+		}
 	case agent.IDAntigravity:
 		for _, path := range paths {
 			n, err := countAntigravityMessages(path)
@@ -584,6 +602,8 @@ func guardTranscriptPath(home string, agentID agent.ID, path string) error {
 		allowed = []transcriptRoot{{root: filepath.Join(home, ".codex", "sessions"), ext: ".jsonl"}}
 	case agent.IDCursor:
 		allowed = []transcriptRoot{{root: filepath.Join(home, ".cursor", "projects"), ext: ".jsonl"}}
+	case agent.IDPi:
+		allowed = []transcriptRoot{{root: filepath.Join(home, ".pi", "agent", "sessions"), ext: ".jsonl"}}
 	case agent.IDAntigravity:
 		allowed = []transcriptRoot{
 			{root: filepath.Join(home, ".gemini", "antigravity-cli", "conversations"), ext: ".pb"},
@@ -657,6 +677,7 @@ func All(opts Options) ([]Conversation, error) {
 		ListCodex,
 		ListCursor,
 		ListAntigravity,
+		ListPi,
 	} {
 		got, err := fn(opts.HomeDir)
 		if err != nil {
@@ -1277,6 +1298,238 @@ func (e cursorEvent) MessageContent() string {
 		return ""
 	}
 	return messagePartsContent(m.Content)
+}
+
+// ListPi walks ~/.pi/agent/sessions/--<cwd>--/<ts>_<uuid>.jsonl
+// (per https://pi.dev/docs/latest/session-format). Each session file
+// is one conversation: the first line is a `{"type":"session",…}`
+// header carrying the authoritative `cwd`, and subsequent
+// `{"type":"message",…}` lines hold the turns. The conversation ID is
+// the session header's `id` (falling back to the filename's <uuid>
+// segment), and the project label is the header `cwd` (falling back
+// to decoding the --<cwd>-- directory name).
+func ListPi(home string) ([]Conversation, error) {
+	root := filepath.Join(home, ".pi", "agent", "sessions")
+	var out []Conversation
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			// Missing root / unreadable subdir: skip, don't fail the
+			// whole walk (matches the other agents' walkers).
+			return nil //nolint:nilerr
+		}
+		if d.IsDir() || !strings.HasSuffix(d.Name(), ".jsonl") {
+			return nil
+		}
+		c := readPiTranscript(root, path)
+		if c.ID != "" {
+			out = append(out, c)
+		}
+		return nil
+	})
+	if err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("walk %s: %w", root, err)
+	}
+	return mergeConversations(out), nil
+}
+
+// piEvent models one line of a pi JSONL session file. pi nests the
+// role + content under `message` and tags every line with a
+// top-level `type` ("session" header, "message", "compaction", …) —
+// distinct from Cursor's top-level `role`, so pi needs its own
+// parser. The session header additionally carries `id` + `cwd`.
+//
+// Timestamp: pi's schema (bundled docs/session-format.md) stores
+// `timestamp` as Unix milliseconds inside the message object; some
+// entries also carry an entry-level timestamp. We accept a number
+// (Unix ms) OR an RFC3339 string at either level, preferring the
+// message-level value, so the parser is robust across pi's session
+// versions (v1 linear → v3 tree).
+type piEvent struct {
+	Type      string          `json:"type"`
+	ID        string          `json:"id"`
+	CWD       string          `json:"cwd"`
+	Timestamp json.RawMessage `json:"timestamp"`
+	Message   *piMessage      `json:"message"`
+}
+
+type piMessage struct {
+	Role      string          `json:"role"`
+	Content   json.RawMessage `json:"content"`
+	Timestamp json.RawMessage `json:"timestamp"`
+}
+
+func (e piEvent) eventTime() time.Time {
+	if m := e.Message; m != nil {
+		if ts := parsePiTimestamp(m.Timestamp); !ts.IsZero() {
+			return ts
+		}
+	}
+	return parsePiTimestamp(e.Timestamp)
+}
+
+// parsePiTimestamp decodes pi's `timestamp` field — Unix milliseconds
+// (a JSON number) in the current schema, or an RFC3339 string in
+// older/migrated sessions. Zero time when absent or unparseable.
+func parsePiTimestamp(raw json.RawMessage) time.Time {
+	if len(raw) == 0 {
+		return time.Time{}
+	}
+	var ms int64
+	if err := json.Unmarshal(raw, &ms); err == nil && ms > 0 {
+		return time.UnixMilli(ms)
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return parseRFC3339(s)
+	}
+	return time.Time{}
+}
+
+// content returns the human-readable text of a pi message. pi's
+// content is either a bare string ("Hello") or an array of typed
+// blocks (text / image / toolCall / thinking) — messagePartsContent
+// already handles both shapes, so we delegate.
+func (m *piMessage) content() string {
+	if m == nil || len(m.Content) == 0 {
+		return ""
+	}
+	return messagePartsContent(m.Content)
+}
+
+// readPiTranscript reads one pi session file end-to-end, returning a
+// Conversation with ID, Project, Preview, and LastActivity populated.
+func readPiTranscript(root, path string) Conversation {
+	c := Conversation{Agent: agent.IDPi, Path: path}
+	if info, err := os.Stat(path); err == nil {
+		c.LastActivity = info.ModTime()
+	}
+	// Fallback ID from the filename: <timestamp>_<uuid>.jsonl → uuid.
+	stem := strings.TrimSuffix(filepath.Base(path), ".jsonl")
+	if i := strings.LastIndex(stem, "_"); i >= 0 && i+1 < len(stem) {
+		c.ID = stem[i+1:]
+	} else {
+		c.ID = stem
+	}
+	// Fallback project from the --<cwd>-- directory name.
+	if rel, err := filepath.Rel(root, path); err == nil {
+		if parts := strings.Split(rel, string(filepath.Separator)); len(parts) >= 2 {
+			c.Project = decodePiSessionDir(parts[0])
+		}
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return c
+	}
+	defer f.Close()
+	var latestEvent time.Time
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	for sc.Scan() {
+		var ev piEvent
+		if err := json.Unmarshal(sc.Bytes(), &ev); err != nil {
+			continue
+		}
+		switch ev.Type {
+		case "session":
+			// Header line: authoritative id + cwd.
+			if ev.ID != "" {
+				c.ID = ev.ID
+			}
+			if ev.CWD != "" {
+				c.Project = ev.CWD
+			}
+		case "message":
+			if ev.Message != nil && ev.Message.Role == "user" && c.Preview == "" {
+				c.Preview = truncatedPreview(cleanPromptText(ev.Message.content()))
+			}
+		}
+		if ts := ev.eventTime(); !ts.IsZero() && ts.After(latestEvent) {
+			latestEvent = ts
+		}
+	}
+	if !latestEvent.IsZero() {
+		c.LastActivity = latestEvent
+	}
+	return c
+}
+
+// decodePiSessionDir reverses pi's `--<cwd>--` directory encoding
+// (cwd with `/` replaced by `-`, wrapped in leading + trailing `--`).
+// Best-effort: a cwd that itself contains hyphens round-trips
+// imperfectly (same naive limitation as the other agents' decoders),
+// but the session-header `cwd` is the authoritative source when
+// present — this is only the fallback.
+func decodePiSessionDir(encoded string) string {
+	encoded = strings.TrimSpace(encoded)
+	encoded = strings.TrimPrefix(encoded, "--")
+	encoded = strings.TrimSuffix(encoded, "--")
+	if encoded == "" {
+		return ""
+	}
+	return "/" + strings.ReplaceAll(strings.TrimPrefix(encoded, "-"), "-", "/")
+}
+
+// readPiMessages parses a pi session file into the shared Message
+// shape for the transcript-preview overlay. Mirrors readCursorMessages
+// but against pi's nested message schema.
+func readPiMessages(path string, limit int) ([]Message, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", path, err)
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	var all []Message
+	for sc.Scan() {
+		var ev piEvent
+		if err := json.Unmarshal(sc.Bytes(), &ev); err != nil {
+			continue
+		}
+		if ev.Type != "message" || ev.Message == nil {
+			continue
+		}
+		role := ev.Message.Role
+		if role != "user" && role != "assistant" {
+			continue
+		}
+		body := strings.TrimSpace(ev.Message.content())
+		if role == "user" {
+			body = cleanPromptText(body)
+		}
+		if body == "" {
+			continue
+		}
+		all = append(all, Message{Role: role, Content: body, Timestamp: ev.eventTime()})
+	}
+	if len(all) > limit {
+		all = all[len(all)-limit:]
+	}
+	return all, nil
+}
+
+// countPiMessages counts user + assistant turns in a pi session file.
+func countPiMessages(path string) (int, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, fmt.Errorf("open %s: %w", path, err)
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	n := 0
+	for sc.Scan() {
+		var ev piEvent
+		if err := json.Unmarshal(sc.Bytes(), &ev); err != nil {
+			continue
+		}
+		if ev.Type == "message" && ev.Message != nil &&
+			(ev.Message.Role == "user" || ev.Message.Role == "assistant") {
+			n++
+		}
+	}
+	return n, nil
 }
 
 // ListAntigravity walks ~/.gemini/antigravity-cli/conversations/<uuid>.pb.

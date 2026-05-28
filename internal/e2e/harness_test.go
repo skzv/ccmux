@@ -92,7 +92,7 @@ func installStubAgents() error {
 echo "ccmux-stub-agent=$(basename "$0")"
 exec sleep 86400
 `
-	for _, name := range []string{"claude", "codex", "agy"} {
+	for _, name := range []string{"claude", "codex", "agy", "cursor-agent", "pi"} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(stub), 0o755); err != nil {
 			return err
 		}

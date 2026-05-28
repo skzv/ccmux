@@ -1,7 +1,7 @@
 ╭─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ Conversations                                                                                                       │
 │                                                                                                                     │
-│ ▸ Claude 1    Codex 1    Cursor 0    Agy 1                                                                          │
+│ ▸ Claude 1    Codex 1    Cursor 0    Agy 1    Pi 0                                                                  │
 │                                                                                                                     │
 │ ▌ claude  now  rebuild login with passkeys                                                                          │
 │                                                                                                                     │

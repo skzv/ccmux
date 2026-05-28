@@ -132,10 +132,10 @@ type AgentsConfig struct {
 	// Default picks which agent the new-project and new-bare-session
 	// forms default to, and which agent the daemon launches when
 	// `ccmux shell` / POST /v1/sessions/bare omits the field. Valid
-	// values: "claude" / "codex" / "antigravity" / "cursor" (or the legacy
-	// alias "gemini" for projects scaffolded before the rebrand),
-	// or the explicit string "shell" for a bare $SHELL with no
-	// agent. Empty falls back to "claude" so a fresh install gets
+	// values: "claude" / "codex" / "antigravity" / "cursor" / "pi"
+	// (or the legacy alias "gemini" for projects scaffolded before the
+	// rebrand), or the explicit string "shell" for a bare $SHELL with
+	// no agent. Empty falls back to "claude" so a fresh install gets
 	// an agent by default — the multi-agent refactor's intent.
 	Default string `toml:"default"`
 
@@ -146,6 +146,7 @@ type AgentsConfig struct {
 	Codex       AgentCommandConfig `toml:"codex"`
 	Antigravity AgentCommandConfig `toml:"antigravity"`
 	Cursor      AgentCommandConfig `toml:"cursor"`
+	Pi          AgentCommandConfig `toml:"pi"`
 }
 
 // AgentCommandConfig stores an optional explicit executable path for
@@ -164,6 +165,7 @@ func (c Config) AgentCommands() agent.Commands {
 		Codex:       strings.TrimSpace(c.Agents.Codex.Command),
 		Antigravity: strings.TrimSpace(c.Agents.Antigravity.Command),
 		Cursor:      strings.TrimSpace(c.Agents.Cursor.Command),
+		Pi:          strings.TrimSpace(c.Agents.Pi.Command),
 	}
 }
 

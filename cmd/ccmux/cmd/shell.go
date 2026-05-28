@@ -35,7 +35,7 @@ func newShellCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "shell",
 		Short: "Spawn a tmux session (agent or shell only) on local or any tailnet peer",
-		Long: `Start a tmux session running an AI agent (claude / codex / antigravity / cursor)
+		Long: `Start a tmux session running an AI agent (claude / codex / antigravity / cursor / pi)
 or a bare shell. Equivalent to pressing 'n' in the Sessions tab.
 
 Defaults:
@@ -52,7 +52,7 @@ Defaults:
 	c.Flags().StringVar(&name, "name", "", "tmux session name; empty for auto")
 	c.Flags().StringVar(&path, "path", "", "working directory; empty uses config default")
 	c.Flags().StringVar(&host, "host", "", "remote tailnet peer; empty for local")
-	c.Flags().StringVar(&agentFlag, "agent", "", `agent to launch: "claude" / "codex" / "antigravity" / "cursor" / "shell"; empty uses config default`)
+	c.Flags().StringVar(&agentFlag, "agent", "", `agent to launch: "claude" / "codex" / "antigravity" / "cursor" / "pi" / "shell"; empty uses config default`)
 	return c
 }
 

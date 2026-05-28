@@ -46,6 +46,7 @@ func TestLaunchCmdForProject_PerAgent(t *testing.T) {
 						a.ID(), got)
 				}
 			default:
+				// claude / codex / antigravity / pi all use --continue.
 				if !strings.Contains(got, "--continue") {
 					t.Errorf("launchCmdForProject(Agent=%q) = %q, expected --continue (project attach resumes)",
 						a.ID(), got)
