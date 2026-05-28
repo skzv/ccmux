@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -152,12 +153,13 @@ type App struct {
 
 	confirm confirmationModal
 
-	helpOpen     bool
-	usageOpen    bool                       // `u` opens the full usage overlay; esc/u closes
-	convPreview  conversationPreviewOverlay // `p` opens the transcript-preview overlay on the Conversations screen
-	tour         tourModel                  // first-run interactive tour; re-openable with T
-	lastRefresh  time.Time
-	daemonOnline bool
+	helpOpen        bool
+	usageOpen       bool                       // `u` opens the full usage overlay; esc/u closes
+	convPreview     conversationPreviewOverlay // `p` opens the transcript-preview overlay on the Conversations screen
+	projectInfoOpen bool                       // `i` on Projects opens the per-project info overlay; esc/i closes
+	tour            tourModel                  // first-run interactive tour; re-openable with T
+	lastRefresh     time.Time
+	daemonOnline    bool
 
 	// Easter egg: pressing M (shift-M) opens the Matrix overlay.
 	// Consistent with T which reopens the tour.
@@ -190,7 +192,7 @@ func (a App) modalCapturingText() bool {
 	if a.sshWizard != nil && a.sshWizard.Active() {
 		return true
 	}
-	if a.tour.Active() || a.helpOpen || a.usageOpen || a.convPreview.IsOpen() {
+	if a.tour.Active() || a.helpOpen || a.usageOpen || a.convPreview.IsOpen() || a.projectInfoOpen {
 		return true
 	}
 	if a.projectsM.form != nil || a.projectsM.menu != nil {
@@ -271,6 +273,7 @@ func (a App) Init() tea.Cmd {
 		detectMoshiCmd(),
 		tickEvery(2 * time.Second),
 		usageTick(),
+		a.projectsM.Init(),
 	}
 	// Auto-update check: a one-shot background `git fetch` + behind-
 	// count when the user hasn't opted out. Fires once per launch —
@@ -995,6 +998,17 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 
+		// Project-info overlay — `i` or `esc` close it. Same
+		// passthrough model as usage/help: every other key is
+		// swallowed so the underlying list doesn't see them.
+		if a.projectInfoOpen {
+			switch msg.String() {
+			case "i", "esc":
+				a.projectInfoOpen = false
+			}
+			return a, nil
+		}
+
 		// Esc dismisses the current toast (when no modal is open). The
 		// projects-screen modal handles esc itself before this code runs.
 		if msg.String() == "esc" && a.toasts.Active() &&
@@ -1030,6 +1044,18 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if sel != nil {
 				a.convPreview.Open(*sel)
 				return a, a.loadConvPreviewCmd(*sel)
+			}
+			return a, nil
+		}
+
+		// `i` opens the per-project info overlay on the Projects
+		// screen. Modal-text guard mirrors `u`: a project name typed
+		// into the filter or the new-project form must not hijack
+		// the keystroke. No-op when no project is selected so a
+		// freshly-discovered-empty list doesn't open an empty modal.
+		if msg.String() == "i" && a.screen == ScreenProjects && !a.modalCapturingText() {
+			if a.projectsM.Selected() != nil {
+				a.projectInfoOpen = true
 			}
 			return a, nil
 		}
@@ -1149,6 +1175,15 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.screen = ScreenNetwork
 			return a, nil
 		case keyMatches(msg, a.keys.Refresh) && a.screen != ScreenAgents:
+			// Refresh fans out: sessions are always refreshed (most
+			// screens display them in some form via the dashboard or
+			// the chrome). On the Projects screen we ALSO re-run the
+			// project discovery, otherwise a project added/removed
+			// from disk while ccmux is open never appears until
+			// restart.
+			if a.screen == ScreenProjects {
+				return a, tea.Batch(a.refreshSessionsCmd(), a.refreshProjectsCmd())
+			}
 			return a, a.refreshSessionsCmd()
 		case keyMatches(msg, a.keys.Enter) && a.screen == ScreenSessions:
 			a2, cmd := a.attachSelectedSession()
@@ -1207,6 +1242,17 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// The Projects screen owns a spinner that ticks during the
+	// initial discovery. Its tick must keep ticking regardless of
+	// which screen is active, otherwise switching to Projects mid-
+	// scan shows a frozen spinner. We forward only the spinner tick
+	// up front so the per-screen routing below stays untouched.
+	if _, ok := msg.(spinner.TickMsg); ok {
+		var pcmd tea.Cmd
+		a.projectsM, pcmd = a.projectsM.Update(msg)
+		return a, pcmd
+	}
+
 	// Forward to the active screen.
 	var cmd tea.Cmd
 	switch a.screen {
@@ -1257,11 +1303,31 @@ func (a App) View() string {
 	statusBar := a.renderStatusBar()
 	helpLine := a.renderHelpLine()
 
+	// Bottom-right toast bubble. Rendered as a rounded-border Charm
+	// box (toasts.Render) and placed flush against the right edge
+	// directly above the status bar. The body shrinks by the bubble
+	// height while the toast is alive — columns stay anchored at
+	// the top so they don't visibly reflow when a toast appears.
+	// The existing 2s tick re-renders the frame so the toast
+	// disappears on its own when `until` passes.
+	//
+	// Suppressed on wide Conversations: that screen routes the same
+	// toast into its detail-pane banner (see body switch below for
+	// the SetBanner call), and we don't want to render it twice.
+	var toastRow string
+	toastH := 0
+	conversationsSideToast := a.toasts.Active() &&
+		a.screen == ScreenConversations && !isNarrow(a.width)
+	if a.toasts.Active() && !conversationsSideToast {
+		toastRow = lipgloss.PlaceHorizontal(a.width, lipgloss.Right, a.toasts.Render(a.styles))
+		toastH = lipgloss.Height(toastRow)
+	}
+
 	// Measure each chrome row's actual rendered height so we never
 	// budget too generously and let body content push the header off
 	// the top. lipgloss.Height counts \n's + 1 so it includes any
 	// invisible line breaks even if forceSingleLine didn't get them.
-	chromeH := lipgloss.Height(header) + lipgloss.Height(statusBar) + lipgloss.Height(helpLine)
+	chromeH := lipgloss.Height(header) + lipgloss.Height(statusBar) + lipgloss.Height(helpLine) + toastH
 	bodyHeight := a.height - chromeH
 	if bodyHeight < 5 {
 		bodyHeight = 5
@@ -1301,7 +1367,12 @@ func (a App) View() string {
 	body = clampLines(body, bodyHeight)
 	body = padToHeight(body, bodyHeight)
 
-	frame := lipgloss.JoinVertical(lipgloss.Left, header, body, statusBar, helpLine)
+	parts := []string{header, body}
+	if toastRow != "" {
+		parts = append(parts, toastRow)
+	}
+	parts = append(parts, statusBar, helpLine)
+	frame := lipgloss.JoinVertical(lipgloss.Left, parts...)
 	// Overlay precedence: tour > help > confirmation > regular frame.
 	if a.tour.Active() {
 		return a.tour.View(a.width, a.height)
@@ -1314,6 +1385,14 @@ func (a App) View() string {
 	}
 	if a.convPreview.IsOpen() {
 		return a.convPreview.View(a.styles, a.width, a.height)
+	}
+	if a.projectInfoOpen {
+		if sel := a.projectsM.Selected(); sel != nil {
+			return projectInfoOverlay{}.View(a.styles, *sel, a.sessions, a.width, a.height)
+		}
+		// Selection vanished between open and render (unlikely race);
+		// fall through to the base frame. The next keypress will see
+		// projectInfoOpen=true and close it via the "esc"/"i" handler.
 	}
 	if a.confirm.open() {
 		return a.renderConfirmationOverlay(a.width, a.height)
@@ -1540,19 +1619,12 @@ func (a App) renderStatusBar() string {
 	return forceSingleLine(line, a.width)
 }
 
-// renderHelpLine renders the screen's bottom help row. Toasts take
-// precedence — when a toast is active it fills the slot. Otherwise
-// the line is the migrated components.HelpBar driven by the current
-// screen's HelpBarProps (or a generic fallback for unmigrated
-// screens).
+// renderHelpLine renders the screen's bottom help row. The line is
+// the migrated components.HelpBar driven by the current screen's
+// HelpBarProps (or a generic fallback for unmigrated screens). The
+// toast no longer competes for this slot — it floats at the top-
+// right (see View's toastRow), so the keybinds are always visible.
 func (a App) renderHelpLine() string {
-	// Conversations wide layout opts out of the footer toast — the
-	// banner already appears at the top of the side pane.
-	conversationsSideToast := a.toasts.Active() &&
-		a.screen == ScreenConversations && !isNarrow(a.width)
-	if a.toasts.Active() && !conversationsSideToast {
-		return forceSingleLine(a.toasts.Render(a.styles), a.width)
-	}
 	return forceSingleLine(components.HelpBar(a.styles, a.helpBarProps()), a.width)
 }
 
@@ -1921,7 +1993,7 @@ func appendRemoteProjects(ctx context.Context, into []project.Project, addr, hos
 	for _, p := range infos {
 		into = append(into, project.Project{
 			Name: p.Name, Host: hostLabel, Path: p.Path,
-			HasGit: p.HasGit, HasCM: p.HasCM, HasDocs: p.HasDocs,
+			HasGit: p.HasGit, HasCM: p.HasCM, HasAgents: p.HasAgents, HasDocs: p.HasDocs,
 			Modified: p.Modified,
 		})
 	}

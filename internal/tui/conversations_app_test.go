@@ -422,32 +422,37 @@ func TestApp_Conversations_ToastRoutedToSidePane(t *testing.T) {
 	}
 }
 
-// TestApp_Conversations_NarrowKeepsFooterToast — narrow layout has no
-// detail pane, so the footer toast remains the only place a toast
-// can land. Regression guard against accidentally hiding the toast
-// when the side-pane route doesn't apply.
-func TestApp_Conversations_NarrowKeepsFooterToast(t *testing.T) {
+// TestApp_Conversations_NarrowSurfacesTopToast — narrow layout has no
+// detail pane, so the side-pane banner route doesn't apply. The toast
+// must still surface in the frame — now via the top-toast bubble
+// inserted between body and status bar (see app.View's toastRow).
+func TestApp_Conversations_NarrowSurfacesTopToast(t *testing.T) {
 	a := newAppForTest(t)
 	a.width, a.height = 80, 40 // narrow
 	a.screen = ScreenConversations
 	a.toasts.Set(toastSuccess, "killed claude-1", 3*time.Second)
-	helpLine := a.renderHelpLine()
-	if !strings.Contains(helpLine, "killed claude-1") {
-		t.Fatalf("narrow layout should keep the footer toast:\n%s", helpLine)
+	rendered := tea.Model(a).View()
+	if !strings.Contains(rendered, "killed claude-1") {
+		t.Fatalf("narrow layout should surface the toast in the frame:\n%s", rendered)
 	}
 }
 
-// TestApp_OtherScreens_ToastStaysInFooter — only the Conversations
-// screen routes toasts to the side pane. Other screens (Sessions,
-// Projects, etc.) keep the long-standing footer toast behaviour.
-func TestApp_OtherScreens_ToastStaysInFooter(t *testing.T) {
+// TestApp_OtherScreens_SurfacesTopToast — only the Conversations wide
+// layout routes toasts to the side pane. Every other screen surfaces
+// the toast in the new top-toast bubble (rendered by app.View, not
+// by renderHelpLine, so the HelpBar stays visible).
+func TestApp_OtherScreens_SurfacesTopToast(t *testing.T) {
 	a := newAppForTest(t)
 	a.width, a.height = 160, 40
 	a.screen = ScreenSessions
 	a.toasts.Set(toastSuccess, "config reloaded", 3*time.Second)
-	helpLine := a.renderHelpLine()
-	if !strings.Contains(helpLine, "config reloaded") {
-		t.Fatalf("non-Conversations screens should keep the footer toast:\n%s", helpLine)
+	rendered := tea.Model(a).View()
+	if !strings.Contains(rendered, "config reloaded") {
+		t.Fatalf("non-Conversations screens should surface the toast in the frame:\n%s", rendered)
+	}
+	// And the HelpBar still appears (top toast doesn't steal the bottom slot).
+	if !strings.Contains(rendered, "? help") {
+		t.Fatalf("HelpBar must stay visible even when a toast is active:\n%s", rendered)
 	}
 }
 

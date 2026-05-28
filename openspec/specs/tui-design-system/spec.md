@@ -1,8 +1,11 @@
 # tui-design-system Specification
 
 ## Purpose
+
 TBD - created by archiving change redesign-tui-charm. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Single token source of truth
 
 The TUI SHALL define every color, spacing value, border radius, typography role, and semantic style in `internal/tui/styles/` as named tokens. No TUI screen file outside `internal/tui/styles/` and `internal/tui/components/` MAY introduce a literal color value (e.g., `lipgloss.Color("#…")`, `lipgloss.Color("123")`), a literal spacing value passed to `.Padding(...)` / `.Margin(...)` / `.PaddingLeft(...)` / `.MarginRight(...)`, or a literal border definition. All such values MUST come from the tokens layer.
@@ -317,3 +320,77 @@ Codex SHALL read project cwd from either top-level `cwd` or `session_meta.payloa
 - **WHEN** Conversations loads Antigravity transcripts
 - **THEN** the Agy section contains a row with first-prompt preview, recent messages, and message count
 
+### Requirement: Agent-coloured Projects rows
+
+The Projects list SHALL render each project row's leading status glyph in the agent's colour from `Styles.AgentAccent(id)`. The colour mapping MUST be explicit (not hashed) so the legend rendered at the top of the pane and the per-row dots always agree on the same colour for the same agent. Host identity is preserved by the `on <host>` subheader and the detail-pane title.
+
+#### Scenario: Each known agent ID maps to a stable colour
+
+- **WHEN** the Projects list renders a project whose `Agent` is `"claude"`, `"codex"`, `"antigravity"`, or `"cursor"`
+- **THEN** the leading status glyph is rendered in the colour returned by `Styles.AgentAccent(agent)` and the colour is identical across renders of the same agent ID
+
+#### Scenario: Empty or unknown agent falls back to claude
+
+- **WHEN** the Projects list renders a project whose `Agent` is empty
+- **THEN** the leading status glyph is rendered in the same colour as `Styles.AgentAccent("claude")`, mirroring `project.ReadAgent`'s back-compat default
+
+### Requirement: Agent legend at the top of the list
+
+The Projects list SHALL render a one-line legend directly under the pane title enumerating every agent in `agent.All()` next to its `Styles.AgentAccent` glyph. The legend SHALL be omitted only when the list has no rows to render against.
+
+#### Scenario: Legend lists every shipped agent
+
+- **WHEN** the Projects list has one or more visible rows
+- **THEN** the rendered output contains the literal `"agents:"` token and each agent's ID (`claude`, `codex`, `antigravity`, `cursor`)
+
+### Requirement: Scaffolding flag chips
+
+The Projects list SHALL render each project row's scaffolding flags (`HasGit`, `HasCM`, `HasDocs`) as bracketed chips (e.g., `[git]`, `[CLAUDE]`, `[docs/]`) consistent with the design-system chip vocabulary established in PR #114. The selected row's chips SHALL render in the accent colour; off-row chips SHALL render in the muted colour.
+
+#### Scenario: Selected-row chips render in accent
+
+- **WHEN** the cursor is on a project whose `HasGit`, `HasCM`, and `HasDocs` are all true
+- **THEN** the row displays `[git] [CLAUDE] [docs/]` chips in the design-system accent foreground
+
+#### Scenario: Off-row chips render in muted
+
+- **WHEN** a project not under the cursor has scaffolding flags set
+- **THEN** the row displays the same chips in the design-system muted foreground
+
+### Requirement: Project-info modal
+
+The Projects screen SHALL bind the `i` key to open a focused overlay rendering the selected project's full metadata: absolute path, agent sidecar contents, recent session count, CLAUDE.md head (first 10 lines), and last-modified timestamp. The overlay SHALL close on `i` or `esc`. The overlay SHALL NOT render when no project is selected.
+
+#### Scenario: `i` opens the modal on a selected project
+
+- **WHEN** the user is on the Projects screen with a project selected and presses `i`
+- **THEN** the project-info overlay opens and renders the project's metadata; the keystroke is not passed through to the underlying list
+
+#### Scenario: `i` is a no-op when no project is selected
+
+- **WHEN** the Projects list is empty and the user presses `i`
+- **THEN** no overlay opens; the keystroke is consumed without changing state
+
+#### Scenario: Modal closes on `esc` or `i`
+
+- **WHEN** the project-info overlay is open and the user presses `esc` or `i`
+- **THEN** the overlay closes and the previous Projects view is restored
+
+### Requirement: Refresh re-discovers projects
+
+The `r` keybinding on the Projects screen SHALL re-run project discovery in addition to refreshing the session list. Without this, a project added or removed from disk while ccmux is running never appears (or remains stale) until restart.
+
+#### Scenario: r on Projects refreshes projects + sessions
+
+- **WHEN** the user presses `r` while the Projects screen is focused
+- **THEN** both `refreshSessionsCmd` and `refreshProjectsCmd` fire as a single `tea.Batch`
+
+### Requirement: Projects filter-state golden
+
+The Projects screen's golden coverage SHALL include the filter-active state in addition to the default state. The filter-active golden SHALL render at the same canonical width (120 columns) as the default golden.
+
+#### Scenario: Filter-active golden exists
+
+- **WHEN** the test suite runs
+- **THEN** `internal/tui/testdata/golden/projects_filter.txt` exists and passes against a fresh render of the Projects screen with `/` filter mode active
+  > > > > > > > f99cc52 (feat(tui): Projects-screen polish — agent-color dots, info overlay, top toast)

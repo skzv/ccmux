@@ -69,10 +69,14 @@ func TestInspect_AcceptsEveryDirAndSurfacesFlags(t *testing.T) {
 	// has-cm: only CLAUDE.md
 	writeFile(t, filepath.Join(root, "has-cm", "CLAUDE.md"), "# hi\n")
 
-	// has-both: .git + CLAUDE.md + docs/
-	mkdir(t, filepath.Join(root, "has-both", ".git"))
-	writeFile(t, filepath.Join(root, "has-both", "CLAUDE.md"), "# hi\n")
-	mkdir(t, filepath.Join(root, "has-both", "docs"))
+	// has-agents: only AGENTS.md (Codex / cross-agent convention).
+	writeFile(t, filepath.Join(root, "has-agents", "AGENTS.md"), "# agents\n")
+
+	// has-all: .git + CLAUDE.md + AGENTS.md + docs/
+	mkdir(t, filepath.Join(root, "has-all", ".git"))
+	writeFile(t, filepath.Join(root, "has-all", "CLAUDE.md"), "# hi\n")
+	writeFile(t, filepath.Join(root, "has-all", "AGENTS.md"), "# agents\n")
+	mkdir(t, filepath.Join(root, "has-all", "docs"))
 
 	// empty: no markers — still a project.
 	mkdir(t, filepath.Join(root, "empty"))
@@ -86,17 +90,18 @@ func TestInspect_AcceptsEveryDirAndSurfacesFlags(t *testing.T) {
 	writeFile(t, filepath.Join(root, "loose.txt"), "x")
 
 	cases := []struct {
-		path                      string
-		wantOK                    bool
-		wantGit, wantCM, wantDocs bool
+		path                                  string
+		wantOK                                bool
+		wantGit, wantCM, wantAgents, wantDocs bool
 	}{
-		{filepath.Join(root, "has-git"), true, true, false, false},
-		{filepath.Join(root, "has-cm"), true, false, true, false},
-		{filepath.Join(root, "has-both"), true, true, true, true},
-		{filepath.Join(root, "empty"), true, false, false, false},
-		{filepath.Join(root, "weird"), true, false, false, false},
-		{filepath.Join(root, "loose.txt"), false, false, false, false},
-		{filepath.Join(root, "missing"), false, false, false, false},
+		{filepath.Join(root, "has-git"), true, true, false, false, false},
+		{filepath.Join(root, "has-cm"), true, false, true, false, false},
+		{filepath.Join(root, "has-agents"), true, false, false, true, false},
+		{filepath.Join(root, "has-all"), true, true, true, true, true},
+		{filepath.Join(root, "empty"), true, false, false, false, false},
+		{filepath.Join(root, "weird"), true, false, false, false, false},
+		{filepath.Join(root, "loose.txt"), false, false, false, false, false},
+		{filepath.Join(root, "missing"), false, false, false, false, false},
 	}
 	for _, tc := range cases {
 		t.Run(filepath.Base(tc.path), func(t *testing.T) {
@@ -107,9 +112,10 @@ func TestInspect_AcceptsEveryDirAndSurfacesFlags(t *testing.T) {
 			if !ok {
 				return
 			}
-			if p.HasGit != tc.wantGit || p.HasCM != tc.wantCM || p.HasDocs != tc.wantDocs {
-				t.Errorf("flags: got git=%v cm=%v docs=%v, want git=%v cm=%v docs=%v",
-					p.HasGit, p.HasCM, p.HasDocs, tc.wantGit, tc.wantCM, tc.wantDocs)
+			if p.HasGit != tc.wantGit || p.HasCM != tc.wantCM || p.HasAgents != tc.wantAgents || p.HasDocs != tc.wantDocs {
+				t.Errorf("flags: got git=%v cm=%v agents=%v docs=%v, want git=%v cm=%v agents=%v docs=%v",
+					p.HasGit, p.HasCM, p.HasAgents, p.HasDocs,
+					tc.wantGit, tc.wantCM, tc.wantAgents, tc.wantDocs)
 			}
 			if p.Name != filepath.Base(tc.path) || p.Path != tc.path {
 				t.Errorf("Name/Path mismatch: %+v", p)

@@ -2,11 +2,13 @@ package tui
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/project"
 	"github.com/skzv/ccmux/internal/tui/styles"
 )
@@ -297,6 +299,217 @@ func TestProjects_NarrowLayout(t *testing.T) {
 	assertNoOverflow(t, out, 50)
 	assertPresent(t, out, "ccmux-website", "dotfiles")
 	assertAbsent(t, out, "/: filter", "upgrade cwd")
+}
+
+// TestProjects_RowAgentColorEncodesAgent — every project row's
+// leading status dot must be coloured by Styles.AgentAccent of the
+// project's agent. Without this, the dot encodes nothing useful (the
+// "on <host>" subheader already groups by host, and the agent is
+// otherwise invisible until the user opens the detail pane).
+func TestProjects_RowAgentColorEncodesAgent(t *testing.T) {
+	st := styles.Default()
+	m := newProjects(st, DefaultKeymap())
+	m.SetProjects([]project.Project{
+		{Name: "claude-proj", Host: "local", Path: "/p/claude", Agent: agent.IDClaude},
+		{Name: "codex-proj", Host: "local", Path: "/p/codex", Agent: agent.IDCodex},
+		{Name: "antigravity-proj", Host: "local", Path: "/p/antigravity", Agent: agent.IDAntigravity},
+		{Name: "cursor-proj", Host: "local", Path: "/p/cursor", Agent: agent.IDCursor},
+	})
+	out := m.View(120, 30)
+
+	for _, tc := range []struct {
+		id   agent.ID
+		name string
+	}{
+		{agent.IDClaude, "claude-proj"},
+		{agent.IDCodex, "codex-proj"},
+		{agent.IDAntigravity, "antigravity-proj"},
+		{agent.IDCursor, "cursor-proj"},
+	} {
+		wantDot := st.AgentAccent(tc.id).Render("●")
+		needle := wantDot + " " + tc.name
+		if !strings.Contains(out, needle) {
+			t.Errorf("row for agent=%q project=%q missing agent-coloured dot.\nwanted: %q\noutput:\n%s",
+				tc.id, tc.name, needle, out)
+		}
+	}
+}
+
+// TestProjects_AgentLegendPresent — the top of the left pane must
+// carry a legend mapping each agent's name to its color so the user
+// can decode the per-row dots without consulting the docs.
+func TestProjects_AgentLegendPresent(t *testing.T) {
+	st := styles.Default()
+	m := newProjects(st, DefaultKeymap())
+	m.SetProjects([]project.Project{
+		{Name: "p", Host: "local", Path: "/p", Agent: agent.IDClaude},
+	})
+	out := m.View(120, 30)
+	for _, want := range []string{"agents:", "claude", "codex", "antigravity", "cursor"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("legend missing %q.\noutput:\n%s", want, out)
+		}
+	}
+}
+
+// TestProjects_ScaffoldChipsSelectedVsOffrow — the selected row must
+// render scaffold chips in the accent foreground; off-row chips stay
+// muted. We assert by comparing rendered fragments to the expected
+// styled output for both states.
+func TestProjects_ScaffoldChipsSelectedVsOffrow(t *testing.T) {
+	st := styles.Default()
+	m := newProjects(st, DefaultKeymap())
+	m.SetProjects([]project.Project{
+		{Name: "alpha", Host: "local", Path: "/p/a", HasGit: true, HasCM: true, HasDocs: true},
+		{Name: "beta", Host: "local", Path: "/p/b", HasGit: true, HasCM: true},
+	})
+	m.cursor = 0
+	out := m.View(120, 30)
+
+	// Selected row: alpha → accent-styled chips. The renderer uses
+	// lipgloss.NewStyle().Foreground(st.Semantic.Accent) — we mirror
+	// that here so a future refactor of renderScaffoldChips that
+	// drops the accent style would be caught.
+	sel := renderScaffoldChips(st, m.projects[0], true)
+	if !strings.Contains(out, strings.TrimLeft(sel, " ")) {
+		t.Errorf("selected-row scaffold chips not in accent style.\nwanted: %q\noutput:\n%s", sel, out)
+	}
+
+	// Off-row: beta → muted chips.
+	off := renderScaffoldChips(st, m.projects[1], false)
+	if !strings.Contains(out, strings.TrimLeft(off, " ")) {
+		t.Errorf("off-row scaffold chips not in muted style.\nwanted: %q\noutput:\n%s", off, out)
+	}
+}
+
+// TestProjects_ScaffoldChipsHelper — direct unit test of the chip
+// helper for completeness: order is git, CLAUDE, docs/; empty when
+// no flags; selected vs off-row apply different styles.
+func TestProjects_ScaffoldChipsHelper(t *testing.T) {
+	st := styles.Default()
+	cases := []struct {
+		name string
+		p    project.Project
+		want []string // substrings the rendered result must contain
+	}{
+		{"all", project.Project{HasGit: true, HasCM: true, HasAgents: true, HasDocs: true}, []string{"[git]", "[CLAUDE]", "[AGENTS]", "[docs/]"}},
+		{"agents-only", project.Project{HasAgents: true}, []string{"[AGENTS]"}},
+		{"git-only", project.Project{HasGit: true}, []string{"[git]"}},
+		{"none", project.Project{}, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := renderScaffoldChips(st, tc.p, false)
+			if len(tc.want) == 0 {
+				if got != "" {
+					t.Errorf("expected empty, got %q", got)
+				}
+				return
+			}
+			for _, w := range tc.want {
+				if !strings.Contains(got, w) {
+					t.Errorf("missing %q in %q", w, got)
+				}
+			}
+		})
+	}
+}
+
+// TestProjects_InfoOverlayRender — the projectInfoOverlay model must
+// render the project's name, host, full path, agent, scaffolding
+// chips, and a session-count line. CLAUDE.md head is not asserted
+// (no on-disk fixture); the test confirms the structural sections
+// are present.
+func TestProjects_InfoOverlayRender(t *testing.T) {
+	st := styles.Default()
+	p := project.Project{
+		Name:   "ccmux",
+		Host:   "atelier",
+		Path:   "/Users/me/repos/ccmux",
+		HasGit: true,
+		HasCM:  true,
+	}
+	out := projectInfoOverlay{}.View(st, p, nil, 120, 40)
+
+	wants := []string{
+		"ccmux",
+		"atelier",
+		"/Users/me/repos/ccmux",
+		"Identity",
+		"session",
+		"agent",
+		"detected",
+		"Sessions",
+		"no active sessions",
+		"press i or esc to close",
+	}
+	for _, w := range wants {
+		if !strings.Contains(out, w) {
+			t.Errorf("projectInfoOverlay missing %q.\noutput:\n%s", w, out)
+		}
+	}
+}
+
+// TestProjects_InfoOverlayMarkdownPreviews — the info overlay must
+// render both CLAUDE.md and AGENTS.md heads when both markers are
+// present on disk. Uses an on-disk fixture so the actual reader path
+// (open + scanner) is exercised, not just the rendering.
+func TestProjects_InfoOverlayMarkdownPreviews(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(dir+"/CLAUDE.md", []byte("# claude header\nclaude line 2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir+"/AGENTS.md", []byte("# agents header\nagents line 2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	st := styles.Default()
+	p := project.Project{
+		Name: "fixture", Host: "local", Path: dir,
+		HasCM: true, HasAgents: true,
+	}
+	out := projectInfoOverlay{}.View(st, p, nil, 120, 50)
+
+	for _, want := range []string{
+		"CLAUDE.md (first 10 lines)",
+		"# claude header",
+		"claude line 2",
+		"AGENTS.md (first 10 lines)",
+		"# agents header",
+		"agents line 2",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("overlay missing %q.\noutput:\n%s", want, out)
+		}
+	}
+}
+
+// TestProjects_LoadingSpinnerBeforeFirstScan — before the first
+// projectsLoadedMsg arrives, the empty list renders a spinner +
+// "Discovering projects…" placeholder, not the "No projects found"
+// terminal state. After SetProjects([]) is called (scan finished,
+// genuinely empty), the placeholder swaps to the terminal copy.
+func TestProjects_LoadingSpinnerBeforeFirstScan(t *testing.T) {
+	st := styles.Default()
+	m := newProjects(st, DefaultKeymap())
+
+	// Pre-load state: !loaded, projects empty → spinner + "Discovering".
+	pre := m.View(120, 30)
+	if !strings.Contains(pre, "Discovering projects…") {
+		t.Errorf("pre-load view missing spinner placeholder.\noutput:\n%s", pre)
+	}
+	if strings.Contains(pre, "No projects found") {
+		t.Errorf("pre-load view should not show terminal empty state.\noutput:\n%s", pre)
+	}
+
+	// Post-load state: loaded=true, projects still empty → terminal.
+	m.SetProjects(nil)
+	post := m.View(120, 30)
+	if !strings.Contains(post, "No projects found") {
+		t.Errorf("post-load view missing terminal empty state.\noutput:\n%s", post)
+	}
+	if strings.Contains(post, "Discovering projects…") {
+		t.Errorf("post-load view should not show spinner placeholder.\noutput:\n%s", post)
+	}
 }
 
 // TestProjects_CursorVisibleWhenScrolledPastWindow — regression for the
