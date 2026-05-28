@@ -48,10 +48,10 @@ func FuzzParseID(f *testing.F) {
 		id, ok := ParseID(s)
 		if ok {
 			switch id {
-			case IDClaude, IDCodex, IDAntigravity, IDCursor:
+			case IDClaude, IDCodex, IDAntigravity, IDCursor, IDPi:
 				// canonical id — good
 			default:
-				t.Fatalf("ParseID(%q) returned ok=true but id=%q is not in {claude,codex,antigravity,cursor}", s, id)
+				t.Fatalf("ParseID(%q) returned ok=true but id=%q is not in {claude,codex,antigravity,cursor,pi}", s, id)
 			}
 		} else {
 			if id != "" {

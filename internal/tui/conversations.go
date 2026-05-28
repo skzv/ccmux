@@ -32,6 +32,7 @@ var conversationAgentSections = []conversationAgentSectionDef{
 	{Label: "Codex", Agent: agent.IDCodex},
 	{Label: "Cursor", Agent: agent.IDCursor},
 	{Label: "Agy", Agent: agent.IDAntigravity},
+	{Label: "Pi", Agent: agent.IDPi},
 }
 
 const conversationColumnGap = 3
@@ -640,6 +641,7 @@ func (m conversationsModel) renderLoading(width, height int) string {
 		agent.IDCodex:       "~/.codex/sessions",
 		agent.IDCursor:      "~/.cursor/projects",
 		agent.IDAntigravity: "~/.gemini",
+		agent.IDPi:          "~/.pi/agent/sessions",
 	}
 	var legend []string
 	for _, def := range conversationAgentSections {
@@ -787,6 +789,8 @@ func conversationAgentLabel(id agent.ID) string {
 		return "cursor"
 	case agent.IDAntigravity:
 		return "agy"
+	case agent.IDPi:
+		return "pi"
 	default:
 		return string(id)
 	}

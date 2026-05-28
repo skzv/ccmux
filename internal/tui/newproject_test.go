@@ -315,9 +315,10 @@ func TestNewProjectForm_PickerRowsDontConsumeTypedChars(t *testing.T) {
 }
 
 // TestNextAgent — the cycler used by the Projects-screen `a` key.
-// Going claude → codex → antigravity → cursor → claude must roundtrip through every
-// installed agent. The unknown-current case (someone hand-edits the
-// sidecar) defaults to the first registered agent rather than crashing.
+// Going claude → codex → antigravity → cursor → pi → claude must
+// roundtrip through every installed agent. The unknown-current case
+// (someone hand-edits the sidecar) defaults to the first registered
+// agent rather than crashing.
 func TestNextAgent(t *testing.T) {
 	cases := []struct {
 		from, to agent.ID
@@ -325,7 +326,8 @@ func TestNextAgent(t *testing.T) {
 		{agent.IDClaude, agent.IDCodex},
 		{agent.IDCodex, agent.IDAntigravity},
 		{agent.IDAntigravity, agent.IDCursor},
-		{agent.IDCursor, agent.IDClaude},
+		{agent.IDCursor, agent.IDPi},
+		{agent.IDPi, agent.IDClaude},
 		// Edge: empty / unknown values land on the first agent.
 		{"", agent.IDClaude},
 		{agent.ID("imaginary"), agent.IDClaude},

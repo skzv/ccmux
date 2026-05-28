@@ -289,6 +289,8 @@ func configuredAgentCommand(cfg config.Config, id agent.ID) string {
 		return strings.TrimSpace(cfg.Agents.Antigravity.Command)
 	case agent.IDCursor:
 		return strings.TrimSpace(cfg.Agents.Cursor.Command)
+	case agent.IDPi:
+		return strings.TrimSpace(cfg.Agents.Pi.Command)
 	default:
 		return ""
 	}
@@ -305,6 +307,8 @@ func setConfiguredAgentCommand(cfg *config.Config, id agent.ID, command string) 
 		cfg.Agents.Antigravity.Command = command
 	case agent.IDCursor:
 		cfg.Agents.Cursor.Command = command
+	case agent.IDPi:
+		cfg.Agents.Pi.Command = command
 	}
 }
 
@@ -323,6 +327,8 @@ func installHintFor(id agent.ID) string {
 		return "curl -fsSL https://antigravity.google/cli/install.sh | bash"
 	case agent.IDCursor:
 		return "curl https://cursor.com/install -fsS | bash"
+	case agent.IDPi:
+		return "curl -fsSL https://pi.dev/install.sh | sh"
 	}
 	return ""
 }
@@ -809,7 +815,7 @@ func defaultAgentChoices(ctx context.Context, cfg config.Config) []agent.ID {
 	}
 
 	choices := []agent.ID{agent.IDClaude}
-	for _, id := range []agent.ID{agent.IDCodex, agent.IDAntigravity, agent.IDCursor} {
+	for _, id := range []agent.ID{agent.IDCodex, agent.IDAntigravity, agent.IDCursor, agent.IDPi} {
 		if available[id] {
 			choices = append(choices, id)
 		}
@@ -827,6 +833,8 @@ func defaultAgentLabel(id agent.ID) string {
 		return "Antigravity CLI (Google)"
 	case agent.IDCursor:
 		return "Cursor"
+	case agent.IDPi:
+		return "Pi"
 	default:
 		return string(id)
 	}

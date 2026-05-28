@@ -382,6 +382,99 @@ func TestListCursor_ParsesAgentTranscriptJSONL(t *testing.T) {
 	}
 }
 
+// TestListPi_ParsesSessionJSONL pins pi's real on-disk format
+// (https://pi.dev/docs/latest/session-format): one JSONL file per
+// session under ~/.pi/agent/sessions/--<cwd>--/<ts>_<uuid>.jsonl,
+// where the first line is a `{"type":"session",…}` header carrying
+// the authoritative id + cwd, and `{"type":"message",…}` lines nest
+// role + content under `message`.
+func TestListPi_ParsesSessionJSONL(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".pi/agent/sessions/--Users-skz-Projects-foo--/20241203T140000_sess-uuid-1.jsonl")
+	// pi's real schema (bundled docs/session-format.md): `timestamp`
+	// is Unix milliseconds INSIDE the message object; content is a
+	// string or a block array; the session header carries id + cwd.
+	writeFile(t, path,
+		`{"type":"session","version":3,"id":"sess-uuid-1","timestamp":1748080800000,"cwd":"/Users/skz/Projects/foo"}`+"\n"+
+			`{"type":"message","id":"a1b2c3d4","parentId":null,"message":{"role":"user","content":"build pi support","timestamp":1748080801000}}`+"\n"+
+			`{"type":"message","id":"e5f6a7b8","parentId":"a1b2c3d4","message":{"role":"assistant","content":[{"type":"text","text":"on it"}],"timestamp":1748080860000}}`+"\n"+
+			`{"type":"compaction","id":"c9d0","timestamp":1748080920000}`+"\n",
+	)
+
+	got, err := ListPi(home)
+	if err != nil {
+		t.Fatalf("ListPi: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1", len(got))
+	}
+	c := got[0]
+	if c.ID != "sess-uuid-1" {
+		t.Errorf("ID = %q, want sess-uuid-1 (session-header id)", c.ID)
+	}
+	if c.Agent != agent.IDPi {
+		t.Errorf("Agent = %q, want pi", c.Agent)
+	}
+	if c.Project != "/Users/skz/Projects/foo" {
+		t.Errorf("Project = %q, want session-header cwd", c.Project)
+	}
+	if c.Preview != "build pi support" {
+		t.Errorf("Preview = %q, want first user text", c.Preview)
+	}
+	// compaction + session header must NOT count as turns.
+	n, err := CountMessages(c)
+	if err != nil {
+		t.Fatalf("CountMessages: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("CountMessages = %d, want 2 (user + assistant only)", n)
+	}
+	msgs, err := RecentMessages(c, 5)
+	if err != nil {
+		t.Fatalf("RecentMessages: %v", err)
+	}
+	if len(msgs) != 2 || msgs[0].Content != "build pi support" || msgs[1].Content != "on it" {
+		t.Errorf("RecentMessages = %+v, want pi user then assistant", msgs)
+	}
+}
+
+// TestListPi_FallsBackToFilenameWhenNoHeader — a session file missing
+// its header line (truncated write, older format) still yields a
+// usable row: ID from the filename's <uuid> segment, project decoded
+// from the --<cwd>-- directory name.
+func TestListPi_FallsBackToFilenameWhenNoHeader(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".pi/agent/sessions/--Users-skz-Projects-bar--/20241203T140000_fallback-uuid.jsonl")
+	writeFile(t, path,
+		`{"type":"message","timestamp":"2026-05-24T10:00:01Z","message":{"role":"user","content":"hi"}}`+"\n",
+	)
+	got, err := ListPi(home)
+	if err != nil {
+		t.Fatalf("ListPi: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1", len(got))
+	}
+	if got[0].ID != "fallback-uuid" {
+		t.Errorf("ID = %q, want fallback-uuid (filename uuid segment)", got[0].ID)
+	}
+	if got[0].Project != "/Users/skz/Projects/bar" {
+		t.Errorf("Project = %q, want dir-decoded /Users/skz/Projects/bar", got[0].Project)
+	}
+}
+
+// TestListPi_MissingTree — no ~/.pi at all is a clean empty result,
+// never an error (matches every other agent walker).
+func TestListPi_MissingTree(t *testing.T) {
+	got, err := ListPi(t.TempDir())
+	if err != nil {
+		t.Fatalf("ListPi on empty home: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("len = %d, want 0", len(got))
+	}
+}
+
 // TestListAntigravity_ListsPBFiles — Antigravity stores conversations
 // as opaque .pb files. We can't read them, but the filename is the
 // UUID and mtime is a useful surrogate for "last activity." The
