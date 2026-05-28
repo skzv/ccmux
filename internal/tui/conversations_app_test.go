@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/conversations"
 	"github.com/skzv/ccmux/internal/project"
@@ -52,13 +54,44 @@ func TestApp_KeyConversations_SwitchesScreen(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("entering Conversations produced no refresh cmd")
 	}
-	// The cmd should fire and produce a conversationsLoadedMsg
-	// regardless of whether there are real transcripts on this
-	// machine — we don't assert success, just shape.
-	msg := cmd()
-	if _, ok := msg.(conversationsLoadedMsg); !ok {
-		t.Errorf("refresh cmd produced %T, want conversationsLoadedMsg", msg)
+	// The cmd batches the walker refresh + the spinner tick. Resolve
+	// the batch and confirm one of the produced msgs is the walker
+	// result (shape only — the result depends on what's on disk).
+	if !cmdEmitsMsgKind(cmd, func(m tea.Msg) bool {
+		_, ok := m.(conversationsLoadedMsg)
+		return ok
+	}) {
+		t.Errorf("refresh cmd batch did not emit a conversationsLoadedMsg")
 	}
+}
+
+// cmdEmitsMsgKind drains a tea.Cmd (which may be a Batch / Sequence)
+// and returns true if any of the emitted msgs satisfies `match`. Used
+// by tests that have to introspect a batched cmd without caring about
+// the order of its constituents.
+func cmdEmitsMsgKind(cmd tea.Cmd, match func(tea.Msg) bool) bool {
+	if cmd == nil {
+		return false
+	}
+	var stack []tea.Msg
+	stack = append(stack, cmd())
+	for len(stack) > 0 {
+		head := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if batch, ok := head.(tea.BatchMsg); ok {
+			for _, c := range batch {
+				if c == nil {
+					continue
+				}
+				stack = append(stack, c())
+			}
+			continue
+		}
+		if match(head) {
+			return true
+		}
+	}
+	return false
 }
 
 // TestApp_OpenConversationsForProjectMsg_AppliesFilter — the
@@ -215,6 +248,206 @@ func TestApp_ConversationDeletedMsg_RefreshesOnSuccess(t *testing.T) {
 	}
 	if cmd == nil {
 		t.Fatal("successful delete produced no refresh cmd")
+	}
+}
+
+// TestApp_KeyP_OpensPreviewOverlay — pressing `p` on the Conversations
+// screen with a row selected must arm the convPreview overlay and fire
+// the load command so the messages stream in. Other screens leave the
+// overlay closed and consume `p` for nothing.
+func TestApp_KeyP_OpensPreviewOverlay(t *testing.T) {
+	a := newAppForTest(t)
+	a.screen = ScreenConversations
+	a.conversationsM.SetList([]conversations.Conversation{
+		{
+			ID:           "claude-1",
+			Agent:        agent.IDClaude,
+			Project:      "/p",
+			LastActivity: time.Now(),
+			Preview:      "hello",
+		},
+	})
+
+	m, cmd := a.Update(keyMsg("p"))
+	a2 := m.(App)
+	if !a2.convPreview.IsOpen() {
+		t.Fatal("p on Conversations should open the preview overlay")
+	}
+	if a2.convPreview.Conversation().ID != "claude-1" {
+		t.Errorf("overlay targeted %q, want claude-1", a2.convPreview.Conversation().ID)
+	}
+	if cmd == nil {
+		t.Fatal("p should fire a load command")
+	}
+	loaded, ok := cmd().(conversationPreviewLoadedMsg)
+	if !ok {
+		t.Fatalf("load cmd produced %T, want conversationPreviewLoadedMsg", cmd())
+	}
+	if loaded.ID != "claude-1" {
+		t.Errorf("loaded.ID = %q, want claude-1", loaded.ID)
+	}
+}
+
+// TestApp_KeyP_NoSelectionIsNoop — `p` with an empty Conversations
+// list does not open the overlay (nothing to preview) and does not
+// crash dereferencing a nil selection.
+func TestApp_KeyP_NoSelectionIsNoop(t *testing.T) {
+	a := newAppForTest(t)
+	a.screen = ScreenConversations
+	// Empty list — Selected() returns nil.
+	m, _ := a.Update(keyMsg("p"))
+	a2 := m.(App)
+	if a2.convPreview.IsOpen() {
+		t.Fatal("p with no selection should NOT open the overlay")
+	}
+}
+
+// TestApp_KeyP_OnNonConversationsScreen_NoOp — `p` outside the
+// Conversations screen must not open the overlay. The Sessions screen
+// already uses other letters; reserving `p` only on Conversations
+// avoids collisions.
+func TestApp_KeyP_OnNonConversationsScreen_NoOp(t *testing.T) {
+	a := newAppForTest(t)
+	a.screen = ScreenSessions
+	m, _ := a.Update(keyMsg("p"))
+	a2 := m.(App)
+	if a2.convPreview.IsOpen() {
+		t.Fatal("p on a non-Conversations screen should NOT open the overlay")
+	}
+}
+
+// TestApp_KeyP_TogglesClose — once the overlay is open, the same `p`
+// keystroke closes it. Mirrors the `u` usage-overlay behaviour so the
+// keystroke is a toggle, not a one-way trip.
+func TestApp_KeyP_TogglesClose(t *testing.T) {
+	a := newAppForTest(t)
+	a.screen = ScreenConversations
+	a.conversationsM.SetList([]conversations.Conversation{
+		{ID: "claude-1", Agent: agent.IDClaude, Project: "/p", LastActivity: time.Now()},
+	})
+	m, _ := a.Update(keyMsg("p"))
+	a = m.(App)
+	if !a.convPreview.IsOpen() {
+		t.Fatal("precondition: overlay should be open")
+	}
+	m, _ = a.Update(keyMsg("p"))
+	a2 := m.(App)
+	if a2.convPreview.IsOpen() {
+		t.Fatal("second p should close the overlay")
+	}
+}
+
+// TestApp_KeyEsc_ClosesPreviewOverlay — esc is the universal "back
+// out" gesture; the preview overlay honours it just like the usage and
+// help overlays do.
+func TestApp_KeyEsc_ClosesPreviewOverlay(t *testing.T) {
+	a := newAppForTest(t)
+	a.screen = ScreenConversations
+	a.conversationsM.SetList([]conversations.Conversation{
+		{ID: "claude-1", Agent: agent.IDClaude, Project: "/p", LastActivity: time.Now()},
+	})
+	m, _ := a.Update(keyMsg("p"))
+	a = m.(App)
+	if !a.convPreview.IsOpen() {
+		t.Fatal("precondition: overlay should be open")
+	}
+	m, _ = a.Update(keyMsg("esc"))
+	a2 := m.(App)
+	if a2.convPreview.IsOpen() {
+		t.Fatal("esc should close the overlay")
+	}
+}
+
+// TestApp_PreviewLoadedMsg_PopulatesOverlay — the load command's
+// result lands in App.Update and the messages slide into the overlay
+// state so the View can render them.
+func TestApp_PreviewLoadedMsg_PopulatesOverlay(t *testing.T) {
+	a := newAppForTest(t)
+	a.convPreview.Open(conversations.Conversation{ID: "claude-1", Agent: agent.IDClaude})
+
+	msgs := []conversations.Message{
+		{Role: "user", Content: "hello"},
+		{Role: "assistant", Content: "hi"},
+	}
+	m, _ := a.Update(conversationPreviewLoadedMsg{ID: "claude-1", Messages: msgs})
+	a2 := m.(App)
+	view := a2.convPreview.View(styles.Default(), 120, 40)
+	if !strings.Contains(view, "hello") || !strings.Contains(view, "hi") {
+		t.Fatalf("overlay view should render the loaded messages:\n%s", view)
+	}
+}
+
+// TestApp_PreviewLoadedMsg_StaleIgnored — if the user closes the
+// overlay (or opens it against a different conversation) between Open
+// and the load returning, the late message must not bleed into the
+// next preview.
+func TestApp_PreviewLoadedMsg_StaleIgnored(t *testing.T) {
+	a := newAppForTest(t)
+	a.convPreview.Open(conversations.Conversation{ID: "claude-1", Agent: agent.IDClaude})
+	a.convPreview.Close()
+
+	m, _ := a.Update(conversationPreviewLoadedMsg{
+		ID:       "claude-1",
+		Messages: []conversations.Message{{Role: "user", Content: "hello"}},
+	})
+	a2 := m.(App)
+	if a2.convPreview.IsOpen() {
+		t.Fatal("late load must not re-open a closed overlay")
+	}
+}
+
+// TestApp_Conversations_ToastRoutedToSidePane — on the Conversations
+// screen in wide layout, an active toast must land in the detail pane
+// (via conversationsM.banner) instead of the screen footer. The
+// renderHelpLine path skips the toast in that case so we don't show it
+// twice.
+func TestApp_Conversations_ToastRoutedToSidePane(t *testing.T) {
+	a := newAppForTest(t)
+	a.width, a.height = 160, 40
+	a.screen = ScreenConversations
+	a.conversationsM.SetList([]conversations.Conversation{
+		{ID: "claude-1", Agent: agent.IDClaude, Project: "/p", LastActivity: time.Now()},
+	})
+	a.toasts.Set(toastSuccess, "killed claude-1", 3*time.Second)
+
+	// Render the body — App should push the banner into conversationsM.
+	rendered := tea.Model(a).View()
+	if !strings.Contains(rendered, "killed claude-1") {
+		t.Fatalf("expected toast text to surface somewhere on Conversations:\n%s", rendered)
+	}
+	// And the footer should NOT also carry the toast (would be a dupe).
+	helpLine := a.renderHelpLine()
+	if strings.Contains(helpLine, "killed claude-1") {
+		t.Fatalf("footer should suppress the toast when it lands in the side pane:\n%s", helpLine)
+	}
+}
+
+// TestApp_Conversations_NarrowKeepsFooterToast — narrow layout has no
+// detail pane, so the footer toast remains the only place a toast
+// can land. Regression guard against accidentally hiding the toast
+// when the side-pane route doesn't apply.
+func TestApp_Conversations_NarrowKeepsFooterToast(t *testing.T) {
+	a := newAppForTest(t)
+	a.width, a.height = 80, 40 // narrow
+	a.screen = ScreenConversations
+	a.toasts.Set(toastSuccess, "killed claude-1", 3*time.Second)
+	helpLine := a.renderHelpLine()
+	if !strings.Contains(helpLine, "killed claude-1") {
+		t.Fatalf("narrow layout should keep the footer toast:\n%s", helpLine)
+	}
+}
+
+// TestApp_OtherScreens_ToastStaysInFooter — only the Conversations
+// screen routes toasts to the side pane. Other screens (Sessions,
+// Projects, etc.) keep the long-standing footer toast behaviour.
+func TestApp_OtherScreens_ToastStaysInFooter(t *testing.T) {
+	a := newAppForTest(t)
+	a.width, a.height = 160, 40
+	a.screen = ScreenSessions
+	a.toasts.Set(toastSuccess, "config reloaded", 3*time.Second)
+	helpLine := a.renderHelpLine()
+	if !strings.Contains(helpLine, "config reloaded") {
+		t.Fatalf("non-Conversations screens should keep the footer toast:\n%s", helpLine)
 	}
 }
 

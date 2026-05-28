@@ -379,7 +379,7 @@ func (m dashboardModel) usagePanel(width int) string {
 	// claudeusage walks Claude's transcripts). Codex and Antigravity
 	// don't have an equivalent so they stay as flat peer sections.
 	if m.usage != nil {
-		rows = append(rows, " "+agentSectionHeading(st, agentClaude, "Claude · 5h window"))
+		rows = append(rows, " "+agentSectionHeading(st, agent.IDClaude, "Claude · 5h window"))
 		rows = append(rows, m.renderClaudeWindowSection()...)
 		if m.ccusage != nil {
 			rows = append(rows, "")
@@ -399,10 +399,10 @@ func (m dashboardModel) usagePanel(width int) string {
 		rows = append(rows, "")
 	}
 
-	rows = append(rows, " "+agentSectionHeading(st, agentCodex, "Codex · recent"))
+	rows = append(rows, " "+agentSectionHeading(st, agent.IDCodex, "Codex · recent"))
 	rows = append(rows, m.renderOtherAgentSection(m.codexUsage)...)
 	rows = append(rows, "")
-	rows = append(rows, " "+agentSectionHeading(st, agentAntigravity, "Antigravity · recent"))
+	rows = append(rows, " "+agentSectionHeading(st, agent.IDAntigravity, "Antigravity · recent"))
 	rows = append(rows, m.renderOtherAgentSection(m.antigravityUsage)...)
 	rows = append(rows, "")
 	rows = append(rows, " "+st.Muted.Render("press ")+st.Key.Render("u")+
@@ -411,34 +411,13 @@ func (m dashboardModel) usagePanel(width int) string {
 	return st.Pane.Width(width - 2).MaxWidth(width).Render(strings.Join(rows, "\n"))
 }
 
-// agentID is the small enum the dashboard uses to pick a section
-// accent color for Claude / Codex / Antigravity headings. Lives
-// here (rather than internal/agent) because it's purely about how
-// the Usage panel colors its sub-section labels.
-type agentID int
-
-const (
-	agentClaude agentID = iota
-	agentCodex
-	agentAntigravity
-)
-
 // agentSectionHeading renders the per-agent sub-section title in
-// the agent's accent color (Claude=mauve, Codex=sky, Antigravity=
-// peach). The "non-Claude" agents are sometimes empty; coloring
-// the heading even in that case keeps the visual cadence consistent
-// across the panel.
-func agentSectionHeading(st styles.Styles, id agentID, text string) string {
-	var color lipgloss.Color
-	switch id {
-	case agentCodex:
-		color = st.P.Sky
-	case agentAntigravity:
-		color = st.P.Peach
-	default:
-		color = st.P.Mauve
-	}
-	return lipgloss.NewStyle().Foreground(color).Bold(true).Render(text)
+// the agent's accent color. The colour mapping lives on
+// styles.Styles.AgentAccent as the design-system single source of
+// truth (Claude=mauve, Codex=sky, Antigravity=peach, Cursor=teal);
+// the dashboard adds Bold for the heading treatment.
+func agentSectionHeading(st styles.Styles, id agent.ID, text string) string {
+	return st.AgentAccent(id).Bold(true).Render(text)
 }
 
 // renderClaudeWindowSection produces the indented body rows of the
@@ -658,12 +637,12 @@ func (m dashboardModel) renderUsageOverlay(st styles.Styles, width, height int) 
 	// Per-agent.
 	lines = append(lines, st.Subtitle.Render("Other agents"))
 	for _, ag := range []struct {
-		id   agentID
+		id   agent.ID
 		name string
 		s    usage.AgentSummary
 	}{
-		{agentCodex, "Codex", m.codexUsage},
-		{agentAntigravity, "Antigravity", m.antigravityUsage},
+		{agent.IDCodex, "Codex", m.codexUsage},
+		{agent.IDAntigravity, "Antigravity", m.antigravityUsage},
 	} {
 		heading := agentSectionHeading(st, ag.id, "  "+ag.name)
 		if !ag.s.HasData {

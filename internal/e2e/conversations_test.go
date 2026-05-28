@@ -138,11 +138,11 @@ func TestTUIFlow_ConversationsGroupedByAgent(t *testing.T) {
 
 	d.Send(KeyTab)
 	d.WaitForTimeout("codex grouped prompt", 8*time.Second)
-	d.WaitForTimeout(codexID, 8*time.Second)
+	d.WaitForTimeout("codex-proj", 8*time.Second)
 	d.Send(KeyTab)
 	d.WaitForTimeout("No conversations for Cursor.", 8*time.Second)
 	d.Send(KeyTab)
-	d.WaitForTimeout("[agy]", 8*time.Second)
+	d.WaitForTimeout("agy", 8*time.Second)
 	d.Quit()
 }
 

@@ -334,6 +334,27 @@ type conversationsLoadedMsg struct {
 	Err  error
 }
 
+// conversationStatsLoadedMsg carries the lazy message-count result
+// that backs the detail pane's "messages N" row. Fired by a Cmd the
+// conversations screen kicks off when the cursor lands on a row whose
+// count isn't cached yet. ID lets the handler reject stale results.
+type conversationStatsLoadedMsg struct {
+	ID    string
+	Count int
+	Err   error
+}
+
+// conversationPreviewLoadedMsg carries the recent-messages slice that
+// backs the `p` transcript-preview overlay. The App pushes the result
+// into a.convPreview via SetMessages / SetLoadErr; ID lets the handler
+// reject a late result if the user has already closed the overlay or
+// armed it against a different conversation.
+type conversationPreviewLoadedMsg struct {
+	ID       string
+	Messages []conversations.Message
+	Err      error
+}
+
 // openConversationsForProjectMsg is the Projects-screen → App
 // trigger for the per-project drill-down: pressing `c` on a project
 // row emits this with the project's path, App switches to

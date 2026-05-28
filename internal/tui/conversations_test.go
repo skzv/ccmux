@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
+
 	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/conversations"
 	"github.com/skzv/ccmux/internal/tui/components"
@@ -402,13 +404,49 @@ func TestConversationsModel_Selected_EmptyList(t *testing.T) {
 
 // TestConversationsModel_View_LoadingPlaceholder — while a refresh is
 // in flight, the user shouldn't see an empty list and assume "no
-// conversations exist." A "Loading…" placeholder must surface.
+// conversations exist." A centered "Scanning transcripts" panel
+// surfaces, anchored by the bubbles/spinner bar frame and a legend
+// of every agent root the walker is touching.
 func TestConversationsModel_View_LoadingPlaceholder(t *testing.T) {
 	m := newConversations(styles.Default(), DefaultKeymap())
 	m.SetLoading(true)
 	out := m.View(120, 40)
-	if !strings.Contains(out, "Loading") {
-		t.Errorf("loading view should mention Loading, got:\n%s", out)
+	if !strings.Contains(out, "Scanning transcripts") {
+		t.Errorf("loading view should show 'Scanning transcripts', got:\n%s", out)
+	}
+	for _, agentLabel := range []string{"claude", "codex", "cursor", "agy"} {
+		if !strings.Contains(out, agentLabel) {
+			t.Errorf("loading legend missing %q line, got:\n%s", agentLabel, out)
+		}
+	}
+	spinnerFrame := strings.TrimSpace(m.spinner.View())
+	if spinnerFrame == "" {
+		t.Fatalf("spinner.View() produced no frame to assert on")
+	}
+	if !strings.Contains(out, spinnerFrame) {
+		t.Errorf("loading view should render the bubbles spinner frame %q, got:\n%s", spinnerFrame, out)
+	}
+}
+
+// TestConversationsModel_View_SpinnerReplacedByContent — once data
+// arrives (SetList lands), the loading panel must give way to the
+// conversation rows. A spinner that lingers after load completes
+// would suggest a stuck scan that isn't happening.
+func TestConversationsModel_View_SpinnerReplacedByContent(t *testing.T) {
+	m := newConversations(styles.Default(), DefaultKeymap())
+	m.SetLoading(true)
+	loadingOut := m.View(120, 40)
+	if !strings.Contains(loadingOut, "Scanning transcripts") {
+		t.Fatalf("precondition: loading view should show the scan panel, got:\n%s", loadingOut)
+	}
+
+	m.SetList(fakeConversations())
+	loadedOut := m.View(120, 40)
+	if strings.Contains(loadedOut, "Scanning transcripts") {
+		t.Errorf("post-load view should NOT carry the scan panel, got:\n%s", loadedOut)
+	}
+	if !strings.Contains(loadedOut, "claude") {
+		t.Errorf("post-load view should render the conversation rows, got:\n%s", loadedOut)
 	}
 }
 
@@ -565,41 +603,149 @@ func TestConversationsModel_DeleteEmptyList_NoOp(t *testing.T) {
 	}
 }
 
+// TestConversationsModel_View_AgentAccentColoursRowLabel — every
+// agent's row label column must render in that agent's accent colour
+// (Claude=mauve, Codex=sky, Antigravity=peach, Cursor=teal) sourced
+// from the design-system helper. The colour distinguishes which agent
+// owns a row at a glance, without changing the rest of the row.
+//
+// The assertion compares the rendered substring for the agent label
+// against an independently-rendered probe from the same helper, so
+// the test stays correct regardless of the active color profile.
+func TestConversationsModel_View_AgentAccentColoursRowLabel(t *testing.T) {
+	s := styles.Default()
+	cases := []struct {
+		name  string
+		id    agent.ID
+		label string
+	}{
+		{"claude", agent.IDClaude, "claude"},
+		{"codex", agent.IDCodex, "codex"},
+		{"cursor", agent.IDCursor, "cursor"},
+		{"antigravity", agent.IDAntigravity, "agy"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newConversations(s, DefaultKeymap())
+			m.SetList([]conversations.Conversation{
+				{
+					ID:           "row-1",
+					Agent:        tc.id,
+					Project:      "/p",
+					LastActivity: time.Now(),
+					Preview:      "row preview",
+				},
+			})
+			setFocusedConversationSection(t, &m, tc.id)
+			row := m.renderConversationRowContent(m.list[0], 120)
+			want := s.AgentAccent(tc.id).Render(tc.label)
+			if !strings.Contains(row, want) {
+				t.Fatalf("row label for %s missing the agent accent treatment\nwant substring: %q\ngot row: %q", tc.id, want, row)
+			}
+			// And confirm the muted style is NOT the one used for the
+			// label — that's the regression we'd hit if a refactor
+			// silently reverted to st.Muted.Render(agentLabel).
+			mutedProbe := s.Muted.Render(tc.label)
+			if mutedProbe != want && strings.Contains(row, mutedProbe) {
+				t.Fatalf("row label for %s rendered with the muted style:\n%s", tc.id, row)
+			}
+		})
+	}
+}
+
+// TestConversationsModel_View_AgentAccentColoursActiveSection — the
+// active section heading in the agent nav row must wear the same
+// accent colour as the matching agent's row labels, so the user can
+// confirm at a glance which agent's conversations they are looking at.
+func TestConversationsModel_View_AgentAccentColoursActiveSection(t *testing.T) {
+	s := styles.Default()
+	m := newConversations(s, DefaultKeymap())
+	m.SetList(fakeConversations())
+	setFocusedConversationSection(t, &m, agent.IDCodex)
+	nav := m.renderAgentNav(m.sections())
+	want := s.AgentAccent(agent.IDCodex).Bold(true).Render("▸ Codex 1")
+	if !strings.Contains(nav, want) {
+		t.Fatalf("active Codex heading missing accent treatment\nwant substring: %q\ngot nav: %q", want, nav)
+	}
+}
+
 // TestConversationsModel_View_ArmedRowShowsConfirm — the armed row
 // must render a visible confirm prompt so the user knows x-again
 // deletes. A silent armed state would make the second x a surprise.
+// The prompt is a bracketed chip at the row's trailing edge so the
+// agent label + timestamp + a truncated preview stay visible on the
+// same row.
 func TestConversationsModel_View_ArmedRowShowsConfirm(t *testing.T) {
 	m := newConversations(styles.Default(), DefaultKeymap())
 	m.SetList(fakeConversations())
 	m, _ = m.Update(keyMsg("x")) // arm row 0
 
 	out := m.View(120, 40)
-	if !strings.Contains(out, "press x to confirm") {
-		t.Errorf("armed row should show a confirm prompt:\n%s", out)
+	if !strings.Contains(out, "[delete? x to confirm · esc]") {
+		t.Errorf("armed row should render the bracketed delete-confirm chip:\n%s", out)
 	}
 }
 
-// TestConversations_UsesSharedBreakpoint — the screen now branches on
-// the shared isNarrow (width < 120), not its old derived detail-pane
-// width. Narrow drops the detail pane; wide keeps it. The "ID  …"
-// row only appears in the detail pane, so its presence is a stable
-// proxy for "wide layout with detail pane rendered."
+// TestConversationsModel_View_ArmedRowKeepsIdentityVisible — the chip
+// replaces the row's tail, NOT its identifying columns. The agent
+// label, timestamp, and a truncated preview must all stay readable
+// alongside the chip so the user can confirm they're targeting the
+// right conversation.
+func TestConversationsModel_View_ArmedRowKeepsIdentityVisible(t *testing.T) {
+	m := newConversations(styles.Default(), DefaultKeymap())
+	m.SetList(fakeConversations())
+	m, _ = m.Update(keyMsg("x")) // arm the Claude row
+
+	out := m.View(160, 40) // wide enough to keep preview alongside the chip
+	if !strings.Contains(out, "claude") {
+		t.Errorf("armed-row layout dropped the agent label:\n%s", out)
+	}
+	if !strings.Contains(out, "rebuild login with passkeys") {
+		t.Errorf("armed-row layout dropped the preview (truncated form expected):\n%s", out)
+	}
+	if !strings.Contains(out, "[delete? x to confirm · esc]") {
+		t.Errorf("armed-row layout missing the chip:\n%s", out)
+	}
+}
+
+// TestConversations_UsesSharedBreakpoint — the screen branches on the
+// shared isNarrow (width < 120). Narrow drops the detail pane; wide
+// keeps it. The detail pane's "last active" field is the marker — it
+// only appears in the detail pane, so its presence is a stable proxy
+// for "wide layout with detail pane rendered."
 func TestConversations_UsesSharedBreakpoint(t *testing.T) {
 	m := newConversations(styles.Default(), DefaultKeymap())
 	m.SetList(fakeConversations())
-	const detailMarker = "ID"
+	const detailMarker = "last active"
 	narrow := m.View(119, 40)
 	wide := m.View(120, 40)
-	// Both layouts contain rows with the agent labels and so on; the
-	// detail-pane's "ID         <id>" row is the unique marker.
-	narrowHasDetail := strings.Contains(narrow, "ID         ")
-	wideHasDetail := strings.Contains(wide, "ID         ")
+	narrowHasDetail := strings.Contains(narrow, detailMarker)
+	wideHasDetail := strings.Contains(wide, detailMarker)
 	if narrowHasDetail {
-		t.Errorf("width 119 should render the narrow layout (no %s row from detail pane):\n%s", detailMarker, narrow)
+		t.Errorf("width 119 should render the narrow layout (no %q row from detail pane):\n%s", detailMarker, narrow)
 	}
 	if !wideHasDetail {
-		t.Errorf("width 120 should render the wide layout (with detail pane %s row):\n%s", detailMarker, wide)
+		t.Errorf("width 120 should render the wide layout (with detail pane %q row):\n%s", detailMarker, wide)
 	}
+}
+
+func TestConversations_WideLayoutFramesColumnsWithGutter(t *testing.T) {
+	m := newConversations(styles.Default(), DefaultKeymap())
+	m.SetList(fakeConversations())
+
+	out := m.View(140, 40)
+	if !strings.Contains(out, "╮   ╭") {
+		t.Fatalf("wide layout should render framed columns with a 3-cell gutter:\n%s", out)
+	}
+	topLine := strings.Split(stripANSI(out), "\n")[0]
+	parts := strings.SplitN(topLine, strings.Repeat(" ", conversationColumnGap), 2)
+	if len(parts) != 2 {
+		t.Fatalf("wide layout top border missing gutter split: %q", topLine)
+	}
+	if got, wantMin := lipgloss.Width(parts[1]), 70; got < wantMin {
+		t.Fatalf("detail pane width = %d, want at least %d cells:\n%s", got, wantMin, out)
+	}
+	assertNoOverflow(t, out, 140)
 }
 
 // TestConversations_NarrowLayout — at phone width the conversation
@@ -611,11 +757,28 @@ func TestConversations_NarrowLayout(t *testing.T) {
 	m, _ = m.Update(keyMsg("tab"))
 	out := m.View(50, 40)
 	assertNoOverflow(t, out, 50)
-	if !strings.Contains(out, "[codex]") {
+	if !strings.Contains(out, "codex") {
 		t.Errorf("narrow conversations dropped the conversation rows:\n%s", out)
 	}
 	if strings.Contains(out, "enter resume") {
 		t.Errorf("narrow conversations still shows the inline hint (T2):\n%s", out)
+	}
+}
+
+func TestConversationsModel_RowColumnsAreCompactAndUnbracketed(t *testing.T) {
+	m := newConversations(styles.Default(), DefaultKeymap())
+	row := stripANSI(m.renderConversationRowContent(conversations.Conversation{
+		ID:           "row-1",
+		Agent:        agent.IDCodex,
+		Project:      "/p",
+		LastActivity: time.Now(),
+		Preview:      "compact prompt",
+	}, 80))
+	if strings.Contains(row, "[codex]") {
+		t.Fatalf("row should render bare agent names, got %q", row)
+	}
+	if !strings.Contains(row, "codex  now  compact prompt") {
+		t.Fatalf("row columns are not compact enough, got %q", row)
 	}
 }
 
@@ -711,6 +874,256 @@ func findHint(hints []components.KeyHint, key string) *components.KeyHint {
 		}
 	}
 	return nil
+}
+
+// TestConversationsModel_View_DetailDropsAgentUUID — the compressed
+// detail pane shows the agent's accent name + project path, but the
+// agent's UUID (c.ID) is debugging-only and must NOT bleed into the
+// pane. A regression that re-added the ID would clutter the side
+// section and make it harder to scan.
+func TestConversationsModel_View_DetailDropsAgentUUID(t *testing.T) {
+	prev := homeDirForDisplay
+	homeDirForDisplay = func() string { return "/home/user" }
+	t.Cleanup(func() { homeDirForDisplay = prev })
+
+	m := newConversations(styles.Default(), DefaultKeymap())
+	m.SetList([]conversations.Conversation{
+		{
+			ID:           "uuid-that-must-not-render",
+			Agent:        agent.IDClaude,
+			Project:      "/home/user/Projects/auth-redesign",
+			LastActivity: time.Now(),
+			Preview:      "rebuild login",
+		},
+	})
+
+	out := m.View(140, 40) // wide enough for the detail pane
+	if strings.Contains(out, "uuid-that-must-not-render") {
+		t.Fatalf("compressed detail pane must NOT render c.ID:\n%s", out)
+	}
+}
+
+// TestConversationsModel_View_DetailRendersTildePath — the detail
+// pane's project line should collapse $HOME to "~" so the path is
+// human-readable instead of cluttered by personal cwd.
+func TestConversationsModel_View_DetailRendersTildePath(t *testing.T) {
+	prev := homeDirForDisplay
+	homeDirForDisplay = func() string { return "/home/user" }
+	t.Cleanup(func() { homeDirForDisplay = prev })
+
+	m := newConversations(styles.Default(), DefaultKeymap())
+	m.SetList([]conversations.Conversation{
+		{
+			ID:           "row-1",
+			Agent:        agent.IDClaude,
+			Project:      "/home/user/Projects/auth-redesign",
+			LastActivity: time.Now(),
+			// Non-empty Preview so the list-row fallback ("(" + path
+			// + ")") doesn't shadow the assertion below.
+			Preview: "rebuild login with passkeys",
+		},
+	})
+	out := m.View(140, 40)
+	if !strings.Contains(out, "~/Projects/auth-redesign") {
+		t.Fatalf("detail pane should tilde-collapse the project path:\n%s", out)
+	}
+	if strings.Contains(out, "/home/user/Projects/auth-redesign") {
+		t.Fatalf("detail pane should NOT carry the absolute home prefix:\n%s", out)
+	}
+}
+
+// TestConversationsModel_View_DetailNoKeybindHints — the side detail
+// pane should NOT duplicate keybind hints (`enter resume`, `p preview`,
+// `x delete`); the screen-wide HelpBar at the bottom owns them. The
+// armed-delete prompt is communicated by the row chip itself.
+func TestConversationsModel_View_DetailNoKeybindHints(t *testing.T) {
+	m := newConversations(styles.Default(), DefaultKeymap())
+	m.SetList(fakeConversations())
+	out := m.View(140, 40)
+	for _, phrase := range []string{
+		"resume this conversation",
+		"preview recent messages",
+		"delete this conversation",
+	} {
+		if strings.Contains(out, phrase) {
+			t.Errorf("detail pane should not duplicate the HelpBar hint %q, got:\n%s", phrase, out)
+		}
+	}
+}
+
+// TestConversationsModel_View_DetailStripsXMLNoise — the first-prompt
+// block in the detail pane should reflect what the user actually
+// typed, not the CLI-injected XML wrappers. environment_context dumps
+// are dropped entirely; system-reminder content keeps its body but
+// loses the brackets.
+func TestConversationsModel_View_DetailStripsXMLNoise(t *testing.T) {
+	m := newConversations(styles.Default(), DefaultKeymap())
+	m.SetList([]conversations.Conversation{
+		{
+			ID:           "row-1",
+			Agent:        agent.IDClaude,
+			Project:      "/p",
+			LastActivity: time.Now(),
+			Preview:      "please refactor the parser",
+		},
+	})
+	out := m.View(140, 40)
+	if !strings.Contains(out, "please refactor the parser") {
+		t.Fatalf("detail pane should show the cleaned preview text:\n%s", out)
+	}
+	for _, bad := range []string{
+		"<environment_context>",
+		"<system-reminder>",
+		"</system-reminder>",
+		"<command-message>",
+	} {
+		if strings.Contains(out, bad) {
+			t.Errorf("detail pane leaked XML wrapper %q:\n%s", bad, out)
+		}
+	}
+}
+
+// TestConversationsModel_View_BannerInSidePanel — when the App pushes
+// a banner into the model (via SetBanner), the wide-layout detail
+// pane should surface it at the top of the side panel so the user
+// sees the notification near the action that produced it. Empty
+// banner is a no-op.
+func TestConversationsModel_View_BannerInSidePanel(t *testing.T) {
+	m := newConversations(styles.Default(), DefaultKeymap())
+	m.SetList(fakeConversations())
+
+	// No banner → no banner text in the output.
+	baseline := m.View(140, 40)
+	if strings.Contains(baseline, "killed claude") {
+		t.Fatalf("precondition: no banner should produce no banner text:\n%s", baseline)
+	}
+
+	m.SetBanner("killed claude-most-recent")
+	out := m.View(140, 40)
+	if !strings.Contains(out, "killed claude-most-recent") {
+		t.Fatalf("wide-layout View should surface SetBanner text in the side pane:\n%s", out)
+	}
+
+	// Clearing the banner removes it again on the next render.
+	m.SetBanner("")
+	cleared := m.View(140, 40)
+	if strings.Contains(cleared, "killed claude-most-recent") {
+		t.Fatalf("SetBanner(\"\") should remove the banner:\n%s", cleared)
+	}
+}
+
+// TestConversationsModel_View_BannerSkippedInNarrow — narrow layout
+// has no detail pane, so the banner has nowhere sensible to land. The
+// App keeps the screen footer toast in that case; the model just
+// ignores the banner.
+func TestConversationsModel_View_BannerSkippedInNarrow(t *testing.T) {
+	m := newConversations(styles.Default(), DefaultKeymap())
+	m.SetList(fakeConversations())
+	m.SetBanner("killed claude-most-recent")
+	out := m.View(80, 40) // narrow
+	if strings.Contains(out, "killed claude-most-recent") {
+		t.Fatalf("narrow layout should not render the side-pane banner:\n%s", out)
+	}
+}
+
+// TestConversationsModel_View_DetailDoesNotOverflowIntoList — the
+// regression test for the "right pane bleeds into the left column"
+// bug. A project path or first prompt with very long unbroken tokens
+// (URL/path strings) used to soft-wrap past the detail pane width and
+// reflow under the list rows. Each rendered row must stay within
+// terminal width so the terminal doesn't have to soft-wrap anything.
+func TestConversationsModel_View_DetailDoesNotOverflowIntoList(t *testing.T) {
+	const longPath = "/Users/mchoi/repos/ccmux-redesign-tui-agents/.claude/skills/openspec-apply-change"
+	m := newConversations(styles.Default(), DefaultKeymap())
+	m.SetList([]conversations.Conversation{
+		{
+			ID:           "row-1",
+			Agent:        agent.IDClaude,
+			Project:      "/Users/mchoi/repos/calendar-alertbar-menu-bar-upcoming-and-alerts",
+			LastActivity: time.Now(),
+			Preview:      "Base directory for this skill: " + longPath,
+		},
+	})
+	for _, termW := range []int{140, 192} {
+		out := m.View(termW, 40)
+		assertNoOverflow(t, out, termW)
+		for _, line := range strings.Split(out, "\n") {
+			if lipgloss.Width(line) > termW {
+				t.Fatalf("rendered line exceeds terminal width (%d > %d): %q",
+					lipgloss.Width(line), termW, line)
+			}
+		}
+	}
+}
+
+func TestConversationsModel_RenderListDoesNotOverflowColumn(t *testing.T) {
+	m := newConversations(styles.Default(), DefaultKeymap())
+	m.SetList([]conversations.Conversation{
+		{
+			ID:           "row-1",
+			Agent:        agent.IDClaude,
+			Project:      "/p",
+			LastActivity: time.Now(),
+			Preview:      "Base directory for this skill: /Users/mchoi/repos/calendar-alertbar-menu-bar-upcoming-and-alerts/.claude/skills/openspec-apply-change",
+		},
+	})
+	sections := m.sections()
+	const listW = 116
+	out := m.renderList(sections, listW, 10)
+	assertNoOverflow(t, out, listW)
+}
+
+// TestConversationsModel_View_DetailRendersFirstPrompt — surfacing
+// c.Preview under a "First prompt" label gives the user a one-line
+// recap of what the thread is about. Free signal — Preview is already
+// loaded by the walker.
+func TestConversationsModel_View_DetailRendersFirstPrompt(t *testing.T) {
+	m := newConversations(styles.Default(), DefaultKeymap())
+	m.SetList([]conversations.Conversation{
+		{
+			ID:           "row-1",
+			Agent:        agent.IDClaude,
+			Project:      "/p",
+			LastActivity: time.Now(),
+			Preview:      "rebuild login with passkeys",
+		},
+	})
+	out := m.View(140, 40)
+	if !strings.Contains(out, "First prompt") {
+		t.Fatalf("detail pane should label the first-prompt block:\n%s", out)
+	}
+	if !strings.Contains(out, "rebuild login with passkeys") {
+		t.Fatalf("detail pane should render c.Preview text:\n%s", out)
+	}
+}
+
+// TestConversationsModel_View_DetailRendersMessageCount — once the
+// lazy load lands, the messages row shows the count. While loading
+// (cache miss), the row shows a muted "…" so the slot is reserved
+// rather than appearing and disappearing as cursor moves.
+func TestConversationsModel_View_DetailRendersMessageCount(t *testing.T) {
+	m := newConversations(styles.Default(), DefaultKeymap())
+	m.SetList([]conversations.Conversation{
+		{
+			ID:           "row-1",
+			Agent:        agent.IDClaude,
+			Project:      "/p",
+			LastActivity: time.Now(),
+		},
+	})
+	loadingOut := m.View(140, 40)
+	if !strings.Contains(loadingOut, "messages") {
+		t.Fatalf("detail pane should label the messages row:\n%s", loadingOut)
+	}
+	if !strings.Contains(loadingOut, "…") {
+		t.Fatalf("messages row should show a loading placeholder before the count lands:\n%s", loadingOut)
+	}
+
+	m.SetMessageCount("row-1", 42)
+	loadedOut := m.View(140, 40)
+	if !strings.Contains(loadedOut, "42") {
+		t.Fatalf("after SetMessageCount, detail pane should render the count:\n%s", loadedOut)
+	}
 }
 
 // TestConversationsModel_View_DetailMarksHeadlessRow — when a headless

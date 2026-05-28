@@ -72,7 +72,8 @@ func TestWalkRoot_MissingTreeReturnsEmpty(t *testing.T) {
 }
 
 // TestWalkRoot_HappyPath — typical session: one synthetic env-context
-// user message + two real user prompts + two token_count events.
+// user message + one synthetic AGENTS.md message + two real user prompts
+// + two token_count events.
 // Verify totals are summed correctly and the synthetic injection is
 // excluded from the prompt count.
 func TestWalkRoot_HappyPath(t *testing.T) {
@@ -87,6 +88,7 @@ func TestWalkRoot_HappyPath(t *testing.T) {
 		sessionMetaLine(ts(30), "happy"),
 		turnContextLine(ts(30), "gpt-5"),
 		userMessageLine(ts(29), "<environment_context>\n<cwd>/x</cwd>\n</environment_context>"),
+		userMessageLine(ts(29), "# AGENTS.md instructions for /x\n\n<INSTRUCTIONS>\n- test\n</INSTRUCTIONS>"),
 		userMessageLine(ts(28), "hello world"),
 		tokenCountLine(ts(27), 1000, 500, 50),
 		userMessageLine(ts(20), "follow up please"),

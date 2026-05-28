@@ -2,11 +2,14 @@ package tui
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/conversations"
@@ -30,6 +33,8 @@ var conversationAgentSections = []conversationAgentSectionDef{
 	{Label: "Cursor", Agent: agent.IDCursor},
 	{Label: "Agy", Agent: agent.IDAntigravity},
 }
+
+const conversationColumnGap = 3
 
 func conversationAgentSectionIndex(id agent.ID) (int, bool) {
 	for i, section := range conversationAgentSections {
@@ -93,6 +98,27 @@ type conversationsModel struct {
 	// delete they armed minutes ago on a different row.
 	pendingDelete string
 
+	// spinner animates next to the loading placeholder while the
+	// initial walk (and any refresh) is in flight. Bubbles wants the
+	// spinner.Tick command running to advance frames; the model owns
+	// the state so it survives across View invocations.
+	spinner spinner.Model
+
+	// statsCache memoizes the per-conversation message count so the
+	// detail pane can render "messages N" without re-walking the
+	// transcript on every render. Populated by SetMessageCount when a
+	// conversationStatsLoadedMsg lands. -1 is a sentinel for "the
+	// walker errored on this transcript" so we don't re-fire forever.
+	statsCache map[string]int
+
+	// banner is the (pre-rendered) toast string the App injects when a
+	// notification fires while the Conversations wide layout is on
+	// screen. The detail pane surfaces it at the top of the side
+	// pane instead of the global footer — closer to the action that
+	// produced it (e.g. a delete on the focused row). Empty when no
+	// toast is active or when the layout is narrow.
+	banner string
+
 	// showHeadless includes headless agent runs in the list (anything
 	// Conversation.IsHeadless reports true for: Claude `claude -p` /
 	// SDK / automation wrappers, Codex `codex exec`). Seeded from
@@ -105,9 +131,68 @@ type conversationsModel struct {
 }
 
 func newConversations(st styles.Styles, km Keymap) conversationsModel {
-	m := conversationsModel{st: st, km: km}
+	sp := spinner.New()
+	// Meter renders a bar-style sweep ("▱▱▱" → "▰▰▰" → "▰▱▱") — closer
+	// to a progress bar than a dot, which reads as "ccmux is working"
+	// at a glance instead of a small twitch in the corner.
+	sp.Spinner = spinner.Meter
+	sp.Style = lipgloss.NewStyle().Foreground(st.Semantic.Primary).Bold(true)
+	m := conversationsModel{
+		st:         st,
+		km:         km,
+		spinner:    sp,
+		statsCache: map[string]int{},
+	}
 	m.ensureSectionCursors()
 	return m
+}
+
+// SetMessageCount records the lazy-loaded message-count result for one
+// conversation. The detail pane reads from the cache; callers that
+// drive the cache hit/miss check use LoadStatsCmd. A count of -1 means
+// the walker errored — we keep it cached so we don't re-fire forever.
+func (m *conversationsModel) SetMessageCount(id string, count int) {
+	if m.statsCache == nil {
+		m.statsCache = map[string]int{}
+	}
+	m.statsCache[id] = count
+}
+
+// LoadStatsCmd returns a Cmd that walks the selected conversation's
+// transcript to count its messages, or nil when the count is already
+// cached (or there's no selection). The App routes the result back
+// through SetMessageCount via conversationStatsLoadedMsg. Cheap
+// short-circuit on cache hit so it's safe to call after every cursor
+// move.
+func (m conversationsModel) LoadStatsCmd() tea.Cmd {
+	sel := m.Selected()
+	if sel == nil {
+		return nil
+	}
+	if _, ok := m.statsCache[sel.ID]; ok {
+		return nil
+	}
+	c := *sel
+	return func() tea.Msg {
+		n, err := conversations.CountMessages(c)
+		return conversationStatsLoadedMsg{ID: c.ID, Count: n, Err: err}
+	}
+}
+
+// SpinnerTickCmd returns the initial Tick command that drives the
+// loading spinner's animation. The App fires this when entering the
+// Conversations screen so the spinner has a frame source.
+func (m conversationsModel) SpinnerTickCmd() tea.Cmd {
+	return m.spinner.Tick
+}
+
+// SetBanner pushes a pre-rendered toast string into the detail pane.
+// App calls this each frame on the Conversations screen — empty
+// string clears the banner; non-empty replaces it. The toast lives in
+// the side panel so the user sees the result of the action (delete,
+// refresh) right where they were focused, not at the screen footer.
+func (m *conversationsModel) SetBanner(s string) {
+	m.banner = s
 }
 
 // SetList replaces the conversation list and preserves the cursor by
@@ -336,11 +421,28 @@ func (m conversationsModel) focusedSectionDef() conversationAgentSectionDef {
 }
 
 func (m conversationsModel) Update(msg tea.Msg) (conversationsModel, tea.Cmd) {
+	// Spinner Tick advances the loading-spinner animation while the
+	// initial walk (or a refresh) is in flight. We forward every
+	// spinner.TickMsg so the spinner stays responsive even when the
+	// user isn't pressing keys.
+	if _, ok := msg.(spinner.TickMsg); ok {
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		return m, cmd
+	}
 	km, ok := msg.(tea.KeyMsg)
 	if !ok {
 		return m, nil
 	}
 	sections := m.sections()
+	// Selection-ID snapshot: navigation moves below may shift it, in
+	// which case we fire the lazy stats load for the new row at the
+	// bottom. Captured early so the switch arms below don't see a
+	// stale value through Selected().
+	prevSelID := ""
+	if sel := m.Selected(); sel != nil {
+		prevSelID = sel.ID
+	}
 	switch {
 	case keyMatches(km, m.km.Up):
 		m.moveFocusedRow(-1, sections)
@@ -389,6 +491,17 @@ func (m conversationsModel) Update(msg tea.Msg) (conversationsModel, tea.Cmd) {
 			m.cursor = 0
 		}
 	}
+	// If navigation actually moved the selection, fire the lazy stats
+	// load for the new row. Skip when the selection is unchanged so
+	// non-nav keys (like a no-op `x` on an empty list) keep their
+	// previous nil-cmd contract.
+	newSelID := ""
+	if sel := m.Selected(); sel != nil {
+		newSelID = sel.ID
+	}
+	if newSelID != prevSelID {
+		return m, m.LoadStatsCmd()
+	}
 	return m, nil
 }
 
@@ -401,7 +514,7 @@ func (m conversationsModel) View(width, height int) string {
 	}
 
 	if m.loading {
-		body := st.Muted.Render("Loading conversations from ~/.claude, ~/.codex, ~/.gemini/antigravity-cli …")
+		body := m.renderLoading(width-4, height-6)
 		return st.Pane.Width(width - 2).Height(height - 2).Render(
 			lipgloss.JoinVertical(lipgloss.Left, header, "", body),
 		)
@@ -420,29 +533,133 @@ func (m conversationsModel) View(width, height int) string {
 	if contentH < 1 {
 		contentH = 1
 	}
+	contentW := width - 4
+	if contentW < 1 {
+		contentW = 1
+	}
 
 	// Narrow: list only — drop the detail pane (T2) and the inline
 	// hint line (T2). Shares the one TUI breakpoint via isNarrow.
 	if isNarrow(width) {
 		return st.Pane.Width(width - 2).Height(height - 2).Render(
-			lipgloss.JoinVertical(lipgloss.Left, header, "", nav, "", m.renderList(sections, width-4, contentH)),
+			lipgloss.JoinVertical(lipgloss.Left, header, "", nav, "", m.renderList(sections, contentW, contentH)),
 		)
 	}
 
-	// Wide: two-column — list on the left, detail on the right.
-	listW := width * 5 / 8
-	detailW := width - listW - 1
-	list := m.renderList(sections, listW, contentH)
+	// Wide: two framed columns — list on the left, detail on the
+	// right — matching the Projects/Notes tab treatment.
+	detailW := width / 2
+	listW := width - detailW - conversationColumnGap
+	if detailW < 1 {
+		detailW = 1
+	}
+	list := m.renderListPanel(sections, listW, height)
 	var detail string
 	if sel := m.Selected(); sel != nil {
-		detail = m.renderDetail(*sel, detailW, contentH)
+		detail = m.renderDetailPanel(*sel, detailW, height)
 	} else {
-		detail = m.renderEmptyDetail(m.focusedSectionDef(), detailW, contentH)
+		detail = m.renderEmptyDetailPanel(m.focusedSectionDef(), detailW, height)
 	}
-	body := lipgloss.JoinHorizontal(lipgloss.Top, list, " ", detail)
-	return st.Pane.Width(width - 2).Height(height - 2).Render(
-		lipgloss.JoinVertical(lipgloss.Left, header, "", nav, "", body),
+	return constrainBlockWidth(
+		lipgloss.JoinHorizontal(lipgloss.Top, list, strings.Repeat(" ", conversationColumnGap), detail),
+		width,
 	)
+}
+
+func (m conversationsModel) renderListPanel(sections []conversationAgentSection, width, height int) string {
+	header := m.st.Title.Render("Conversations")
+	if m.projectFilter != "" {
+		header = lipgloss.JoinHorizontal(lipgloss.Top, header,
+			"  "+m.st.Muted.Render("filter: "+m.projectFilter+"  (esc to clear)"))
+	}
+	innerW := width - 4
+	if innerW < 1 {
+		innerW = 1
+	}
+	listH := height - 8
+	if listH < 1 {
+		listH = 1
+	}
+	body := lipgloss.JoinVertical(lipgloss.Left,
+		header,
+		"",
+		m.renderAgentNav(sections),
+		"",
+		m.renderList(sections, innerW, listH),
+	)
+	return m.st.PaneFocused.Width(width - 2).Height(height - 2).Render(body)
+}
+
+func (m conversationsModel) renderDetailPanel(c conversations.Conversation, width, height int) string {
+	innerW := width - 4
+	if innerW < 1 {
+		innerW = 1
+	}
+	body := m.renderDetail(c, innerW, height-4)
+	body = m.prependBanner(body, innerW)
+	return m.st.Pane.Width(width - 2).Height(height - 2).Render(body)
+}
+
+func (m conversationsModel) renderEmptyDetailPanel(def conversationAgentSectionDef, width, height int) string {
+	innerW := width - 4
+	if innerW < 1 {
+		innerW = 1
+	}
+	body := m.renderEmptyDetail(def, innerW, height-4)
+	body = m.prependBanner(body, innerW)
+	return m.st.Pane.Width(width - 2).Height(height - 2).Render(body)
+}
+
+// prependBanner pastes the active toast banner above the side-pane
+// body. Width-clamped to the inner pane width so a long toast can't
+// blow past the panel border. No-op when banner is empty.
+func (m conversationsModel) prependBanner(body string, width int) string {
+	if m.banner == "" {
+		return body
+	}
+	banner := lipgloss.NewStyle().Width(width).Render(m.banner)
+	return lipgloss.JoinVertical(lipgloss.Left, banner, "", body)
+}
+
+// renderLoading produces the centered "scanning transcripts" block
+// that fills the pane while the walker is in flight. The bar spinner
+// + the per-agent dot column communicates "ccmux is reaching into
+// each agent's directory" — much louder than a one-line muted hint.
+func (m conversationsModel) renderLoading(width, height int) string {
+	st := m.st
+	heading := st.Title.Render("Scanning transcripts")
+	bar := m.spinner.View()
+	headLine := lipgloss.JoinHorizontal(lipgloss.Top, bar, "  ", heading)
+
+	// Per-agent dot legend — each ● wears the agent's accent so the
+	// user sees which sources ccmux is touching. The roots map to the
+	// directories the walkers actually open; future agents land here
+	// by extension.
+	roots := map[agent.ID]string{
+		agent.IDClaude:      "~/.claude/projects",
+		agent.IDCodex:       "~/.codex/sessions",
+		agent.IDCursor:      "~/.cursor/projects",
+		agent.IDAntigravity: "~/.gemini",
+	}
+	var legend []string
+	for _, def := range conversationAgentSections {
+		dot := st.AgentAccent(def.Agent).Bold(true).Render("●")
+		legend = append(legend,
+			"  "+dot+"  "+
+				st.Type.Body.Render(strings.ToLower(def.Label))+
+				"  "+st.Muted.Render(roots[def.Agent]),
+		)
+	}
+	block := lipgloss.JoinVertical(lipgloss.Left,
+		headLine,
+		"",
+		strings.Join(legend, "\n"),
+	)
+
+	if height < lipgloss.Height(block) {
+		height = lipgloss.Height(block)
+	}
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, block)
 }
 
 func (m conversationsModel) renderAgentNav(sections []conversationAgentSection) string {
@@ -450,7 +667,10 @@ func (m conversationsModel) renderAgentNav(sections []conversationAgentSection) 
 	for i, section := range sections {
 		label := fmt.Sprintf("%s %d", section.def.Label, len(section.conversations))
 		if i == m.activeSection {
-			parts = append(parts, m.st.Emphasis.Render("▸ "+label))
+			// Active section heading carries the agent's accent colour
+			// (Claude=mauve, Codex=sky, Antigravity=peach, Cursor=teal)
+			// via the design-system helper.
+			parts = append(parts, m.st.AgentAccent(section.def.Agent).Bold(true).Render("▸ "+label))
 			continue
 		}
 		parts = append(parts, m.st.Muted.Render("  "+label))
@@ -485,38 +705,52 @@ func (m conversationsModel) renderList(sections []conversationAgentSection, widt
 }
 
 // renderConversationRowContent formats the inner content of a single
-// conversation row (agent label, timestamp, preview) sized to fit
-// `width` cells. Selection treatment is applied by the caller via
-// components.RenderListRow.
+// conversation row (agent label, timestamp, preview / armed-delete
+// chip) sized to fit `width` cells. The agent label column carries the
+// agent's accent colour via the design-system helper; the rest of the
+// row stays in the default / muted foreground so the colour doesn't
+// dominate Codex-heavy or Antigravity-heavy lists. Selection treatment
+// is applied by the caller via components.RenderListRow.
 func (m conversationsModel) renderConversationRowContent(c conversations.Conversation, width int) string {
 	const (
-		agentW = 12
-		timeW  = 12
+		agentW = 7
+		timeW  = 6
 	)
-	agentLabel := conversationAgentLabel(c.Agent)
+	agentLabel := truncateDisplay(conversationAgentLabel(c.Agent), agentW)
+	agentCol := m.st.AgentAccent(c.Agent).Render(agentLabel)
 	when := relativeTimeShort(c.LastActivity)
+	whenCol := m.st.Muted.Render(truncateDisplay(when, timeW))
+	prefix := agentCol + "  " + whenCol + "  "
+	remaining := width - lipgloss.Width(prefix)
+	if remaining < 1 {
+		return truncateDisplay(prefix, width)
+	}
 	preview := c.Preview
 	if preview == "" {
 		preview = "(" + c.Project + ")"
 	}
-	previewBudget := width - agentW - timeW - 4
-	if previewBudget < 10 {
-		previewBudget = 10
-	}
-	// Armed-for-delete row: replace the preview with a loud confirm
-	// prompt so the user can't miss what x-again will do.
+	// Armed-for-delete row: render a bracketed danger chip at the
+	// row's trailing edge so the agent label + timestamp + a
+	// truncated preview stay visible. The user still sees which row
+	// they armed; the chip says what `x` will do next.
 	if c.ID == m.pendingDelete {
-		return fmt.Sprintf("%-*s  %-*s  %s",
-			agentW, m.st.Muted.Render(truncate(agentLabel, agentW)),
-			timeW, m.st.Muted.Render(when),
-			m.st.StatusError.Render("delete this conversation? press x to confirm · esc cancels"),
-		)
+		chip := m.st.StatusError.Render("[delete? x to confirm · esc]")
+		chipW := lipgloss.Width(chip)
+		if chipW >= remaining {
+			return truncateDisplay(prefix+chip, width)
+		}
+		previewBudget := remaining - chipW - 2
+		if previewBudget < 0 {
+			previewBudget = 0
+		}
+		previewText := truncateDisplay(preview, previewBudget)
+		gap := remaining - lipgloss.Width(previewText) - chipW
+		if gap < 1 {
+			gap = 1
+		}
+		return truncateDisplay(prefix+previewText+strings.Repeat(" ", gap)+chip, width)
 	}
-	return fmt.Sprintf("%-*s  %-*s  %s",
-		agentW, m.st.Muted.Render(truncate(agentLabel, agentW)),
-		timeW, m.st.Muted.Render(when),
-		truncate(preview, previewBudget),
-	)
+	return truncateDisplay(prefix+truncateDisplay(preview, remaining), width)
 }
 
 // HelpBarProps returns the screen-specific key hints for
@@ -532,6 +766,7 @@ func (m conversationsModel) HelpBarProps(width int) components.HelpBarProps {
 			{Key: "?", Label: "help", Priority: 10},
 			{Key: "q", Label: "quit", Priority: 10},
 			{Key: "enter", Label: "resume", Priority: 8},
+			{Key: "p", Label: "preview", Priority: 7},
 			{Key: "x", Label: "delete", Priority: 6},
 			{Key: "tab", Label: "sections", Priority: 5},
 			{Key: "H", Label: "headless: " + hStatus, Priority: 4},
@@ -547,11 +782,11 @@ func conversationAgentLabel(id agent.ID) string {
 	case agent.IDClaude:
 		return "claude"
 	case agent.IDCodex:
-		return "[codex]"
+		return "codex"
 	case agent.IDCursor:
-		return "[cursor]"
+		return "cursor"
 	case agent.IDAntigravity:
-		return "[agy]"
+		return "agy"
 	default:
 		return string(id)
 	}
@@ -565,22 +800,38 @@ func (m conversationsModel) emptySectionText(def conversationAgentSectionDef) st
 }
 
 // renderDetail draws the right-hand pane for the selected conversation.
-// Shows full ID, project, last-activity timestamp, preview, and the
-// resume keybind hint.
+// The layout is intentionally flat and compressed: agent name as the
+// accent heading, the project path beneath it as the only identifier
+// (the agent's UUID is debugging-only and not human-readable), then a
+// small column of facts, the first-prompt recap, and the action keys.
+//
+// Metadata sources:
+//   - last active  — Conversation.LastActivity, rendered as a long
+//     relative form ("5 hours ago", "yesterday").
+//   - messages     — lazy-loaded via LoadStatsCmd; "…" while the walker
+//     is still running, omitted on walker error.
+//   - mode         — only when c.IsHeadless(), so the user knows
+//     they're about to resume a sdk / exec run.
+//   - first prompt — Conversation.Preview, the first ~100 chars of
+//     the conversation's first user message.
 func (m conversationsModel) renderDetail(c conversations.Conversation, width, height int) string {
 	st := m.st
+	indent := strings.Repeat(" ", st.Spacing.MD)
+
 	lines := []string{
-		st.Emphasis.Render(string(c.Agent)),
+		st.AgentAccent(c.Agent).Bold(true).Render(string(c.Agent)),
+		st.Muted.Render(wrapDetailText(displayPath(c.Project), width)),
 		"",
-		st.Muted.Render("ID         ") + c.ID,
-		st.Muted.Render("Project    ") + emptyOr(summarizePath(c.Project), "(unknown)"),
-		st.Muted.Render("Last active") + "  " + c.LastActivity.Format("2006-01-02 15:04"),
+	}
+
+	const labelW = 12
+	lines = append(lines, indent+st.Muted.Render(padLabel("last active", labelW))+"  "+relativeTimeLong(c.LastActivity))
+	if count, ok := m.statsCache[c.ID]; ok && count >= 0 {
+		lines = append(lines, indent+st.Muted.Render(padLabel("messages", labelW))+"  "+fmt.Sprintf("%d", count))
+	} else if !ok {
+		lines = append(lines, indent+st.Muted.Render(padLabel("messages", labelW))+"  "+st.Muted.Render("…"))
 	}
 	if c.IsHeadless() {
-		// Show *which* headless mode the row is — "SDK" for Claude
-		// `sdk-cli`, "exec" for Codex `codex_exec`. A user who
-		// opted-in to seeing headless rows shouldn't have to guess
-		// which automation flavour they're about to resume.
 		label := "headless"
 		switch c.Entrypoint {
 		case "sdk-cli":
@@ -588,20 +839,66 @@ func (m conversationsModel) renderDetail(c conversations.Conversation, width, he
 		case "codex_exec":
 			label = "headless / exec"
 		}
-		lines = append(lines, st.Muted.Render("Mode       ")+st.StatusError.Render(label))
+		lines = append(lines, indent+st.Muted.Render(padLabel("mode", labelW))+"  "+st.StatusError.Render(label))
 	}
+
 	if c.Preview != "" {
-		lines = append(lines, "", st.Muted.Render("Preview"), wrap(c.Preview, width-2))
+		previewW := width - lipgloss.Width(indent)
+		if previewW < 1 {
+			previewW = 1
+		}
+		lines = append(lines, "", st.Muted.Render("First prompt"), indentBlock(wrapDetailText(c.Preview, previewW), indent))
 	}
-	lines = append(lines, "", st.Key.Render("enter")+"  resume this conversation in a new tmux session")
-	if m.pendingDelete == c.ID {
-		lines = append(lines, st.StatusError.Render("x")+"    press x again to confirm delete · esc to cancel")
-	} else {
-		lines = append(lines, st.Key.Render("x")+"    delete this conversation")
+
+	// No keybind hints in the side pane — the screen-wide HelpBar at
+	// the bottom already advertises enter / p / x. The armed-delete
+	// case is communicated by the chip on the row itself.
+
+	_ = height
+	return constrainBlockWidth(strings.Join(lines, "\n"), width)
+}
+
+// padLabel right-pads a label to a fixed width so the value column
+// in the detail pane lines up. Plain spaces (not lipgloss padding) so
+// the result composes cleanly with Render() calls.
+func padLabel(s string, width int) string {
+	if len(s) >= width {
+		return s
 	}
-	body := strings.Join(lines, "\n")
-	_ = height // reserved for future scrolling
-	return body
+	return s + strings.Repeat(" ", width-len(s))
+}
+
+// displayPath collapses $HOME → "~" so the detail pane reads
+// "~/Projects/auth-redesign" instead of "/Users/skz/Projects/...".
+// Falls back to the literal path when $HOME isn't set or doesn't
+// prefix the project path. Empty paths surface as "(unknown)".
+func displayPath(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return "(unknown)"
+	}
+	home := homeDirForDisplay()
+	if home == "" || !strings.HasPrefix(p, home) {
+		return p
+	}
+	rest := strings.TrimPrefix(p, home)
+	if rest == "" {
+		return "~"
+	}
+	if !strings.HasPrefix(rest, "/") {
+		return p
+	}
+	return "~" + rest
+}
+
+// homeDirForDisplay is a thin os.UserHomeDir wrapper; tests stub via a
+// hook so display tests don't depend on the real $HOME of the process.
+var homeDirForDisplay = func() string {
+	h, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return h
 }
 
 func (m conversationsModel) renderEmptyDetail(def conversationAgentSectionDef, width, height int) string {
@@ -616,6 +913,39 @@ func (m conversationsModel) renderEmptyDetail(def conversationAgentSectionDef, w
 	_ = width
 	_ = height
 	return strings.Join(lines, "\n")
+}
+
+// relativeTimeLong is the human-readable form used in the detail
+// pane: "5h ago", "3 days ago", "yesterday", "just now". The detail
+// pane has the room for words; list rows still use the compact
+// relativeTimeShort form so the timestamp column stays narrow.
+func relativeTimeLong(t time.Time) string {
+	if t.IsZero() {
+		return "—"
+	}
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		n := int(d.Minutes())
+		if n == 1 {
+			return "1 minute ago"
+		}
+		return fmt.Sprintf("%d minutes ago", n)
+	case d < 24*time.Hour:
+		n := int(d.Hours())
+		if n == 1 {
+			return "1 hour ago"
+		}
+		return fmt.Sprintf("%d hours ago", n)
+	case d < 2*24*time.Hour:
+		return "yesterday"
+	case d < 30*24*time.Hour:
+		return fmt.Sprintf("%d days ago", int(d.Hours()/24))
+	default:
+		return t.Format("Jan 02")
+	}
 }
 
 // relativeTimeShort is the compact form used in list rows: "5m",
@@ -646,31 +976,45 @@ func emptyOr(s, fallback string) string {
 	return s
 }
 
-// wrap is a minimal word-wrapper for the detail-pane preview. We
-// don't pull in a wrapping library because the existing screens hand-
-// roll the same trick.
-func wrap(s string, width int) string {
+func wrapDetailText(s string, width int) string {
 	if width <= 0 {
 		return s
 	}
-	var b strings.Builder
-	col := 0
-	for _, word := range strings.Fields(s) {
-		w := len(word)
-		if col == 0 {
-			b.WriteString(word)
-			col = w
-			continue
-		}
-		if col+1+w > width {
-			b.WriteByte('\n')
-			b.WriteString(word)
-			col = w
-			continue
-		}
-		b.WriteByte(' ')
-		b.WriteString(word)
-		col += 1 + w
+	return ansi.Wrap(s, width, "/._")
+}
+
+func truncateDisplay(s string, width int) string {
+	if width <= 0 {
+		return ""
 	}
-	return b.String()
+	if lipgloss.Width(s) <= width {
+		return s
+	}
+	if width == 1 {
+		return "…"
+	}
+	return ansi.Truncate(s, width, "…")
+}
+
+func indentBlock(s, indent string) string {
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		if line != "" {
+			lines[i] = indent + line
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func constrainBlockWidth(s string, width int) string {
+	if width <= 0 {
+		return s
+	}
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		if lipgloss.Width(line) > width {
+			lines[i] = ansi.Hardwrap(line, width, false)
+		}
+	}
+	return strings.Join(lines, "\n")
 }

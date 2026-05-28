@@ -146,9 +146,10 @@ test-e2e: check-go build
 #
 # Pairs are listed verbatim (no globbing) so adding a target is a
 # deliberate one-line edit here, and a forgotten target is loud
-# instead of silently skipped. CI runs `make fuzz FUZZTIME=10s` for
-# a quick PR-time signal; humans run `make fuzz` (default 5m/target)
-# before tightening a parser or after touching a heuristic surface.
+# instead of silently skipped. CI runs `make fuzz FUZZTIME=100000x`
+# for a quick PR-time signal; humans run `make fuzz` (default
+# 5m/target) before tightening a parser or after touching a heuristic
+# surface.
 # Bump FUZZTIME=1h for an overnight sweep, e.g. before a release.
 #
 # Failing seeds land under <pkg>/testdata/fuzz/<FuzzName>/<sha> per
@@ -172,10 +173,10 @@ fuzz: check-go
 		go test "$$pkg" -run '^$$' -fuzz="^$${target}$$" -fuzztime=$(FUZZTIME) || exit 1; \
 	done
 
-# Quick local pass — mirrors CI's per-target budget so `make fuzz-quick`
-# gives the same signal a PR would, in ~70s total.
+# Quick local pass — mirrors CI's per-target execution-count budget so
+# `make fuzz-quick` gives the same signal a PR would.
 fuzz-quick:
-	@$(MAKE) fuzz FUZZTIME=10s
+	@$(MAKE) fuzz FUZZTIME=100000x
 
 fmt: check-go
 	gofmt -w .

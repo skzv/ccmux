@@ -126,6 +126,71 @@ func TestListClaude_CwdFieldOverridesDecodedPath(t *testing.T) {
 	}
 }
 
+// TestListClaude_MergesSubagentFragments pins the logical-conversation
+// view over Claude's scattered transcript layout. Claude may write
+// nested subagent JSONL files under
+// <project>/<parent-session>/subagents/*.jsonl; the Conversations tab
+// should show the parent session once, with preview/count/detail data
+// assembled from every fragment.
+func TestListClaude_MergesSubagentFragments(t *testing.T) {
+	home := t.TempDir()
+	projectDir := filepath.Join(home, ".claude/projects/-Users-skz-Projects-foo")
+	parentPath := filepath.Join(projectDir, "parent-1.jsonl")
+	subagentPath := filepath.Join(projectDir, "parent-1/subagents/agent-a123.jsonl")
+	writeFile(t, parentPath,
+		`{"type":"user","entrypoint":"cli","cwd":"/Users/skz/Projects/foo","message":{"role":"user","content":"parent prompt"},"timestamp":"2026-04-30T10:00:00Z"}`+"\n"+
+			`{"type":"assistant","message":{"role":"assistant","content":"parent reply"},"timestamp":"2026-04-30T10:01:00Z"}`+"\n",
+	)
+	writeFile(t, subagentPath,
+		`{"type":"assistant","message":{"role":"assistant","content":"subagent result"},"timestamp":"2026-04-30T10:02:00Z"}`+"\n",
+	)
+
+	got, err := ListClaude(home)
+	if err != nil {
+		t.Fatalf("ListClaude: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1 merged conversation: %+v", len(got), got)
+	}
+	c := got[0]
+	if c.ID != "parent-1" {
+		t.Errorf("ID = %q, want parent-1", c.ID)
+	}
+	if c.Path != parentPath {
+		t.Errorf("Path = %q, want parent transcript %q", c.Path, parentPath)
+	}
+	if !equalStringSlice(c.Paths, []string{parentPath, subagentPath}) {
+		t.Errorf("Paths = %v, want parent + subagent", c.Paths)
+	}
+	if c.Preview != "parent prompt" {
+		t.Errorf("Preview = %q, want parent prompt", c.Preview)
+	}
+	if c.Project != "/Users/skz/Projects/foo" {
+		t.Errorf("Project = %q, want cwd from parent transcript", c.Project)
+	}
+	if c.IsHeadless() {
+		t.Error("merged parent/subagent conversation should remain interactive")
+	}
+	wantLast, _ := time.Parse(time.RFC3339Nano, "2026-04-30T10:02:00Z")
+	if !c.LastActivity.Equal(wantLast) {
+		t.Errorf("LastActivity = %v, want latest fragment timestamp %v", c.LastActivity, wantLast)
+	}
+	n, err := CountMessages(c)
+	if err != nil {
+		t.Fatalf("CountMessages: %v", err)
+	}
+	if n != 3 {
+		t.Errorf("CountMessages = %d, want 3 across parent + subagent", n)
+	}
+	msgs, err := RecentMessages(c, 2)
+	if err != nil {
+		t.Fatalf("RecentMessages: %v", err)
+	}
+	if len(msgs) != 2 || msgs[0].Content != "parent reply" || msgs[1].Content != "subagent result" {
+		t.Errorf("RecentMessages tail = %+v, want parent reply then subagent result", msgs)
+	}
+}
+
 // TestListClaude_TolerantToBadLines — a corrupt or partial JSONL line
 // must NOT break the rest of the transcript scan. We've seen these in
 // the wild (claude killed mid-write).
@@ -188,6 +253,135 @@ func TestListCodex_MissingTree(t *testing.T) {
 	}
 }
 
+func TestListCodex_MergesDuplicateRolloutIDs(t *testing.T) {
+	home := t.TempDir()
+	uuid := "019dff0c-4b4d-7830-af27-408791f87129"
+	firstPath := filepath.Join(home, ".codex/sessions/2026/05/06", "rollout-2026-05-06T13-48-09-"+uuid+".jsonl")
+	secondPath := filepath.Join(home, ".codex/sessions/2026/05/07", "rollout-2026-05-07T09-10-11-"+uuid+".jsonl")
+	writeFile(t, firstPath,
+		`{"type":"session_meta","payload":{"originator":"codex_exec"},"cwd":"/Users/skz/Projects/bar"}`+"\n"+
+			`{"type":"user_message","text":"first rollout"}`+"\n"+
+			`{"timestamp":"2026-05-06T13:48:10Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"first message"}]}}`+"\n",
+	)
+	writeFile(t, secondPath,
+		`{"type":"session_meta","payload":{"originator":"codex-tui"},"cwd":"/Users/skz/Projects/bar"}`+"\n"+
+			`{"type":"user_message","text":"second rollout"}`+"\n"+
+			`{"timestamp":"2026-05-07T09:10:12Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"second message"}]}}`+"\n",
+	)
+	firstTime := time.Date(2026, 5, 6, 13, 48, 10, 0, time.UTC)
+	secondTime := time.Date(2026, 5, 7, 9, 10, 12, 0, time.UTC)
+	_ = os.Chtimes(firstPath, firstTime, firstTime)
+	_ = os.Chtimes(secondPath, secondTime, secondTime)
+
+	got, err := ListCodex(home)
+	if err != nil {
+		t.Fatalf("ListCodex: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1 merged Codex conversation: %+v", len(got), got)
+	}
+	c := got[0]
+	if c.ID != uuid {
+		t.Errorf("ID = %q, want %s", c.ID, uuid)
+	}
+	if !equalStringSlice(c.Paths, []string{firstPath, secondPath}) {
+		t.Errorf("Paths = %v, want both rollout files", c.Paths)
+	}
+	if !c.LastActivity.Equal(secondTime) {
+		t.Errorf("LastActivity = %v, want newest rollout mtime %v", c.LastActivity, secondTime)
+	}
+	if c.IsHeadless() {
+		t.Error("merged Codex conversation should prefer interactive originator when any fragment has one")
+	}
+	msgs, err := RecentMessages(c, 2)
+	if err != nil {
+		t.Fatalf("RecentMessages: %v", err)
+	}
+	if len(msgs) != 2 || msgs[0].Content != "first message" || msgs[1].Content != "second message" {
+		t.Errorf("RecentMessages = %+v, want messages merged by timestamp", msgs)
+	}
+}
+
+func TestListCodex_UsesPayloadCwdAndTimestampedMessages(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".codex/sessions/2026/05/23/rollout-2026-05-23T10-00-00-00000000-0000-0000-0000-000000000004.jsonl")
+	writeFile(t, path,
+		`{"timestamp":"2026-05-23T10:00:00Z","type":"session_meta","payload":{"id":"u4","originator":"codex-tui","cwd":"/Users/skz/Projects/payload-cwd"}}`+"\n"+
+			`{"timestamp":"2026-05-23T10:01:00Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"ship the cursor walker"}]}}`+"\n"+
+			`{"timestamp":"2026-05-23T10:02:00Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}}`+"\n",
+	)
+
+	got, err := ListCodex(home)
+	if err != nil {
+		t.Fatalf("ListCodex: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1", len(got))
+	}
+	c := got[0]
+	if c.Project != "/Users/skz/Projects/payload-cwd" {
+		t.Errorf("Project = %q, want cwd from session_meta payload", c.Project)
+	}
+	if c.Preview != "ship the cursor walker" {
+		t.Errorf("Preview = %q, want response_item user text", c.Preview)
+	}
+	wantLast, _ := time.Parse(time.RFC3339Nano, "2026-05-23T10:02:00Z")
+	if !c.LastActivity.Equal(wantLast) {
+		t.Errorf("LastActivity = %v, want latest event timestamp %v", c.LastActivity, wantLast)
+	}
+	n, err := CountMessages(c)
+	if err != nil {
+		t.Fatalf("CountMessages: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("CountMessages = %d, want user + assistant", n)
+	}
+}
+
+func TestListCursor_ParsesAgentTranscriptJSONL(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".cursor/projects/Users-skz-Projects-foo/agent-transcripts/cur-1/cur-1.jsonl")
+	writeFile(t, path,
+		`{"role":"user","message":{"content":[{"type":"text","text":"build cursor support"}]},"timestamp":"2026-05-24T10:00:00Z"}`+"\n"+
+			`{"role":"assistant","message":{"content":[{"type":"text","text":"working"}]},"timestamp":"2026-05-24T10:01:00Z"}`+"\n",
+	)
+
+	got, err := ListCursor(home)
+	if err != nil {
+		t.Fatalf("ListCursor: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1", len(got))
+	}
+	c := got[0]
+	if c.ID != "cur-1" {
+		t.Errorf("ID = %q, want cur-1", c.ID)
+	}
+	if c.Agent != agent.IDCursor {
+		t.Errorf("Agent = %q, want cursor", c.Agent)
+	}
+	if c.Project != "/Users/skz/Projects/foo" {
+		t.Errorf("Project = %q, want decoded Cursor project path", c.Project)
+	}
+	if c.Preview != "build cursor support" {
+		t.Errorf("Preview = %q, want first user text", c.Preview)
+	}
+	n, err := CountMessages(c)
+	if err != nil {
+		t.Fatalf("CountMessages: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("CountMessages = %d, want 2", n)
+	}
+	msgs, err := RecentMessages(c, 2)
+	if err != nil {
+		t.Fatalf("RecentMessages: %v", err)
+	}
+	if len(msgs) != 2 || msgs[0].Content != "build cursor support" || msgs[1].Content != "working" {
+		t.Errorf("RecentMessages = %+v, want cursor user then assistant", msgs)
+	}
+}
+
 // TestListAntigravity_ListsPBFiles — Antigravity stores conversations
 // as opaque .pb files. We can't read them, but the filename is the
 // UUID and mtime is a useful surrogate for "last activity." The
@@ -225,6 +419,53 @@ func TestListAntigravity_ListsPBFiles(t *testing.T) {
 	// mtime must round-trip — used by All() for sort order.
 	if !c.LastActivity.Equal(old.Truncate(time.Second)) && c.LastActivity.Sub(old).Abs() > 2*time.Second {
 		t.Errorf("LastActivity = %v, want ~%v (mtime)", c.LastActivity, old)
+	}
+}
+
+func TestListAntigravity_ParsesGeminiJSONChats(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".gemini/tmp/abcdef1234567890/chats/session-2026-05-24T10-00-agy.json")
+	writeFile(t, path,
+		`{"sessionId":"agy-1","projectHash":"abcdef1234567890","startTime":"2026-05-24T10:00:00Z","lastUpdated":"2026-05-24T10:02:00Z","messages":[`+
+			`{"type":"user","content":"summarize this repo","timestamp":"2026-05-24T10:00:00Z"},`+
+			`{"type":"gemini","content":"summary","timestamp":"2026-05-24T10:01:00Z"}`+
+			`]}`,
+	)
+
+	got, err := ListAntigravity(home)
+	if err != nil {
+		t.Fatalf("ListAntigravity: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1", len(got))
+	}
+	c := got[0]
+	if c.ID != "agy-1" {
+		t.Errorf("ID = %q, want session ID", c.ID)
+	}
+	if c.Preview != "summarize this repo" {
+		t.Errorf("Preview = %q, want first user message", c.Preview)
+	}
+	if c.Project != "project abcdef123456" {
+		t.Errorf("Project = %q, want short project hash label", c.Project)
+	}
+	wantLast, _ := time.Parse(time.RFC3339Nano, "2026-05-24T10:02:00Z")
+	if !c.LastActivity.Equal(wantLast) {
+		t.Errorf("LastActivity = %v, want lastUpdated %v", c.LastActivity, wantLast)
+	}
+	n, err := CountMessages(c)
+	if err != nil {
+		t.Fatalf("CountMessages: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("CountMessages = %d, want 2", n)
+	}
+	msgs, err := RecentMessages(c, 2)
+	if err != nil {
+		t.Fatalf("RecentMessages: %v", err)
+	}
+	if len(msgs) != 2 || msgs[0].Content != "summarize this repo" || msgs[1].Role != "assistant" {
+		t.Errorf("RecentMessages = %+v, want Gemini JSON user + assistant", msgs)
 	}
 }
 
@@ -312,6 +553,109 @@ func TestAll_SinceFiltersStale(t *testing.T) {
 	}
 }
 
+// TestCountMessages_ClaudeJSONL counts user + assistant events out of
+// a Claude JSONL transcript and ignores the other event types ccmux
+// also writes (permission-mode, summary, etc.). The count powers the
+// detail pane's "messages N" row.
+func TestCountMessages_ClaudeJSONL(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "abc.jsonl")
+	writeFile(t, path, strings.Join([]string{
+		`{"type":"permission-mode","permissionMode":"default"}`,
+		`{"type":"user","message":{"role":"user","content":"a"},"timestamp":"2026-04-30T10:00:00Z"}`,
+		`{"type":"assistant","message":{"role":"assistant","content":"b"},"timestamp":"2026-04-30T10:00:01Z"}`,
+		`{"type":"user","message":{"role":"user","content":"c"},"timestamp":"2026-04-30T10:00:02Z"}`,
+		`{"type":"summary","summary":"x"}`,
+		"not-json",
+	}, "\n")+"\n")
+
+	n, err := CountMessages(Conversation{Agent: agent.IDClaude, Path: path})
+	if err != nil {
+		t.Fatalf("CountMessages: %v", err)
+	}
+	if n != 3 {
+		t.Errorf("count = %d, want 3 (2 user + 1 assistant)", n)
+	}
+}
+
+// TestCountMessages_AntigravityZero — protobuf transcripts are opaque,
+// so we report 0 without erroring. The detail pane then knows to hide
+// the messages row for Antigravity rather than show a misleading "0".
+func TestCountMessages_AntigravityZero(t *testing.T) {
+	n, err := CountMessages(Conversation{Agent: agent.IDAntigravity, Path: "/anything.pb"})
+	if err != nil {
+		t.Fatalf("CountMessages: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("antigravity count = %d, want 0", n)
+	}
+}
+
+// TestRecentMessages_ClaudeReturnsTail — RecentMessages must return
+// the *last* N messages in chronological order. The detail-preview
+// modal relies on this to show a focused recap, not the start of the
+// conversation.
+func TestRecentMessages_ClaudeReturnsTail(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "abc.jsonl")
+	var b strings.Builder
+	for i := 0; i < 50; i++ {
+		role := "user"
+		if i%2 == 1 {
+			role = "assistant"
+		}
+		b.WriteString(`{"type":"` + role + `","message":{"role":"` + role + `","content":"msg-`)
+		b.WriteString(intToStr(i))
+		b.WriteString(`"},"timestamp":"2026-04-30T10:00:` + zeroPad2(i) + `Z"}` + "\n")
+	}
+	writeFile(t, path, b.String())
+
+	got, err := RecentMessages(Conversation{Agent: agent.IDClaude, Path: path}, 5)
+	if err != nil {
+		t.Fatalf("RecentMessages: %v", err)
+	}
+	if len(got) != 5 {
+		t.Fatalf("len = %d, want 5", len(got))
+	}
+	if got[0].Content != "msg-45" || got[4].Content != "msg-49" {
+		t.Errorf("tail mismatch: %q..%q, want msg-45..msg-49", got[0].Content, got[4].Content)
+	}
+}
+
+func TestRecentMessages_ClaudeCleansUserSkillInvocation(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "abc.jsonl")
+	writeFile(t, path,
+		`{"type":"user","message":{"role":"user","content":"worktree-openspec-workflow\n/worktree-openspec-workflow help me create a spec"},"timestamp":"2026-04-30T10:00:00Z"}`+"\n"+
+			`{"type":"assistant","message":{"role":"assistant","content":"done"},"timestamp":"2026-04-30T10:00:01Z"}`+"\n",
+	)
+
+	got, err := RecentMessages(Conversation{Agent: agent.IDClaude, Path: path}, 5)
+	if err != nil {
+		t.Fatalf("RecentMessages: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2", len(got))
+	}
+	if got[0].Content != "help me create a spec" {
+		t.Errorf("first user message = %q, want cleaned prompt text", got[0].Content)
+	}
+}
+
+func intToStr(i int) string {
+	if i < 10 {
+		return string(rune('0' + i))
+	}
+	return string(rune('0'+i/10)) + string(rune('0'+i%10))
+}
+
+func zeroPad2(i int) string {
+	if i < 10 {
+		return "0" + string(rune('0'+i))
+	}
+	return string(rune('0'+i/10)) + string(rune('0'+i%10))
+}
+
 // TestResumeArgs_AgentDialects pins the per-agent CLI shape. A regression
 // here would mean clicking "resume" on a Codex row tries `codex --resume`
 // (which doesn't exist; codex uses positional `resume <id>`).
@@ -390,16 +734,100 @@ func TestTruncatedPreview_CollapsesWhitespace(t *testing.T) {
 }
 
 func TestTruncatedPreview_LengthCap(t *testing.T) {
-	in := strings.Repeat("a", 500)
+	in := strings.Repeat("a", 800)
 	out := truncatedPreview(in)
 	// Cap is in runes (display width), not bytes — the trailing "…"
 	// is a multi-byte rune so len(out) in bytes is naturally a bit
-	// higher than the rune count.
-	if got := len([]rune(out)); got > 120 {
+	// higher than the rune count. The cap was bumped from 120 to 400
+	// so the detail pane has room to wrap a couple of paragraphs.
+	if got := len([]rune(out)); got > 400 {
 		t.Errorf("preview not capped: runes=%d", got)
 	}
 	if !strings.HasSuffix(out, "…") {
 		t.Errorf("long preview should be ellipsized: %q", out)
+	}
+}
+
+// TestCleanPromptText_StripsTagsAndNoiseBlocks — the helper that the
+// walker runs over the first user message should:
+//   - drop synthetic blocks (environment_context, user_instructions)
+//     entirely, so the preview reflects the user's real first prompt
+//   - strip XML-style tag delimiters from system-reminder / command
+//     wrappers but keep their inner text
+func TestCleanPromptText_StripsTagsAndNoiseBlocks(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			"pure_environment_context_is_empty",
+			"<environment_context>cwd=/foo PATH=/bar</environment_context>",
+			"",
+		},
+		{
+			"system_reminder_strips_tags_keeps_body",
+			"<system-reminder>be terse</system-reminder>",
+			"be terse",
+		},
+		{
+			"strips_known_noise_then_keeps_real_prompt",
+			"<environment_context>cwd=/foo</environment_context>\n\nplease refactor the parser",
+			"please refactor the parser",
+		},
+		{
+			"drops_leading_codex_agents_bundle_then_keeps_real_prompt",
+			"# AGENTS.md instructions for /repo\n\n<INSTRUCTIONS>\n- Prefer tests.\n</INSTRUCTIONS>\n\n<environment_context><cwd>/repo</cwd></environment_context>\n\nfix the row preview",
+			"fix the row preview",
+		},
+		{
+			"keeps_non_leading_agents_reference",
+			"please update AGENTS.md with this workflow",
+			"please update AGENTS.md with this workflow",
+		},
+		{
+			"command_message_keeps_inner",
+			"<command-name>commit</command-name> save the file",
+			"commit save the file",
+		},
+		{
+			"drops_matching_skill_header_and_slash_command",
+			"worktree-openspec-workflow\n/worktree-openspec-workflow help me create a hovercard spec",
+			"help me create a hovercard spec",
+		},
+		{
+			"drops_inline_skill_header_and_slash_command",
+			"openspec-apply-change /openspec-apply-change update the spec",
+			"update the spec",
+		},
+		{
+			"drops_skill_slash_command_without_header",
+			"/worktree-openspec-workflow help me create a hovercard spec",
+			"help me create a hovercard spec",
+		},
+		{
+			"skill_command_without_prompt_is_empty",
+			"openspec-apply-change /openspec-apply-change",
+			"",
+		},
+		{
+			"keeps_path_like_leading_slash_text",
+			"/Users/skz/Projects/foo should stay",
+			"/Users/skz/Projects/foo should stay",
+		},
+		{
+			"plain_text_passes_through",
+			"  hello world  ",
+			"hello world",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := strings.TrimSpace(strings.Join(strings.Fields(cleanPromptText(tc.in)), " "))
+			if got != tc.want {
+				t.Errorf("cleanPromptText(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
 	}
 }
 
@@ -426,6 +854,36 @@ func TestDelete_RemovesClaudeTranscript(t *testing.T) {
 	}
 }
 
+func TestDelete_RemovesMergedClaudeFragments(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	projectDir := filepath.Join(home, ".claude/projects/-Users-skz-Projects-foo")
+	parentPath := filepath.Join(projectDir, "parent-1.jsonl")
+	subagentPath := filepath.Join(projectDir, "parent-1/subagents/agent-a123.jsonl")
+	writeFile(t, parentPath,
+		`{"type":"user","message":{"role":"user","content":"hi"},"timestamp":"2026-04-30T10:00:00Z"}`+"\n",
+	)
+	writeFile(t, subagentPath,
+		`{"type":"assistant","message":{"role":"assistant","content":"done"},"timestamp":"2026-04-30T10:01:00Z"}`+"\n",
+	)
+	got, err := ListClaude(home)
+	if err != nil {
+		t.Fatalf("ListClaude: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want merged row", len(got))
+	}
+
+	if err := Delete(got[0]); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	for _, path := range []string{parentPath, subagentPath} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("%s still exists after Delete: stat err = %v", path, err)
+		}
+	}
+}
+
 // TestDelete_RemovesAntigravityPB — Antigravity transcripts are .pb
 // files under a different root; Delete must handle that agent's
 // path + extension too.
@@ -441,6 +899,36 @@ func TestDelete_RemovesAntigravityPB(t *testing.T) {
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Errorf("pb file still exists after Delete")
+	}
+}
+
+func TestDelete_RemovesCursorTranscript(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(home, ".cursor/projects/Users-skz-Projects-foo/agent-transcripts/cur-1/cur-1.jsonl")
+	writeFile(t, path, `{"role":"user","message":{"content":[{"type":"text","text":"hi"}]}}`+"\n")
+
+	c := Conversation{ID: "cur-1", Agent: agent.IDCursor, Path: path}
+	if err := Delete(c); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("cursor transcript still exists after Delete")
+	}
+}
+
+func TestDelete_RemovesAntigravityJSONChat(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(home, ".gemini/tmp/abcdef/chats/session-2026-05-24T10-00-agy.json")
+	writeFile(t, path, `{"sessionId":"agy-1","messages":[]}`)
+
+	c := Conversation{ID: "agy-1", Agent: agent.IDAntigravity, Path: path}
+	if err := Delete(c); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("antigravity JSON chat still exists after Delete")
 	}
 }
 

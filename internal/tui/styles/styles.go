@@ -18,7 +18,11 @@
 // enforcement.
 package styles
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"github.com/charmbracelet/lipgloss"
+
+	"github.com/skzv/ccmux/internal/agent"
+)
 
 // Styles is the full ccmux style set, derived from a Palette. Every
 // screen reads from a Styles value passed in via its model, or from
@@ -135,6 +139,36 @@ func FromPalette(p Palette) Styles {
 // Default returns the default Styles built from DefaultPalette.
 func Default() Styles {
 	return FromPalette(DefaultPalette)
+}
+
+// AgentAccent returns the per-agent accent style. The mapping is the
+// design system's single source of truth for agent colour coding: every
+// surface that surfaces multiple agents (the Dashboard's Usage panel,
+// the Conversations section nav, the Conversations row's agent label
+// column, the Agents sub-tab row) reads from this method.
+//
+// Mapping: Claude=Mauve, Codex=Sky, Antigravity=Peach, Cursor=Teal.
+// Unknown IDs fall back to the muted style so a future agent without
+// a colour assignment still renders.
+//
+// The returned style sets the foreground only; callers add Bold (or
+// other modifiers) themselves so the same accent can be reused for
+// both loud headings and quieter row labels.
+func (s Styles) AgentAccent(id agent.ID) lipgloss.Style {
+	var color lipgloss.Color
+	switch id {
+	case agent.IDClaude:
+		color = s.P.Mauve
+	case agent.IDCodex:
+		color = s.P.Sky
+	case agent.IDAntigravity:
+		color = s.P.Peach
+	case agent.IDCursor:
+		color = s.P.Teal
+	default:
+		return s.Muted
+	}
+	return lipgloss.NewStyle().Foreground(color)
 }
 
 // HostColor returns a deterministic color for a remote host name so

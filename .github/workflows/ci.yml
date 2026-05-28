@@ -117,28 +117,23 @@ jobs:
 
   fuzz:
     # PR-time fuzz smoke pass per docs/01_Specs/03_Testing_And_CI.md.
-    # Each FuzzXxx target gets a SHORT budget (10s) — enough to catch
-    # a freshly-broken parser invariant on the PR that introduced it,
-    # not enough to find deep bugs. Deep sweeps belong in the
-    # contributor's `make fuzz` run (default 5m/target) and the
+    # Each FuzzXxx target gets a short fixed execution-count budget —
+    # enough to catch a freshly-broken parser invariant on the PR that
+    # introduced it, not enough to find deep bugs. Deep sweeps belong
+    # in the contributor's `make fuzz` run (default 5m/target) and the
     # planned Mac mini nightly cron (1h/target). GHA minutes are
     # finite; PR feedback latency is what we optimize here.
     #
-    # Why 10s and not 60s like before: per-target budget at 60s
-    # pushed the job past 7min and the slow step was gating every
-    # PR's merge latency behind it. The targets are all tight
-    # parsers/classifiers (ParseID, ReadAgent, OSC-52 round-trip,
-    # pmset battery, pane classify, tmux session-name, session-line
-    # render) — 10s is enough to execute tens of thousands of
-    # mutations per target on a GHA runner and surface any same-PR
-    # regression. The original 30s→60s bump (PR #12) was a graceful-
-    # shutdown race the Go fuzz framework has since fixed; 10s does
-    # not reintroduce it.
+    # Why execution-count and not wall-clock time: short `-fuzztime=10s`
+    # runs can fail in Go's fuzz harness with `context deadline exceeded`
+    # at shutdown even when no failing input was found. A fixed
+    # `100000x` budget keeps the smoke signal while avoiding deadline-
+    # shutdown flakes on hosted Linux runners.
     #
     # Single source of truth: the target list lives in the root
-    # Makefile's FUZZ_TARGETS variable. `make fuzz FUZZTIME=10s` is
+    # Makefile's FUZZ_TARGETS variable. `make fuzz FUZZTIME=100000x` is
     # exactly what a contributor would run locally to reproduce.
-    name: fuzz (10s/target)
+    name: fuzz (100k execs/target)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -146,8 +141,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
-      - name: Run all fuzz targets for 10s each
-        run: make fuzz FUZZTIME=10s
+      - name: Run all fuzz targets for 100k executions each
+        run: make fuzz FUZZTIME=100000x
 
   integration:
     name: integration (${{ matrix.os }})
