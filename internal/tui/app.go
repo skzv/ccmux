@@ -452,15 +452,18 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, cmd
 
 	case wizardCompletedMsg:
-		// Wizard finished successfully. Persist any user@host
-		// pairs the user selected on the enumerate step, then
-		// emit a toast acknowledging the success. The `resume`
-		// payload is reserved for the attach-flow integration —
-		// reattach automatically if it was an attach that
-		// triggered the wizard. Currently nil for the
-		// Network-screen and CLI-mirror paths.
+		// Wizard finished successfully. Persist any user@host pairs
+		// the user selected on the enumerate step first.
 		if len(msg.added) > 0 {
 			a = persistWizardAdded(a, msg.target, msg.added)
+		}
+		// If the user reached the wizard while trying to GET INTO a
+		// device (Network-tab Enter / `s`), finish the job: drop
+		// them into the ssh shell now that auth is set up. Without
+		// this the wizard installed the key and then stranded the
+		// user on the Network screen.
+		if target, ok := shouldOpenShell(msg.resume, msg.target); ok {
+			return a, sshShellExec(target)
 		}
 		until := time.Now().Add(4 * time.Second)
 		return a, func() tea.Msg {
@@ -894,8 +897,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// "Permission denied (publickey)" they get a 30-sec
 			// password-once flow.
 			if target := remoteAttachTargetFromErr(msg); target != nil {
+				// Carry the shell-vs-attach intent so a successful
+				// setup finishes the right job: Network-tab Enter
+				// opens a shell; a session attach just signals ready.
+				resume := sshWizardResume{OpenShell: msg.RemoteSSHTarget.OpenShellOnSetup}
 				return a, func() tea.Msg {
-					return openSSHWizardMsg{target: *target}
+					return openSSHWizardMsg{target: *target, resume: resume}
 				}
 			}
 			until := time.Now().Add(5 * time.Second)
