@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/tui/styles"
@@ -113,7 +114,13 @@ func TestSettings_EditEnterCommitRoundTrip(t *testing.T) {
 	}
 
 	m := newSettings(styles.Default(), DefaultKeymap(), config.Defaults(), "test")
-	// Cursor on projects.root (index 0).
+	// Park the cursor on the projects.root row regardless of where it
+	// lives in editableFields() so this test stays robust to reorderings.
+	for i, f := range editableFields() {
+		if f.label == "projects.root" {
+			m.cursor = i
+		}
+	}
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if !m.editing {
 		t.Fatal("Enter on cursor should activate editing")
@@ -144,6 +151,11 @@ func TestSettings_EditEscCancels(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	m := newSettings(styles.Default(), DefaultKeymap(), config.Defaults(), "test")
 	original := m.cfg.Projects.Root
+	for i, f := range editableFields() {
+		if f.label == "projects.root" {
+			m.cursor = i
+		}
+	}
 
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m.editor.SetValue("/some/bogus/path/that/will/fail/validation")
@@ -160,6 +172,11 @@ func TestSettings_EditEscCancels(t *testing.T) {
 func TestSettings_CommitWithInvalidValueKeepsEditingOpen(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	m := newSettings(styles.Default(), DefaultKeymap(), config.Defaults(), "test")
+	for i, f := range editableFields() {
+		if f.label == "projects.root" {
+			m.cursor = i
+		}
+	}
 
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m.editor.SetValue("/nonexistent/path/that/cannot/exist")
@@ -232,6 +249,67 @@ func TestSettings_SubscriptionTierAccepts_ScreenEdit(t *testing.T) {
 	}
 	if reloaded.Subscription.Tier != "pro" {
 		t.Errorf("config.Save didn't persist Subscription.Tier: got %q", reloaded.Subscription.Tier)
+	}
+}
+
+// TestSettings_ActiveFieldRendersAccentBar — the active row MUST be
+// rendered with the design-system accent-bar prefix ("▌"), not the
+// legacy "▸ " cursor marker. This is the contract the redesign-tui-
+// settings change pins for the Settings screen.
+func TestSettings_ActiveFieldRendersAccentBar(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Subscription.Tier = "max5x"
+	cfg.Projects.Root = "/Users/me/Projects"
+	m := newSettings(styles.Default(), DefaultKeymap(), cfg, "v0.0.0-golden")
+	for i, f := range editableFields() {
+		if f.label == "subscription.tier" {
+			m.cursor = i
+		}
+	}
+	out := m.View(120, 40)
+	if !strings.Contains(out, "▌") {
+		t.Fatalf("expected accent-bar marker '▌' on active row, output:\n%s", out)
+	}
+	if strings.Contains(out, "▸ ") {
+		t.Errorf("legacy '▸ ' cursor must not appear in Settings output")
+	}
+}
+
+// TestSettings_ChipPresenceAndColor — boolean/enum fields render their
+// value as a [chip]. Active-row chips MUST color the chip with
+// Semantic.Accent; off-row chips MUST be muted. We grep the output for
+// ANSI color codes derived from the live palette so a theme swap stays
+// honest.
+func TestSettings_ChipPresenceAndColor(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Subscription.Tier = "max5x"
+	cfg.Projects.Root = "/Users/me/Projects"
+	st := styles.Default()
+	m := newSettings(st, DefaultKeymap(), cfg, "v0.0.0-golden")
+
+	// Cursor on subscription.tier — its [max5x] chip should render
+	// in the active treatment, and the other enum chips
+	// ([claude], [mirror], [on]) should render muted.
+	for i, f := range editableFields() {
+		if f.label == "subscription.tier" {
+			m.cursor = i
+		}
+	}
+	out := m.View(120, 40)
+
+	for _, want := range []string{"[max5x]", "[claude]", "[mirror]", "[on]"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected chip %q in Settings output", want)
+		}
+	}
+
+	// The active chip ([max5x]) must carry the accent foreground.
+	// st.Semantic.Accent is the lavender palette token; render an
+	// empty styled run with the same style and look for its escape
+	// prefix in the output.
+	accentMarker := lipgloss.NewStyle().Foreground(st.Semantic.Accent).Render("[max5x]")
+	if !strings.Contains(out, accentMarker) {
+		t.Errorf("expected active [max5x] chip rendered in Semantic.Accent; output did not contain the styled run")
 	}
 }
 
@@ -436,14 +514,14 @@ func TestSettings_AutoCheck_GetShowsOnOff(t *testing.T) {
 }
 
 // TestSettings_NarrowLayout — at phone width the Settings screen keeps
-// the editable field rows (T0) but drops the version line, the config
-// path line, and the (↑/↓ to move…) instructions (T2), with no line
-// overflowing the terminal.
+// the editable field rows (T0) and the group subtitles, with the
+// version + config-path rows pushed into the `i` info modal so they
+// don't crowd the body. No line overflows the terminal.
 func TestSettings_NarrowLayout(t *testing.T) {
 	m := newSettings(styles.Default(), DefaultKeymap(), config.Defaults(), "v9.9.9")
 	out := m.View(50, 60)
 	assertNoOverflow(t, out, 50)
-	assertPresent(t, out, "Settings", "Editable")
+	assertPresent(t, out, "Settings", "Subscription", "Projects", "Agents")
 	assertAbsent(t, out, "v9.9.9", "config file", "↑/↓ to move")
 }
 

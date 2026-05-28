@@ -6,11 +6,13 @@
 │   Run ccmux moshi-setup in a shell to install + pair.                                                                │
 │                                                                                                                      │
 │ Subscription                                                                                                         │
-│ ▌ subscription.tier      [max5x]                                                                                     │
-│   Drives the dashboard quota bar. One of: api, pro, max5x, max20x.                                                   │
+│   subscription.tier      [max5x]                                                                                     │
 │                                                                                                                      │
 │ Projects                                                                                                             │
-│   projects.root          /Users/me/Projects                                                                          │
+│ ▌ projects.root          /Users/me/Projects                                                                          │
+│   Where ccmux looks for projects (~/Projects default).                                                               │
+│   > /Users/me/Projects                                                                                               │
+│   enter to save, esc to cancel                                                                                       │
 │                                                                                                                      │
 │ Agents                                                                                                               │
 │   agents.default         [claude]                                                                                    │
@@ -34,7 +36,5 @@
 │    Use `ccmux host add` only for non-Tailscale hosts or non-default ports.)                                          │
 │                                                                                                                      │
 │                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-? help · q quit · i info · e edit config · 1-7 screens                                                                  
+? help · q quit · i info · e edit config · 1-7 screens · enter save · esc cancel                                        

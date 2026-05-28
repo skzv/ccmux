@@ -153,13 +153,14 @@ type App struct {
 
 	confirm confirmationModal
 
-	helpOpen        bool
-	usageOpen       bool                       // `u` opens the full usage overlay; esc/u closes
-	convPreview     conversationPreviewOverlay // `p` opens the transcript-preview overlay on the Conversations screen
-	projectInfoOpen bool                       // `i` on Projects opens the per-project info overlay; esc/i closes
-	tour            tourModel                  // first-run interactive tour; re-openable with T
-	lastRefresh     time.Time
-	daemonOnline    bool
+	helpOpen         bool
+	usageOpen        bool                       // `u` opens the full usage overlay; esc/u closes
+	convPreview      conversationPreviewOverlay // `p` opens the transcript-preview overlay on the Conversations screen
+	projectInfoOpen  bool                       // `i` on Projects opens the per-project info overlay; esc/i closes
+	settingsInfoOpen bool                       // `i` on Settings opens the version/paths/last-save overlay; esc/i closes
+	tour             tourModel                  // first-run interactive tour; re-openable with T
+	lastRefresh      time.Time
+	daemonOnline     bool
 
 	// Easter egg: pressing M (shift-M) opens the Matrix overlay.
 	// Consistent with T which reopens the tour.
@@ -192,7 +193,7 @@ func (a App) modalCapturingText() bool {
 	if a.sshWizard != nil && a.sshWizard.Active() {
 		return true
 	}
-	if a.tour.Active() || a.helpOpen || a.usageOpen || a.convPreview.IsOpen() || a.projectInfoOpen {
+	if a.tour.Active() || a.helpOpen || a.usageOpen || a.convPreview.IsOpen() || a.projectInfoOpen || a.settingsInfoOpen {
 		return true
 	}
 	if a.projectsM.form != nil || a.projectsM.menu != nil {
@@ -281,6 +282,11 @@ func (a App) Init() tea.Cmd {
 		usageTick(),
 		a.projectsM.Init(),
 		a.agentsM.Init(),
+		// Kick the Moshi-probe spinner so the Settings screen has
+		// motion the moment it's opened — even before the user lands
+		// on it, the spinner ID is registered with Bubble Tea's tick
+		// router so subsequent ticks are accepted.
+		a.settings.SpinnerTick(),
 	}
 	// Auto-update check: a one-shot background `git fetch` + behind-
 	// count when the user hasn't opted out. Fires once per launch —
@@ -553,8 +559,21 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case moshiDetectedMsg:
 		// Async result of detectMoshiCmd — push it into the Settings
 		// screen, which renders the moshi/moshi-hook status block.
+		// Also kick the spinner one more time so it picks back up
+		// on the next probe (the spinner's tick loop pauses when no
+		// TickMsg comes in for its ID).
 		a.settings.SetMoshiState(msg.State)
-		return a, nil
+		return a, a.settings.SpinnerTick()
+
+	case spinner.TickMsg:
+		// Route Moshi-probe spinner ticks globally — the spinner's
+		// loop is keyed by ID, so the message threading works even
+		// when the user is on a different screen. Without this the
+		// spinner would freeze the moment the user navigated away
+		// from Settings during a probe.
+		var cmd tea.Cmd
+		a.settings, cmd = a.settings.Update(msg)
+		return a, cmd
 
 	case conversationDeletedMsg:
 		if msg.Err != nil {
@@ -1039,6 +1058,16 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 
+		// Settings info overlay — `i` or `esc` close it. Same
+		// swallow-all-other-keys pattern as the help/usage overlays.
+		if a.settingsInfoOpen {
+			switch msg.String() {
+			case "i", "esc":
+				a.settingsInfoOpen = false
+			}
+			return a, nil
+		}
+
 		// Esc dismisses the current toast (when no modal is open). The
 		// projects-screen modal handles esc itself before this code runs.
 		if msg.String() == "esc" && a.toasts.Active() &&
@@ -1096,6 +1125,16 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// to the input rather than opening the overlay.
 		if msg.String() == "i" && a.screen == ScreenNotes && !a.modalCapturingText() {
 			return a, func() tea.Msg { return noteInfoOpenMsg{} }
+		}
+
+		// `i` opens the Settings info overlay (ccmux version, config
+		// path, log path, last save). Restricted to the Settings
+		// screen so the keystroke remains available for future
+		// per-screen bindings elsewhere. Same modal-text guard as `u`
+		// so a textinput "i" doesn't hijack the overlay.
+		if msg.String() == "i" && a.screen == ScreenSettings && !a.modalCapturingText() {
+			a.settingsInfoOpen = true
+			return a, nil
 		}
 
 		// `T` re-opens the first-run tour at step 0. Capital so it doesn't
@@ -1443,6 +1482,9 @@ func (a App) View() string {
 		// Selection vanished between open and render (unlikely race);
 		// fall through to the base frame. The next keypress will see
 		// projectInfoOpen=true and close it via the "esc"/"i" handler.
+	}
+	if a.settingsInfoOpen {
+		return a.settings.renderSettingsInfoOverlay(a.width, a.height)
 	}
 	if a.confirm.open() {
 		return a.renderConfirmationOverlay(a.width, a.height)

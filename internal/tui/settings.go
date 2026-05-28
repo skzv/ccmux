@@ -6,8 +6,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/config"
@@ -33,6 +35,7 @@ type settingsModel struct {
 	version    string
 	moshiState moshi.Status
 	moshiCheck time.Time
+	moshiProbe spinner.Model // animates while the Moshi probe is in flight
 
 	cursor  int // index into editableFields()
 	editing bool
@@ -40,6 +43,7 @@ type settingsModel struct {
 	errMsg  string
 	saveMsg string // transient "saved ✓" message
 	savedAt time.Time
+	lastErr string // last save-failure error, surfaced in the info modal
 
 	// cfgPath overrides the user's actual config.Path() result.
 	// Production leaves this empty and View falls back to
@@ -80,10 +84,38 @@ type editableField struct {
 	// For a fixed enum like the agent list, cycling beats making the
 	// user type the exact string.
 	options []string
+
+	// chip marks fields whose value is a fixed enum or boolean and
+	// should render as a [value] chip rather than free text. Off-row
+	// chips render muted; the active-row chip uses Semantic.Accent.
+	chip bool
+}
+
+// fieldGroup labels a contiguous slice of editable fields rendered as
+// one Subtitle-headed sub-section. Groups carry no state; they're a
+// pure View concern derived from editableFields() in groupedFields().
+type fieldGroup struct {
+	label  string
+	fields []editableField
 }
 
 func editableFields() []editableField {
 	return []editableField{
+		{
+			label: "subscription.tier",
+			hint:  "Drives the dashboard quota bar. One of: api, pro, max5x, max20x.",
+			chip:  true,
+			get:   func(c *config.Config) string { return c.Subscription.Tier },
+			set: func(c *config.Config, raw string) error {
+				raw = strings.TrimSpace(strings.ToLower(raw))
+				switch raw {
+				case "", "api", "pro", "max5x", "max20x":
+					c.Subscription.Tier = raw
+					return nil
+				}
+				return fmt.Errorf("must be one of: api, pro, max5x, max20x")
+			},
+		},
 		{
 			label: "projects.root",
 			hint:  "Where ccmux looks for projects (~/Projects default).",
@@ -110,23 +142,10 @@ func editableFields() []editableField {
 			},
 		},
 		{
-			label: "subscription.tier",
-			hint:  "Drives the dashboard quota bar. One of: api, pro, max5x, max20x.",
-			get:   func(c *config.Config) string { return c.Subscription.Tier },
-			set: func(c *config.Config, raw string) error {
-				raw = strings.TrimSpace(strings.ToLower(raw))
-				switch raw {
-				case "", "api", "pro", "max5x", "max20x":
-					c.Subscription.Tier = raw
-					return nil
-				}
-				return fmt.Errorf("must be one of: api, pro, max5x, max20x")
-			},
-		},
-		{
 			label:   "agents.default",
 			hint:    "Default agent for new projects and bare sessions. Enter cycles: claude → codex → antigravity → cursor → shell.",
 			options: []string{"claude", "codex", "antigravity", "cursor", "shell"},
+			chip:    true,
 			get:     func(c *config.Config) string { return c.Agents.Default },
 			set: func(c *config.Config, raw string) error {
 				raw = strings.TrimSpace(strings.ToLower(raw))
@@ -155,6 +174,7 @@ func editableFields() []editableField {
 		{
 			label: "sessions.attach_mode",
 			hint:  "mirror = other devices stay attached (default); exclusive = attaching detaches them.",
+			chip:  true,
 			get: func(c *config.Config) string {
 				// Surface the effective value so an empty field reads
 				// as "mirror" rather than blank.
@@ -179,6 +199,7 @@ func editableFields() []editableField {
 		{
 			label: "update.auto_check",
 			hint:  "Check for ccmux updates on launch and show a banner. on/off. Never auto-installs.",
+			chip:  true,
 			get: func(c *config.Config) string {
 				if c.Update.AutoCheck {
 					return "on"
@@ -209,13 +230,43 @@ func editableFields() []editableField {
 	}
 }
 
+// groupedFields returns the editable-field set partitioned into the
+// three Subtitle-headed sub-sections required by the design-system
+// spec: Subscription, Projects, Agents. The cursor index into the
+// flat editableFields() list is preserved by walking the groups in
+// the same order. Fields without a dedicated section (sessions,
+// updates, theme) fall under Agents — that group reads as
+// "agent and session runtime behavior" rather than just the agent
+// picker.
+func groupedFields(fields []editableField) []fieldGroup {
+	groups := []fieldGroup{
+		{label: "Subscription"},
+		{label: "Projects"},
+		{label: "Agents"},
+	}
+	for _, f := range fields {
+		switch f.label {
+		case "subscription.tier":
+			groups[0].fields = append(groups[0].fields, f)
+		case "projects.root":
+			groups[1].fields = append(groups[1].fields, f)
+		default:
+			groups[2].fields = append(groups[2].fields, f)
+		}
+	}
+	return groups
+}
+
 func newSettings(st styles.Styles, km Keymap, cfg config.Config, version string) settingsModel {
 	// moshi/moshi-hook status is detected asynchronously — App fires
 	// detectMoshiCmd at startup and again every 30s while this screen is
 	// focused, delivering the result via SetMoshiState. Detecting it here
 	// would shell out (launchctl/brew) and stall the first frame by up
 	// to 2s on every launch.
-	return settingsModel{st: st, km: km, cfg: cfg, version: version}
+	sp := spinner.New()
+	sp.Spinner = spinner.MiniDot
+	sp.Style = lipgloss.NewStyle().Foreground(st.Semantic.Accent)
+	return settingsModel{st: st, km: km, cfg: cfg, version: version, moshiProbe: sp}
 }
 
 // SetMoshiState records the result of an async moshi probe (see
@@ -234,6 +285,21 @@ func (m settingsModel) MoshiStale() bool {
 	return time.Since(m.moshiCheck) > 30*time.Second
 }
 
+// moshiProbing reports whether we're still waiting on the first Moshi
+// probe to come back. While true, the View renders the spinner instead
+// of the not-yet-installed placeholder so the user sees motion rather
+// than an inaccurate "moshi-hook not installed" verdict.
+func (m settingsModel) moshiProbing() bool {
+	return m.moshiCheck.IsZero()
+}
+
+// SpinnerTick returns the command that drives the moshi-probe spinner
+// while it's animating. The App batches this into the screen-focus
+// switch so the spinner only ticks when the Settings screen is visible.
+func (m settingsModel) SpinnerTick() tea.Cmd {
+	return m.moshiProbe.Tick
+}
+
 func (m settingsModel) Update(msg tea.Msg) (settingsModel, tea.Cmd) {
 	// Editor mode owns the keyboard: enter to commit, esc to cancel.
 	if m.editing {
@@ -250,6 +316,14 @@ func (m settingsModel) Update(msg tea.Msg) (settingsModel, tea.Cmd) {
 		}
 		var cmd tea.Cmd
 		m.editor, cmd = m.editor.Update(msg)
+		return m, cmd
+	}
+
+	// Forward spinner ticks regardless of editing state so the Moshi
+	// probe's animation keeps advancing in the background.
+	if _, ok := msg.(spinner.TickMsg); ok {
+		var cmd tea.Cmd
+		m.moshiProbe, cmd = m.moshiProbe.Update(msg)
 		return m, cmd
 	}
 
@@ -320,12 +394,14 @@ func (m settingsModel) commit() (settingsModel, tea.Cmd) {
 	}
 	if err := config.Save(m.cfg); err != nil {
 		m.errMsg = "save: " + err.Error()
+		m.lastErr = err.Error()
 		return m, nil
 	}
 	m.editing = false
 	m.errMsg = ""
 	m.saveMsg = "saved ✓"
 	m.savedAt = time.Now()
+	m.lastErr = ""
 	return m, nil
 }
 
@@ -351,11 +427,13 @@ func (m settingsModel) cycleField(f editableField) (settingsModel, tea.Cmd) {
 	}
 	if err := config.Save(m.cfg); err != nil {
 		m.errMsg = "save: " + err.Error()
+		m.lastErr = err.Error()
 		return m, nil
 	}
 	m.errMsg = ""
 	m.saveMsg = "saved ✓  " + f.label + " → " + next
 	m.savedAt = time.Now()
+	m.lastErr = ""
 	return m, nil
 }
 
@@ -394,19 +472,24 @@ func (m *settingsModel) SetConfig(cfg config.Config) {
 // `r` (refresh) is intentionally omitted — Settings has no remote
 // state to refetch; the hint used to be a silent no-op.
 func (m settingsModel) HelpBarProps(width int) components.HelpBarProps {
-	return components.HelpBarProps{
-		Hints: []components.KeyHint{
-			{Key: "?", Label: "help", Priority: 10},
-			{Key: "q", Label: "quit", Priority: 10},
-			{Key: "e", Label: "edit config", Priority: 7},
-			{Key: "1-7", Label: "screens", Priority: 2},
-		},
-		Width: width,
+	hints := []components.KeyHint{
+		{Key: "?", Label: "help", Priority: 10},
+		{Key: "q", Label: "quit", Priority: 10},
+		{Key: "i", Label: "info", Priority: 8},
+		{Key: "e", Label: "edit config", Priority: 7},
+		{Key: "1-7", Label: "screens", Priority: 2},
 	}
+	if m.editing {
+		hints = append(hints,
+			components.KeyHint{Key: "enter", Label: "save", Priority: 9},
+			components.KeyHint{Key: "esc", Label: "cancel", Priority: 9},
+		)
+	}
+	return components.HelpBarProps{Hints: hints, Width: width}
 }
 
 func (m settingsModel) View(width, height int) string {
-	narrow := isNarrow(width)
+	paneInner := width - 2 - 2*m.st.Spacing.SM
 
 	lines := []string{
 		m.st.Emphasis.Render("Settings"),
@@ -414,56 +497,38 @@ func (m settingsModel) View(width, height int) string {
 		m.renderMoshiBlock(),
 		"",
 	}
-	// The version + config-path lines are T2 reference detail, dropped
-	// on narrow. The "Editable" header keeps a short section label but
-	// sheds the (↑/↓ to move…) instructions (also T2).
-	if !narrow {
-		cfgPath := m.cfgPath
-		if cfgPath == "" {
-			cfgPath, _ = config.Path()
-		}
-		lines = append(lines,
-			fmt.Sprintf("ccmux version    %s", m.version),
-			fmt.Sprintf("config file      %s", summarizePath(cfgPath)),
-			"",
-			m.st.Subtitle.Render("Editable (↑/↓ to move, enter to edit, e to open config in $EDITOR)"),
-		)
-	} else {
-		lines = append(lines, m.st.Subtitle.Render("Editable"))
-	}
 
 	fields := editableFields()
+	groups := groupedFields(fields)
+	// Walk the flat field list in editableFields() order so the group
+	// renderer can map a field back to its global cursor index.
+	indexByLabel := make(map[string]int, len(fields))
 	for i, f := range fields {
-		val := f.get(&m.cfg)
-		display := val
-		if display == "" {
-			display = m.st.Muted.Render("(default)")
-		} else if looksLikePath(display) {
-			// Collapse $HOME to `~/` so sandbox /tmp/... paths
-			// don't leak into demo GIFs and so the user sees the
-			// short readable form they typed (or "~/Projects"
-			// rather than the absolute resolution).
-			display = summarizePath(display)
+		indexByLabel[f.label] = i
+	}
+
+	for gi, g := range groups {
+		if len(g.fields) == 0 {
+			continue
 		}
-		cursor := "  "
-		if i == m.cursor {
-			cursor = m.st.Key.Render("▸ ")
+		if gi > 0 {
+			lines = append(lines, "")
 		}
-		row := fmt.Sprintf("%s%-22s %s", cursor, f.label, display)
-		if f.readOnly {
-			row += m.st.Muted.Render("  (read-only)")
-		}
-		lines = append(lines, row)
-		if i == m.cursor {
-			lines = append(lines, "  "+m.st.Muted.Render(f.hint))
-			if m.editing {
-				lines = append(lines, "  "+m.editor.View())
-				lines = append(lines, "  "+m.st.Muted.Render("enter to save, esc to cancel"))
-				if m.errMsg != "" {
+		lines = append(lines, m.st.Subtitle.Render(g.label))
+		for _, f := range g.fields {
+			idx := indexByLabel[f.label]
+			lines = append(lines, m.renderFieldRow(f, idx == m.cursor, paneInner))
+			if idx == m.cursor {
+				lines = append(lines, "  "+m.st.Muted.Render(f.hint))
+				if m.editing {
+					lines = append(lines, "  "+m.editor.View())
+					lines = append(lines, "  "+m.st.Muted.Render("enter to save, esc to cancel"))
+					if m.errMsg != "" {
+						lines = append(lines, "  "+m.st.StatusError.Render("✗ "+m.errMsg))
+					}
+				} else if m.errMsg != "" {
 					lines = append(lines, "  "+m.st.StatusError.Render("✗ "+m.errMsg))
 				}
-			} else if m.errMsg != "" {
-				lines = append(lines, "  "+m.st.StatusError.Render("✗ "+m.errMsg))
 			}
 		}
 	}
@@ -476,19 +541,67 @@ func (m settingsModel) View(width, height int) string {
 	lines = append(lines,
 		"",
 		m.st.Subtitle.Render("Sleep prevention"),
-		fmt.Sprintf("  mode           %s", sleepModeDisplay(m.cfg.Sleep)),
-		fmt.Sprintf("  idle release   %d minutes", m.cfg.Sleep.IdleReleaseMinutes),
-		fmt.Sprintf("  low-batt cutoff %d%% (dangerous auto-downgrades below this)", m.cfg.Sleep.LowBatteryCutoff),
+		"  "+fmt.Sprintf("mode             %s", m.renderChip(sleepModeDisplay(m.cfg.Sleep), false)),
+		"  "+fmt.Sprintf("idle release     %d minutes", m.cfg.Sleep.IdleReleaseMinutes),
+		"  "+fmt.Sprintf("low-batt cutoff  %d%%", m.cfg.Sleep.LowBatteryCutoff),
+		"  "+m.st.Muted.Render("dangerous mode auto-downgrades below the cutoff"),
 		"",
 		m.st.Subtitle.Render("Daemon"),
-		fmt.Sprintf("  poll interval  %ds", m.cfg.Daemon.PollIntervalSeconds),
-		fmt.Sprintf("  needs-input idle %ds", m.cfg.Daemon.IdleSecondsForNeedsInput),
-		fmt.Sprintf("  tailnet listen %v (port %d)", m.cfg.Daemon.ListenTailnet, m.cfg.Daemon.TailnetPort),
+		"  "+fmt.Sprintf("poll interval    %ds", m.cfg.Daemon.PollIntervalSeconds),
+		"  "+fmt.Sprintf("needs-input idle %ds", m.cfg.Daemon.IdleSecondsForNeedsInput),
+		"  "+fmt.Sprintf("tailnet listen   %s (port %d)", m.renderChip(boolOnOff(m.cfg.Daemon.ListenTailnet), false), m.cfg.Daemon.TailnetPort),
 		"",
-		m.st.Subtitle.Render("Remote hosts"),
+		m.st.Subtitle.Render("Hosts"),
 		m.renderHosts(),
 	)
 	return m.st.Pane.Width(width - 2).Height(height - 2).MaxWidth(width).Render(strings.Join(lines, "\n"))
+}
+
+// renderFieldRow lays out a single editable field as a design-system
+// list row: 2-cell prefix (selection bar on the active row, two spaces
+// otherwise), label, value (or chip), optional read-only tag.
+func (m settingsModel) renderFieldRow(f editableField, active bool, paneInner int) string {
+	rawVal := f.get(&m.cfg)
+	var valStr string
+	switch {
+	case rawVal == "":
+		valStr = m.st.Muted.Render("(default)")
+	case f.chip:
+		valStr = m.renderChip(rawVal, active)
+	case looksLikePath(rawVal):
+		// Collapse $HOME to "~/" so sandbox /tmp/... paths don't
+		// leak into demo GIFs and the user sees the short form
+		// they typed (e.g. "~/Projects") rather than the absolute
+		// resolution.
+		valStr = summarizePath(rawVal)
+	default:
+		valStr = rawVal
+	}
+	content := fmt.Sprintf("%-22s %s", f.label, valStr)
+	if f.readOnly {
+		content += "  " + m.st.Muted.Render("(read-only)")
+	}
+	return components.RenderListRow(m.st, content, active, paneInner)
+}
+
+// renderChip renders a value as a bracketed chip. The active row's
+// chip uses Semantic.Accent so it pops against the elevated background;
+// off-row chips render muted to match the surrounding row text.
+func (m settingsModel) renderChip(value string, active bool) string {
+	style := m.st.Muted
+	if active {
+		style = lipgloss.NewStyle().Foreground(m.st.Semantic.Accent).Bold(true)
+	}
+	return style.Render("[" + value + "]")
+}
+
+// boolOnOff renders a Go bool as the project's "on"/"off" idiom so
+// boolean rows can flow through the same chip-rendering path as enums.
+func boolOnOff(b bool) string {
+	if b {
+		return "on"
+	}
+	return "off"
 }
 
 // renderMoshiBlock shows the most useful one-glance view of the mobile
@@ -498,6 +611,12 @@ func (m settingsModel) renderMoshiBlock() string {
 	s := m.moshiState
 	title := m.st.Subtitle.Render("Moshi (mobile push)")
 	var blockLines []string
+	if m.moshiProbing() {
+		blockLines = []string{
+			"  " + m.moshiProbe.View() + " " + m.st.Muted.Render("detecting moshi-hook…"),
+		}
+		return strings.Join(append([]string{title}, blockLines...), "\n")
+	}
 	switch {
 	case !s.BinaryInstalled:
 		blockLines = []string{
@@ -551,4 +670,54 @@ func sleepModeDisplay(s config.SleepConfig) string {
 		return "dangerous (legacy flag)"
 	}
 	return "safe"
+}
+
+// renderSettingsInfoOverlay produces the centered "i" info modal: ccmux
+// version, config + log paths, last-save status, and a hint to dismiss.
+// Lives next to settingsModel so the modal renders straight off the
+// model's own state without needing an extra struct.
+func (m settingsModel) renderSettingsInfoOverlay(width, height int) string {
+	st := m.st
+	cfgPath := m.cfgPath
+	if cfgPath == "" {
+		cfgPath, _ = config.Path()
+	}
+	logPath := ccmuxLogPath()
+
+	lines := []string{
+		st.Emphasis.Render("ccmux info"),
+		st.Subtitle.Render("Reference metadata: version, paths, last save."),
+		"",
+		fmt.Sprintf("  %s   %s", st.Key.Render("version "), m.version),
+		fmt.Sprintf("  %s   %s", st.Key.Render("config  "), summarizePath(cfgPath)),
+		fmt.Sprintf("  %s   %s", st.Key.Render("log     "), summarizePath(logPath)),
+		"",
+	}
+	if !m.savedAt.IsZero() {
+		lines = append(lines, fmt.Sprintf("  %s   %s ago",
+			st.Key.Render("saved   "),
+			humanDuration(time.Since(m.savedAt))))
+	} else {
+		lines = append(lines, "  "+st.Muted.Render("no saves this session"))
+	}
+	if m.lastErr != "" {
+		lines = append(lines, "  "+st.StatusError.Render("last error: "+m.lastErr))
+	}
+
+	lines = append(lines, "", st.Muted.Render("press i or esc to close"))
+
+	modalW := minInt(96, width-4)
+	body := strings.Join(lines, "\n")
+	modal := st.PaneFocused.Width(modalW).Render(body)
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, modal)
+}
+
+// ccmuxLogPath returns the well-known TUI debug log path. Centralized
+// here so the info modal doesn't have to know the layout debug.go uses.
+func ccmuxLogPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "~/.local/state/ccmux/ccmux.log"
+	}
+	return home + "/.local/state/ccmux/ccmux.log"
 }

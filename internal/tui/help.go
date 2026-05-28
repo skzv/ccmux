@@ -93,7 +93,11 @@ func helpForScreen(s Screen, km Keymap) []HelpItem {
 		}
 	case ScreenSettings:
 		return []HelpItem{
-			{"(read-only for now)", "edit ~/.config/ccmux/config.toml manually"},
+			{"↑↓ / j k", "navigate fields"},
+			{"enter", "edit field (or cycle enum)"},
+			{"esc", "cancel edit"},
+			{"i", "open info modal (version, paths, last save)"},
+			{"e", "open ~/.config/ccmux/config.toml in $EDITOR"},
 		}
 	case ScreenNetwork:
 		return []HelpItem{
