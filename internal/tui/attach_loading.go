@@ -70,6 +70,12 @@ type attachRemoteTarget struct {
 	// key wouldn't fix a Tailscale-SSH rejection (that's an ACL
 	// issue), so we surface a more targeted hint instead.
 	TailscaleSSH bool
+	// OpenShellOnSetup marks the "open an interactive shell" intent
+	// (Network-tab Enter) vs a session/project attach. When the
+	// post-attach auth-failure auto-route opens the SSH wizard, a
+	// true value tells the wizard to drop the user into a shell on
+	// success; false leaves them to retry their attach.
+	OpenShellOnSetup bool
 }
 
 // attachSpinTickMsg advances the spinner frame while the overlay is up.

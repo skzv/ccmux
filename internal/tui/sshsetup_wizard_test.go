@@ -74,10 +74,12 @@ func TestSSHWizard_UserStepPrefillsTarget(t *testing.T) {
 }
 
 // TestSSHWizard_UserStepEditPersists — type into the username
-// field, hit Enter, the target's User is updated and we advance
-// to password. This is the alice-locally-bob-on-the-remote fix.
+// field, hit Enter, the target's User is updated; the wizard then
+// re-probes the corrected user before deciding password-vs-skip.
+// This is the alice-locally-bob-on-the-remote fix.
 func TestSSHWizard_UserStepEditPersists(t *testing.T) {
 	m := newSSHWizard(styles.Default())
+	m.probeFn = fakeProbeAuthFailed
 	m.Open(sshsetup.Target{User: "alice", Host: "sputnik"}, nil)
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // confirm → user
 	// Clear pre-fill with Ctrl-U, then type the new name.
@@ -85,12 +87,62 @@ func TestSSHWizard_UserStepEditPersists(t *testing.T) {
 	for _, r := range "bob" {
 		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 	}
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if m.Step() != sshWizardPassword {
-		t.Fatalf("Step = %v, want sshWizardPassword after username Enter", m.Step())
-	}
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // user → probing
 	if m.target.User != "bob" {
 		t.Errorf("target.User = %q, want bob (the edited value)", m.target.User)
+	}
+	if m.Step() != sshWizardProbing {
+		t.Fatalf("Step = %v, want sshWizardProbing after username Enter", m.Step())
+	}
+	m, _ = m.Update(runCmd(cmd)) // probe(AuthFailed) → password
+	if m.Step() != sshWizardPassword {
+		t.Fatalf("Step = %v, want sshWizardPassword after AuthFailed probe", m.Step())
+	}
+}
+
+// TestSSHWizard_PasswordlessSkipsToEnumerate — the headline new
+// behavior: the user corrects the username, the re-probe finds key
+// auth ALREADY works (passwordless login configured), so the wizard
+// skips the password + install steps entirely and goes straight to
+// the enumerate/done path. No password is ever requested.
+func TestSSHWizard_PasswordlessSkipsToEnumerate(t *testing.T) {
+	m := newSSHWizard(styles.Default())
+	m.probeFn = fakeProbeOK           // key auth already works
+	m.enumerateFn = fakeEnumerateNone // nothing else to add → Done
+	m.keyFn = fakeKey
+	var installCalls int
+	m.installFn = func(ctx context.Context, t sshsetup.Target, pw string, k sshsetup.LocalKey, p sshsetup.Progress) error {
+		installCalls++
+		return nil
+	}
+	m.Open(sshsetup.Target{User: "bob", Host: "sputnik"}, nil)
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})    // confirm → user
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // user → probing
+	if m.Step() != sshWizardProbing {
+		t.Fatalf("Step = %v, want sshWizardProbing", m.Step())
+	}
+	m, cmd = m.Update(runCmd(cmd)) // probe(OK) → startEnumerate (skip password)
+	if m.Step() == sshWizardPassword {
+		t.Fatal("wizard asked for a password despite passwordless auth already working")
+	}
+	m, _ = m.Update(runCmd(cmd)) // enumerate(none) → done
+	if m.Step() != sshWizardDone {
+		t.Fatalf("Step = %v, want sshWizardDone (passwordless → straight to done)", m.Step())
+	}
+	if installCalls != 0 {
+		t.Errorf("installFn called %d times; must be 0 when auth already works", installCalls)
+	}
+}
+
+// TestSSHWizard_ProbingEscCancels — Esc during the re-probe cancels
+// the wizard cleanly.
+func TestSSHWizard_ProbingEscCancels(t *testing.T) {
+	m := newSSHWizard(styles.Default())
+	m.step = sshWizardProbing
+	m.target = sshsetup.Target{User: "bob", Host: "sputnik"}
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if _, ok := runCmd(cmd).(wizardCancelledMsg); !ok {
+		t.Fatal("Esc during probing should emit wizardCancelledMsg")
 	}
 }
 
@@ -149,10 +201,7 @@ func TestSSHWizard_PasswordFlowOK(t *testing.T) {
 	m.keyFn = fakeKey
 
 	m.Open(sshsetup.Target{User: "alice", Host: "sputnik"}, nil)
-	// confirm → user
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	// user → password (accept pre-fill)
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = advanceUserToPassword(t, m)
 	// type password
 	for _, r := range "hunter2" {
 		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
@@ -185,8 +234,7 @@ func TestSSHWizard_WrongPasswordReprompts(t *testing.T) {
 	m.installFn = fakeInstallWrongPassword
 	m.keyFn = fakeKey
 	m.Open(sshsetup.Target{User: "alice", Host: "sputnik"}, nil)
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // confirm → user
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // user → password (accept)
+	m = advanceUserToPassword(t, m)
 	for _, r := range "bad" {
 		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 	}
@@ -213,8 +261,7 @@ func TestSSHWizard_ErrorStateRetry(t *testing.T) {
 	m.installFn = fakeInstallGenericErr
 	m.keyFn = fakeKey
 	m.Open(sshsetup.Target{User: "alice", Host: "sputnik"}, nil)
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // confirm → user
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // user → password (accept)
+	m = advanceUserToPassword(t, m)
 	for _, r := range "x" {
 		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 	}
@@ -239,8 +286,7 @@ func TestSSHWizard_EnumerateSelection(t *testing.T) {
 	m.enumerateFn = fakeEnumerateBobCarol
 	m.keyFn = fakeKey
 	m.Open(sshsetup.Target{User: "alice", Host: "sputnik"}, nil)
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // confirm → user
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // user → password (accept)
+	m = advanceUserToPassword(t, m)
 	for _, r := range "p" {
 		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 	}
@@ -274,8 +320,7 @@ func TestSSHWizard_EnumerateEscSkipsAdd(t *testing.T) {
 	m.enumerateFn = fakeEnumerateBobCarol
 	m.keyFn = fakeKey
 	m.Open(sshsetup.Target{User: "alice", Host: "sputnik"}, nil)
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // confirm → user
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // user → password (accept)
+	m = advanceUserToPassword(t, m)
 	for _, r := range "p" {
 		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 	}
@@ -384,6 +429,41 @@ func fakeEnumerateNone(ctx context.Context, t sshsetup.Target, key sshsetup.Loca
 func fakeEnumerateBobCarol(ctx context.Context, t sshsetup.Target, key sshsetup.LocalKey) ([]string, error) {
 	_ = ctx
 	return []string{"bob", "carol"}, nil
+}
+
+// fakeProbeAuthFailed makes the post-username re-probe report
+// "key auth not set up" so the wizard falls through to the password
+// step — the path most password-flow tests exercise.
+func fakeProbeAuthFailed(ctx context.Context, t sshsetup.Target) sshsetup.ProbeResult {
+	_ = ctx
+	return sshsetup.ProbeAuthFailed
+}
+
+// fakeProbeOK makes the re-probe report "key auth already works" —
+// the passwordless-already-configured path that skips password +
+// install.
+func fakeProbeOK(ctx context.Context, t sshsetup.Target) sshsetup.ProbeResult {
+	_ = ctx
+	return sshsetup.ProbeOK
+}
+
+// advanceUserToPassword drives confirm → user → (re-probe AuthFailed)
+// → password, leaving the model parked on the password step. Sets a
+// default AuthFailed probe seam if the test didn't supply one. Use
+// in password-flow tests so they don't each re-spell the re-probe
+// hop the Username step now performs.
+func advanceUserToPassword(t *testing.T, m *sshWizardModel) *sshWizardModel {
+	t.Helper()
+	if m.probeFn == nil {
+		m.probeFn = fakeProbeAuthFailed
+	}
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})    // confirm → user
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // user → probing
+	m, _ = m.Update(runCmd(cmd))                       // probe done → password
+	if m.Step() != sshWizardPassword {
+		t.Fatalf("advanceUserToPassword: landed on %v, want sshWizardPassword", m.Step())
+	}
+	return m
 }
 
 // makeOpenAt jumps the wizard into a specific step without driving
