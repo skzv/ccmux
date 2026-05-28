@@ -910,7 +910,7 @@ func toUsageSummary(s usage.AgentSummary) daemon.UsageSummary {
 }
 
 // handleConversations returns past agent transcripts (Claude, Codex,
-// Antigravity) from the daemon's home directory. Sorted most-recent
+// Cursor, Antigravity) from the daemon's home directory. Sorted most-recent
 // first; clients can do their own filtering. Headless / SDK runs are
 // excluded by default — they pile up fast in automation and aren't
 // usually what a user means by "my conversations".

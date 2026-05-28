@@ -7,9 +7,8 @@ import (
 )
 
 // Cursor is the Cursor Agent CLI. Binary: `cursor-agent`. Config root:
-// ~/.cursor. The CLI is currently beta; transcript parsing is not wired
-// into ccmux yet, so TranscriptsRoot points at the config tree as a
-// placeholder for future discovery work.
+// ~/.cursor. Cursor Agent writes JSONL transcripts beneath
+// ~/.cursor/projects/<encoded-cwd>/agent-transcripts/.
 type Cursor struct{}
 
 func (Cursor) ID() ID              { return IDCursor }
@@ -24,7 +23,7 @@ func (Cursor) LaunchCmd(continueFlag bool) string {
 }
 
 func (Cursor) ConfigRoot(home string) string      { return filepath.Join(home, ".cursor") }
-func (Cursor) TranscriptsRoot(home string) string { return filepath.Join(home, ".cursor", "sessions") }
+func (Cursor) TranscriptsRoot(home string) string { return filepath.Join(home, ".cursor", "projects") }
 
 // InitialPrompt mirrors the AGENTS.md-centered bootstrap used by Codex
 // and Antigravity. Cursor CLI reads AGENTS.md and .cursor/rules, so the

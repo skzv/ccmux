@@ -339,7 +339,9 @@ func isSyntheticUserContent(content []struct {
 			continue
 		}
 		t := strings.TrimSpace(c.Text)
-		if strings.HasPrefix(t, "<environment_context>") || strings.HasPrefix(t, "<user_instructions>") {
+		if strings.HasPrefix(t, "<environment_context>") ||
+			strings.HasPrefix(t, "<user_instructions>") ||
+			strings.HasPrefix(t, "# AGENTS.md instructions") {
 			return true
 		}
 		// First real text block decides — bail after seeing one.

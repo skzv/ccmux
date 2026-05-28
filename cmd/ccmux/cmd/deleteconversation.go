@@ -22,7 +22,7 @@ func newDeleteConversationCmd() *cobra.Command {
 		Use:     "delete-conversation <id>",
 		Aliases: []string{"rm-conversation"},
 		Short:   "Delete a past conversation's transcript (irreversible)",
-		Long: `Delete a past conversation's transcript file from disk.
+		Long: `Delete a past conversation's transcript file(s) from disk.
 
 This is irreversible: the transcript is gone and the conversation can
 no longer be resumed. Use ` + "`ccmux list-conversations`" + ` to find
@@ -47,6 +47,11 @@ Prints a confirmation prompt unless --force is given.`,
 					fmt.Printf("  %q\n", target.Preview)
 				}
 				fmt.Printf("  %s\n", target.Path)
+				for _, path := range target.Paths {
+					if path != target.Path {
+						fmt.Printf("  %s\n", path)
+					}
+				}
 				fmt.Print("This cannot be undone. Type 'yes' to confirm: ")
 				var answer string
 				_, _ = fmt.Scanln(&answer)

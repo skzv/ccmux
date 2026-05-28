@@ -153,8 +153,9 @@ type App struct {
 	confirm confirmationModal
 
 	helpOpen     bool
-	usageOpen    bool      // `u` opens the full usage overlay; esc/u closes
-	tour         tourModel // first-run interactive tour; re-openable with T
+	usageOpen    bool                       // `u` opens the full usage overlay; esc/u closes
+	convPreview  conversationPreviewOverlay // `p` opens the transcript-preview overlay on the Conversations screen
+	tour         tourModel                  // first-run interactive tour; re-openable with T
 	lastRefresh  time.Time
 	daemonOnline bool
 
@@ -189,7 +190,7 @@ func (a App) modalCapturingText() bool {
 	if a.sshWizard != nil && a.sshWizard.Active() {
 		return true
 	}
-	if a.tour.Active() || a.helpOpen || a.usageOpen {
+	if a.tour.Active() || a.helpOpen || a.usageOpen || a.convPreview.IsOpen() {
 		return true
 	}
 	if a.projectsM.form != nil || a.projectsM.menu != nil {
@@ -368,6 +369,17 @@ func (a App) refreshUsageCmd() tea.Cmd {
 	}
 }
 
+// loadConvPreviewCmd reads the most recent ~30 messages from the
+// selected conversation's transcript so the `p`-key preview overlay
+// can render them. Antigravity short-circuits to an empty slice — the
+// overlay surfaces "preview unavailable" itself.
+func (a App) loadConvPreviewCmd(c conversations.Conversation) tea.Cmd {
+	return func() tea.Msg {
+		msgs, err := conversations.RecentMessages(c, previewMessageLimit)
+		return conversationPreviewLoadedMsg{ID: c.ID, Messages: msgs, Err: err}
+	}
+}
+
 // refreshConversationsCmd loads the full conversations list. Fired on
 // Conversations-tab entry and on the Refresh keybind while the screen
 // is focused. Walks ~/.claude, ~/.codex, ~/.gemini/antigravity-cli —
@@ -472,7 +484,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.screen = ScreenConversations
 		a.conversationsM.SetProjectFilter(msg.Project)
 		a.conversationsM.SetLoading(true)
-		return a, a.refreshConversationsCmd()
+		return a, tea.Batch(a.refreshConversationsCmd(), a.conversationsM.SpinnerTickCmd())
 
 	case conversationsLoadedMsg:
 		if msg.Err != nil {
@@ -480,6 +492,27 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		a.conversationsM.SetList(msg.List)
+		// Kick off the lazy stats load for the row the cursor landed
+		// on so the detail pane's "messages N" populates without
+		// waiting for the next keystroke.
+		return a, a.conversationsM.LoadStatsCmd()
+
+	case conversationStatsLoadedMsg:
+		if msg.Err != nil {
+			// On error, plant a sentinel so we don't re-fire the load on
+			// every cursor move. The pane will silently skip the row.
+			a.conversationsM.SetMessageCount(msg.ID, -1)
+			return a, nil
+		}
+		a.conversationsM.SetMessageCount(msg.ID, msg.Count)
+		return a, nil
+
+	case conversationPreviewLoadedMsg:
+		if msg.Err != nil {
+			a.convPreview.SetLoadErr(msg.ID, msg.Err.Error())
+			return a, nil
+		}
+		a.convPreview.SetMessages(msg.ID, msg.Messages)
 		return a, nil
 
 	case updateCheckMsg:
@@ -952,6 +985,16 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 
+		// Transcript-preview overlay — `p` or `esc` close it. Same
+		// swallow-everything-else model as the usage overlay.
+		if a.convPreview.IsOpen() {
+			switch msg.String() {
+			case "p", "esc":
+				a.convPreview.Close()
+			}
+			return a, nil
+		}
+
 		// Esc dismisses the current toast (when no modal is open). The
 		// projects-screen modal handles esc itself before this code runs.
 		if msg.String() == "esc" && a.toasts.Active() &&
@@ -974,6 +1017,20 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// while the textinput has focus.
 		if msg.String() == "u" && a.screen == ScreenSessions && !a.modalCapturingText() {
 			a.usageOpen = true
+			return a, nil
+		}
+
+		// `p` opens the transcript-preview overlay — only on the
+		// Conversations screen, where a row is selected. The modal-
+		// text guard keeps the keystroke out when the help overlay,
+		// tour, or any text-capturing form is open. The same `p`
+		// closes the overlay (handled above).
+		if msg.String() == "p" && a.screen == ScreenConversations && !a.modalCapturingText() {
+			sel := a.conversationsM.Selected()
+			if sel != nil {
+				a.convPreview.Open(*sel)
+				return a, a.loadConvPreviewCmd(*sel)
+			}
 			return a, nil
 		}
 
@@ -1063,9 +1120,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.screen = ScreenConversations
 			// Conversations are read lazily — refresh on every entry so
 			// a newly-saved transcript from another window shows up next
-			// time the user opens this tab.
+			// time the user opens this tab. The spinner tick drives the
+			// loading placeholder while the walk runs.
 			a.conversationsM.SetLoading(true)
-			return a, a.refreshConversationsCmd()
+			return a, tea.Batch(a.refreshConversationsCmd(), a.conversationsM.SpinnerTickCmd())
 		case keyMatches(msg, a.keys.Projects):
 			a.screen = ScreenProjects
 			return a, nil
@@ -1214,6 +1272,14 @@ func (a App) View() string {
 	case ScreenSessions:
 		body = a.homeView(a.width, bodyHeight)
 	case ScreenConversations:
+		// Wide layout swaps the screen footer toast for an inline
+		// banner at the top of the detail pane — closer to the action
+		// that produced the notification.
+		if !isNarrow(a.width) && a.toasts.Active() {
+			a.conversationsM.SetBanner(a.toasts.Render(a.styles))
+		} else {
+			a.conversationsM.SetBanner("")
+		}
 		body = a.conversationsM.View(a.width, bodyHeight)
 	case ScreenProjects:
 		body = a.projectsM.View(a.width, bodyHeight)
@@ -1245,6 +1311,9 @@ func (a App) View() string {
 	}
 	if a.usageOpen {
 		return a.dashboard.renderUsageOverlay(a.styles, a.width, a.height)
+	}
+	if a.convPreview.IsOpen() {
+		return a.convPreview.View(a.styles, a.width, a.height)
 	}
 	if a.confirm.open() {
 		return a.renderConfirmationOverlay(a.width, a.height)
@@ -1477,7 +1546,11 @@ func (a App) renderStatusBar() string {
 // screen's HelpBarProps (or a generic fallback for unmigrated
 // screens).
 func (a App) renderHelpLine() string {
-	if a.toasts.Active() {
+	// Conversations wide layout opts out of the footer toast — the
+	// banner already appears at the top of the side pane.
+	conversationsSideToast := a.toasts.Active() &&
+		a.screen == ScreenConversations && !isNarrow(a.width)
+	if a.toasts.Active() && !conversationsSideToast {
 		return forceSingleLine(a.toasts.Render(a.styles), a.width)
 	}
 	return forceSingleLine(components.HelpBar(a.styles, a.helpBarProps()), a.width)

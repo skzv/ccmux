@@ -8,6 +8,7 @@ import (
 
 	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/config"
+	"github.com/skzv/ccmux/internal/conversations"
 	"github.com/skzv/ccmux/internal/notes"
 	"github.com/skzv/ccmux/internal/project"
 	"github.com/skzv/ccmux/internal/tui/components"
@@ -57,6 +58,26 @@ func TestConversationsGolden(t *testing.T) {
 	body := m.View(width, height-lipgloss.Height(helpLine))
 	out := composeScreen(body, helpLine, height)
 	goldenAssert(t, "conversations.txt", out)
+}
+
+// TestConversationsModalGolden snapshots the `p` transcript preview
+// overlay at 120x40 — the design-system breakpoint where the wide
+// layout kicks in. Fixed messages + the same fixed-relative-time
+// fakeConversations() seed keep the snapshot deterministic.
+func TestConversationsModalGolden(t *testing.T) {
+	const width, height = 120, 40
+	st := styles.Default()
+
+	target := fakeConversations()[0] // claude row
+	var overlay conversationPreviewOverlay
+	overlay.Open(target)
+	overlay.SetMessages(target.ID, []conversations.Message{
+		{Role: "user", Content: "Walk me through the auth-redesign migration plan."},
+		{Role: "assistant", Content: "Sure. We're swapping the legacy session-token middleware for a passkey-backed flow. The plan is in three phases:\n\n1. Bring up the new endpoints behind a feature flag.\n2. Dual-write for one week so we can compare.\n3. Cut the legacy code path."},
+	})
+
+	out := overlay.View(st, width, height)
+	goldenAssert(t, "conversations_modal.txt", out)
 }
 
 // TestProjectsGolden snapshots the Projects screen at 120x40 with a

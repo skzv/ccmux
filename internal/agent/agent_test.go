@@ -116,7 +116,7 @@ func TestAgent_Identity_Stable(t *testing.T) {
 		{Claude{}, IDClaude, "claude", "Claude Code", ".claude", "projects"},
 		{Codex{}, IDCodex, "codex", "Codex", ".codex", "sessions"},
 		{Antigravity{}, IDAntigravity, "agy", "Antigravity CLI", ".gemini/antigravity-cli", "conversations"},
-		{Cursor{}, IDCursor, "cursor-agent", "Cursor", ".cursor", "sessions"},
+		{Cursor{}, IDCursor, "cursor-agent", "Cursor", ".cursor", "projects"},
 	}
 	for _, tc := range cases {
 		t.Run(string(tc.id), func(t *testing.T) {
