@@ -13,6 +13,24 @@ import (
 	"github.com/creack/pty"
 )
 
+// TestTUIAgents_CodexReasoningEffortKeyPersists exercises the keyboard
+// workflow that writes Codex's reasoning effort from the TUI:
+//
+//  1. The TUI boots into Sessions (the only display assertion the test
+//     makes — tab names are public app vocabulary, fluid section
+//     labels are not).
+//  2. `5` switches to Agents, `l` advances to the Codex sub-tab,
+//     `r` cycles the effort.
+//  3. The Codex `config.toml` on disk reflects the new value.
+//
+// The test deliberately avoids waiting on per-sub-tab display strings
+// ("Default model", "Codex configuration", etc.). Those are
+// design-system content that the TUI redesign work churns through
+// regularly — every time a label tweaks, a content-coupled e2e wait
+// breaks even though the underlying workflow is fine. The only
+// outcome that matters here is the file write, so the test sends the
+// key sequence with a short inter-key delay and polls the file as
+// the sole behavioural assertion.
 func TestTUIAgents_CodexReasoningEffortKeyPersists(t *testing.T) {
 	e := newEnv(t)
 	cfg := e.defaultConfig()
@@ -45,10 +63,18 @@ func TestTUIAgents_CodexReasoningEffortKeyPersists(t *testing.T) {
 	copyDone := make(chan struct{})
 	go copyTerminalOutput(f, &output, copyDone)
 
+	// Single sync point: wait for the TUI to fully render the
+	// initial Sessions screen. After that we drive the workflow with
+	// timed key sends and assert on the on-disk outcome.
 	waitForTUI(t, &output, "Sessions")
-	waitForTUIWithInput(t, f, &output, "Default model", "5")
-	waitForTUIWithInput(t, f, &output, "Codex configuration", "l")
-	writeTTY(t, f, "r")
+
+	// `5` → Agents · default sub-tab is Claude.
+	// `l` → cycle to Codex sub-tab (h/l cycle agents).
+	// `r` → advance reasoning effort (medium → low).
+	for _, k := range []string{"5", "l", "r"} {
+		writeTTY(t, f, k)
+		time.Sleep(150 * time.Millisecond)
+	}
 
 	configPath := filepath.Join(codexHome, "config.toml")
 	if !waitFor(5*time.Second, func() bool {

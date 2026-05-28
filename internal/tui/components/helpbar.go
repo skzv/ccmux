@@ -50,7 +50,15 @@ func HelpBar(s styles.Styles, p HelpBarProps) string {
 	rendered := make([]string, len(p.Hints))
 	widths := make([]int, len(p.Hints))
 	for i, h := range p.Hints {
-		rendered[i] = s.Key.Render(h.Key) + " " + s.Muted.Render(h.Label)
+		// Label-only hints (empty Key) skip the "<key> " prefix so the
+		// rendered fragment stays a clean "(read-only)" or similar
+		// marker instead of " (read-only)" — the leading space would
+		// double up against the separator and read as a typo.
+		if h.Key == "" {
+			rendered[i] = s.Muted.Render(h.Label)
+		} else {
+			rendered[i] = s.Key.Render(h.Key) + " " + s.Muted.Render(h.Label)
+		}
 		widths[i] = lipgloss.Width(rendered[i])
 	}
 

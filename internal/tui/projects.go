@@ -472,7 +472,7 @@ func (m projectsModel) renderList(width, height int, narrow bool) string {
 		// `on <host>` subheader above and in the detail pane.
 		// Pressing `a` cycles the agent on the focused row and the
 		// dot's color follows on the next frame.
-		dot := m.st.AgentAccent(p.Agent).Render("●")
+		dot := m.st.AgentAccent(p.Agent).Render("•")
 		content := dot + " " + p.Name + renderScaffoldChips(m.st, p, selected)
 		line := components.RenderListRow(m.st, content, selected, inner)
 		rows = append(rows, line)
@@ -522,7 +522,7 @@ func (m projectsModel) renderDetail(width, height int) string {
 		m.st.Muted.Render(summarizePath(p.Path)),
 		"",
 		"session   " + m.st.Emphasis.Render(p.SessionName()),
-		"agent     " + m.st.AgentAccent(p.Agent).Render("● ") + m.st.Emphasis.Render(agentDisplay),
+		"agent     " + m.st.AgentAccent(p.Agent).Render("• ") + m.st.Emphasis.Render(agentDisplay),
 		"detected  " + detected,
 		"",
 		m.st.Key.Render("a") + " " + m.st.Muted.Render("switch agent") + "   " +
@@ -550,7 +550,7 @@ func projectHost(p project.Project) string {
 func renderAgentLegend(st styles.Styles) string {
 	parts := []string{st.Muted.Render("agents:")}
 	for _, a := range agent.All() {
-		dot := st.AgentAccent(a.ID()).Render("●")
+		dot := st.AgentAccent(a.ID()).Render("•")
 		// Lowercase agent ID (not DisplayName) — the IDs are short
 		// enough to fit on one line in a 60-cell pane, and they're
 		// already the canonical strings the rest of the codebase

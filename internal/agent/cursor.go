@@ -8,7 +8,9 @@ import (
 
 // Cursor is the Cursor Agent CLI. Binary: `cursor-agent`. Config root:
 // ~/.cursor. Cursor Agent writes JSONL transcripts beneath
-// ~/.cursor/projects/<encoded-cwd>/agent-transcripts/.
+// ~/.cursor/projects/<encoded-cwd>/agent-transcripts/. Aggregate
+// analytics live at ~/.cursor/ai-tracking/ai-code-tracking.db and
+// are read by internal/cursorusage for the Agents Cursor sub-tab.
 type Cursor struct{}
 
 func (Cursor) ID() ID              { return IDCursor }

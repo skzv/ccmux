@@ -62,8 +62,6 @@ The TUI SHALL ship exactly one default theme. The default theme SHALL be exposed
 
 The TUI SHALL provide a single shared `Header` rendering component under `internal/tui/components/`. The Header is OPTIONAL — primary navigation screens MAY use it when a screen-level title or breadcrumb adds information that is not already present on the app-level tab strip or status bar. When a screen does use the Header, it SHALL pass through `components.Header` (not a bespoke alternative) so the visual treatment stays consistent.
 
-**Why the requirement is opt-in rather than mandatory.** The first pass of the redesign added a per-screen Header row on every screen, which on the home/Dashboard duplicated the tab-strip label (`Sessions`) and the status-bar session count (`N sess`). That stacked chrome works against the redesign's "calmer, less busy" goal. Keeping the Header available but opt-in means screens that genuinely have a screen-level breadcrumb (e.g., a Notes detail view showing the active file path) can still get a consistent treatment, while screens whose identity is fully carried by the tab strip don't pay for redundant chrome.
-
 #### Scenario: Header is available under components/
 
 - **WHEN** a screen file imports `github.com/skzv/ccmux/internal/tui/components`
@@ -83,6 +81,11 @@ The TUI SHALL provide a single shared `Header` rendering component under `intern
 
 - **WHEN** a screen renders a screen-level title bar
 - **THEN** it uses `components.Header`, not a hand-rolled lipgloss composition
+
+#### Scenario: Agent-accent helper is the single source of truth
+
+- **WHEN** a screen renders a per-agent visual element (a label, a section heading, a chip)
+- **THEN** the colour is sourced from `styles.AgentAccent(id agent.ID) lipgloss.Style`, not from an inline `lipgloss.NewStyle().Foreground(...)` literal selecting a palette colour
 
 ### Requirement: Shared Footer / HelpBar component
 
@@ -393,7 +396,6 @@ The Projects screen's golden coverage SHALL include the filter-active state in a
 
 - **WHEN** the test suite runs
 - **THEN** `internal/tui/testdata/golden/projects_filter.txt` exists and passes against a fresh render of the Projects screen with `/` filter mode active
-  > > > > > > > # f99cc52 (feat(tui): Projects-screen polish — agent-color dots, info overlay, top toast)
 
 ### Requirement: Glamour preview consumes design-system tokens
 
@@ -441,4 +443,44 @@ The Notes screen SHALL bind the `i` key to open a focused overlay rendering the 
 - **WHEN** the user is on the Notes screen with a note selected and presses `i`
 - **THEN** the note-info overlay opens and renders the note's metadata
 
-> > > > > > > 7b0aeea (feat(tui/notes): redesign Notes tab — new-note flow, themed Glamour, sub-section indent, scroll/mouse polish)
+### Requirement: Agents sub-tab row uses the per-agent palette
+
+The Agents tab's sub-tab row SHALL render each sub-tab label in the corresponding agent's accent colour from the shared `styles.AgentAccent(id)` helper. Inactive sub-tabs SHALL render in the muted colour. The active sub-tab SHALL be additionally marked with the `◆ ` glyph.
+
+#### Scenario: Active Claude sub-tab renders in mauve
+
+- **WHEN** the Agents tab is open with the Claude sub-tab active
+- **THEN** the `Claude` label renders in the colour returned by `styles.AgentAccent(agent.IDClaude)` (mauve) with the `◆ ` glyph prefix
+
+#### Scenario: Inactive sub-tabs render muted
+
+- **WHEN** the Agents tab is open with the Claude sub-tab active
+- **THEN** the `Codex`, `Antigravity`, and `Cursor` labels render in `Styles.Muted` (no agent-accent colour)
+
+### Requirement: Per-sub-tab HelpBar
+
+The Agents tab's `HelpBarProps` SHALL surface keys relevant to the active sub-tab in addition to the common Agents-tab keys. The Claude sub-tab SHALL include `m model`, `e effort`, `a always`, `y yolo`, `c CLAUDE.md`, `j settings.json`. The Codex and Antigravity sub-tabs SHALL include `y yolo` and `e edit`. The Cursor sub-tab SHALL render `(read-only)` in place of action keys.
+
+#### Scenario: Claude sub-tab HelpBar advertises its keys
+
+- **WHEN** the Agents tab is open with the Claude sub-tab active
+- **THEN** the HelpBar contains `m`, `e`, `a`, `y`, `c`, `j` hints in addition to `? help`, `q quit`, `tab next`, `1-7 screens`
+
+#### Scenario: Cursor sub-tab HelpBar omits Claude-specific keys
+
+- **WHEN** the Agents tab is open with the Cursor sub-tab active
+- **THEN** the HelpBar does NOT contain `m`, `c`, `j` hints
+
+### Requirement: Cursor sub-tab populated from local SQLite
+
+The Cursor sub-tab SHALL render usage data from `~/.cursor/ai-tracking/ai-code-tracking.db` via the new `internal/cursorusage` package when the database exists and is readable. The rendered fields SHALL include: conversation count, top models used (up to 5), AI-authored lines in the last 7 days, and most-recent activity timestamp. When the database does not exist, the sub-tab SHALL render a muted `Cursor not detected — install from cursor.com` placeholder.
+
+#### Scenario: Cursor sub-tab renders the SQLite summary
+
+- **WHEN** `~/.cursor/ai-tracking/ai-code-tracking.db` exists and contains rows in `ai_code_hashes`
+- **THEN** the Cursor sub-tab renders the conversation count, top models, AI-lines-last-7d, and last-activity timestamp from the database
+
+#### Scenario: Cursor sub-tab renders empty-state when DB missing
+
+- **WHEN** `~/.cursor/ai-tracking/ai-code-tracking.db` does not exist
+- **THEN** the Cursor sub-tab renders a muted `Cursor not detected — install from cursor.com` placeholder and the screen does not error

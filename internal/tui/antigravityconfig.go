@@ -2,10 +2,12 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/skzv/ccmux/internal/antigravityconfig"
 	"github.com/skzv/ccmux/internal/tui/styles"
@@ -21,15 +23,17 @@ import (
 type antigravityConfigModel struct {
 	st       styles.Styles
 	settings *antigravityconfig.Settings
+	mcp      []antigravityconfig.MCPServer
 	paths    antigravityconfig.Locations
 	saveMsg  string
 	savedAt  time.Time
+	browser  agentBrowser
 	editor   string
 	err      string
 }
 
 func newAntigravityConfig(st styles.Styles) antigravityConfigModel {
-	m := antigravityConfigModel{st: st, editor: pickEditor()}
+	m := antigravityConfigModel{st: st, editor: pickEditor(), browser: newAgentBrowser(st)}
 	m.reload()
 	return m
 }
@@ -44,10 +48,21 @@ func (m *antigravityConfigModel) reload() {
 	} else {
 		m.err = err.Error()
 	}
+	m.mcp, _ = antigravityconfig.ListMCPServers()
+	m.browser.SetSections("Antigravity configured", m.browserSections())
 }
 
 func (m antigravityConfigModel) Update(msg tea.Msg) (antigravityConfigModel, tea.Cmd) {
+	if _, ok := msg.(tea.MouseMsg); ok {
+		b, cmd, _ := m.browser.Update(msg)
+		m.browser = b
+		return m, cmd
+	}
 	if km, ok := msg.(tea.KeyMsg); ok {
+		if b, cmd, handled := m.browser.Update(km); handled {
+			m.browser = b
+			return m, cmd
+		}
 		switch km.String() {
 		case "y":
 			cur, _ := antigravityconfig.EffectiveYoloMode()
@@ -95,20 +110,26 @@ func nextAntigravityEffort() string {
 }
 
 func (m antigravityConfigModel) View(width, height int) string {
+	return m.st.Pane.Width(width - 2).Height(height - 2).MaxWidth(width).Render(
+		m.ViewBody(width-4, height-2))
+}
+
+// ViewBody renders the Antigravity sub-tab's inner content without
+// an outer Pane border so agentsModel.View can wrap the whole agent
+// surface in one bordered block.
+func (m antigravityConfigModel) ViewBody(width, height int) string {
 	st := m.st
 	narrow := isNarrow(width)
-	rows := []string{st.Emphasis.Render("Antigravity configuration")}
-	// The settings-file path is T2 — drop it on narrow. Tildified
-	// so sandbox /tmp/... paths don't leak into demo GIFs.
+	header := []string{st.Emphasis.Render("Antigravity configuration")}
 	if !narrow {
-		rows = append(rows, st.Muted.Render(summarizePath(m.paths.Settings)))
+		header = append(header, st.Muted.Render(summarizePath(m.paths.Settings)))
 	}
-	rows = append(rows, "")
+	header = append(header, "")
 	if m.err != "" {
-		rows = append(rows, st.StatusError.Render("⚠ "+m.err), "")
+		header = append(header, st.StatusError.Render("⚠ "+m.err), "")
 	}
 	if s := m.settings; s != nil {
-		rows = append(rows,
+		header = append(header,
 			fmt.Sprintf("model           %s", emphOrPlaceholder(st, s.Model, "(Antigravity default)")),
 			fmt.Sprintf("effort          %s", emphOrPlaceholder(st, s.ReasoningEffort, "(default)")),
 		)
@@ -117,23 +138,59 @@ func (m antigravityConfigModel) View(width, height int) string {
 		if yoloOn {
 			yoloLabel = st.StatusError.Render("YOLO (no approval prompts)")
 		}
-		rows = append(rows, fmt.Sprintf("yolo mode       %s", yoloLabel))
+		header = append(header, fmt.Sprintf("yolo mode       %s", yoloLabel))
 	}
-
-	// The Keys cheatsheet is T2 — dropped on narrow.
-	if !narrow {
-		rows = append(rows, "",
-			st.Subtitle.Render("Keys"),
-			st.Key.Render("y")+"  toggle YOLO mode",
-			st.Key.Render("r")+"  cycle reasoning effort",
-			st.Key.Render("e")+"  open settings.json in $EDITOR",
-			st.Key.Render("tab")+"  switch agent",
-		)
-	}
-
 	if m.saveMsg != "" && time.Since(m.savedAt) < 3*time.Second {
-		rows = append(rows, "", st.StatusGood.Render("saved ✓  "+m.saveMsg))
+		header = append(header, "", st.StatusGood.Render("saved ✓  "+m.saveMsg))
 	}
+	header = append(header, "")
+	headerStr := strings.Join(header, "\n")
+	headerH := lipgloss.Height(headerStr)
 
-	return st.Pane.Width(width - 2).Height(height - 2).MaxWidth(width).Render(strings.Join(rows, "\n"))
+	browserH := height - headerH
+	if browserH < 8 {
+		browserH = 8
+	}
+	browserView := m.browser.View(width, browserH)
+	return lipgloss.JoinVertical(lipgloss.Left, headerStr, browserView)
+}
+
+// browserSections builds the Configured browser sections for the
+// Antigravity sub-tab. Today the only surface ccmux parses is
+// MCP servers (Gemini CLI / Antigravity stores them under
+// `mcpServers` in settings.json); hooks / commands / skills exist in
+// the Gemini CLI ecosystem but use file conventions ccmux doesn't
+// inspect yet, so they're omitted rather than mocked.
+func (m antigravityConfigModel) browserSections() []agentBrowserSection {
+	return []agentBrowserSection{m.browserMCPSection()}
+}
+
+func (m antigravityConfigModel) browserMCPSection() agentBrowserSection {
+	section := agentBrowserSection{Title: "MCP servers", Color: m.st.P.Sky}
+	for _, s := range m.mcp {
+		preview := []string{s.Name, "", "  type: " + s.Type}
+		if s.URL != "" {
+			preview = append(preview, "  url: "+s.URL)
+		}
+		if s.Command != "" {
+			preview = append(preview, "  command: "+s.Command)
+		}
+		if len(s.Args) > 0 {
+			preview = append(preview, "  args: "+strings.Join(s.Args, " "))
+		}
+		if len(s.Env) > 0 {
+			envKeys := make([]string, 0, len(s.Env))
+			for k := range s.Env {
+				envKeys = append(envKeys, k)
+			}
+			sort.Strings(envKeys)
+			preview = append(preview, "  env keys: "+strings.Join(envKeys, ", "))
+		}
+		section.Items = append(section.Items, agentBrowserItem{
+			Label:    s.Name,
+			Trailing: s.Type,
+			Preview:  strings.Join(preview, "\n"),
+		})
+	}
+	return section
 }
