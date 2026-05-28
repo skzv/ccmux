@@ -113,7 +113,7 @@ func newNewCmd() *cobra.Command {
 			if agentFlag != "" {
 				id, ok := agent.ParseID(agentFlag)
 				if !ok {
-					return fmt.Errorf("unknown agent %q (want claude, codex, antigravity, or cursor)", agentFlag)
+					return fmt.Errorf("unknown agent %q (want claude, codex, antigravity, cursor, or pi)", agentFlag)
 				}
 				opts.Agent = id
 			}
@@ -125,7 +125,7 @@ func newNewCmd() *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&agentFlag, "agent", "",
-		"agent to launch: claude, codex, antigravity, or cursor (default claude)")
+		"agent to launch: claude, codex, antigravity, cursor, or pi (default claude)")
 	return c
 }
 
@@ -239,6 +239,8 @@ func configuredDoctorCommand(cfg config.Config, id agent.ID) string {
 		return strings.TrimSpace(cfg.Agents.Antigravity.Command)
 	case agent.IDCursor:
 		return strings.TrimSpace(cfg.Agents.Cursor.Command)
+	case agent.IDPi:
+		return strings.TrimSpace(cfg.Agents.Pi.Command)
 	default:
 		return ""
 	}
@@ -479,6 +481,8 @@ func agentInstallHint(id agent.ID) string {
 		return "`curl -fsSL https://antigravity.google/cli/install.sh | bash` (or see antigravity docs)"
 	case agent.IDCursor:
 		return "`curl https://cursor.com/install -fsS | bash` (or see cursor docs)"
+	case agent.IDPi:
+		return "`curl -fsSL https://pi.dev/install.sh | sh` (or `npm i -g @earendil-works/pi-coding-agent`)"
 	}
 	return ""
 }

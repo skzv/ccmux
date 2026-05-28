@@ -1,8 +1,9 @@
 // Package agent abstracts over Claude Code, Codex (OpenAI),
-// Antigravity CLI (Google), and Cursor — the interactive AI coding agents
-// ccmux can supervise inside a tmux session. Adding a fourth agent
-// later is a matter of dropping a new `Agent` implementation alongside
-// the existing three and registering it in All().
+// Antigravity CLI (Google), Cursor, and pi (Earendil Works) — the
+// interactive AI coding agents ccmux can supervise inside a tmux
+// session. Adding another agent later is a matter of dropping a new
+// `Agent` implementation alongside the existing ones and registering
+// it in All().
 //
 // Why this exists: ccmux's first cut was Claude-only. Every layer
 // (session command, state classifier, usage panel, config tab,
@@ -34,6 +35,7 @@ const (
 	IDCodex       ID = "codex"
 	IDAntigravity ID = "antigravity"
 	IDCursor      ID = "cursor"
+	IDPi          ID = "pi"
 )
 
 // State enumerates the high-level lifecycle of an agent session, mirrored
@@ -93,6 +95,7 @@ type Commands struct {
 	Codex       string
 	Antigravity string
 	Cursor      string
+	Pi          string
 }
 
 // All returns every supported agent in canonical order
@@ -100,7 +103,7 @@ type Commands struct {
 // the first installed entry, and that lets us bias new users toward
 // Claude without making it special-case in UI code.
 func All() []Agent {
-	return []Agent{Claude{}, Codex{}, Antigravity{}, Cursor{}}
+	return []Agent{Claude{}, Codex{}, Antigravity{}, Cursor{}, Pi{}}
 }
 
 // ByID returns the Agent for a known ID. Falls back to Default() for
@@ -121,6 +124,8 @@ func ByID(id ID) Agent {
 		return Antigravity{}
 	case IDCursor:
 		return Cursor{}
+	case IDPi:
+		return Pi{}
 	}
 	panic("agent: unknown ID " + string(id))
 }
@@ -141,6 +146,8 @@ func ParseID(s string) (ID, bool) {
 		return IDAntigravity, true
 	case IDCursor:
 		return IDCursor, true
+	case IDPi:
+		return IDPi, true
 	}
 	return "", false
 }
@@ -271,6 +278,10 @@ func ResumeArgs(id ID, conversationID string, commands Commands) []string {
 		return []string{configuredBinary(IDAntigravity, "agy", commands), "--conversation", conversationID}
 	case IDCursor:
 		return []string{configuredBinary(IDCursor, "cursor-agent", commands), "--resume", conversationID}
+	case IDPi:
+		// pi resumes a specific session by partial UUID via
+		// `--session <id>` (`pi --help`).
+		return []string{configuredBinary(IDPi, "pi", commands), "--session", conversationID}
 	}
 	return nil
 }
@@ -300,6 +311,10 @@ func commandOverride(id ID, commands Commands) string {
 		if strings.TrimSpace(commands.Cursor) != "" {
 			return strings.TrimSpace(commands.Cursor)
 		}
+	case IDPi:
+		if strings.TrimSpace(commands.Pi) != "" {
+			return strings.TrimSpace(commands.Pi)
+		}
 	}
 	return ""
 }
@@ -309,9 +324,11 @@ func launchCmdWithBinary(a Agent, binary string, continueFlag bool) string {
 	if !continueFlag {
 		return cmd
 	}
-	if a.ID() == IDCursor {
+	switch a.ID() {
+	case IDCursor:
 		return cmd + " resume || " + cmd + " || zsh || bash || sh"
 	}
+	// claude / codex / antigravity / pi all take `--continue`.
 	return cmd + " --continue || " + cmd + " || zsh || bash || sh"
 }
 

@@ -62,3 +62,69 @@ func TestDefaultAgent_SwitchPersistsAndLaunches(t *testing.T) {
 		t.Errorf("session launched claude despite codex being the configured default\npane:\n%s", pane)
 	}
 }
+
+// TestPiAgent_LaunchesViaDefault covers the issue-116 ask end-to-end:
+// with the default agent set to pi, a bare session launches the `pi`
+// binary (the stub here). Verifies the whole chain — config →
+// daemon → agent.LaunchCmd(IDPi) → tmux — resolves to pi, not the
+// hardcoded claude default.
+func TestPiAgent_LaunchesViaDefault(t *testing.T) {
+	e := newEnv(t)
+	cfg := e.defaultConfig()
+	cfg.Agents.Default = "pi"
+	e.writeConfig(cfg)
+
+	loaded, err := config.Load()
+	if err != nil {
+		t.Fatalf("reload config: %v", err)
+	}
+	if loaded.Agents.Default != "pi" {
+		t.Fatalf("default agent did not persist: got %q, want pi", loaded.Agents.Default)
+	}
+
+	e.startDaemon()
+	const name = "c-pidefault"
+	if _, stderr, _ := e.ccmux("shell", "--name", name, "--path", e.Root); !e.hasSession(name) {
+		t.Fatalf("`ccmux shell` did not create session %q\nstderr: %s", name, stderr)
+	}
+
+	var pane string
+	if !waitFor(5*time.Second, func() bool {
+		pane = e.capturePane(name)
+		return strings.Contains(pane, "ccmux-stub-agent=")
+	}) {
+		t.Fatalf("agent stub never wrote its marker\npane:\n%s", pane)
+	}
+	if !strings.Contains(pane, "ccmux-stub-agent=pi") {
+		t.Errorf("session launched the wrong agent — want pi\npane:\n%s", pane)
+	}
+	if strings.Contains(pane, "ccmux-stub-agent=claude") {
+		t.Errorf("session launched claude despite pi being the configured default\npane:\n%s", pane)
+	}
+}
+
+// TestPiAgent_ExplicitFlagLaunches covers `ccmux shell --agent pi`:
+// the explicit flag must override the (claude) default and launch pi.
+func TestPiAgent_ExplicitFlagLaunches(t *testing.T) {
+	e := newEnv(t)
+	e.writeConfig(e.defaultConfig()) // default stays claude
+	e.startDaemon()
+
+	const name = "c-piflag"
+	if _, stderr, _ := e.ccmux("shell", "--name", name, "--path", e.Root, "--agent", "pi"); !e.hasSession(name) {
+		t.Fatalf("`ccmux shell --agent pi` did not create session %q\nstderr: %s", name, stderr)
+	}
+	var pane string
+	if !waitFor(5*time.Second, func() bool {
+		pane = e.capturePane(name)
+		return strings.Contains(pane, "ccmux-stub-agent=")
+	}) {
+		t.Fatalf("agent stub never wrote its marker\npane:\n%s", pane)
+	}
+	if !strings.Contains(pane, "ccmux-stub-agent=pi") {
+		t.Errorf("`--agent pi` launched the wrong agent\npane:\n%s", pane)
+	}
+	if strings.Contains(pane, "ccmux-stub-agent=claude") {
+		t.Errorf("`--agent pi` launched claude instead of pi\npane:\n%s", pane)
+	}
+}
