@@ -12,6 +12,26 @@ One TUI for every Claude / Codex / Antigravity / Cursor / pi session across ever
 [![Status: alpha](https://img.shields.io/badge/status-alpha-orange.svg)](#status)
 [![Made with Charm](https://img.shields.io/badge/made_with-Charm-FF66CC.svg)](https://charm.sh/)
 
+</div>
+
+## 🚀 Install
+
+```bash
+brew install skzv/tap/ccmux
+ccmux setup
+```
+
+Homebrew is recommended on macOS; Linuxbrew works on Linux. `ccmux setup` finishes first-run setup for Tailscale, agent CLIs, and the background daemon.
+
+Other paths:
+
+- No Homebrew: `curl -fsSL https://raw.githubusercontent.com/skzv/ccmux/main/scripts/install.sh | sh`, then `ccmux setup`.
+- From source: `git clone https://github.com/skzv/ccmux.git && cd ccmux && make setup`.
+
+Works on macOS, Linux, and Windows via WSL2. Source builds require Go 1.26+.
+
+<div align="center">
+
 <img src="docs/vhs/out/cuj00_hero.gif" alt="ccmux full tour: dashboard with five parallel agent sessions, attach to Claude Code, then tour Conversations, Notes, Agents, Settings, Network." width="900" />
 
 </div>
@@ -135,48 +155,6 @@ One screen for "is my agent installed and signed in?" Per-agent CLI version, con
 </div>
 
 Dashboard shows a banner when a new release lands. `ccmux update` git-pulls the checkout, rebuilds, reloads `ccmuxd`. Flags: `--dry-run`, `--skip-pull`, `--no-restart`. The Devices panel tags any tailnet peer running a behind-version of ccmuxd so you see at a glance which machines need an update.
-
----
-
-## 🚀 Install (60 seconds)
-
-**Homebrew (macOS, Linuxbrew on Linux):**
-
-```bash
-brew install skzv/tap/ccmux
-ccmux setup
-```
-
-`brew install` pulls cross-compiled binaries from the [GitHub Release](https://github.com/skzv/ccmux/releases/latest) and wires the runtime deps (`tmux`, `mosh`, `ripgrep`). `ccmux setup` runs the interactive wizard for the things brew can't cover (Tailscale, the agent CLIs, the ccmuxd background service).
-
-**One-line install script (no Homebrew):**
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/skzv/ccmux/main/scripts/install.sh | sh
-ccmux setup
-```
-
-Downloads the latest release tarball to `~/.local/bin/`, strips the macOS quarantine attribute automatically, then drops you at the wizard.
-
-**From source:**
-
-```bash
-git clone https://github.com/skzv/ccmux.git
-cd ccmux
-make setup
-```
-
-`make setup` builds, installs `ccmux` + `ccmuxd` into `~/.local/bin/`, then runs the wizard. Idempotent — re-run any time.
-
-Requirements:
-
-- Go 1.26+ (source builds only — `brew install` and `install.sh` don't need it)
-- macOS, Linux, or Windows via WSL2 (see [Windows guide](docs/04_Guides/Windows.md) — native Windows tracks as an open TODO)
-- `~/.local/bin` on your PATH (for source / install-script paths)
-
-> 🤖 **Built with ccmux.** Almost every commit in this repo was produced by a Claude Code session managed through the very TUI you're about to install — kept alive across laptop lid-closes by the daemon, attached from iOS over Mosh when away from the desk, supervised from the dashboard. It's the kind of tool you only really validate by living inside it; that's what we did.
-
-> **macOS, raw release tarballs:** if you grab a binary tarball directly from [Releases](https://github.com/skzv/ccmux/releases) instead of going through `brew install` / `make setup` / `scripts/install.sh`, macOS may refuse to open it (_"cannot verify the developer"_). Strip the quarantine attribute once: `xattr -d com.apple.quarantine ./ccmux ./ccmuxd`. All three supported install paths handle this for you.
 
 ---
 
