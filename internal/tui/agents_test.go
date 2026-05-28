@@ -22,8 +22,8 @@ func TestAgents_NarrowLayout(t *testing.T) {
 	m := newAgents(styles.Default(), DefaultKeymap())
 	out := m.View(50, 60)
 	assertNoOverflow(t, out, 50)
-	assertPresent(t, out, "Claude", "Codex", "Antigravity", "Default model")
-	assertAbsent(t, out, "switch agent", "settings:", "pick default model")
+	assertPresent(t, out, "Claude", "Codex", "Antigravity", "Defaults", "model")
+	assertAbsent(t, out, "switch agent", "pick default model")
 }
 
 func TestAgents_CodexThinkingModeKeyPersistsAndRefreshes(t *testing.T) {
@@ -283,6 +283,108 @@ func setIsolatedAgentHomes(t *testing.T) agentHomes {
 	t.Setenv("CODEX_HOME", homes.codex)
 	t.Setenv("ANTIGRAVITY_HOME", homes.antigravity)
 	return homes
+}
+
+// TestAgents_HelpBar_PerSubtabKeys — the HelpBar advertises the keys
+// that actually do something on the active sub-tab. Claude's set
+// includes its rich pickers (m/e/a/y/c/j); Codex / Antigravity share
+// the smaller r/y/e set; Cursor shows the read-only hint and none
+// of the action keys.
+func TestAgents_HelpBar_PerSubtabKeys(t *testing.T) {
+	st := styles.Default()
+
+	cases := []struct {
+		id     agent.ID
+		want   []string
+		absent []string
+	}{
+		{
+			id:     agent.IDClaude,
+			want:   []string{"m", "e", "a", "y", "c", "j", "?", "q", "h/l", "1-7"},
+			absent: []string{"(read-only)"},
+		},
+		{
+			id:     agent.IDCodex,
+			want:   []string{"r", "y", "e", "?", "q", "h/l", "1-7"},
+			absent: []string{"m", "c", "j", "(read-only)"},
+		},
+		{
+			id:     agent.IDAntigravity,
+			want:   []string{"r", "y", "e", "?", "q", "h/l", "1-7"},
+			absent: []string{"m", "c", "j", "(read-only)"},
+		},
+		{
+			id:     agent.IDCursor,
+			want:   []string{"?", "q", "h/l", "1-7"},
+			absent: []string{"m", "e", "a", "c", "j", "(read-only)"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(string(tc.id), func(t *testing.T) {
+			m := newAgents(st, DefaultKeymap())
+			m.active = tc.id
+			props := m.HelpBarProps(120)
+
+			keys := map[string]bool{}
+			labels := map[string]bool{}
+			for _, h := range props.Hints {
+				keys[h.Key] = true
+				labels[h.Label] = true
+			}
+
+			for _, w := range tc.want {
+				if !keys[w] && !labels[w] {
+					t.Errorf("HelpBarProps(%s) missing %q (have keys=%v)", tc.id, w, props.Hints)
+				}
+			}
+			for _, a := range tc.absent {
+				if keys[a] || labels[a] {
+					t.Errorf("HelpBarProps(%s) unexpectedly contains %q (have keys=%v)", tc.id, a, props.Hints)
+				}
+			}
+		})
+	}
+}
+
+// TestAgents_SubtabRow_UsesAgentAccent — the active sub-tab's label
+// MUST render through styles.AgentAccent(id) so the per-agent palette
+// stays the design-system's single source of truth. Inactive sub-tabs
+// render muted regardless of which agent they represent. The check
+// compares rendered substrings (which carry the ANSI escapes) rather
+// than introspecting lipgloss styles, so the test catches drift in
+// either the call site or the helper.
+func TestAgents_SubtabRow_UsesAgentAccent(t *testing.T) {
+	st := styles.Default()
+	for _, id := range []agent.ID{agent.IDClaude, agent.IDCodex, agent.IDAntigravity, agent.IDCursor} {
+		t.Run(string(id), func(t *testing.T) {
+			m := newAgents(st, DefaultKeymap())
+			m.active = id
+			row := m.renderSubtabs(false)
+
+			// Active sub-tab: colored dot + bold accent label.
+			wantActiveDot := st.AgentAccent(id).Render("•")
+			wantActiveLabel := st.AgentAccent(id).Bold(true).Render(agent.ByID(id).DisplayName())
+			if !strings.Contains(row, wantActiveDot) || !strings.Contains(row, wantActiveLabel) {
+				t.Errorf("renderSubtabs missing active accent fragment for %s\n got: %q\nwant dot: %q\nwant label: %q",
+					id, row, wantActiveDot, wantActiveLabel)
+			}
+
+			// Inactive sub-tabs: still get a colored dot (so all four
+			// agents stay identifiable in the row), but the label
+			// drops to muted.
+			for _, other := range agent.All() {
+				if other.ID() == id {
+					continue
+				}
+				wantDot := st.AgentAccent(other.ID()).Render("•")
+				wantLabel := st.Muted.Render(other.DisplayName())
+				if !strings.Contains(row, wantDot) || !strings.Contains(row, wantLabel) {
+					t.Errorf("renderSubtabs missing inactive treatment for %s while %s active\n got: %q\nwant dot: %q\nwant label: %q",
+						other.ID(), id, row, wantDot, wantLabel)
+				}
+			}
+		})
+	}
 }
 
 func switchAgentsSubtab(t *testing.T, m agentsModel, want agent.ID) agentsModel {

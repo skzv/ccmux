@@ -2,10 +2,12 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/skzv/ccmux/internal/codexconfig"
 	"github.com/skzv/ccmux/internal/tui/styles"
@@ -25,15 +27,20 @@ import (
 type codexConfigModel struct {
 	st       styles.Styles
 	settings *codexconfig.Settings
+	hooks    codexconfig.HooksFile
+	mcp      []codexconfig.MCPServer
+	prompts  []codexconfig.Prompt
+	rules    []codexconfig.Rule
 	paths    codexconfig.Locations
 	saveMsg  string // transient "saved ✓" flash
 	savedAt  time.Time
+	browser  agentBrowser
 	editor   string
 	err      string
 }
 
 func newCodexConfig(st styles.Styles) codexConfigModel {
-	m := codexConfigModel{st: st, editor: pickEditor()}
+	m := codexConfigModel{st: st, editor: pickEditor(), browser: newAgentBrowser(st)}
 	m.reload()
 	return m
 }
@@ -48,10 +55,24 @@ func (m *codexConfigModel) reload() {
 	} else {
 		m.err = err.Error()
 	}
+	m.hooks, _ = codexconfig.ReadHooks()
+	m.mcp, _ = codexconfig.ListMCPServers()
+	m.prompts, _ = codexconfig.ListPrompts()
+	m.rules, _ = codexconfig.ListRules()
+	m.browser.SetSections("Codex configured", m.browserSections())
 }
 
 func (m codexConfigModel) Update(msg tea.Msg) (codexConfigModel, tea.Cmd) {
+	if _, ok := msg.(tea.MouseMsg); ok {
+		b, cmd, _ := m.browser.Update(msg)
+		m.browser = b
+		return m, cmd
+	}
 	if km, ok := msg.(tea.KeyMsg); ok {
+		if b, cmd, handled := m.browser.Update(km); handled {
+			m.browser = b
+			return m, cmd
+		}
 		switch km.String() {
 		case "y":
 			// Toggle YOLO. PR #8 added SetYoloMode which writes both
@@ -109,21 +130,26 @@ func nextCodexEffort() string {
 }
 
 func (m codexConfigModel) View(width, height int) string {
+	return m.st.Pane.Width(width - 2).Height(height - 2).MaxWidth(width).Render(
+		m.ViewBody(width-4, height-2))
+}
+
+// ViewBody renders the Codex sub-tab's inner content without the
+// outer Pane border. agentsModel.View owns the bordered chrome so
+// the sub-tab row + body share one continuous block.
+func (m codexConfigModel) ViewBody(width, height int) string {
 	st := m.st
 	narrow := isNarrow(width)
-	rows := []string{st.Emphasis.Render("Codex configuration")}
-	// The config-file path is T2 — drop it on narrow. Tildified
-	// so sandbox /tmp/... paths don't leak into demo GIFs.
+	header := []string{st.Emphasis.Render("Codex configuration")}
 	if !narrow {
-		rows = append(rows, st.Muted.Render(summarizePath(m.paths.Config)))
+		header = append(header, st.Muted.Render(summarizePath(m.paths.Config)))
 	}
-	rows = append(rows, "")
+	header = append(header, "")
 	if m.err != "" {
-		rows = append(rows, st.StatusError.Render("⚠ "+m.err), "")
+		header = append(header, st.StatusError.Render("⚠ "+m.err), "")
 	}
 	if s := m.settings; s != nil {
-		// Model + effort + yolo block.
-		rows = append(rows,
+		header = append(header,
 			fmt.Sprintf("model           %s", emphOrPlaceholder(st, s.Model, "(Codex default)")),
 			fmt.Sprintf("effort          %s", emphOrPlaceholder(st, s.ModelReasoningEffort, "(default)")),
 			fmt.Sprintf("approval        %s", emphOrPlaceholder(st, s.ApprovalPolicy, "(default)")),
@@ -134,25 +160,21 @@ func (m codexConfigModel) View(width, height int) string {
 		if yoloOn {
 			yoloLabel = st.StatusError.Render("YOLO (no approval prompts, full filesystem)")
 		}
-		rows = append(rows, fmt.Sprintf("yolo mode       %s", yoloLabel))
+		header = append(header, fmt.Sprintf("yolo mode       %s", yoloLabel))
 	}
-
-	// The Keys cheatsheet is T2 — dropped on narrow.
-	if !narrow {
-		rows = append(rows, "",
-			st.Subtitle.Render("Keys"),
-			st.Key.Render("y")+"  toggle YOLO mode (writes approval_policy + sandbox_mode)",
-			st.Key.Render("r")+"  cycle reasoning effort",
-			st.Key.Render("e")+"  open config.toml in $EDITOR",
-			st.Key.Render("tab")+"  switch agent",
-		)
-	}
-
 	if m.saveMsg != "" && time.Since(m.savedAt) < 3*time.Second {
-		rows = append(rows, "", st.StatusGood.Render("saved ✓  "+m.saveMsg))
+		header = append(header, "", st.StatusGood.Render("saved ✓  "+m.saveMsg))
 	}
+	header = append(header, "")
+	headerStr := strings.Join(header, "\n")
+	headerH := lipgloss.Height(headerStr)
 
-	return st.Pane.Width(width - 2).Height(height - 2).MaxWidth(width).Render(strings.Join(rows, "\n"))
+	browserH := height - headerH
+	if browserH < 8 {
+		browserH = 8
+	}
+	browserView := m.browser.View(width, browserH)
+	return lipgloss.JoinVertical(lipgloss.Left, headerStr, browserView)
 }
 
 // emphOrPlaceholder renders `v` with Emphasis if non-empty, otherwise
@@ -163,4 +185,128 @@ func emphOrPlaceholder(st styles.Styles, v, placeholder string) string {
 		return st.Muted.Render(placeholder)
 	}
 	return st.Emphasis.Render(v)
+}
+
+// browserSections builds the Configured browser sections for the
+// Codex sub-tab. Mirrors claudeModel.browserSections in section order
+// — Hooks (~/.codex/hooks.json), MCP (config.toml [mcp_servers]),
+// Prompts (~/.codex/prompts/), Rules (~/.codex/rules/) — so the
+// per-agent browsers feel like the same surface.
+func (m codexConfigModel) browserSections() []agentBrowserSection {
+	out := []agentBrowserSection{
+		m.browserHooksSection(),
+		m.browserMCPSection(),
+		m.browserPromptsSection(),
+		m.browserRulesSection(),
+	}
+	return out
+}
+
+func (m codexConfigModel) browserHooksSection() agentBrowserSection {
+	section := agentBrowserSection{Title: "Hooks", Color: m.st.P.Peach}
+	if len(m.hooks.Hooks) == 0 {
+		return section
+	}
+	events := make([]string, 0, len(m.hooks.Hooks))
+	for k := range m.hooks.Hooks {
+		events = append(events, k)
+	}
+	// Same preferred-then-alphabetical ordering Claude uses.
+	preferred := []string{"SessionStart", "UserPromptSubmit", "PermissionRequest", "Stop"}
+	seen := map[string]bool{}
+	ordered := []string{}
+	for _, p := range preferred {
+		if _, ok := m.hooks.Hooks[p]; ok {
+			ordered = append(ordered, p)
+			seen[p] = true
+		}
+	}
+	rest := []string{}
+	for _, e := range events {
+		if !seen[e] {
+			rest = append(rest, e)
+		}
+	}
+	sort.Strings(rest)
+	ordered = append(ordered, rest...)
+	for _, event := range ordered {
+		count := 0
+		preview := []string{event, ""}
+		for _, g := range m.hooks.Hooks[event] {
+			for _, h := range g.Hooks {
+				count++
+				preview = append(preview, "  command: "+h.Command)
+				if h.Timeout > 0 {
+					preview = append(preview, fmt.Sprintf("  timeout: %ds", h.Timeout))
+				}
+				if h.StatusMessage != "" {
+					preview = append(preview, "  status: "+h.StatusMessage)
+				}
+				preview = append(preview, "")
+			}
+		}
+		section.Items = append(section.Items, agentBrowserItem{
+			Label:    event,
+			Trailing: fmt.Sprintf("%d hook(s)", count),
+			Preview:  strings.Join(preview, "\n"),
+		})
+	}
+	return section
+}
+
+func (m codexConfigModel) browserMCPSection() agentBrowserSection {
+	section := agentBrowserSection{Title: "MCP servers", Color: m.st.P.Sky}
+	for _, s := range m.mcp {
+		preview := []string{s.Name, "", "  type: " + s.Type}
+		if s.URL != "" {
+			preview = append(preview, "  url: "+s.URL)
+		}
+		if s.Command != "" {
+			preview = append(preview, "  command: "+s.Command)
+		}
+		if len(s.Args) > 0 {
+			preview = append(preview, "  args: "+strings.Join(s.Args, " "))
+		}
+		if len(s.Env) > 0 {
+			envKeys := make([]string, 0, len(s.Env))
+			for k := range s.Env {
+				envKeys = append(envKeys, k)
+			}
+			sort.Strings(envKeys)
+			preview = append(preview, "  env keys: "+strings.Join(envKeys, ", "))
+		}
+		section.Items = append(section.Items, agentBrowserItem{
+			Label:    s.Name,
+			Trailing: s.Type,
+			Preview:  strings.Join(preview, "\n"),
+		})
+	}
+	return section
+}
+
+func (m codexConfigModel) browserPromptsSection() agentBrowserSection {
+	section := agentBrowserSection{Title: "Commands", Color: m.st.P.Green}
+	for _, p := range m.prompts {
+		section.Items = append(section.Items, agentBrowserItem{
+			Label:    "/" + p.Name,
+			Preview:  p.Body,
+			Markdown: true,
+		})
+	}
+	return section
+}
+
+func (m codexConfigModel) browserRulesSection() agentBrowserSection {
+	section := agentBrowserSection{Title: "Rules", Color: m.st.P.Mauve}
+	for _, r := range m.rules {
+		// Rule files use the .rules extension but the body is markdown-
+		// adjacent (frontmatter + freeform prose); Glamour renders it
+		// the same way it renders SKILL.md.
+		section.Items = append(section.Items, agentBrowserItem{
+			Label:    r.Name,
+			Preview:  r.Body,
+			Markdown: true,
+		})
+	}
+	return section
 }

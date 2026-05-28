@@ -663,9 +663,10 @@ func TestConversationsModel_View_AgentAccentColoursActiveSection(t *testing.T) {
 	m.SetList(fakeConversations())
 	setFocusedConversationSection(t, &m, agent.IDCodex)
 	nav := m.renderAgentNav(m.sections())
-	want := s.AgentAccent(agent.IDCodex).Bold(true).Render("▸ Codex 1")
-	if !strings.Contains(nav, want) {
-		t.Fatalf("active Codex heading missing accent treatment\nwant substring: %q\ngot nav: %q", want, nav)
+	wantLabel := s.AgentAccent(agent.IDCodex).Bold(true).Render("Codex 1")
+	wantDot := s.AgentAccent(agent.IDCodex).Render("•")
+	if !strings.Contains(nav, wantDot) || !strings.Contains(nav, wantLabel) {
+		t.Fatalf("active Codex heading missing accent treatment\nwant dot substring: %q\nwant label substring: %q\ngot nav: %q", wantDot, wantLabel, nav)
 	}
 }
 

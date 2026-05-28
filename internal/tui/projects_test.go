@@ -326,7 +326,7 @@ func TestProjects_RowAgentColorEncodesAgent(t *testing.T) {
 		{agent.IDAntigravity, "antigravity-proj"},
 		{agent.IDCursor, "cursor-proj"},
 	} {
-		wantDot := st.AgentAccent(tc.id).Render("●")
+		wantDot := st.AgentAccent(tc.id).Render("•")
 		needle := wantDot + " " + tc.name
 		if !strings.Contains(out, needle) {
 			t.Errorf("row for agent=%q project=%q missing agent-coloured dot.\nwanted: %q\noutput:\n%s",

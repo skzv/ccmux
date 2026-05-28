@@ -4,12 +4,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/claudeconfig"
 	"github.com/skzv/ccmux/internal/tui/components"
 	"github.com/skzv/ccmux/internal/tui/styles"
@@ -38,6 +40,7 @@ type claudeModel struct {
 	lastBackup     string
 	picker         pickerKind
 	pickerCursor   int
+	browser        agentBrowser
 	editor         string
 	narrow         bool // terminal is below the layout breakpoint
 }
@@ -53,7 +56,7 @@ const (
 )
 
 func newClaude(st styles.Styles, km Keymap) claudeModel {
-	m := claudeModel{st: st, km: km, editor: pickEditor()}
+	m := claudeModel{st: st, km: km, editor: pickEditor(), browser: newAgentBrowser(st)}
 	m.reload()
 	return m
 }
@@ -73,6 +76,7 @@ func (m *claudeModel) reload() {
 	if m.settings != nil {
 		m.alwaysThinking = m.settings.AlwaysThinkingEnabled
 	}
+	m.browser.SetSections("Claude Code configured", m.browserSections())
 }
 
 func (m claudeModel) Update(msg tea.Msg) (claudeModel, tea.Cmd) {
@@ -141,9 +145,21 @@ func (m claudeModel) Update(msg tea.Msg) (claudeModel, tea.Cmd) {
 			6,
 		)
 
+	case tea.MouseMsg:
+		if b, cmd, _ := m.browser.Update(msg); true {
+			m.browser = b
+			return m, cmd
+		}
 	case tea.KeyMsg:
 		if m.picker != pickerNone {
 			return m.updatePicker(msg)
+		}
+		// Route to the embedded browser first. It consumes navigation
+		// (j/k/arrows/enter); any letter key it doesn't bind falls
+		// through to the model-/effort-/yolo-picker shortcuts below.
+		if b, cmd, handled := m.browser.Update(msg); handled {
+			m.browser = b
+			return m, cmd
 		}
 		switch msg.String() {
 		case "m":
@@ -240,236 +256,244 @@ func (m claudeModel) View(width, height int) string {
 	if m.picker != pickerNone {
 		return m.viewPicker(width, height)
 	}
-	return m.viewMain(width, height)
+	// Fallback wrapper for callers outside agentsModel (e.g. golden
+	// tests rendering claudeModel directly). Production renders go
+	// through agentsModel.View, which owns the bordered Pane.
+	return m.st.Pane.Width(width - 2).Height(height - 2).MaxWidth(width).Render(
+		m.ViewBody(width-4, height-2))
 }
 
-func (m claudeModel) viewMain(width, height int) string {
+// ViewBody renders the sub-tab's inner content without an outer
+// Pane. agentsModel.View wraps every sub-tab in one shared Pane so
+// the agent label row + body sit inside one continuous bordered
+// block; that contract requires un-wrapped inner content from each
+// sub-model.
+func (m claudeModel) ViewBody(width, height int) string {
+	m.narrow = isNarrow(width)
 	st := m.st
-	lines := []string{st.Emphasis.Render("Claude Code Configuration")}
-	// The settings-file path is T2 — drop it on narrow. Tildified
-	// so sandbox /tmp/... paths don't leak into demo GIFs.
-	if !m.narrow {
-		lines = append(lines, st.Muted.Render("settings: "+summarizePath(m.paths.Settings)))
+	header := []string{
+		st.Emphasis.Render("Claude Code Configuration"),
+		"",
+		st.AgentAccent(agent.IDClaude).Render("Defaults"),
 	}
-	lines = append(lines,
+	header = append(header, m.renderDefaultsRows()...)
+	header = append(header,
 		"",
-		m.renderModelBlock(),
-		"",
-		m.renderEffortBlock(),
-		"",
-		m.renderSafetyBlock(),
-		"",
-		m.renderHooksBlock(),
-		"",
-		m.renderMCPBlock(),
-		"",
-		m.renderPermissionsBlock(),
-		"",
-		m.renderCommandsBlock(),
-		"",
-		m.renderSkillsBlock(),
+		st.AgentAccent(agent.IDClaude).Render("Config files"),
 	)
-	// The Keys cheatsheet and the backup-path note are T2.
-	if !m.narrow {
-		lines = append(lines,
-			"",
-			st.Subtitle.Render("Keys"),
-			"  "+st.Key.Render("m")+"  pick default model       "+st.Key.Render("e")+"  pick reasoning effort",
-			"  "+st.Key.Render("a")+"  toggle always-thinking    "+st.Key.Render("y")+"  toggle yolo mode",
-			"  "+st.Key.Render("c")+"  edit global CLAUDE.md     "+st.Key.Render("j")+"  edit settings.json",
-			"  "+st.Key.Render("5")+"  open project notes",
-		)
-		if m.lastBackup != "" {
-			lines = append(lines, "", st.Muted.Render("last write backed up to "+summarizePath(m.lastBackup)))
-		}
+	header = append(header, m.renderConfigFilesRows()...)
+	header = append(header, "")
+	headerStr := strings.Join(header, "\n")
+	headerH := lipgloss.Height(headerStr)
+
+	browserH := height - headerH
+	if browserH < 8 {
+		browserH = 8
 	}
-	return st.Pane.Width(width - 2).Height(height - 2).MaxWidth(width).Render(strings.Join(lines, "\n"))
+	browserView := m.browser.View(width, browserH)
+	body := lipgloss.JoinVertical(lipgloss.Left, headerStr, browserView)
+	if !m.narrow && m.lastBackup != "" {
+		body = lipgloss.JoinVertical(lipgloss.Left, body, st.Muted.Render("last write backed up to "+summarizePath(m.lastBackup)))
+	}
+	return body
 }
 
-func (m claudeModel) renderModelBlock() string {
+// renderDefaultsRows produces the indented label/value/source rows
+// under the Defaults header — model, effort, always-thinking, yolo.
+// Label column is padded to 18 cells so the value column aligns
+// across all four rows; source column is muted parenthetical.
+func (m claudeModel) renderDefaultsRows() []string {
 	st := m.st
-	hint := "(set in " + m.modelSource + ")"
-	lines := []string{
-		st.Subtitle.Render("Default model"),
-		"  " + st.Emphasis.Render(m.model) + "  " + st.Muted.Render(hint),
-	}
-	if !m.narrow {
-		lines = append(lines, st.Muted.Render("  press "+st.Key.Render("m")+" to change"))
-	}
-	return strings.Join(lines, "\n")
-}
-
-func (m claudeModel) renderEffortBlock() string {
-	st := m.st
-	hint := "(set in " + m.effortSource + ")"
 	thinkLabel := "off"
 	if m.alwaysThinking {
 		thinkLabel = "on"
 	}
-	lines := []string{
-		st.Subtitle.Render("Reasoning effort"),
-		"  " + st.Emphasis.Render(m.effort) + "  " + st.Muted.Render(hint),
-		"  always-thinking: " + st.Emphasis.Render(thinkLabel),
-	}
-	if !m.narrow {
-		lines = append(lines,
-			st.Muted.Render("  "+st.Key.Render("e")+" pick effort  · "+st.Key.Render("a")+" toggle always-thinking"),
-			st.Muted.Render("  (CLI override: `claude --effort <low|medium|high|xhigh|max>` per session)"),
-		)
-	}
-	return strings.Join(lines, "\n")
-}
-
-// renderSafetyBlock surfaces the YOLO toggle. Pulled into its own block
-// rather than tacked onto the effort one so users can't miss the
-// safety-relevant state at a glance.
-func (m claudeModel) renderSafetyBlock() string {
-	st := m.st
 	yoloLabel := "off"
 	if m.yolo {
 		yoloLabel = "on"
 	}
-	hint := "(set in " + m.yoloSource + ")"
-	lines := []string{
-		st.Subtitle.Render("Safety"),
-		"  yolo mode: " + st.Emphasis.Render(yoloLabel) + "  " + st.Muted.Render(hint),
+	row := func(label, value, source string) string {
+		out := "  " + fmt.Sprintf("%-18s", label) + st.Emphasis.Render(value)
+		if source != "" {
+			out += "  " + st.Muted.Render("(from "+source+")")
+		}
+		return out
 	}
-	if !m.narrow {
-		lines = append(lines,
-			st.Muted.Render("  "+st.Key.Render("y")+" toggle  · writes permissions.defaultMode = \"bypassPermissions\""),
-			st.Muted.Render("  (CLI override: `claude --dangerously-skip-permissions` per session)"),
-		)
+	return []string{
+		row("model", m.model, m.modelSource),
+		row("effort", m.effort, m.effortSource),
+		row("always-thinking", thinkLabel, ""),
+		row("yolo mode", yoloLabel, m.yoloSource),
 	}
-	return strings.Join(lines, "\n")
 }
 
-func (m claudeModel) renderHooksBlock() string {
+// renderConfigFilesRows lists the two Claude config-file paths the
+// `c` and `j` keys edit. Path column is muted so the file name is the
+// visual anchor; HelpBar already advertises c / j as the action keys.
+func (m claudeModel) renderConfigFilesRows() []string {
 	st := m.st
-	if m.settings == nil || len(m.settings.Hooks) == 0 {
-		return st.Subtitle.Render("Hooks") + "\n  " + st.Muted.Render("(none)")
+	row := func(name, path string) string {
+		return "  " + fmt.Sprintf("%-18s", name) + st.Muted.Render(summarizePath(path))
 	}
-	out := []string{st.Subtitle.Render("Hooks")}
-	preferredOrder := []string{"SessionStart", "UserPromptSubmit", "PermissionRequest", "Stop"}
-	ordered := []string{}
+	return []string{
+		row("CLAUDE.md", m.paths.GlobalCLAUDEMd),
+		row("settings.json", m.paths.Settings),
+	}
+}
+
+// renderConfiguredRows summarizes the five `settings.json` subsystems —
+// Hooks, MCP servers, Permissions, Slash commands, Skills — as one row
+// each. Each row reads `<label>  <count> <units>  <sample>` so the
+// section is scannable at a glance and the file behind it is still
+// reachable via `j`.
+func (m claudeModel) renderConfiguredRows() []string {
+	st := m.st
+	row := func(label, value, sample string) string {
+		out := "  " + fmt.Sprintf("%-18s", label) + value
+		if sample != "" {
+			out += "  " + st.Muted.Render(sample)
+		}
+		return out
+	}
+	rows := []string{
+		row("Hooks", m.hooksSummaryValue(), m.hooksSummarySample()),
+		row("MCP servers", m.mcpSummaryValue(), m.mcpSummarySample()),
+		row("Permissions", m.permissionsSummaryValue(), ""),
+		row("Slash commands", m.commandsSummaryValue(), m.commandsSummarySample()),
+		row("Skills", m.skillsSummaryValue(), m.skillsSummarySample()),
+	}
+	return rows
+}
+
+// hooksSummaryValue returns the right-of-label count text for the
+// Hooks row ("(none)" when no hooks are configured, otherwise
+// "<n> events").
+func (m claudeModel) hooksSummaryValue() string {
+	if m.settings == nil || len(m.settings.Hooks) == 0 {
+		return m.st.Muted.Render("(none)")
+	}
+	return fmt.Sprintf("%d events", len(m.settings.Hooks))
+}
+
+// hooksSummarySample returns the sample event-name preview rendered
+// muted to the right of the count. The order is stable across renders:
+// preferred Claude lifecycle events (SessionStart, UserPromptSubmit,
+// PermissionRequest, Stop) first in that fixed order, then any
+// remaining configured events in alphabetical order. Sample is capped
+// at 3 names; remainder collapses to ", …" so the row stays one line.
+//
+// The deterministic order is the fix for the "hooks rows jump around"
+// bug — Go's map iteration is intentionally randomized, so the prior
+// code surfaced a different right-column preview on every render.
+func (m claudeModel) hooksSummarySample() string {
+	if m.settings == nil || len(m.settings.Hooks) == 0 {
+		return ""
+	}
+	names := sortedHookEventNames(m.settings.Hooks)
+	if len(names) <= 3 {
+		return strings.Join(names, ", ")
+	}
+	return strings.Join(names[:3], ", ") + ", …"
+}
+
+// sortedHookEventNames returns hook event names in a stable display
+// order: known Claude lifecycle events first, alphabetical for the
+// rest. Lifted out of the renderer so any future caller (a `?` modal,
+// for example) renders the same order.
+func sortedHookEventNames(hooks map[string][]claudeconfig.HookGroup) []string {
+	preferred := []string{"SessionStart", "UserPromptSubmit", "PermissionRequest", "Stop"}
 	seen := map[string]bool{}
-	for _, p := range preferredOrder {
-		if _, ok := m.settings.Hooks[p]; ok {
-			ordered = append(ordered, p)
+	out := []string{}
+	for _, p := range preferred {
+		if _, ok := hooks[p]; ok {
+			out = append(out, p)
 			seen[p] = true
 		}
 	}
-	for k := range m.settings.Hooks {
+	rest := []string{}
+	for k := range hooks {
 		if !seen[k] {
-			ordered = append(ordered, k)
+			rest = append(rest, k)
 		}
 	}
-	for _, lc := range ordered {
-		groups := m.settings.Hooks[lc]
-		count := 0
-		var first string
-		for _, g := range groups {
-			for _, h := range g.Hooks {
-				count++
-				if first == "" {
-					first = h.Command
-					if len(first) > 60 {
-						first = first[:57] + "…"
-					}
-				}
-			}
-		}
-		out = append(out, fmt.Sprintf("  %-22s %d hook(s)  %s",
-			lc, count, st.Muted.Render(first)))
-	}
-	return strings.Join(out, "\n")
+	sort.Strings(rest)
+	return append(out, rest...)
 }
 
-func (m claudeModel) renderMCPBlock() string {
-	st := m.st
+func (m claudeModel) mcpSummaryValue() string {
 	if m.settings == nil || len(m.settings.MCPServers) == 0 {
-		return st.Subtitle.Render("MCP servers") + "\n  " + st.Muted.Render("(none configured)")
+		return m.st.Muted.Render("(none)")
 	}
-	out := []string{st.Subtitle.Render(fmt.Sprintf("MCP servers (%d)", len(m.settings.MCPServers)))}
+	return fmt.Sprintf("%d", len(m.settings.MCPServers))
+}
+
+// mcpSummarySample lists the first 3 server names in alphabetical
+// order so the row is stable across renders.
+func (m claudeModel) mcpSummarySample() string {
+	if m.settings == nil || len(m.settings.MCPServers) == 0 {
+		return ""
+	}
 	names := make([]string, 0, len(m.settings.MCPServers))
 	for k := range m.settings.MCPServers {
 		names = append(names, k)
 	}
-	cap := 5
-	for i, n := range names {
-		if i >= cap {
-			out = append(out, st.Muted.Render(fmt.Sprintf("  … and %d more", len(names)-cap)))
-			break
-		}
-		s := m.settings.MCPServers[n]
-		kind := s.Type
-		if kind == "" {
-			if s.URL != "" {
-				kind = "http"
-			} else if s.Command != "" {
-				kind = "stdio"
-			}
-		}
-		out = append(out, fmt.Sprintf("  %-22s %s", n, st.Muted.Render(kind)))
+	sort.Strings(names)
+	if len(names) <= 3 {
+		return strings.Join(names, ", ")
 	}
-	return strings.Join(out, "\n")
+	return strings.Join(names[:3], ", ") + ", …"
 }
 
-func (m claudeModel) renderPermissionsBlock() string {
-	st := m.st
+func (m claudeModel) permissionsSummaryValue() string {
 	if m.settings == nil || (len(m.settings.Permissions.Allow) == 0 && len(m.settings.Permissions.Deny) == 0) {
-		return st.Subtitle.Render("Permissions") + "\n  " + st.Muted.Render("(no explicit allow/deny — Claude prompts each time)")
+		return m.st.Muted.Render("(prompt each time)")
 	}
-	lines := []string{
-		st.Subtitle.Render("Permissions"),
-		fmt.Sprintf("  allow: %d pattern(s)", len(m.settings.Permissions.Allow)),
-		fmt.Sprintf("  deny:  %d pattern(s)", len(m.settings.Permissions.Deny)),
-	}
-	if !m.narrow {
-		lines = append(lines, st.Muted.Render("  edit with "+st.Key.Render("j")+" (opens settings.json)"))
-	}
-	return strings.Join(lines, "\n")
+	return fmt.Sprintf("%d allow · %d deny",
+		len(m.settings.Permissions.Allow), len(m.settings.Permissions.Deny))
 }
 
-func (m claudeModel) renderCommandsBlock() string {
-	st := m.st
+func (m claudeModel) commandsSummaryValue() string {
 	if len(m.commands) == 0 {
-		return st.Subtitle.Render("Slash commands") + "\n  " + st.Muted.Render("(none under "+m.paths.CommandsDir+")")
+		return m.st.Muted.Render("(none)")
 	}
-	out := []string{st.Subtitle.Render(fmt.Sprintf("Slash commands (%d)", len(m.commands)))}
-	cap := 5
-	for i, c := range m.commands {
-		if i >= cap {
-			out = append(out, st.Muted.Render(fmt.Sprintf("  … and %d more", len(m.commands)-cap)))
-			break
-		}
-		desc := c.Description
-		if desc == "" {
-			desc = "—"
-		}
-		out = append(out, fmt.Sprintf("  /%s   %s", c.Name, st.Muted.Render(desc)))
-	}
-	return strings.Join(out, "\n")
+	return fmt.Sprintf("%d", len(m.commands))
 }
 
-func (m claudeModel) renderSkillsBlock() string {
-	st := m.st
+func (m claudeModel) commandsSummarySample() string {
+	if len(m.commands) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(m.commands))
+	for _, c := range m.commands {
+		names = append(names, "/"+c.Name)
+	}
+	sort.Strings(names)
+	if len(names) <= 3 {
+		return strings.Join(names, ", ")
+	}
+	return strings.Join(names[:3], ", ") + ", …"
+}
+
+func (m claudeModel) skillsSummaryValue() string {
 	if len(m.skills) == 0 {
-		return st.Subtitle.Render("Skills") + "\n  " + st.Muted.Render("(none)")
+		return m.st.Muted.Render("(none)")
 	}
-	out := []string{st.Subtitle.Render(fmt.Sprintf("Skills (%d)", len(m.skills)))}
-	cap := 5
-	for i, s := range m.skills {
-		if i >= cap {
-			out = append(out, st.Muted.Render(fmt.Sprintf("  … and %d more", len(m.skills)-cap)))
-			break
-		}
-		desc := s.Description
-		if desc == "" {
-			desc = "—"
-		}
-		out = append(out, fmt.Sprintf("  %s   %s", s.Name, st.Muted.Render(desc)))
+	return fmt.Sprintf("%d", len(m.skills))
+}
+
+func (m claudeModel) skillsSummarySample() string {
+	if len(m.skills) == 0 {
+		return ""
 	}
-	return strings.Join(out, "\n")
+	names := make([]string, 0, len(m.skills))
+	for _, s := range m.skills {
+		names = append(names, s.Name)
+	}
+	sort.Strings(names)
+	if len(names) <= 3 {
+		return strings.Join(names, ", ")
+	}
+	return strings.Join(names[:3], ", ") + ", …"
 }
 
 func (m claudeModel) viewPicker(width, height int) string {
@@ -602,4 +626,139 @@ func looksLikePath(s string) bool {
 	return strings.HasPrefix(s, "/") ||
 		strings.HasPrefix(s, "~/") ||
 		strings.HasPrefix(s, "unix://")
+}
+
+// browserSections builds the agent-browser sections for the Claude
+// sub-tab. Sections appear in a fixed order — Hooks, MCP servers,
+// Slash commands, Skills — to match the Configured row order and
+// keep the browser's vertical layout predictable across renders.
+// Items within each section are sorted alphabetically (hooks by
+// event lifecycle order). Preview text is plain — no Glamour — so
+// the browser's hard-wrap stays accurate.
+func (m claudeModel) browserSections() []agentBrowserSection {
+	out := []agentBrowserSection{}
+	out = append(out, m.browserHooksSection())
+	out = append(out, m.browserMCPSection())
+	out = append(out, m.browserCommandsSection())
+	out = append(out, m.browserSkillsSection())
+	return out
+}
+
+func (m claudeModel) browserHooksSection() agentBrowserSection {
+	section := agentBrowserSection{Title: "Hooks", Color: m.st.P.Peach}
+	if m.settings == nil || len(m.settings.Hooks) == 0 {
+		return section
+	}
+	for _, event := range sortedHookEventNames(m.settings.Hooks) {
+		groups := m.settings.Hooks[event]
+		count := 0
+		preview := []string{event, ""}
+		for _, g := range groups {
+			for _, h := range g.Hooks {
+				count++
+				preview = append(preview, "  command: "+h.Command)
+				if h.Timeout > 0 {
+					preview = append(preview, fmt.Sprintf("  timeout: %ds", h.Timeout))
+				}
+				preview = append(preview, "")
+			}
+		}
+		section.Items = append(section.Items, agentBrowserItem{
+			Label:    event,
+			Trailing: fmt.Sprintf("%d hook(s)", count),
+			Preview:  strings.Join(preview, "\n"),
+		})
+	}
+	return section
+}
+
+func (m claudeModel) browserMCPSection() agentBrowserSection {
+	section := agentBrowserSection{Title: "MCP servers", Color: m.st.P.Sky}
+	if m.settings == nil || len(m.settings.MCPServers) == 0 {
+		return section
+	}
+	names := make([]string, 0, len(m.settings.MCPServers))
+	for k := range m.settings.MCPServers {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		s := m.settings.MCPServers[name]
+		kind := s.Type
+		if kind == "" {
+			if s.URL != "" {
+				kind = "http"
+			} else if s.Command != "" {
+				kind = "stdio"
+			}
+		}
+		preview := []string{name, "", "  type: " + kind}
+		if s.URL != "" {
+			preview = append(preview, "  url: "+s.URL)
+		}
+		if s.Command != "" {
+			preview = append(preview, "  command: "+s.Command)
+		}
+		if len(s.Args) > 0 {
+			preview = append(preview, "  args: "+strings.Join(s.Args, " "))
+		}
+		if len(s.Env) > 0 {
+			envKeys := make([]string, 0, len(s.Env))
+			for k := range s.Env {
+				envKeys = append(envKeys, k)
+			}
+			sort.Strings(envKeys)
+			preview = append(preview, "  env keys: "+strings.Join(envKeys, ", "))
+		}
+		section.Items = append(section.Items, agentBrowserItem{
+			Label:    name,
+			Trailing: kind,
+			Preview:  strings.Join(preview, "\n"),
+		})
+	}
+	return section
+}
+
+func (m claudeModel) browserCommandsSection() agentBrowserSection {
+	section := agentBrowserSection{Title: "Commands", Color: m.st.P.Green}
+	for _, c := range m.commands {
+		// The Command struct only carries Description in-memory; the
+		// underlying ~/.claude/commands/<name>.md body lives on disk
+		// and we read it lazily so the browser can render the full
+		// content (frontmatter + markdown) via Glamour.
+		body := readFileOr(c.Path, c.Description)
+		section.Items = append(section.Items, agentBrowserItem{
+			Label:    "/" + c.Name,
+			Preview:  body,
+			Markdown: true,
+		})
+	}
+	return section
+}
+
+func (m claudeModel) browserSkillsSection() agentBrowserSection {
+	section := agentBrowserSection{Title: "Skills", Color: m.st.P.Mauve}
+	for _, s := range m.skills {
+		body := readFileOr(s.Path, s.Description)
+		section.Items = append(section.Items, agentBrowserItem{
+			Label:    s.Name,
+			Preview:  body,
+			Markdown: true,
+		})
+	}
+	return section
+}
+
+// readFileOr returns the file contents at path, or fallback when the
+// file is unreadable / empty. Used by the browser sections to read
+// slash command + skill .md bodies for the right-pane preview.
+func readFileOr(path, fallback string) string {
+	if path == "" {
+		return fallback
+	}
+	b, err := os.ReadFile(path)
+	if err != nil || len(b) == 0 {
+		return fallback
+	}
+	return string(b)
 }

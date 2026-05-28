@@ -280,6 +280,7 @@ func (a App) Init() tea.Cmd {
 		tickEvery(2 * time.Second),
 		usageTick(),
 		a.projectsM.Init(),
+		a.agentsM.Init(),
 	}
 	// Auto-update check: a one-shot background `git fetch` + behind-
 	// count when the user hasn't opted out. Fires once per launch —
@@ -926,15 +927,17 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a.updateConfirmationMouse(msg)
 		}
 		// Forward wheel events to the active screen so its
-		// scrollable regions (notes preview viewport, etc.) can
-		// respond. Non-wheel mouse events are intentionally
-		// swallowed — clicks/drags don't drive navigation here,
-		// and absorbing them keeps the rest of the app pointer-free.
+		// scrollable regions (notes preview, agents browser preview,
+		// etc.) can respond. Non-wheel mouse events are intentionally
+		// swallowed — clicks/drags don't drive navigation here, and
+		// absorbing them keeps the rest of the app pointer-free.
 		if isWheelMsg(msg) {
 			var cmd tea.Cmd
 			switch a.screen {
 			case ScreenNotes:
 				a.notes, cmd = a.notes.Update(msg)
+			case ScreenAgents:
+				a.agentsM, cmd = a.agentsM.Update(msg)
 			}
 			return a, cmd
 		}

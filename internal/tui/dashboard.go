@@ -414,10 +414,9 @@ func (m dashboardModel) usagePanel(width int) string {
 // agentSectionHeading renders the per-agent sub-section title in
 // the agent's accent color. The colour mapping lives on
 // styles.Styles.AgentAccent as the design-system single source of
-// truth (Claude=mauve, Codex=sky, Antigravity=peach, Cursor=teal);
-// the dashboard adds Bold for the heading treatment.
+// truth (Claude=mauve, Codex=sky, Antigravity=peach, Cursor=teal).
 func agentSectionHeading(st styles.Styles, id agent.ID, text string) string {
-	return st.AgentAccent(id).Bold(true).Render(text)
+	return st.AgentAccent(id).Render(text)
 }
 
 // renderClaudeWindowSection produces the indented body rows of the

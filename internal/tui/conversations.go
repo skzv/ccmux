@@ -645,7 +645,7 @@ func (m conversationsModel) renderLoading(width, height int) string {
 	}
 	var legend []string
 	for _, def := range conversationAgentSections {
-		dot := st.AgentAccent(def.Agent).Bold(true).Render("●")
+		dot := st.AgentAccent(def.Agent).Bold(true).Render("•")
 		legend = append(legend,
 			"  "+dot+"  "+
 				st.Type.Body.Render(strings.ToLower(def.Label))+
@@ -668,14 +668,19 @@ func (m conversationsModel) renderAgentNav(sections []conversationAgentSection) 
 	parts := make([]string, 0, len(sections))
 	for i, section := range sections {
 		label := fmt.Sprintf("%s %d", section.def.Label, len(section.conversations))
+		// Per-section dot uses the agent's accent colour so the four
+		// section headings read as a categorical legend at a glance
+		// — same convention as the Agents browser's hooks/MCP/commands/
+		// skills dots. The active section keeps the accent on the
+		// label text too; inactive sections keep the dot coloured but
+		// drop the label to muted so the eye lands on the active one.
+		accent := m.st.AgentAccent(section.def.Agent)
+		dot := accent.Render("•")
 		if i == m.activeSection {
-			// Active section heading carries the agent's accent colour
-			// (Claude=mauve, Codex=sky, Antigravity=peach, Cursor=teal)
-			// via the design-system helper.
-			parts = append(parts, m.st.AgentAccent(section.def.Agent).Bold(true).Render("▸ "+label))
+			parts = append(parts, dot+" "+accent.Bold(true).Render(label))
 			continue
 		}
-		parts = append(parts, m.st.Muted.Render("  "+label))
+		parts = append(parts, dot+" "+m.st.Muted.Render(label))
 	}
 	return strings.Join(parts, "  ")
 }

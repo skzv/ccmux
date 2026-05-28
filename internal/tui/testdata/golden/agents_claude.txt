@@ -1,0 +1,40 @@
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ • Claude Code   • Codex   • Antigravity CLI   • Cursor   • Pi   • Grok   (tab / h·l: switch agent)                   │
+│                                                                                                                      │
+│ Claude Code Configuration                                                                                            │
+│                                                                                                                      │
+│ Defaults                                                                                                             │
+│   model             (default)  (from Claude Code default)                                                            │
+│   effort            (default)  (from Claude Code default)                                                            │
+│   always-thinking   off                                                                                              │
+│   yolo mode         off  (from Claude Code default)                                                                  │
+│                                                                                                                      │
+│ Config files                                                                                                         │
+│   CLAUDE.md         ~/.claude/CLAUDE.md                                                                              │
+│   settings.json     ~/.claude/settings.json                                                                          │
+│                                                                                                                      │
+│ ╭────────────────────────────────────────────╮╭────────────────────────────────────────────────────────────────────╮ │
+│ │ • Hooks                                    ││                                                                    │ │
+│ │ • MCP servers                              ││                                                                    │ │
+│ │ • Commands                                 ││                                                                    │ │
+│ │ • Skills                                   ││                                                                    │ │
+│ │                                            ││                                                                    │ │
+│ │                                            ││                                                                    │ │
+│ │                                            ││                                                                    │ │
+│ │                                            ││                                                                    │ │
+│ │                                            ││                                                                    │ │
+│ │                                            ││                                                                    │ │
+│ │                                            ││                                                                    │ │
+│ │                                            ││                                                                    │ │
+│ │                                            ││                                                                    │ │
+│ │                                            ││                                                                    │ │
+│ │                                            ││                                                                    │ │
+│ │                                            ││                                                                    │ │
+│ │                                            ││                                                                    │ │
+│ │                                            ││                                                                    │ │
+│ │                                            ││                                                                    │ │
+│ ╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────╯ │
+│                                                                                                                      │
+│ ↑↓ navigate · enter/→ focus preview                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+? help · q quit · tab next agent · h/l switch · ←→ pane · m model · e effort · y yolo · c CLAUDE.md · j settings.json   
