@@ -641,6 +641,11 @@ func (m settingsModel) renderDetailPane(width, height int, focused bool) string 
 	if m.cursor >= 0 && m.cursor < len(fields) {
 		f := fields[m.cursor]
 		title := m.st.Emphasis.Render(f.label)
+		if f.agentID != "" {
+			// Tier-row detail title wears the agent's accent, matching
+			// the colored row label in the list pane.
+			title = m.st.AgentAccent(f.agentID).Bold(true).Render(f.label)
+		}
 		if f.readOnly {
 			title += "  " + m.st.Muted.Render("(read-only)")
 		}
@@ -746,7 +751,7 @@ func (m settingsModel) fieldValue(f editableField, active bool) string {
 	case rawVal == "":
 		return m.st.Muted.Render("(default)")
 	case f.chip:
-		return m.renderChip(rawVal, active)
+		return m.renderChipColor(rawVal, m.chipColorForField(f, rawVal), active)
 	case looksLikePath(rawVal):
 		// Collapse $HOME to "~/" so sandbox /tmp/... paths don't leak
 		// into demo GIFs and the user sees the short form they typed.
@@ -760,7 +765,13 @@ func (m settingsModel) fieldValue(f editableField, active bool) string {
 // list row: 2-cell prefix (selection bar on the active row, two spaces
 // otherwise), label, value (or chip), optional read-only tag.
 func (m settingsModel) renderFieldRow(f editableField, active bool, contentW int) string {
-	content := fmt.Sprintf("%-*s %s", settingsLabelWidth, f.label, m.fieldValue(f, active))
+	label := fmt.Sprintf("%-*s", settingsLabelWidth, f.label)
+	if f.agentID != "" {
+		// Per-agent tier rows wear their agent's accent, the same color
+		// coding every other multi-agent surface uses (Styles.AgentAccent).
+		label = m.st.AgentAccent(f.agentID).Render(label)
+	}
+	content := label + " " + m.fieldValue(f, active)
 	if f.readOnly {
 		content += "  " + m.st.Muted.Render("(read-only)")
 	}
@@ -779,7 +790,7 @@ func (m settingsModel) renderDetailOptions(f editableField) []string {
 	lines := []string{m.st.Subtitle.Render("Options") + "  " + m.st.Muted.Render("enter cycles")}
 	for _, opt := range f.options {
 		if strings.ToLower(opt) == current {
-			lines = append(lines, "  "+m.renderChip(opt, true))
+			lines = append(lines, "  "+m.renderChipColor(opt, m.chipColorForField(f, opt), true))
 		} else {
 			lines = append(lines, "  "+m.st.Muted.Render(opt))
 		}
@@ -787,20 +798,55 @@ func (m settingsModel) renderDetailOptions(f editableField) []string {
 	return lines
 }
 
-// renderChip renders a value as a bracketed chip with a semantic
-// foreground color so the row reads as a status at a glance. Active
-// rows render bold; off rows render at normal weight so the active
-// chip pops against the elevated background without changing the hue
-// from one row to the next. Unknown values fall back to Accent
-// (active) or Muted (off) so additions to an enum render sensibly
-// even before this map is updated.
+// renderChip renders a value as a bracketed chip colored by value
+// (semantic status, or an agent accent when the value names an agent).
+// Used by the static Sleep/Daemon rows that have no editableField.
 func (m settingsModel) renderChip(value string, active bool) string {
-	color := chipColorFor(value, m.st)
+	return m.renderChipColor(value, m.chipColorForValue(value), active)
+}
+
+// renderChipColor renders a `[value]` chip in the given foreground.
+// Active rows render bold so the chip pops against the elevated
+// background without changing hue from one row to the next.
+func (m settingsModel) renderChipColor(value string, color lipgloss.Color, active bool) string {
 	style := lipgloss.NewStyle().Foreground(color)
 	if active {
 		style = style.Bold(true)
 	}
 	return style.Render("[" + value + "]")
+}
+
+// chipColorForField picks a chip's color. Per-agent tier rows wear their
+// agent's accent (matching Styles.AgentAccent on every other tab);
+// otherwise the value decides (an agent-name value like the
+// agents.default chip wears that agent's accent, everything else a
+// semantic status color).
+func (m settingsModel) chipColorForField(f editableField, value string) lipgloss.Color {
+	if f.agentID != "" {
+		return agentAccentColor(m.st, f.agentID)
+	}
+	return m.chipColorForValue(value)
+}
+
+// chipColorForValue colors a chip from its value alone: an agent-name
+// value wears that agent's accent, everything else a semantic status
+// color (see chipColorFor).
+func (m settingsModel) chipColorForValue(value string) lipgloss.Color {
+	if id, ok := agent.ParseID(value); ok {
+		return agentAccentColor(m.st, id)
+	}
+	return chipColorFor(value, m.st)
+}
+
+// agentAccentColor extracts the raw foreground color from the design
+// system's per-agent accent style (Styles.AgentAccent), so chips can
+// match the agent color coding used across the other tabs. Falls back
+// to Accent if the style carries no plain color (unknown agent).
+func agentAccentColor(st styles.Styles, id agent.ID) lipgloss.Color {
+	if c, ok := st.AgentAccent(id).GetForeground().(lipgloss.Color); ok {
+		return c
+	}
+	return st.Semantic.Accent
 }
 
 // chipColorFor maps a chip value to the semantic color it should

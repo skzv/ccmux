@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -328,10 +329,11 @@ func TestSettings_ActiveFieldRendersAccentBar(t *testing.T) {
 }
 
 // TestSettings_ChipPresenceAndColor — boolean/enum fields render their
-// value as a [chip] colored by semantic intent: tier values in Info,
-// on/safe/mirror in Success, off/dangerous/exclusive in Warning. The
-// active row renders bold without changing hue so the chip's status
-// reading stays stable as the cursor moves. We grep the output for
+// value as a [chip]. Per-agent tier chips (and the agents.default value
+// chip) wear that agent's accent from Styles.AgentAccent, matching the
+// color coding on every other tab; status chips stay semantic
+// (on/safe/mirror in Success, off/dangerous/exclusive in Warning). The
+// active row renders bold without changing hue. We grep the output for
 // the live palette's ANSI runs so a theme swap re-themes the test.
 func TestSettings_ChipPresenceAndColor(t *testing.T) {
 	cfg := config.Defaults()
@@ -357,10 +359,23 @@ func TestSettings_ChipPresenceAndColor(t *testing.T) {
 		}
 	}
 
-	// Active tier chip: Semantic.Info, bold (the active treatment).
-	activeTier := lipgloss.NewStyle().Foreground(st.Semantic.Info).Bold(true).Render("[max5x]")
+	// Active claude.tier chip: Claude's accent (Mauve), bold.
+	activeTier := st.AgentAccent(agent.IDClaude).Bold(true).Render("[max5x]")
 	if !strings.Contains(out, activeTier) {
-		t.Errorf("expected active [max5x] chip rendered in Semantic.Info (bold); output did not contain the styled run")
+		t.Errorf("expected active [max5x] chip rendered in Claude's AgentAccent (bold); output did not contain the styled run")
+	}
+	// agents.default value chip names an agent, so it wears that agent's
+	// accent too: [claude] in Claude's accent (off-row, not bold).
+	claudeChip := st.AgentAccent(agent.IDClaude).Render("[claude]")
+	if !strings.Contains(out, claudeChip) {
+		t.Errorf("expected [claude] chip rendered in Claude's AgentAccent; output did not contain the styled run")
+	}
+	// The per-agent tier row's label wears the agent accent too. Check an
+	// off-row label (codex.tier) so the run isn't merged with the active
+	// row's selected background.
+	codexLabel := st.AgentAccent(agent.IDCodex).Render(fmt.Sprintf("%-*s", settingsLabelWidth, "codex.tier"))
+	if !strings.Contains(out, codexLabel) {
+		t.Errorf("expected codex.tier label rendered in Codex's AgentAccent; output did not contain the styled run")
 	}
 	// Off-row positive chip: Semantic.Success.
 	onChip := lipgloss.NewStyle().Foreground(st.Semantic.Success).Render("[on]")

@@ -3,7 +3,9 @@
 ## Purpose
 
 TBD - created by archiving change redesign-tui-charm. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Single token source of truth
 
 The TUI SHALL define every color, spacing value, border radius, typography role, and semantic style in `internal/tui/styles/` as named tokens. No TUI screen file outside `internal/tui/styles/` and `internal/tui/components/` MAY introduce a literal color value (e.g., `lipgloss.Color("#…")`, `lipgloss.Color("123")`), a literal spacing value passed to `.Padding(...)` / `.Margin(...)` / `.PaddingLeft(...)` / `.MarginRight(...)`, or a literal border definition. All such values MUST come from the tokens layer.
@@ -531,12 +533,17 @@ When the cursor is on an editable field with a fixed enum (`options` slice non-e
 
 ### Requirement: Fixed-enum field value chips
 
-Editable fields whose value is a fixed enum or boolean (e.g., `subscription.tier`, `agents.default`, `sleep.mode`) SHALL render the current value as a bracketed chip (`[max5x]`, `[claude]`, `[off]`). Each chip SHALL render in a semantic color drawn from the live `Styles.Semantic` palette so the row reads as a status at a glance: status-positive values (`on`, `safe`, `mirror`) in `Semantic.Success`; status-negative or warning values (`off`, `dangerous`, `exclusive`) in `Semantic.Warning`; classification values (`api`, `pro`, `max5x`, `max20x`) in `Semantic.Info`; everything else in `Semantic.Accent`. Active-row chips SHALL render bold so they pop against the elevated background without changing hue.
+Editable fields whose value is a fixed enum or boolean (e.g., `subscription.tier`, `agents.default`, `sleep.mode`) SHALL render the current value as a bracketed chip (`[max5x]`, `[claude]`, `[off]`). Per-agent tier chips (the `*.tier` rows) and chips whose value names an agent (the `agents.default` value) SHALL render in that agent's accent from `Styles.AgentAccent` — the design system's single source of truth for agent color coding — so the Settings rows match the agent colors used on every other tab. The matching tier row's label SHALL also render in that agent accent. All other chips SHALL render in a semantic color drawn from the live `Styles.Semantic` palette so the row reads as a status at a glance: status-positive values (`on`, `safe`, `mirror`) in `Semantic.Success`; status-negative or warning values (`off`, `dangerous`, `exclusive`) in `Semantic.Warning`; everything else in `Semantic.Accent`. Active-row chips SHALL render bold so they pop against the elevated background without changing hue.
 
-#### Scenario: Tier field renders the current tier as a colored chip
+#### Scenario: Tier chip and label render in the agent accent
 
-- **WHEN** `subscription.tier` is `"max5x"` and the field is not under the cursor
-- **THEN** the row's value renders as a `[max5x]` chip in `Semantic.Info`
+- **WHEN** `claude.tier` is `"max5x"`
+- **THEN** the `[max5x]` chip and the `claude.tier` label both render in Claude's `Styles.AgentAccent` color
+
+#### Scenario: Agent-name value chip wears the agent accent
+
+- **WHEN** `agents.default` is `claude`
+- **THEN** the `[claude]` chip renders in Claude's `Styles.AgentAccent` color
 
 #### Scenario: Boolean on/off chip uses status colors
 
@@ -589,4 +596,3 @@ The Settings screen SHALL bind the `i` key to open a focused overlay rendering r
 
 - **WHEN** the Settings screen renders at width ≥ 120 columns
 - **THEN** neither `ccmux version` nor `config file` appears in the body; they live in the info overlay
-
