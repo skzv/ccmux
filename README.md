@@ -2,9 +2,11 @@
 
 # ccmux
 
-**Start on your Mac. Continue on your phone. Resume on your laptop.**
+_Terminal session manager for AI coding agents._
 
-One TUI for every Claude / Codex / Antigravity / Cursor / pi / Grok session across every device on your tailnet. No tmux session names to memorize, no `claude --resume <hash>` to type, no SSH-then-attach gymnastics when you pick up on your phone. Your work follows you between devices — frictionless.
+**Run your coding agents from any device — even your phone.**
+
+ccmux is one TUI for every coding-agent session you've got running — Claude Code, Codex, Cursor, and more. Start, resume, and supervise them all from your Mac, your laptop, or your phone. No tmux session names to memorize, no `claude --resume <hash>` to type, no SSH-then-attach gymnastics. It runs over your tailnet and attaches over SSH or Mosh. Setup is one command.
 
 [![CI](https://github.com/skzv/ccmux/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/skzv/ccmux/actions/workflows/ci.yml)
 [![Go Version](https://img.shields.io/badge/go-1.26+-00ADD8.svg)](https://go.dev/)
@@ -86,7 +88,7 @@ tmux is the session store; ccmux is the lens. The phone-width layout collapses e
 
 Open the Projects tab, press `n`. Pick which device should host the new project — local, or any reachable peer running `ccmuxd` on your tailnet. The remote daemon creates the directory natively and starts the agent. ccmux SSH-attaches you in. You never typed `ssh`, never typed `mkdir`, never typed `tmux new-session`.
 
-The new-project form also picks the agent (Claude / Codex / Antigravity / Cursor) for this project — the choice sticks at `<project>/.ccmux/agent`.
+The new-project form also picks the agent (Claude, Codex, Cursor, and more) for this project — the choice sticks at `<project>/.ccmux/agent`.
 
 ---
 
@@ -102,13 +104,13 @@ Headless agent runs (`claude -p`, `codex exec`, SDK invocations) are filtered ou
 
 ---
 
-## 🤖 Four agents. One workflow.
+## 🤖 Every agent. One workflow.
 
 <div align="center">
 <img src="docs/vhs/out/cuj05_pick_agent.gif" alt="ccmux new-project form: cycle Claude / Codex / Antigravity / Cursor with arrow keys, the agent picker writes the per-project choice into .ccmux/agent." width="900" />
 </div>
 
-Pick per project which AI runs it — [Claude Code](https://claude.ai/code), [Codex](https://github.com/openai/codex), [Antigravity CLI](https://antigravity.google/download), [Cursor](https://cursor.com/cli), [pi](https://pi.dev), or [Grok](https://x.ai/cli). The choice is sticky, stored at `<project>/.ccmux/agent`. The dashboard, daemon state-detection, and dispatch all follow per-project. Press `a` in the Projects tab to switch the selected project's agent (cycles claude → codex → antigravity → cursor → pi → grok).
+Pick per project which AI runs it — ccmux works with [Claude Code](https://claude.ai/code), [Codex](https://github.com/openai/codex), [Antigravity CLI](https://antigravity.google/download), [Cursor](https://cursor.com/cli), [pi](https://pi.dev), [Grok](https://x.ai/cli), and more, speaking each one's launch and resume dialect. The choice is sticky, stored at `<project>/.ccmux/agent`. The dashboard, daemon state-detection, and dispatch all follow per-project. Press `a` in the Projects tab to switch the selected project's agent (cycles claude → codex → antigravity → cursor → pi → grok).
 
 Dashboard rows on non-default agents get a small `[codex]`, `[antigravity]`, `[cursor]`, `[pi]`, or `[grok]` tag so a single glance tells you what's running where.
 
@@ -156,6 +158,14 @@ Dashboard shows a banner when a new release lands. `ccmux update` git-pulls the 
 
 ## 📱 Mobile setup
 
+The way to use ccmux on your phone today is the **[Moshi](https://getmoshi.app/) app**. Moshi holds a Mosh connection to your Mac alive through roaming and lid-close, raises a real push notification when an agent needs you, and shows a live picker of your sessions — tap one and you're attached to ccmux's TUI on your phone.
+
+<div align="center">
+<img src="docs/screenshots/moshi.png" alt="ccmux running inside the Moshi app on an iPhone: a live ccmux session, the status line reading 'reachable via Moshi', and Moshi's on-screen key bar (Ctrl / Esc / Tab) at the bottom." width="260" />
+<br/>
+<em>ccmux in the Moshi app — a live session on your phone, attached over Mosh</em>
+</div>
+
 ```bash
 ccmux moshi-setup
 ```
@@ -163,6 +173,8 @@ ccmux moshi-setup
 Installs [moshi-hook](https://getmoshi.app/) on the Mac, runs **Easy Pair** (a QR code appears in your terminal — scan it with the Moshi iOS app, done), and wires the Claude Code hooks that turn `needs_input` events into **categorized** push notifications (approval_required vs task_complete). Tap the notification, the Moshi app shows your live tmux session list, pick one, attach, answer, detach. No tokens to copy.
 
 Plain BEL fallback works in any iOS terminal client (Blink Shell, Termius) — you lose the categories, that's it. For headless / scripted setups: `ccmux moshi-setup --token <token>` bypasses the QR flow.
+
+**Native apps:** dedicated iOS and Android apps that talk to `ccmuxd` directly over your tailnet are in active development.
 
 ---
 
@@ -255,7 +267,7 @@ bell = true                          # ring local terminal BEL on needs_input
 - **Create on any device.** Press `n` in Projects, pick a host, the remote daemon does the work.
 - **Every subdirectory of your projects root shows up** — no marker file required. `git · CLAUDE · docs/` tags tell you which dirs are real software projects vs scratch dirs.
 
-### 🤝 Multi-agent (Claude, Codex, Antigravity)
+### 🤝 Multi-agent
 
 - Per-project agent stored in `<project>/.ccmux/agent` — sticky across sessions
 - New-project form cycles Claude / Codex / Antigravity / Cursor / pi / Grok with `←/→`
