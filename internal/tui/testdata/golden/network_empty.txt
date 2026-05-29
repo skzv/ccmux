@@ -1,0 +1,40 @@
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Network  (0)                                                                                                         │
+│                                                                                                                      │
+│ No devices discovered yet.                                                                                           │
+│                                                                                                                      │
+│ This screen lists every machine on your tailnet that ccmux can see.                                                  │
+│ Make sure tailscale is signed in (tailscale status) and try r to refresh.                                            │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+? help · q quit · enter ssh · s setup ssh · i details · r refresh · 1-7 screens                                         

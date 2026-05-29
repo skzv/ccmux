@@ -193,7 +193,7 @@ func (a App) modalCapturingText() bool {
 	if a.sshWizard != nil && a.sshWizard.Active() {
 		return true
 	}
-	if a.tour.Active() || a.helpOpen || a.usageOpen || a.convPreview.IsOpen() || a.projectInfoOpen || a.settingsInfoOpen {
+	if a.tour.Active() || a.helpOpen || a.usageOpen || a.convPreview.IsOpen() || a.projectInfoOpen || a.settingsInfoOpen || a.network.DetailOpen() {
 		return true
 	}
 	if a.projectsM.form != nil || a.projectsM.menu != nil {
@@ -254,6 +254,7 @@ func New(cfg config.Config, version string) App {
 	}
 	a.dashboard.SetConfig(cfg)
 	a.dashboard.SetVersion(version)
+	a.network.SetVersion(version)
 	a.sessionsM.SetDefaultDir(cfg.Sessions.DefaultDir)
 	a.sessionsM.SetDefaultAgent(cfg.Agents.Default)
 	a.sessionsM.SetAgentCommands(cfg.AgentCommands())
@@ -585,14 +586,18 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, a.settings.SpinnerTick()
 
 	case spinner.TickMsg:
-		// Route Moshi-probe spinner ticks globally — the spinner's
-		// loop is keyed by ID, so the message threading works even
-		// when the user is on a different screen. Without this the
-		// spinner would freeze the moment the user navigated away
-		// from Settings during a probe.
-		var cmd tea.Cmd
-		a.settings, cmd = a.settings.Update(msg)
-		return a, cmd
+		// Route every spinner tick globally, fanning it out to the
+		// three models that own an always-ticking spinner: Settings
+		// (Moshi probe), Projects (initial discovery), and Network
+		// (per-row probe). Each spinner's loop is keyed by ID, so a
+		// model ignores ticks that aren't its own — fanning out is
+		// safe and keeps every spinner animating even when the user
+		// navigates to another screen mid-probe.
+		var scmd, pcmd, ncmd tea.Cmd
+		a.settings, scmd = a.settings.Update(msg)
+		a.projectsM, pcmd = a.projectsM.Update(msg)
+		a.network, ncmd = a.network.Update(msg)
+		return a, tea.Batch(scmd, pcmd, ncmd)
 
 	case conversationDeletedMsg:
 		if msg.Err != nil {
@@ -1087,6 +1092,16 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 
+		// Network host-detail overlay — `i` or `esc` close it.
+		// Same passthrough model as the usage overlay.
+		if a.network.DetailOpen() {
+			switch msg.String() {
+			case "i", "esc":
+				a.network.CloseDetail()
+			}
+			return a, nil
+		}
+
 		// Esc dismisses the current toast (when no modal is open). The
 		// projects-screen modal handles esc itself before this code runs.
 		if msg.String() == "esc" && a.toasts.Active() &&
@@ -1281,7 +1296,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		case keyMatches(msg, a.keys.Network):
 			a.screen = ScreenNetwork
-			return a, nil
+			// Kick the spinner column on screen-enter so the user
+			// sees motion while the refresh tick catches up. The
+			// next sessionsLoadedMsg will clear the flag.
+			tick := a.network.StartRefresh()
+			return a, tea.Batch(tick, a.refreshSessionsCmd())
 		case keyMatches(msg, a.keys.Refresh) && a.screen != ScreenAgents:
 			// Refresh fans out: sessions are always refreshed (most
 			// screens display them in some form via the dashboard or
@@ -1291,6 +1310,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// restart.
 			if a.screen == ScreenProjects {
 				return a, tea.Batch(a.refreshSessionsCmd(), a.refreshProjectsCmd())
+			}
+			// Network screen: start the per-row spinner so the user
+			// sees a refresh in flight, even when the actual probe
+			// finishes within a single frame.
+			if a.screen == ScreenNetwork {
+				tick := a.network.StartRefresh()
+				return a, tea.Batch(tick, a.refreshSessionsCmd())
 			}
 			return a, a.refreshSessionsCmd()
 		case keyMatches(msg, a.keys.Enter) && a.screen == ScreenSessions:
@@ -1347,18 +1373,15 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, func() tea.Msg {
 				return toastMsg{Text: "nothing to set up for that row", Kind: toastInfo, Until: time.Now().Add(3 * time.Second)}
 			}
+		case msg.String() == "i" && a.screen == ScreenNetwork && !a.modalCapturingText():
+			// `i` opens the host-detail overlay for the focused
+			// row. Parallel to `u` on the home screen — same
+			// passthrough modal model.
+			if a.network.Selected() != nil {
+				a.network.OpenDetail()
+			}
+			return a, nil
 		}
-	}
-
-	// The Projects screen owns a spinner that ticks during the
-	// initial discovery. Its tick must keep ticking regardless of
-	// which screen is active, otherwise switching to Projects mid-
-	// scan shows a frozen spinner. We forward only the spinner tick
-	// up front so the per-screen routing below stays untouched.
-	if _, ok := msg.(spinner.TickMsg); ok {
-		var pcmd tea.Cmd
-		a.projectsM, pcmd = a.projectsM.Update(msg)
-		return a, pcmd
 	}
 
 	// Forward to the active screen.
@@ -1504,6 +1527,9 @@ func (a App) View() string {
 	}
 	if a.settingsInfoOpen {
 		return a.settings.renderSettingsInfoOverlay(a.width, a.height)
+	}
+	if a.network.DetailOpen() {
+		return a.network.renderDetailOverlay(a.width, a.height)
 	}
 	if a.confirm.open() {
 		return a.renderConfirmationOverlay(a.width, a.height)
@@ -1831,11 +1857,13 @@ func (a App) refreshSessionsCmd() tea.Cmd {
 				hs = append(hs, hostStatus{
 					Name:      localName,
 					Local:     true,
+					Source:    "local",
 					Address:   local.Addr(),
 					OK:        h.OK,
 					Sessions:  h.Sessions,
 					SleepMode: h.SleepMode,
 					Version:   h.Version,
+					LastProbe: time.Now(),
 				})
 			} else {
 				direct, e2 := fallbackDirectTmux(ctx)
@@ -1853,10 +1881,12 @@ func (a App) refreshSessionsCmd() tea.Cmd {
 					// something's off — the user can `ccmux daemon
 					// install` to fix.
 					hs = append(hs, hostStatus{
-						Name:    name,
-						Local:   true,
-						Address: "tmux (no daemon)",
-						OK:      true,
+						Name:      name,
+						Local:     true,
+						Source:    "local",
+						Address:   "tmux (no daemon)",
+						OK:        true,
+						LastProbe: time.Now(),
 					})
 				} else {
 					err = fmt.Errorf("local: %w", e2)
@@ -1881,12 +1911,14 @@ func (a App) refreshSessionsCmd() tea.Cmd {
 			cli := daemon.RemoteClient(addr)
 			ss, e := cli.Sessions(ctx)
 			st := hostStatus{
-				Name:     h.Name,
-				Address:  addr,
-				DialHost: h.Address, // bare address without port, for ssh/mosh
-				User:     h.User,
-				Mosh:     h.Mosh,
-				SSHPort:  h.SSHPort, // 0 → default 22 at the dial site
+				Name:      h.Name,
+				Source:    "configured",
+				Address:   addr,
+				DialHost:  h.Address, // bare address without port, for ssh/mosh
+				User:      h.User,
+				Mosh:      h.Mosh,
+				SSHPort:   h.SSHPort, // 0 → default 22 at the dial site
+				LastProbe: time.Now(),
 			}
 			if e == nil {
 				st.OK = true
@@ -1928,9 +1960,11 @@ func (a App) refreshSessionsCmd() tea.Cmd {
 				// down," so we shouldn't make the dot red.
 				st := hostStatus{
 					Name: d.Name, Address: d.Address,
+					Source:     "discovered",
 					Discovered: true, DialHost: d.DialHost,
 					Version: d.Version, OK: true,
 					TailscaleSSH: d.TailscaleSSH,
+					LastProbe:    time.Now(),
 				}
 				if ss, e := cli.Sessions(ctx); e == nil {
 					st.Sessions = len(ss)
@@ -1951,11 +1985,13 @@ func (a App) refreshSessionsCmd() tea.Cmd {
 				seen[addr] = true
 				hs = append(hs, hostStatus{
 					Name:         shortPeerName(p.DisplayName()),
+					Source:       "discovered",
 					Address:      addr,
 					Discovered:   true,
 					NeedsInstall: true,
 					OS:           p.OS,
 					OK:           p.Online,
+					LastProbe:    time.Now(),
 				})
 			}
 			for _, p := range scan.Mobile {
@@ -1969,11 +2005,13 @@ func (a App) refreshSessionsCmd() tea.Cmd {
 				seen[key] = true
 				hs = append(hs, hostStatus{
 					Name:       shortPeerName(p.DisplayName()),
+					Source:     "mobile",
 					Address:    p.Addr,
 					Discovered: true,
 					Mobile:     true,
 					OS:         p.OS,
 					OK:         p.Online,
+					LastProbe:  time.Now(),
 				})
 			}
 		}

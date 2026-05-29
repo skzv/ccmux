@@ -1,0 +1,40 @@
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Network  (6)                                                                                                         │
+│                                                                                                                      │
+│ Local                                                                                                                │
+│    ● sputnik  (this device)                                                                                          │
+│                                                                                                                      │
+│ Configured                                                                                                           │
+│   ● mac-mini    [SSH ✓]                                                                                              │
+│   ● atelier    [↑ update]                                                                                            │
+│                                                                                                                      │
+│ Discovered                                                                                                           │
+│   ● scout    [Tailscale SSH ✓]                                                                                       │
+│   ○ old-box    [no ccmuxd]                                                                                           │
+│                                                                                                                      │
+│ Mobile                                                                                                               │
+│   📱 iphone    [Moshi]                                                                                               │
+│                                                                                                                      │
+│ Selected                                                                                                             │
+│   name      sputnik                                                                                                  │
+│   os        darwin                                                                                                   │
+│   address   local:7474                                                                                               │
+│   ccmuxd    v1.0                                                                                                     │
+│                                                                                                                      │
+│ This is the local machine — nothing to ssh into.                                                                     │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+? help · q quit · enter ssh · s setup ssh · i details · r refresh · 1-7 screens                                         

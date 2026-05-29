@@ -9,6 +9,13 @@
 // Mobile peers are listed but not actionable from here (use the
 // Moshi app instead). Local is listed but Enter is a no-op since
 // the user is already there.
+//
+// Source-grouped layout: rows are partitioned into four sections —
+// Local, Configured, Discovered, Mobile — by `hostStatus.Source`.
+// Each row carries a small vocabulary of status chips
+// (`[Tailscale SSH ✓]`, `[↑ update]`, `[unreachable]`, `[SSH ✓]`,
+// `[Moshi]`, `[no ccmuxd]`) so the user can read state without a
+// separate legend.
 package tui
 
 import (
@@ -17,7 +24,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/skzv/ccmux/internal/remoteattach"
 	"github.com/skzv/ccmux/internal/sshsetup"
@@ -30,29 +39,71 @@ type networkModel struct {
 	km     Keymap
 	hosts  []hostStatus
 	cursor int
+
+	// version is the local ccmux build version, used to compute the
+	// `[↑ update]` chip by comparing against each peer's reported
+	// ccmuxd Version. Pushed in by App at startup; empty disables the
+	// chip entirely (no false positives on dev builds).
+	version string
+
+	// refreshing is true between the moment a refresh fires (either
+	// `r` or screen-entry) and the moment SetHosts delivers the next
+	// snapshot. While true the chip column renders the spinner for
+	// every row instead of the resolved chips — visual cue that
+	// state on screen is in motion.
+	refreshing bool
+	spinner    spinner.Model
+
+	// detailOpen drives the `i` host-detail modal. Cleared on `i`
+	// or `esc`. The overlay reads from Selected() so the App
+	// doesn't need to thread a separate "which host" argument.
+	detailOpen bool
 }
 
 func newNetwork(st styles.Styles, km Keymap) networkModel {
-	return networkModel{st: st, km: km}
+	sp := spinner.New(spinner.WithSpinner(spinner.MiniDot))
+	sp.Style = lipgloss.NewStyle().Foreground(st.Semantic.Info)
+	return networkModel{st: st, km: km, spinner: sp}
 }
 
 // SetHosts mirrors the Sessions/Dashboard pattern — the App pushes
 // the latest hosts list in via this setter after each refresh tick.
+//
+// Side effect: clears the refreshing flag so the spinner column
+// reverts to chips once fresh state lands.
 func (m *networkModel) SetHosts(hs []hostStatus) {
 	m.hosts = hs
 	if m.cursor >= len(hs) {
 		m.cursor = max0(len(hs) - 1)
 	}
+	m.refreshing = false
+}
+
+// SetVersion records the local ccmux build version so renderRow can
+// flag peers running a different ccmuxd build with the `[↑ update]`
+// chip. Empty disables the chip globally.
+func (m *networkModel) SetVersion(v string) { m.version = v }
+
+// StartRefresh flags the screen as "refresh in flight" so the chip
+// column renders the spinner until SetHosts settles new state, and
+// returns the tea.Cmd that starts the spinner ticking. Caller is
+// expected to batch this with the actual refresh command.
+func (m *networkModel) StartRefresh() tea.Cmd {
+	m.refreshing = true
+	return m.spinner.Tick
 }
 
 // HelpBarProps returns the screen-specific key hints for the
-// Network screen.
+// Network screen. `s setup ssh` advertises the SSH setup wizard
+// keybind; `i details` advertises the host-detail overlay.
 func (m networkModel) HelpBarProps(width int) components.HelpBarProps {
 	return components.HelpBarProps{
 		Hints: []components.KeyHint{
 			{Key: "?", Label: "help", Priority: 10},
 			{Key: "q", Label: "quit", Priority: 10},
-			{Key: "enter", Label: "ssh", Priority: 7},
+			{Key: "enter", Label: "ssh", Priority: 8},
+			{Key: "s", Label: "setup ssh", Priority: 7},
+			{Key: "i", Label: "details", Priority: 5},
 			{Key: "r", Label: "refresh", Priority: 4},
 			{Key: "1-7", Label: "screens", Priority: 2},
 		},
@@ -61,17 +112,28 @@ func (m networkModel) HelpBarProps(width int) components.HelpBarProps {
 }
 
 func (m networkModel) Update(msg tea.Msg) (networkModel, tea.Cmd) {
-	if km, ok := msg.(tea.KeyMsg); ok {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
 		switch {
-		case keyMatches(km, m.km.Up):
+		case keyMatches(msg, m.km.Up):
 			if m.cursor > 0 {
 				m.cursor--
 			}
-		case keyMatches(km, m.km.Down):
+		case keyMatches(msg, m.km.Down):
 			if m.cursor < len(m.hosts)-1 {
 				m.cursor++
 			}
 		}
+	case spinner.TickMsg:
+		// Keep the spinner ticking whenever we're refreshing. Once
+		// SetHosts clears the flag, we stop returning a follow-up
+		// tick and the animation halts.
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		if !m.refreshing {
+			return m, nil
+		}
+		return m, cmd
 	}
 	return m, nil
 }
@@ -85,6 +147,17 @@ func (m networkModel) Selected() *hostStatus {
 	h := m.hosts[m.cursor]
 	return &h
 }
+
+// OpenDetail flips the host-detail overlay on. No-op when no row is
+// selectable; the caller is responsible for that guard.
+func (m *networkModel) OpenDetail() { m.detailOpen = true }
+
+// CloseDetail flips the host-detail overlay off.
+func (m *networkModel) CloseDetail() { m.detailOpen = false }
+
+// DetailOpen reports whether the `i` overlay is currently rendered.
+// Used by App.modalCapturingText / overlay routing.
+func (m networkModel) DetailOpen() bool { return m.detailOpen }
 
 // SSHCmd builds the tea.Cmd that opens an interactive shell on the
 // selected peer. Returns nil when the selection isn't ssh-able
@@ -214,18 +287,18 @@ func (m networkModel) View(width, height int) string {
 	st := m.st
 	narrow := isNarrow(width)
 
-	// Header: the device count (T1) stays; the inline action hint
-	// (T2) is dropped on narrow.
-	header := st.Emphasis.Render("Network") + "  "
-	if narrow {
-		header += st.Muted.Render(fmt.Sprintf("(%d)", len(m.hosts)))
-	} else {
-		header += st.Muted.Render(fmt.Sprintf("(%d device(s) — enter: ssh   r: refresh)", len(m.hosts)))
-	}
+	// Header: just the title and a small device count. The inline
+	// action hint that used to live here is now in the HelpBar —
+	// avoid duplicating the key vocabulary across two places.
+	header := st.Emphasis.Render("Network") + "  " +
+		st.Muted.Render(fmt.Sprintf("(%d)", len(m.hosts)))
 
 	if len(m.hosts) == 0 {
 		parts := []string{header, "", st.Muted.Render("No devices discovered yet.")}
-		// The explanatory help paragraph is T2 — dropped on narrow.
+		// One-sentence hint about the tailnet dependency — kept on
+		// wide because the empty state is rare and the user benefits
+		// from the pointer. The legend / glossary block is gone:
+		// chips elsewhere on the screen carry that meaning.
 		if !narrow {
 			parts = append(parts,
 				"",
@@ -236,14 +309,36 @@ func (m networkModel) View(width, height int) string {
 		return st.Pane.Width(width - 2).Height(height - 2).MaxWidth(width).Render(strings.Join(parts, "\n"))
 	}
 
-	// The colour legend is T2 — dropped on narrow.
 	rows := []string{header, ""}
-	if !narrow {
-		rows = append(rows, st.Muted.Render(networkLegend()), "")
+
+	// Source-grouped layout. Sections render in a pinned order;
+	// empty sections are skipped so the screen doesn't carry blank
+	// headings. Cursor index is computed against the unsorted hosts
+	// slice; we walk in source-order and render each row alongside
+	// its original index so cursor selection still tracks.
+	sectionOrder := []struct {
+		source string
+		label  string
+	}{
+		{"local", "Local"},
+		{"configured", "Configured"},
+		{"discovered", "Discovered"},
+		{"mobile", "Mobile"},
 	}
-	for i, h := range m.hosts {
-		row := m.renderRow(h, i == m.cursor)
-		rows = append(rows, row)
+	first := true
+	for _, sec := range sectionOrder {
+		idxs := indicesForSource(m.hosts, sec.source)
+		if len(idxs) == 0 {
+			continue
+		}
+		if !first {
+			rows = append(rows, "")
+		}
+		first = false
+		rows = append(rows, st.Type.Subtitle.Render(sec.label))
+		for _, i := range idxs {
+			rows = append(rows, m.renderRow(m.hosts[i], i == m.cursor, narrow))
+		}
 	}
 
 	rows = append(rows, "")
@@ -292,45 +387,87 @@ func (m networkModel) View(width, height int) string {
 	return st.Pane.Width(width - 2).Height(height - 2).MaxWidth(width).Render(strings.Join(rows, "\n"))
 }
 
-func (m networkModel) renderRow(h hostStatus, selected bool) string {
+// indicesForSource returns the indices in `hs` whose Source matches
+// `want`. Preserves the slice's original order so within a section
+// rows render in the same sequence the refresh loop produced.
+func indicesForSource(hs []hostStatus, want string) []int {
+	var out []int
+	for i, h := range hs {
+		if h.Source == want {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
+func (m networkModel) renderRow(h hostStatus, selected, narrow bool) string {
 	st := m.st
 	icon := iconForHost(h, st)
 	name := h.Name
 	if h.Local {
 		name += "  " + st.Muted.Render("(this device)")
 	}
-	tag := ""
-	switch {
-	case h.Mobile:
-		tag = st.Muted.Render("mobile — use Moshi")
-	case h.NeedsInstall:
-		tag = st.Muted.Render("ccmuxd unreachable")
-	case h.OS != "" && h.Version != "":
-		tag = st.Muted.Render(h.OS + " · " + h.Version)
-	case h.Version != "":
-		tag = st.Muted.Render(h.Version)
+	// Chip column: spinner while a refresh is in flight; the
+	// resolved chip set once state lands.
+	var chipStr string
+	if m.refreshing {
+		chipStr = m.spinner.View()
+	} else {
+		chipStr = m.renderChips(h, narrow)
 	}
-	// Append a small "ts-ssh" badge when the peer has Tailscale
-	// SSH enabled — signals to the user that no key-install
-	// wizard is needed and that auth flows through their tailnet
-	// identity (governed by ACLs in the admin console).
-	if h.TailscaleSSH && !h.Local && !h.Mobile {
-		badge := st.Key.Render("ts-ssh")
-		if tag == "" {
-			tag = badge
-		} else {
-			tag = badge + "  " + tag
-		}
-	}
-	row := fmt.Sprintf("  %s %s    %s", icon, name, tag)
+	// Indent rows under their section heading by one design-system
+	// step (2 cells) — the spec's grouping rule.
+	indent := strings.Repeat(" ", st.Spacing.MD)
+	row := fmt.Sprintf("%s%s %s    %s", indent, icon, name, chipStr)
 	if selected {
 		row = st.ListItemSelected.Render(row)
 	}
 	return row
 }
 
-func networkLegend() string {
-	return "● online (ccmuxd reachable)   ○ ccmuxd unreachable   📱 mobile (use Moshi)"
+// renderChips builds the per-row status chip set from a hostStatus.
+// Multiple chips can appear; they're rendered left-to-right after
+// the host name. The local row deliberately omits `[↑ update]` and
+// `[SSH ✓]` — neither is meaningful for the device you're on.
+//
+// Narrow terminals collapse the chip vocabulary to glyph-only
+// shorthand (✓ / ↑ / ✗ / …) so the row still fits on a phone width.
+func (m networkModel) renderChips(h hostStatus, narrow bool) string {
+	st := m.st
+	var chips []string
+
+	switch {
+	case h.Mobile:
+		chips = append(chips, chipText(st, st.Muted, "Moshi", "📱", narrow))
+	case h.NeedsInstall:
+		chips = append(chips, chipText(st, st.Muted, "no ccmuxd", "○", narrow))
+	case !h.OK && !h.Local && h.Err != nil:
+		chips = append(chips, chipText(st, st.StateError, "unreachable", "✗", narrow))
+	}
+
+	if h.TailscaleSSH && !h.Local && !h.Mobile {
+		chips = append(chips, chipText(st, st.StatusGood, "Tailscale SSH ✓", "ts✓", narrow))
+	}
+	if h.SSHVerified && !h.Local && !h.Mobile {
+		chips = append(chips, chipText(st, st.StatusGood, "SSH ✓", "✓", narrow))
+	}
+
+	if !h.Local && !h.Mobile && !h.NeedsInstall &&
+		h.Version != "" && m.version != "" && versionsDiffer(m.version, h.Version) {
+		chips = append(chips, chipText(st, st.StatusWarning, "↑ update", "↑", narrow))
+	}
+
+	return strings.Join(chips, " ")
+}
+
+// chipText renders one chip with bracketed long form on wide and a
+// terse glyph on narrow. The style argument carries the chip's
+// semantic color (success / warning / muted / error).
+func chipText(_ styles.Styles, style lipgloss.Style, long, short string, narrow bool) string {
+	if narrow {
+		return style.Render(short)
+	}
+	return style.Render("[" + long + "]")
 }
 
 // DialHostOrAddr is a small accessor that returns whichever of
@@ -341,4 +478,83 @@ func (h hostStatus) DialHostOrAddr() string {
 		return h.DialHost
 	}
 	return dialAddrFor(h)
+}
+
+// renderDetailOverlay produces the full host-detail modal opened by
+// pressing `i` on the Network screen. Parallel to the dashboard's
+// `u` usage overlay — same place-in-center, same close-on-key
+// hint.
+func (m networkModel) renderDetailOverlay(width, height int) string {
+	st := m.st
+	sel := m.Selected()
+	if sel == nil {
+		body := st.Muted.Render("(no host selected)")
+		modal := st.PaneFocused.Width(40).Render(body)
+		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, modal)
+	}
+
+	lines := []string{
+		st.Emphasis.Render("Host detail · " + sel.Name),
+		st.Subtitle.Render("Pressed-i expansion of the Network row — tailnet IP, ccmuxd version, SSH status, and last-probe timestamp."),
+		"",
+	}
+
+	lines = append(lines, st.Subtitle.Render("Identity"))
+	lines = append(lines, fmt.Sprintf("  name             %s", sel.Name))
+	if sel.OS != "" {
+		lines = append(lines, fmt.Sprintf("  os               %s", sel.OS))
+	}
+	if sel.Source != "" {
+		lines = append(lines, fmt.Sprintf("  source           %s", sel.Source))
+	}
+	lines = append(lines, "")
+
+	lines = append(lines, st.Subtitle.Render("Network"))
+	if sel.Address != "" {
+		lines = append(lines, fmt.Sprintf("  tailnet address  %s", sel.Address))
+	}
+	if sel.DialHost != "" {
+		lines = append(lines, fmt.Sprintf("  dial host        %s", sel.DialHost))
+	}
+	if sel.SSHPort > 0 {
+		lines = append(lines, fmt.Sprintf("  ssh port         %d", sel.SSHPort))
+	}
+	lines = append(lines, "")
+
+	lines = append(lines, st.Subtitle.Render("Daemon"))
+	if sel.Version != "" {
+		lines = append(lines, fmt.Sprintf("  ccmuxd version   %s", sel.Version))
+	} else if sel.NeedsInstall {
+		lines = append(lines, "  ccmuxd version   "+st.Muted.Render("(not installed)"))
+	} else {
+		lines = append(lines, "  ccmuxd version   "+st.Muted.Render("(unknown)"))
+	}
+	lines = append(lines, fmt.Sprintf("  sessions         %d", sel.Sessions))
+	if !sel.LastProbe.IsZero() {
+		lines = append(lines, fmt.Sprintf("  last probe       %s",
+			sel.LastProbe.Local().Format("15:04:05")))
+	}
+	lines = append(lines, "")
+
+	lines = append(lines, st.Subtitle.Render("SSH"))
+	switch {
+	case sel.Local:
+		lines = append(lines, "  status           "+st.Muted.Render("(local — n/a)"))
+	case sel.Mobile:
+		lines = append(lines, "  status           "+st.Muted.Render("(mobile — Moshi handles auth)"))
+	case sel.TailscaleSSH:
+		lines = append(lines, "  status           "+st.StatusGood.Render("Tailscale SSH ✓"))
+	case sel.SSHVerified:
+		lines = append(lines, "  status           "+st.StatusGood.Render("key verified"))
+	default:
+		lines = append(lines, "  status           "+st.Muted.Render("(unverified — press s to set up)"))
+	}
+	lines = append(lines, "")
+
+	lines = append(lines, st.Muted.Render("press i or esc to close"))
+
+	modalW := minInt(72, width-4)
+	body := strings.Join(lines, "\n")
+	modal := st.PaneFocused.Width(modalW).Render(body)
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, modal)
 }
