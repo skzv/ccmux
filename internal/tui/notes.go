@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/notes"
 	"github.com/skzv/ccmux/internal/project"
 	"github.com/skzv/ccmux/internal/tui/components"
@@ -87,6 +88,15 @@ type notesModel struct {
 	// overlay paints over the notes layout; the App routes `i`/esc
 	// to close it.
 	noteInfo noteInfoOverlay
+
+	// Cross-device state. hosts is the latest host-health list (pushed
+	// from the App via SetHosts); deviceName is the active device's
+	// project-host label ("local" or a remote host name); deviceErr
+	// holds the last remote fetch error so the screen can show "device
+	// unreachable" rather than silently empty. See notes_device.go.
+	hosts      []hostStatus
+	deviceName string
+	deviceErr  string
 }
 
 // notesFocus tracks which pane receives navigation keys.
@@ -114,6 +124,7 @@ func newNotes(st styles.Styles, km Keymap) notesModel {
 		searchInput:    ti,
 		entriesCache:   make(map[string][]notes.Entry),
 		loadingSpinner: sp,
+		deviceName:     localDeviceLabel,
 	}
 }
 
@@ -133,22 +144,26 @@ func (m *notesModel) SetProject(p *project.Project) tea.Cmd {
 		m.loading = false
 		return nil
 	}
-	if m.project != nil && m.project.Path == p.Path {
+	if m.project != nil && m.project.Path == p.Path && projectHost(*m.project) == projectHost(*p) {
 		return nil
 	}
 	m.project = p
+	// Keep the active device in sync with the project the App handed us
+	// (e.g. opening a remote project from the Projects screen switches
+	// the Notes device to that host). The toggle can still move it.
+	m.deviceName = projectHost(*p)
+	m.deviceErr = ""
 	m.cursor = 0
 	m.focus = focusList
-	if cached, ok := m.entriesCache[p.Path]; ok {
+	if cached, ok := m.entriesCache[m.cacheKey(p)]; ok {
 		m.entries = cached
 		m.loading = false
-		m.refreshPreview()
-		return nil
+		return m.refreshPreview()
 	}
 	m.entries = nil
 	m.loading = true
-	m.refreshPreview()
-	return tea.Batch(m.loadEntriesCmd(p.Path), m.loadingSpinner.Tick)
+	pvCmd := m.refreshPreview()
+	return tea.Batch(m.loadEntriesCmd(*p), m.loadingSpinner.Tick, pvCmd)
 }
 
 // SetSize records the terminal size so refreshPreview can render
@@ -257,15 +272,29 @@ func (m *notesModel) SetProjects(ps []project.Project) {
 // loadEntriesCmd walks the project tree off the UI goroutine and posts
 // notesEntriesLoadedMsg. The path is echoed so the Update handler can
 // discard stale results when the user has already switched projects.
-func (m notesModel) loadEntriesCmd(path string) tea.Cmd {
-	return func() tea.Msg {
-		vault := notes.Open(path)
-		entries, err := vault.List()
-		if err != nil {
-			entries = nil
+func (m notesModel) loadEntriesCmd(p project.Project) tea.Cmd {
+	label := projectHost(p)
+	path := p.Path
+	if label == localDeviceLabel {
+		return func() tea.Msg {
+			entries, err := notes.Open(path).List()
+			if err != nil {
+				entries = nil
+			}
+			return notesEntriesLoadedMsg{Host: label, Path: path, Entries: entries}
 		}
-		return notesEntriesLoadedMsg{Path: path, Entries: entries}
 	}
+	// Remote: fetch over the tailnet. An unresolvable address means the
+	// device went offline — surface it as an error rather than reading
+	// the (non-existent) remote path off the local disk.
+	addr, ok := m.remoteAddr(label)
+	if !ok {
+		host := label
+		return func() tea.Msg {
+			return notesEntriesLoadedMsg{Host: host, Path: path, Err: "device " + host + " is unreachable"}
+		}
+	}
+	return remoteNotesCmd(addr, label, path, p.Name)
 }
 
 // refreshPreview loads the selected note's markdown bytes into
@@ -275,13 +304,16 @@ func (m notesModel) loadEntriesCmd(path string) tea.Cmd {
 // keypress) has something to operate on — without persistent
 // SetContent the focused-pane j/k keys would no-op against an
 // empty viewport.
-func (m *notesModel) refreshPreview() {
+// refreshPreview returns a tea.Cmd because a remote note body must be
+// fetched off the UI goroutine (it arrives as notesPreviewLoadedMsg).
+// Local notes are still read synchronously and the returned Cmd is nil.
+func (m *notesModel) refreshPreview() tea.Cmd {
 	if m.project == nil {
 		m.previewSrc = ""
 		m.previewRel = ""
 		m.preview.SetContent("")
 		m.preview.GotoTop()
-		return
+		return nil
 	}
 	rel := ""
 	if m.hasActiveSearch() {
@@ -297,29 +329,45 @@ func (m *notesModel) refreshPreview() {
 		m.previewSrc = ""
 		m.previewRel = ""
 		m.preview.SetContent("")
-		return
+		return nil
 	}
 	pw, ph := m.previewPaneSize()
 	m.preview.Width = pw
 	m.preview.Height = ph
-	// Skip the disk read when the selection didn't move (cursor +
-	// project unchanged) and the viewport already holds rendered
-	// content sized for the current column.
+	// Skip the fetch when the selection didn't move (rel unchanged) and
+	// the viewport already holds rendered content sized for the column.
 	if rel == m.previewRel && m.previewSrc != "" {
-		return
+		return nil
 	}
-	vault := notes.Open(m.project.Path)
-	data, err := vault.Read(rel)
+
+	label := projectHost(*m.project)
+	if label != localDeviceLabel {
+		// Remote: show a placeholder and fetch the body asynchronously.
+		m.previewRel = rel
+		m.previewSrc = ""
+		m.preview.SetContent(m.st.Muted.Render("Loading…"))
+		m.preview.GotoTop()
+		addr, ok := m.remoteAddr(label)
+		if !ok {
+			m.previewSrc = m.st.StatusError.Render("device " + label + " is unreachable")
+			m.preview.SetContent(m.previewSrc)
+			return nil
+		}
+		return remoteNoteContentCmd(addr, label, m.project.Path, m.project.Name, rel)
+	}
+
+	data, err := notes.Open(m.project.Path).Read(rel)
 	if err != nil {
 		m.previewSrc = m.st.StatusError.Render(err.Error())
 		m.previewRel = rel
 		m.preview.SetContent(m.previewSrc)
-		return
+		return nil
 	}
 	m.previewSrc = string(data)
 	m.previewRel = rel
 	m.preview.SetContent(m.renderPreviewContent(pw))
 	m.preview.GotoTop()
+	return nil
 }
 
 // renderPreviewContent runs Glamour at `wrap` cells wide and returns
@@ -416,8 +464,7 @@ func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
 				m.searchResults = nil
 				m.searchQuery = ""
 				m.cursor = 0
-				m.refreshPreview()
-				return m, nil
+				return m, m.refreshPreview()
 			case "enter":
 				query := strings.TrimSpace(m.searchInput.Value())
 				m.searchInput.Blur()
@@ -450,19 +497,20 @@ func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
 			if rowCount == 0 {
 				return m, nil
 			}
+			var pvCmd tea.Cmd
 			switch msg.Button {
 			case tea.MouseButtonWheelUp:
 				if m.cursor > 0 {
 					m.cursor--
-					m.refreshPreview()
+					pvCmd = m.refreshPreview()
 				}
 			case tea.MouseButtonWheelDown:
 				if m.cursor < rowCount-1 {
 					m.cursor++
-					m.refreshPreview()
+					pvCmd = m.refreshPreview()
 				}
 			}
-			return m, nil
+			return m, pvCmd
 		}
 		var cmd tea.Cmd
 		m.preview, cmd = m.preview.Update(msg)
@@ -491,32 +539,76 @@ func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
 		if m.project == nil {
 			return m, nil
 		}
-		delete(m.entriesCache, m.project.Path)
+		delete(m.entriesCache, m.cacheKey(m.project))
 		m.loading = true
-		return m, tea.Batch(m.loadEntriesCmd(m.project.Path), m.loadingSpinner.Tick)
+		return m, tea.Batch(m.loadEntriesCmd(*m.project), m.loadingSpinner.Tick)
 	case notesEntriesLoadedMsg:
-		// Discard stale results — the user may have switched projects
-		// between the Cmd dispatching and the walk returning.
-		if m.project == nil || msg.Path != m.project.Path {
+		// Discard stale results — the user may have switched device or
+		// project between the Cmd dispatching and the fetch returning.
+		if m.project == nil || msg.Path != m.project.Path || msg.Host != projectHost(*m.project) {
 			return m, nil
 		}
-		m.entries = msg.Entries
-		m.entriesCache[msg.Path] = msg.Entries
 		m.loading = false
+		if msg.Err != "" {
+			// Remote device unreachable: show the error, don't fall back
+			// to local notes (which would misrepresent whose notes these
+			// are). Leave the cache untouched so a later retry refetches.
+			m.deviceErr = msg.Err
+			m.entries = nil
+			m.cursor = 0
+			return m, m.refreshPreview()
+		}
+		m.deviceErr = ""
+		m.entries = msg.Entries
+		m.entriesCache[m.cacheKey(m.project)] = msg.Entries
 		if m.cursor >= len(m.entries) {
 			m.cursor = max0(len(m.entries) - 1)
 		}
-		m.refreshPreview()
+		return m, m.refreshPreview()
+	case notesPreviewLoadedMsg:
+		// Drop a stale fetch: the cursor (and thus previewRel) may have
+		// moved, or the user switched project, since we dispatched.
+		if m.project == nil || msg.Path != m.project.Path || msg.Rel != m.previewRel {
+			return m, nil
+		}
+		if msg.Err != "" {
+			m.previewSrc = m.st.StatusError.Render(msg.Err)
+			m.preview.SetContent(m.previewSrc)
+			m.preview.GotoTop()
+			return m, nil
+		}
+		m.previewSrc = msg.Content
+		pw, _ := m.previewPaneSize()
+		m.preview.SetContent(m.renderPreviewContent(pw))
+		m.preview.GotoTop()
 		return m, nil
 	case notesSearchResultMsg:
+		if msg.Err != "" {
+			m.deviceErr = msg.Err
+			return m, nil
+		}
+		m.deviceErr = ""
 		m.searchResults = msg.Hits
 		m.searchQuery = msg.Query
 		m.cursor = 0
-		m.refreshPreview()
-		return m, nil
+		return m, m.refreshPreview()
 	case tea.KeyMsg:
 		// Global Notes keys (don't depend on which pane has focus).
 		switch msg.String() {
+		case "H":
+			// Cycle the active device. No-op (with a hint) when only this
+			// machine is reachable.
+			cmd, switched := m.cycleDevice()
+			if !switched {
+				return m, func() tea.Msg {
+					return toastMsg{
+						Text:  "no other devices reachable",
+						Kind:  toastInfo,
+						Until: time.Now().Add(3 * time.Second),
+					}
+				}
+			}
+			return m, cmd
 		case "n":
 			if m.project == nil {
 				return m, func() tea.Msg {
@@ -524,6 +616,15 @@ func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
 						Text:  "select a project first (press p)",
 						Kind:  toastInfo,
 						Until: time.Now().Add(3 * time.Second),
+					}
+				}
+			}
+			if m.activeIsRemote() {
+				return m, func() tea.Msg {
+					return toastMsg{
+						Text:  "remote notes are read-only — create on " + m.deviceName + " directly",
+						Kind:  toastInfo,
+						Until: time.Now().Add(4 * time.Second),
 					}
 				}
 			}
@@ -546,8 +647,7 @@ func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
 				m.searchQuery = ""
 				m.searching = false
 				m.cursor = 0
-				m.refreshPreview()
-				return m, nil
+				return m, m.refreshPreview()
 			}
 		case "p", " ":
 			// Both `p` and space open the project picker. Space is
@@ -613,7 +713,7 @@ func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
 					} else {
 						m.cursor--
 					}
-					m.refreshPreview()
+					return m, m.refreshPreview()
 				}
 				return m, nil
 			case keyMatches(msg, m.km.Down):
@@ -625,13 +725,24 @@ func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
 					} else {
 						m.cursor++
 					}
-					m.refreshPreview()
+					return m, m.refreshPreview()
 				}
 				return m, nil
 			case keyMatches(msg, m.km.EditInEd), keyMatches(msg, m.km.Enter):
 				// enter and e both open the selected file in $EDITOR.
-				// The previous behaviour left `enter` unhandled, which
-				// the HelpBar's "enter open" hint advertised as broken.
+				// Editing only works on local notes — a remote note's
+				// file lives on another machine's disk. The preview pane
+				// still shows remote content; we just can't open $EDITOR
+				// on it.
+				if m.activeIsRemote() {
+					return m, func() tea.Msg {
+						return toastMsg{
+							Text:  "remote notes are read-only — preview only",
+							Kind:  toastInfo,
+							Until: time.Now().Add(4 * time.Second),
+						}
+					}
+				}
 				if path := m.selectedPath(); path != "" {
 					return m, openInEditor(m.editor, path)
 				}
@@ -695,13 +806,33 @@ func (m notesModel) runSearch(query string) tea.Cmd {
 	if m.project == nil {
 		return nil
 	}
-	root := m.project.Path
+	label := projectHost(*m.project)
+	if label == localDeviceLabel {
+		root := m.project.Path
+		return func() tea.Msg {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			hits, _ := notes.Open(root).Search(ctx, query, 100)
+			return notesSearchResultMsg{Query: query, Hits: hits}
+		}
+	}
+	// Remote search hits the daemon's /v1/notes/search endpoint.
+	addr, ok := m.remoteAddr(label)
+	if !ok {
+		host := label
+		return func() tea.Msg {
+			return notesSearchResultMsg{Query: query, Err: "device " + host + " is unreachable"}
+		}
+	}
+	name := m.project.Name
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
-		v := notes.Open(root)
-		hits, _ := v.Search(ctx, query, 100)
-		return notesSearchResultMsg{Query: query, Hits: hits}
+		dhits, err := daemon.RemoteClient(addr).SearchNotes(ctx, name, query)
+		if err != nil {
+			return notesSearchResultMsg{Query: query, Err: err.Error()}
+		}
+		return notesSearchResultMsg{Query: query, Hits: searchHitsFromDaemon(dhits)}
 	}
 }
 
@@ -720,6 +851,7 @@ func (m notesModel) HelpBarProps(width int) components.HelpBarProps {
 			{Key: "/", Label: "search", Priority: 6},
 			{Key: "i", Label: "info", Priority: 6},
 			{Key: "p / space", Label: "switch project", Priority: 5},
+			{Key: "H", Label: "device", Priority: 5},
 			{Key: "tab", Label: "focus preview", Priority: 4},
 			{Key: "1-7", Label: "screens", Priority: 2},
 		},
@@ -729,14 +861,21 @@ func (m notesModel) HelpBarProps(width int) components.HelpBarProps {
 
 func (m notesModel) View(width, height int) string {
 	if m.project == nil {
-		body := strings.Join([]string{
+		bodyLines := []string{
 			m.st.Emphasis.Render("Notes"),
 			"",
 			m.st.Muted.Render("No project selected."),
 			"",
 			"Press " + m.st.Key.Render("p") + " here to pick one, or " + m.st.Key.Render("3") + " to go to the Projects tab.",
-		}, "\n")
-		return m.st.Pane.Width(width - 2).Height(height - 2).Render(body)
+		}
+		if len(m.selectableDeviceLabels()) > 1 {
+			bodyLines = append(bodyLines,
+				"",
+				"Viewing device: "+m.st.HostColor(m.deviceName).Render(m.deviceName)+
+					"  — press "+m.st.Key.Render("H")+" to switch device.",
+			)
+		}
+		return m.st.Pane.Width(width - 2).Height(height - 2).Render(strings.Join(bodyLines, "\n"))
 	}
 	if m.newNoteForm != nil {
 		modalW := minInt(80, width-4)
@@ -776,7 +915,10 @@ func (m notesModel) renderList(width, height int, narrow bool) string {
 		focusMark = m.st.Emphasis.Render(" ◀")
 	}
 	header := m.st.Emphasis.Render(m.project.Name) + focusMark
-	lines := []string{header}
+	lines := []string{header, m.deviceHeaderLine()}
+	if m.deviceErr != "" {
+		lines = append(lines, m.st.StatusError.Render("⚠ "+m.deviceErr))
+	}
 
 	// Search box / search-results banner.
 	if m.searching && m.searchInput.Focused() {

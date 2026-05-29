@@ -1,6 +1,7 @@
 ╭──────────────────────────────────────╮ ╭─────────────────────────────────────────────────────────────────────────────╮
 │ ccmux ◀                              │ │ README.md                                                                   │
-│                                      │ │ ─────────────────────────────────────────────────────────────────────────── │
+│ ● local                              │ │ ─────────────────────────────────────────────────────────────────────────── │
+│                                      │ │                                                                             │
 │ ● (project root)                     │ │                                                                             │
 │  ▌ README.md                         │ │                                                                             │
 │    CLAUDE.md                         │ │                                                                             │
@@ -34,7 +35,6 @@
 │                                      │ │                                                                             │
 │                                      │ │                                                                             │
 │                                      │ │                                                                             │
-│                                      │ │                                                                             │
 │                                      │ │ tab: focus list   j/k: scroll (currently focused: list)   100%              │
 ╰──────────────────────────────────────╯ ╰─────────────────────────────────────────────────────────────────────────────╯
-? help · q quit · enter open · n new note · e edit · / search · i info · p / space switch project · tab focus preview   
+? help · q quit · enter open · n new note · e edit · / search · i info · p / space switch project · H device            

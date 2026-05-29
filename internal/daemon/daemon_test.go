@@ -265,6 +265,88 @@ func TestClient_Projects(t *testing.T) {
 	}
 }
 
+// TestClient_Notes covers list, read, and search against a fake daemon,
+// asserting each method targets the right path + query and decodes the
+// expected shape. Mirrors the cross-device Notes screen's three loaders.
+func TestClient_Notes(t *testing.T) {
+	var gotPaths []string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/notes/search", func(w http.ResponseWriter, r *http.Request) {
+		gotPaths = append(gotPaths, r.URL.RequestURI())
+		if r.URL.Query().Get("project") != "ccmux" || r.URL.Query().Get("q") != "tail scale" {
+			http.Error(w, "bad query", http.StatusBadRequest)
+			return
+		}
+		_ = json.NewEncoder(w).Encode([]SearchHit{{Rel: "README.md", LineNum: 2, Snippet: "tail scale"}})
+	})
+	mux.HandleFunc("/v1/notes", func(w http.ResponseWriter, r *http.Request) {
+		gotPaths = append(gotPaths, r.URL.RequestURI())
+		if r.URL.Query().Get("project") != "ccmux" {
+			http.Error(w, "missing project", http.StatusBadRequest)
+			return
+		}
+		if file := r.URL.Query().Get("file"); file != "" {
+			if file != "docs/Design.md" {
+				http.Error(w, "unexpected file", http.StatusBadRequest)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(NoteContent{Rel: file, Content: "# Design"})
+			return
+		}
+		_ = json.NewEncoder(w).Encode([]NoteEntry{{Rel: "README.md", Display: "README"}})
+	})
+	c := spawnFakeDaemon(t, mux)
+
+	entries, err := c.Notes(context.Background(), "ccmux")
+	if err != nil {
+		t.Fatalf("Notes: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Rel != "README.md" {
+		t.Fatalf("Notes = %+v", entries)
+	}
+
+	content, err := c.NoteContent(context.Background(), "ccmux", "docs/Design.md")
+	if err != nil {
+		t.Fatalf("NoteContent: %v", err)
+	}
+	if content.Rel != "docs/Design.md" || content.Content != "# Design" {
+		t.Fatalf("NoteContent = %+v", content)
+	}
+
+	// A query with a space exercises URL escaping on both params.
+	hits, err := c.SearchNotes(context.Background(), "ccmux", "tail scale")
+	if err != nil {
+		t.Fatalf("SearchNotes: %v", err)
+	}
+	if len(hits) != 1 || hits[0].LineNum != 2 || hits[0].Rel != "README.md" {
+		t.Fatalf("SearchNotes = %+v", hits)
+	}
+}
+
+// TestClient_SearchNotes_404Surfaces — an older daemon without the search
+// endpoint returns 404; the client must surface it as an error so the UI
+// can say "search unavailable on this device" rather than show no hits.
+func TestClient_SearchNotes_404Surfaces(t *testing.T) {
+	mux := http.NewServeMux() // no /v1/notes/search registered → 404
+	c := spawnFakeDaemon(t, mux)
+	if _, err := c.SearchNotes(context.Background(), "ccmux", "x"); err == nil {
+		t.Fatal("expected error when search endpoint is absent (404)")
+	}
+}
+
+// TestSearchHit_JSONRoundTrip pins the wire shape of the new search hit.
+func TestSearchHit_JSONRoundTrip(t *testing.T) {
+	in := SearchHit{Rel: "docs/x.md", LineNum: 12, Snippet: "hello"}
+	b, _ := json.Marshal(in)
+	var out SearchHit
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out != in {
+		t.Errorf("round-trip: got %+v want %+v", out, in)
+	}
+}
+
 func TestProjectInfo_JSONRoundTrip(t *testing.T) {
 	// UTC for the same time.Location round-trip reason as
 	// TestProtocol_SessionStateRoundTrip — see comment there.

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
@@ -229,6 +230,42 @@ func (c *Client) CreatePairToken(ctx context.Context) (PairTokenResponse, error)
 	var out PairTokenResponse
 	if err := c.post(ctx, "/v1/pair-token", nil, &out); err != nil {
 		return out, err
+	}
+	return out, nil
+}
+
+// Notes lists the markdown files in the named project's vault on this
+// client's daemon (local socket or remote tailnet peer). The call site
+// is identical for local and remote — the Client encapsulates the target.
+func (c *Client) Notes(ctx context.Context, project string) ([]NoteEntry, error) {
+	q := url.Values{"project": {project}}
+	var out []NoteEntry
+	if err := c.getJSON(ctx, "/v1/notes?"+q.Encode(), &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// NoteContent reads the body of one markdown file (project-relative,
+// slash-separated path) from this client's daemon.
+func (c *Client) NoteContent(ctx context.Context, project, rel string) (NoteContent, error) {
+	q := url.Values{"project": {project}, "file": {rel}}
+	var out NoteContent
+	if err := c.getJSON(ctx, "/v1/notes?"+q.Encode(), &out); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
+// SearchNotes runs a search across the named project's vault on this
+// client's daemon. Older daemons that predate /v1/notes/search return a
+// 404, surfaced here as an error so callers can report "search
+// unavailable on this device" rather than silently showing no hits.
+func (c *Client) SearchNotes(ctx context.Context, project, query string) ([]SearchHit, error) {
+	q := url.Values{"project": {project}, "q": {query}}
+	var out []SearchHit
+	if err := c.getJSON(ctx, "/v1/notes/search?"+q.Encode(), &out); err != nil {
+		return nil, err
 	}
 	return out, nil
 }

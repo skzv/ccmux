@@ -315,12 +315,31 @@ type newNoteCancelMsg struct{}
 // determines which note's metadata is rendered.
 type noteInfoOpenMsg struct{}
 
-// notesEntriesLoadedMsg carries the result of an async Vault.List walk.
-// The path is echoed so the handler can discard stale results when the
-// user has already switched projects while the walk was in flight.
+// notesEntriesLoadedMsg carries the result of an async note listing —
+// either a local Vault.List walk or a remote daemon.Client.Notes call.
+// Host + Path together identify the project so the handler can discard
+// stale results when the user has switched device/project while the
+// fetch was in flight. Err is non-empty when a remote device couldn't
+// be reached (so the screen shows an explicit error rather than silently
+// falling back to local notes).
 type notesEntriesLoadedMsg struct {
+	Host    string // project-host label ("local" or remote host name)
 	Path    string
 	Entries []notes.Entry
+	Err     string
+}
+
+// notesPreviewLoadedMsg carries the body of a remote note fetched via
+// daemon.Client.NoteContent. Local previews are read synchronously, so
+// this message only ever originates from a remote device. Host/Path/Rel
+// identify the selection so a stale fetch (cursor already moved) is
+// dropped.
+type notesPreviewLoadedMsg struct {
+	Host    string
+	Path    string
+	Rel     string
+	Content string
+	Err     string
 }
 
 // configReloadMsg asks the App to re-read ~/.config/ccmux/config.toml
@@ -334,6 +353,7 @@ type configReloadMsg struct{}
 type notesSearchResultMsg struct {
 	Query string
 	Hits  []notes.SearchHit
+	Err   string
 }
 
 // usageTickMsg fires periodically to refresh the dashboard's usage panel.
