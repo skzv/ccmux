@@ -9,6 +9,7 @@ import (
 	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/conversations"
+	"github.com/skzv/ccmux/internal/moshi"
 	"github.com/skzv/ccmux/internal/notes"
 	"github.com/skzv/ccmux/internal/project"
 	"github.com/skzv/ccmux/internal/tui/components"
@@ -230,9 +231,47 @@ func TestSettingsGolden(t *testing.T) {
 	cfg.Projects.Root = "/Users/me/Projects"
 	m := newSettings(st, km, cfg, "v0.0.0-golden")
 	m.SetCfgPath("/Users/me/.config/ccmux/config.toml")
+	// Mark the moshi probe complete so the snapshot renders the
+	// post-probe block (the "not installed" verdict) rather than a
+	// transient spinner frame, which would freeze the golden to one
+	// arbitrary frame index.
+	m.SetMoshiState(moshi.Status{})
 
 	helpLine := renderHelpBarFor(st, m.HelpBarProps(width), width)
 	body := m.View(width, height-lipgloss.Height(helpLine))
 	out := composeScreen(body, helpLine, height)
 	goldenAssert(t, "settings.txt", out)
+}
+
+// TestSettingsEditingGolden snapshots the Settings screen with the
+// inline textinput open on the projects.root row — the "editing field"
+// state called out in the design-system spec. Pins the cursor to
+// projects.root and walks Enter through the screen's edit-state setup
+// so the snapshot exercises the same code path as a real keystroke.
+func TestSettingsEditingGolden(t *testing.T) {
+	const width, height = 120, 40
+	st := styles.Default()
+	km := DefaultKeymap()
+
+	cfg := config.Defaults()
+	cfg.Subscription.Tier = "max5x"
+	cfg.Projects.Root = "/Users/me/Projects"
+	m := newSettings(st, km, cfg, "v0.0.0-golden")
+	m.SetCfgPath("/Users/me/.config/ccmux/config.toml")
+	m.SetMoshiState(moshi.Status{})
+
+	for i, f := range editableFields() {
+		if f.label == "projects.root" {
+			m.cursor = i
+		}
+	}
+	// Walk through startEdit directly rather than going through
+	// Update so the editor's textinput is left in a deterministic
+	// state (focused, current value preloaded).
+	m.startEdit(editableFields()[m.cursor])
+
+	helpLine := renderHelpBarFor(st, m.HelpBarProps(width), width)
+	body := m.View(width, height-lipgloss.Height(helpLine))
+	out := composeScreen(body, helpLine, height)
+	goldenAssert(t, "settings_editing.txt", out)
 }

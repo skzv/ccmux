@@ -729,12 +729,14 @@ func stepConfig(ctx context.Context, out io.Writer) error {
 		detectedTier = s.Tier()
 		fmt.Fprintf(out, "  detected Claude plan: %s\n", stEmphasis.Render(detectedTier))
 	}
-	if (cfg.Subscription.Tier == "" || cfg.Subscription.Tier == "api") && detectedTier != "" && detectedTier != "api" {
-		cfg.Subscription.Tier = detectedTier
+	claudeTier := cfg.Subscription.TierFor("claude")
+	if (claudeTier == "" || claudeTier == "api") && detectedTier != "" && detectedTier != "api" {
+		cfg.Subscription.SetTierFor("claude", detectedTier)
+		claudeTier = detectedTier
 	}
 
 	root := cfg.Projects.Root
-	tier := cfg.Subscription.Tier
+	tier := claudeTier
 	if tier == "" {
 		tier = "api"
 	}
@@ -792,7 +794,7 @@ func stepConfig(ctx context.Context, out io.Writer) error {
 
 	cfg.Projects.Root = strings.TrimSpace(root)
 	cfg.Agents.Default = strings.TrimSpace(defaultAgent)
-	cfg.Subscription.Tier = strings.TrimSpace(tier)
+	cfg.Subscription.SetTierFor("claude", strings.TrimSpace(tier))
 	cfg.Daemon.ListenTailnet = listenTailnet
 	cfg.Update.AutoCheck = autoCheckUpdates
 	if err := config.Save(cfg); err != nil {

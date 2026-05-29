@@ -1,13 +1,16 @@
 package tui
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
+	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/tui/styles"
 )
@@ -53,18 +56,70 @@ func TestEditableFields_ProjectsRoot(t *testing.T) {
 	}
 }
 
-func TestEditableFields_SubscriptionTier(t *testing.T) {
-	fields := byLabel(editableFields(), "subscription.tier")
+func TestEditableFields_ClaudeTier(t *testing.T) {
+	f := byLabel(editableFields(), "claude.tier")
+	if f == nil {
+		t.Fatal("claude.tier field missing")
+	}
 	cfg := config.Defaults()
 	for _, ok := range []string{"", "api", "pro", "max5x", "max20x", "MAX20X", "  pro  "} {
-		if err := fields.set(&cfg, ok); err != nil {
+		if err := f.set(&cfg, ok); err != nil {
 			t.Errorf("tier %q rejected: %v", ok, err)
 		}
 	}
-	for _, bad := range []string{"max", "max-5x", "free", "team"} {
-		if err := fields.set(&cfg, bad); err == nil {
-			t.Errorf("tier %q should be rejected", bad)
+	// `free` / `team` are Codex tiers; `max-5x` is the wrong spelling.
+	// Each should be rejected for Claude even though they're plausible
+	// elsewhere.
+	for _, bad := range []string{"max", "max-5x", "free", "team", "hobby"} {
+		if err := f.set(&cfg, bad); err == nil {
+			t.Errorf("claude.tier %q should be rejected", bad)
 		}
+	}
+}
+
+// TestEditableFields_PerAgentTiers — every non-claude agent gets its
+// own tier row with its own enum, and the value round-trips through
+// the per-agent map without touching the legacy Claude `Tier` field.
+func TestEditableFields_PerAgentTiers(t *testing.T) {
+	cases := []struct {
+		label   string
+		agent   string
+		valid   []string
+		invalid []string
+	}{
+		{"codex.tier", "codex", []string{"api", "free", "plus", "pro", "team"}, []string{"max5x", "hobby"}},
+		{"antigravity.tier", "antigravity", []string{"api", "free", "ai-pro", "ai-ultra"}, []string{"pro", "max5x"}},
+		{"cursor.tier", "cursor", []string{"free", "pro", "pro+", "ultra", "teams"}, []string{"api", "max5x", "business"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.label, func(t *testing.T) {
+			f := byLabel(editableFields(), tc.label)
+			if f == nil {
+				t.Fatalf("%s missing", tc.label)
+			}
+			for _, v := range tc.valid {
+				cfg := config.Defaults()
+				if err := f.set(&cfg, v); err != nil {
+					t.Errorf("%q rejected: %v", v, err)
+					continue
+				}
+				if got := cfg.Subscription.TierFor(tc.agent); got != v {
+					t.Errorf("TierFor(%q) = %q, want %q", tc.agent, got, v)
+				}
+				// Claude's tier must not be touched by setting another
+				// agent's tier — the per-agent map is the right
+				// storage for non-claude entries.
+				if cfg.Subscription.Tier != "api" {
+					t.Errorf("setting %s leaked into legacy Tier = %q", tc.label, cfg.Subscription.Tier)
+				}
+			}
+			for _, v := range tc.invalid {
+				cfg := config.Defaults()
+				if err := f.set(&cfg, v); err == nil {
+					t.Errorf("%s %q should be rejected", tc.label, v)
+				}
+			}
+		})
 	}
 }
 
@@ -113,7 +168,13 @@ func TestSettings_EditEnterCommitRoundTrip(t *testing.T) {
 	}
 
 	m := newSettings(styles.Default(), DefaultKeymap(), config.Defaults(), "test")
-	// Cursor on projects.root (index 0).
+	// Park the cursor on the projects.root row regardless of where it
+	// lives in editableFields() so this test stays robust to reorderings.
+	for i, f := range editableFields() {
+		if f.label == "projects.root" {
+			m.cursor = i
+		}
+	}
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if !m.editing {
 		t.Fatal("Enter on cursor should activate editing")
@@ -144,6 +205,11 @@ func TestSettings_EditEscCancels(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	m := newSettings(styles.Default(), DefaultKeymap(), config.Defaults(), "test")
 	original := m.cfg.Projects.Root
+	for i, f := range editableFields() {
+		if f.label == "projects.root" {
+			m.cursor = i
+		}
+	}
 
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m.editor.SetValue("/some/bogus/path/that/will/fail/validation")
@@ -160,6 +226,11 @@ func TestSettings_EditEscCancels(t *testing.T) {
 func TestSettings_CommitWithInvalidValueKeepsEditingOpen(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	m := newSettings(styles.Default(), DefaultKeymap(), config.Defaults(), "test")
+	for i, f := range editableFields() {
+		if f.label == "projects.root" {
+			m.cursor = i
+		}
+	}
 
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m.editor.SetValue("/nonexistent/path/that/cannot/exist")
@@ -192,46 +263,255 @@ func TestSettings_ReadOnlyFieldRefusesEnter(t *testing.T) {
 	}
 }
 
-// TestSettings_SubscriptionTierAccepts_ScreenEdit — exercises the
-// subscription.tier row at the settingsModel level: park cursor on
-// the row, press Enter to open the inline editor, type "pro", commit.
-// The cfg field updates and the value persists to disk. This is the
-// screen-level companion to TestEditableFields_SubscriptionTier, which
-// only covers the field's set() closure directly.
-func TestSettings_SubscriptionTierAccepts_ScreenEdit(t *testing.T) {
+// TestSettings_ClaudeTier_CyclePicker — claude.tier is now
+// a cycle-picker (Enter advances api → pro → max5x → max20x and
+// wraps), parallel to agents.default. The previous "Enter opens the
+// inline textinput" behavior is gone: every chip field cycles so the
+// options track's affordance is consistent across them. Each step
+// persists to disk.
+func TestSettings_ClaudeTier_CyclePicker(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	m := newSettings(styles.Default(), DefaultKeymap(), config.Defaults(), "test")
 
-	// Park cursor on the subscription.tier row.
-	for i, f := range editableFields() {
-		if f.label == "subscription.tier" {
+	// The field must be registered as a cycle-picker.
+	f := byLabel(editableFields(), "claude.tier")
+	if f == nil || len(f.options) == 0 {
+		t.Fatal("claude.tier should be a cycle-picker with non-empty options")
+	}
+
+	for i, fld := range editableFields() {
+		if fld.label == "claude.tier" {
 			m.cursor = i
 		}
 	}
 
-	// Enter opens the inline textinput.
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if !m.editing {
-		t.Fatal("Enter on subscription.tier should activate editing")
+	// Default is "api"; Enter cycles forward through the tier list.
+	for _, want := range []string{"pro", "max5x", "max20x", "api"} {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		if m.editing {
+			t.Fatal("cycle-picker Enter must not open the inline editor")
+		}
+		if m.cfg.Subscription.Tier != want {
+			t.Fatalf("after cycle: Subscription.Tier = %q, want %q", m.cfg.Subscription.Tier, want)
+		}
 	}
-	m.editor.SetValue("pro")
-	m, _ = m.commit()
-	if m.editing {
-		t.Fatalf("commit should close the editor; errMsg=%q", m.errMsg)
-	}
-	if m.errMsg != "" {
-		t.Fatalf("unexpected commit error: %s", m.errMsg)
-	}
-	if m.cfg.Subscription.Tier != "pro" {
-		t.Errorf("Subscription.Tier = %q, want pro", m.cfg.Subscription.Tier)
-	}
-	// Persisted to disk.
+
 	reloaded, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reloaded.Subscription.Tier != "pro" {
-		t.Errorf("config.Save didn't persist Subscription.Tier: got %q", reloaded.Subscription.Tier)
+	if reloaded.Subscription.Tier != "api" {
+		t.Errorf("cycle did not persist: config.toml has Subscription.Tier = %q", reloaded.Subscription.Tier)
+	}
+}
+
+// TestSettings_ActiveFieldRendersAccentBar — the active row MUST be
+// rendered with the design-system accent-bar prefix ("▌"), not the
+// legacy "▸ " cursor marker. This is the contract the redesign-tui-
+// settings change pins for the Settings screen.
+func TestSettings_ActiveFieldRendersAccentBar(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Subscription.Tier = "max5x"
+	cfg.Projects.Root = "/Users/me/Projects"
+	m := newSettings(styles.Default(), DefaultKeymap(), cfg, "v0.0.0-golden")
+	for i, f := range editableFields() {
+		if f.label == "claude.tier" {
+			m.cursor = i
+		}
+	}
+	out := m.View(120, 40)
+	if !strings.Contains(out, "▌") {
+		t.Fatalf("expected accent-bar marker '▌' on active row, output:\n%s", out)
+	}
+	if strings.Contains(out, "▸ ") {
+		t.Errorf("legacy '▸ ' cursor must not appear in Settings output")
+	}
+}
+
+// TestSettings_ChipPresenceAndColor — boolean/enum fields render their
+// value as a [chip]. Per-agent tier chips (and the agents.default value
+// chip) wear that agent's accent from Styles.AgentAccent, matching the
+// color coding on every other tab; status chips stay semantic
+// (on/safe/mirror in Success, off/dangerous/exclusive in Warning). The
+// active row renders bold without changing hue. We grep the output for
+// the live palette's ANSI runs so a theme swap re-themes the test.
+func TestSettings_ChipPresenceAndColor(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Subscription.Tier = "max5x"
+	cfg.Projects.Root = "/Users/me/Projects"
+	st := styles.Default()
+	m := newSettings(st, DefaultKeymap(), cfg, "v0.0.0-golden")
+
+	// Cursor on claude.tier — its [max5x] chip should render
+	// in the active treatment, and the other enum chips
+	// ([claude], [mirror], [on]) should render in their semantic
+	// colors off-row.
+	for i, f := range editableFields() {
+		if f.label == "claude.tier" {
+			m.cursor = i
+		}
+	}
+	out := m.View(120, 40)
+
+	for _, want := range []string{"[max5x]", "[claude]", "[mirror]", "[on]"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected chip %q in Settings output", want)
+		}
+	}
+
+	// Active claude.tier chip: Claude's accent (Mauve), bold.
+	activeTier := st.AgentAccent(agent.IDClaude).Bold(true).Render("[max5x]")
+	if !strings.Contains(out, activeTier) {
+		t.Errorf("expected active [max5x] chip rendered in Claude's AgentAccent (bold); output did not contain the styled run")
+	}
+	// agents.default value chip names an agent, so it wears that agent's
+	// accent too: [claude] in Claude's accent (off-row, not bold).
+	claudeChip := st.AgentAccent(agent.IDClaude).Render("[claude]")
+	if !strings.Contains(out, claudeChip) {
+		t.Errorf("expected [claude] chip rendered in Claude's AgentAccent; output did not contain the styled run")
+	}
+	// The per-agent tier row's label wears the agent accent too. Check an
+	// off-row label (codex.tier) so the run isn't merged with the active
+	// row's selected background.
+	codexLabel := st.AgentAccent(agent.IDCodex).Render(fmt.Sprintf("%-*s", settingsLabelWidth, "codex.tier"))
+	if !strings.Contains(out, codexLabel) {
+		t.Errorf("expected codex.tier label rendered in Codex's AgentAccent; output did not contain the styled run")
+	}
+	// Off-row positive chip: Semantic.Success.
+	onChip := lipgloss.NewStyle().Foreground(st.Semantic.Success).Render("[on]")
+	if !strings.Contains(out, onChip) {
+		t.Errorf("expected [on] chip rendered in Semantic.Success; output did not contain the styled run")
+	}
+	// Off-row positive chip (mirror): Semantic.Success.
+	mirrorChip := lipgloss.NewStyle().Foreground(st.Semantic.Success).Render("[mirror]")
+	if !strings.Contains(out, mirrorChip) {
+		t.Errorf("expected [mirror] chip rendered in Semantic.Success; output did not contain the styled run")
+	}
+}
+
+// TestSettings_DetailPaneOptions — in the wide two-column layout, the
+// active chip field's enum renders one value per line in the right
+// detail pane with the current value bracketed. Free-text fields show
+// no options block; opening the editor renders the inline textinput +
+// save/cancel hint in the detail pane.
+func TestSettings_DetailPaneOptions(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := config.Defaults()
+	cfg.Subscription.Tier = "max5x"
+	cfg.Projects.Root = "/Users/me/Projects"
+	st := styles.Default()
+	m := newSettings(st, DefaultKeymap(), cfg, "v0.0.0-golden")
+
+	// Cursor on claude.tier — the detail pane should list all four
+	// tiers and bracket [max5x]. Other tier names appear unbracketed.
+	for i, f := range editableFields() {
+		if f.label == "claude.tier" {
+			m.cursor = i
+		}
+	}
+	out := m.View(120, 40)
+
+	if !strings.Contains(out, "Options") {
+		t.Fatalf("expected an Options block on active chip field; output:\n%s", out)
+	}
+	for _, opt := range []string{"api", "pro", "max5x", "max20x"} {
+		if !strings.Contains(out, opt) {
+			t.Errorf("expected option %q listed in the detail pane", opt)
+		}
+	}
+	if !strings.Contains(out, "[max5x]") {
+		t.Error("expected the current tier bracketed in the options list")
+	}
+
+	// Free-text field (projects.root): no options block.
+	for i, f := range editableFields() {
+		if f.label == "projects.root" {
+			m.cursor = i
+		}
+	}
+	out2 := m.View(120, 40)
+	if strings.Contains(out2, "Options") {
+		t.Errorf("free-text field must NOT render an options block; output:\n%s", out2)
+	}
+
+	// Editing the free-text field surfaces the editor + save hint in
+	// the detail pane.
+	m.startEdit(*byLabel(editableFields(), "projects.root"))
+	out3 := m.View(120, 40)
+	if !strings.Contains(out3, "enter to save, esc to cancel") {
+		t.Errorf("editing should render the save/cancel hint in the detail pane; output:\n%s", out3)
+	}
+}
+
+// TestSettings_DetailPaneDescription — in the wide two-column layout the
+// active field's full description renders in the right detail pane. On a
+// narrow terminal the layout collapses to a single column and the same
+// description falls back to the line below the row. No line overflows
+// either width.
+func TestSettings_DetailPaneDescription(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Projects.Root = "/Users/me/Projects"
+	m := newSettings(styles.Default(), DefaultKeymap(), cfg, "test")
+	for i, f := range editableFields() {
+		if f.label == "projects.root" {
+			m.cursor = i
+		}
+	}
+
+	wide := m.View(120, 40)
+	if !strings.Contains(wide, "Where ccmux looks for projects") {
+		t.Errorf("wide layout should show the field description in the detail pane; output:\n%s", wide)
+	}
+	assertNoOverflow(t, wide, 120)
+
+	narrow := m.View(50, 60)
+	if !strings.Contains(narrow, "Where ccmux looks for projects") {
+		t.Errorf("narrow layout should fall back to the below-row hint; output:\n%s", narrow)
+	}
+	assertNoOverflow(t, narrow, 50)
+}
+
+// TestSettings_HidesUnavailableAgentTiers — once App reports the
+// installed/usable agents, tier rows for agents that aren't available
+// drop out of the Settings list (and out of cursor navigation), while
+// Claude's tier always remains. A nil set (not yet detected) shows all.
+func TestSettings_HidesUnavailableAgentTiers(t *testing.T) {
+	m := newSettings(styles.Default(), DefaultKeymap(), config.Defaults(), "test")
+
+	// Before detection: every tier row is present.
+	all := m.fields()
+	for _, label := range []string{"claude.tier", "codex.tier", "antigravity.tier", "cursor.tier"} {
+		if byLabel(all, label) == nil {
+			t.Errorf("pre-detection: expected %q to be present", label)
+		}
+	}
+
+	// Only claude + cursor are usable.
+	m.SetAvailableAgents([]agent.ID{agent.IDClaude, agent.IDCursor})
+	got := m.fields()
+	if byLabel(got, "claude.tier") == nil {
+		t.Error("claude.tier must always show")
+	}
+	if byLabel(got, "cursor.tier") == nil {
+		t.Error("cursor.tier should show when cursor is available")
+	}
+	if byLabel(got, "codex.tier") != nil {
+		t.Error("codex.tier should be hidden when codex is unavailable")
+	}
+	if byLabel(got, "antigravity.tier") != nil {
+		t.Error("antigravity.tier should be hidden when antigravity is unavailable")
+	}
+
+	// The hidden rows must not appear in the rendered Settings either.
+	out := m.View(120, 40)
+	if strings.Contains(out, "codex.tier") || strings.Contains(out, "antigravity.tier") {
+		t.Errorf("hidden tier rows leaked into the view:\n%s", out)
+	}
+
+	// Even with Claude unavailable, its tier still shows (primary agent).
+	m.SetAvailableAgents([]agent.ID{agent.IDCodex})
+	if byLabel(m.fields(), "claude.tier") == nil {
+		t.Error("claude.tier must show even when Claude is unavailable")
 	}
 }
 
@@ -436,14 +716,14 @@ func TestSettings_AutoCheck_GetShowsOnOff(t *testing.T) {
 }
 
 // TestSettings_NarrowLayout — at phone width the Settings screen keeps
-// the editable field rows (T0) but drops the version line, the config
-// path line, and the (↑/↓ to move…) instructions (T2), with no line
-// overflowing the terminal.
+// the editable field rows (T0) and the group subtitles, with the
+// version + config-path rows pushed into the `i` info modal so they
+// don't crowd the body. No line overflows the terminal.
 func TestSettings_NarrowLayout(t *testing.T) {
 	m := newSettings(styles.Default(), DefaultKeymap(), config.Defaults(), "v9.9.9")
 	out := m.View(50, 60)
 	assertNoOverflow(t, out, 50)
-	assertPresent(t, out, "Settings", "Editable")
+	assertPresent(t, out, "Settings", "Subscription", "Projects", "Agents")
 	assertAbsent(t, out, "v9.9.9", "config file", "↑/↓ to move")
 }
 

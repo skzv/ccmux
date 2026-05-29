@@ -1,18 +1,18 @@
 ╭──────────────────────────────────────────────────────────╮ ╭─────────────────────────────────────────────────────────╮
-│ Settings                                                 │ │ claude.tier                                             │
-│                                                          │ │ [max5x]                                                 │
+│ Settings                                                 │ │ projects.root                                           │
+│                                                          │ │ /Users/me/Projects                                      │
 │ Moshi (mobile push)                                      │ │                                                         │
-│   · moshi-hook not installed.                            │ │ Anthropic / Claude.ai tier. Enter cycles: api → pro →   │
-│   Run ccmux moshi-setup in a shell to install + pair.    │ │ max5x → max20x. Drives the dashboard 5-hour quota bar.  │
-│                                                          │ │                                                         │
-│ Subscription                                             │ │ Options  enter cycles                                   │
-│ ▌ claude.tier            [max5x]                         │ │   api                                                   │
-│   codex.tier             (default)                       │ │   pro                                                   │
-│   antigravity.tier       (default)                       │ │   [max5x]                                               │
-│   cursor.tier            (default)                       │ │   max20x                                                │
+│   · moshi-hook not installed.                            │ │ Where ccmux looks for projects (~/Projects default).    │
+│   Run ccmux moshi-setup in a shell to install + pair.    │ │                                                         │
+│                                                          │ │ > /Users/me/Projects                                    │
+│ Subscription                                             │ │ enter to save, esc to cancel                            │
+│   claude.tier            [max5x]                         │ │                                                         │
+│   codex.tier             (default)                       │ │                                                         │
+│   antigravity.tier       (default)                       │ │                                                         │
+│   cursor.tier            (default)                       │ │                                                         │
 │                                                          │ │                                                         │
 │ Projects                                                 │ │                                                         │
-│   projects.root          /Users/me/Projects              │ │                                                         │
+│ ▌ projects.root          /Users/me/Projects              │ │                                                         │
 │                                                          │ │                                                         │
 │ Agents                                                   │ │                                                         │
 │   agents.default         [claude]                        │ │                                                         │
@@ -37,4 +37,4 @@
 │    Use `ccmux host add` only for non-Tailscale hosts or  │ │                                                         │
 │ non-default ports.)                                      │ │                                                         │
 ╰──────────────────────────────────────────────────────────╯ ╰─────────────────────────────────────────────────────────╯
-? help · q quit · i info · e edit config · 1-7 screens                                                                  
+? help · q quit · i info · e edit config · 1-7 screens · enter save · esc cancel                                        
