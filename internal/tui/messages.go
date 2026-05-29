@@ -100,6 +100,31 @@ type hostStatus struct {
 	// rows (we don't probe their TS-SSH state because that'd cost
 	// a `tailscale status` shell-out per refresh).
 	TailscaleSSH bool
+	// Source identifies where this row came from. One of "local",
+	// "configured", "discovered", "mobile". Drives the Network
+	// screen's four source-grouped sub-sections. The redundancy with
+	// Local/Discovered/Mobile is intentional: Source is the single
+	// field renderers switch on, while the booleans keep their
+	// existing semantics (Local=this machine, Discovered=came from
+	// the tailnet scan, Mobile=Moshi peer).
+	Source string
+	// SSHVerified is true when key-based SSH auth has been confirmed
+	// for this peer (the peer is in known_hosts and pubkey auth
+	// works). Renderers use it to surface the `[SSH ✓]` chip. Left
+	// false (and the chip omitted) when unknown — we don't probe
+	// every host on every refresh because that'd cost a shell-out
+	// per peer per tick.
+	SSHVerified bool
+	// LastProbe is the wall-clock time of the most recent refresh
+	// that touched this row. Drives the "last probe" line in the
+	// `i` host-detail overlay. Zero when never probed.
+	LastProbe time.Time
+	// ProbeInFlight is true while a refresh is actively probing this
+	// peer (between the spawn and the result landing). Drives the
+	// per-row spinner that replaces the chip column until the probe
+	// settles. Set during the App's refresh loop, cleared as soon as
+	// the loop produces a final hostStatus value.
+	ProbeInFlight bool
 }
 
 // tickMsg is the periodic dashboard refresh trigger.

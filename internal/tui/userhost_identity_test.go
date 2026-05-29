@@ -27,8 +27,8 @@ func TestUserHostIdentity_TwoUsersSameAddressRenderDistinctly(t *testing.T) {
 	// Simulate the data the refresh loop would push in. Use bare
 	// hostStatus values since the live refresh is async.
 	app.network.SetHosts([]hostStatus{
-		{Name: "alice@sputnik", Address: "sputnik:7474", DialHost: "sputnik", User: "alice"},
-		{Name: "bob@sputnik", Address: "sputnik:7474", DialHost: "sputnik", User: "bob"},
+		{Name: "alice@sputnik", Source: "configured", Address: "sputnik:7474", DialHost: "sputnik", User: "alice"},
+		{Name: "bob@sputnik", Source: "configured", Address: "sputnik:7474", DialHost: "sputnik", User: "bob"},
 	})
 	v := app.network.View(100, 30)
 	if !strings.Contains(v, "alice@sputnik") {

@@ -89,23 +89,23 @@ func TestRemoteAttachTargetFromErr_FiresForPlainPeer(t *testing.T) {
 }
 
 // TestNetworkRenderRow_ShowsTSSSHBadge — the row for a Tailscale-
-// SSH peer renders a small badge so the user knows why no wizard
-// fires. Plain peers don't get the badge.
+// SSH peer renders a `[Tailscale SSH ✓]` chip so the user knows
+// why no wizard fires. Plain peers don't get the chip.
 func TestNetworkRenderRow_ShowsTSSSHBadge(t *testing.T) {
 	m := newNetwork(styles.Default(), DefaultKeymap())
 	m.SetHosts([]hostStatus{
-		{Name: "tss-peer", DialHost: "tss-peer", TailscaleSSH: true, OK: true},
-		{Name: "plain-peer", DialHost: "plain-peer", TailscaleSSH: false, OK: true},
+		{Name: "tss-peer", Source: "discovered", DialHost: "tss-peer", TailscaleSSH: true, OK: true},
+		{Name: "plain-peer", Source: "discovered", DialHost: "plain-peer", TailscaleSSH: false, OK: true},
 	})
 	v := m.View(120, 30)
-	if !strings.Contains(v, "ts-ssh") {
-		t.Errorf("View missing ts-ssh badge; got %q", firstN(v, 400))
+	if !strings.Contains(v, "Tailscale SSH") {
+		t.Errorf("View missing Tailscale SSH chip; got %q", firstN(v, 400))
 	}
-	// Plain peer shouldn't get the badge — coarse check that the
-	// badge appears only once for the two-row fixture.
-	if strings.Count(v, "ts-ssh") != 1 {
-		t.Errorf("ts-ssh count = %d, want 1 (only tss-peer should be badged)",
-			strings.Count(v, "ts-ssh"))
+	// Plain peer shouldn't get the chip — coarse check that the
+	// chip appears only once for the two-row fixture.
+	if strings.Count(v, "Tailscale SSH") != 1 {
+		t.Errorf("Tailscale SSH chip count = %d, want 1 (only tss-peer should be chipped)",
+			strings.Count(v, "Tailscale SSH"))
 	}
 }
 

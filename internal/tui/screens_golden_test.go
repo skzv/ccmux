@@ -215,6 +215,74 @@ func TestNotesSearchGolden(t *testing.T) {
 	goldenAssert(t, "notes_search.txt", out)
 }
 
+// TestNetworkGolden snapshots the Network screen at 120x40 with a
+// fixed multi-source populated hosts list so every section and
+// chip type lands in the snapshot. LastProbe is pinned and
+// SetVersion is set to a value that's identical to the peers'
+// versions on most rows — exercising the `[↑ update]` chip only
+// on the one row that needs it.
+func TestNetworkGolden(t *testing.T) {
+	const width, height = 120, 40
+	st := styles.Default()
+	km := DefaultKeymap()
+
+	m := newNetwork(st, km)
+	m.SetVersion("v1.0")
+	probeAt := time.Date(2026, 5, 27, 14, 30, 0, 0, time.UTC)
+	m.SetHosts([]hostStatus{
+		{
+			Name: "sputnik", Source: "local", Local: true, OK: true,
+			Address: "local:7474", OS: "darwin", Version: "v1.0",
+			Sessions: 2, LastProbe: probeAt,
+		},
+		{
+			Name: "mac-mini", Source: "configured", DialHost: "mac-mini",
+			Address: "mac-mini:7474", OK: true, OS: "darwin",
+			Version: "v1.0", SSHVerified: true, Sessions: 1, LastProbe: probeAt,
+		},
+		{
+			Name: "atelier", Source: "configured", DialHost: "atelier",
+			Address: "atelier:7474", OK: true, OS: "linux",
+			Version: "v0.9", Sessions: 0, LastProbe: probeAt,
+		},
+		{
+			Name: "scout", Source: "discovered", DialHost: "scout",
+			Address: "scout:7474", OK: true, OS: "linux",
+			Version: "v1.0", TailscaleSSH: true, LastProbe: probeAt,
+		},
+		{
+			Name: "old-box", Source: "discovered", NeedsInstall: true,
+			Address: "100.64.1.5:7474", OS: "linux", LastProbe: probeAt,
+		},
+		{
+			Name: "iphone", Source: "mobile", Mobile: true,
+			Address: "100.64.1.6", OS: "iOS", LastProbe: probeAt,
+		},
+	})
+
+	helpLine := renderHelpBarFor(st, m.HelpBarProps(width), width)
+	body := m.View(width, height-lipgloss.Height(helpLine))
+	out := composeScreen(body, helpLine, height)
+	goldenAssert(t, "network.txt", out)
+}
+
+// TestNetworkEmptyGolden snapshots the Network screen empty state.
+// No devices, wide layout — the empty-state hint about tailnet
+// signed-in / `r` to refresh is the only body content. Chips are
+// the legend now; nothing else renders.
+func TestNetworkEmptyGolden(t *testing.T) {
+	const width, height = 120, 40
+	st := styles.Default()
+	km := DefaultKeymap()
+
+	m := newNetwork(st, km)
+
+	helpLine := renderHelpBarFor(st, m.HelpBarProps(width), width)
+	body := m.View(width, height-lipgloss.Height(helpLine))
+	out := composeScreen(body, helpLine, height)
+	goldenAssert(t, "network_empty.txt", out)
+}
+
 // TestSettingsGolden snapshots the Settings screen at 120x40. Both
 // the config path and the Projects.Root default are pinned to fixed
 // values so the snapshot doesn't drift across machines (config.Defaults
