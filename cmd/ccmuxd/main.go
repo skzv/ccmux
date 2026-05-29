@@ -345,6 +345,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/v1/peers", s.handlePeers)
 	mux.HandleFunc("/v1/conversations", s.handleConversations)
 	mux.HandleFunc("/v1/usage", s.handleUsage)
+	mux.HandleFunc("/v1/notes/search", s.handleNotesSearch)
 	mux.HandleFunc("/v1/notes", s.handleNotes)
 }
 
@@ -704,27 +705,8 @@ func (s *server) handleNotes(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	name := strings.TrimSpace(r.URL.Query().Get("project"))
-	if name == "" {
-		http.Error(w, "project query required", http.StatusBadRequest)
-		return
-	}
-	projs, err := project.Discover(s.cfg.Projects.Root)
-	if err != nil {
-		http.Error(w, "discover: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	var proj project.Project
-	var found bool
-	for _, p := range projs {
-		if p.Name == name {
-			proj = p
-			found = true
-			break
-		}
-	}
-	if !found {
-		http.Error(w, "project not found", http.StatusNotFound)
+	proj, ok := s.resolveProject(w, r)
+	if !ok {
 		return
 	}
 	vault := notes.Open(proj.Path)
@@ -771,6 +753,66 @@ func (s *server) handleNotes(w http.ResponseWriter, r *http.Request) {
 			Dir:      e.Dir,
 			Display:  e.Display,
 			Modified: e.Modified,
+		})
+	}
+	writeJSON(w, out)
+}
+
+// resolveProject reads the required ?project=<name> query, resolves it
+// against the daemon's configured Projects.Root via project.Discover
+// (same source as handleNotes/the dashboard, so a caller can only ever
+// reference projects ccmux already lists), and writes the appropriate
+// HTTP error if the name is missing or unknown. The bool reports whether
+// the caller should continue.
+func (s *server) resolveProject(w http.ResponseWriter, r *http.Request) (project.Project, bool) {
+	name := strings.TrimSpace(r.URL.Query().Get("project"))
+	if name == "" {
+		http.Error(w, "project query required", http.StatusBadRequest)
+		return project.Project{}, false
+	}
+	projs, err := project.Discover(s.cfg.Projects.Root)
+	if err != nil {
+		http.Error(w, "discover: "+err.Error(), http.StatusInternalServerError)
+		return project.Project{}, false
+	}
+	for _, p := range projs {
+		if p.Name == name {
+			return p, true
+		}
+	}
+	http.Error(w, "project not found", http.StatusNotFound)
+	return project.Project{}, false
+}
+
+// handleNotesSearch serves GET /v1/notes/search?project=<name>&q=<query>,
+// returning search hits from the project's markdown vault. The project is
+// validated the same way as handleNotes; the query itself never becomes a
+// filesystem path, so there's no traversal surface to harden here.
+func (s *server) handleNotesSearch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	proj, ok := s.resolveProject(w, r)
+	if !ok {
+		return
+	}
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	if query == "" {
+		http.Error(w, "q query required", http.StatusBadRequest)
+		return
+	}
+	hits, err := notes.Open(proj.Path).Search(r.Context(), query, 0)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	out := make([]daemon.SearchHit, 0, len(hits))
+	for _, h := range hits {
+		out = append(out, daemon.SearchHit{
+			Rel:     h.Rel,
+			LineNum: h.LineNum,
+			Snippet: h.Snippet,
 		})
 	}
 	writeJSON(w, out)

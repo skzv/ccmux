@@ -68,5 +68,6 @@ func init() {
 		newListConversationsCmd(),
 		newResumeCmd(),
 		newDeleteConversationCmd(),
+		newNotesCmd(),
 	)
 }

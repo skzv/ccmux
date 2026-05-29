@@ -68,8 +68,9 @@ Rendering: Glamour with the active theme. Wikilinks (`[[foo]]`) and markdown lin
 
 | Action | Result |
 |---|---|
-| `e` | Edit the selected file in `$EDITOR` (nvim, vim, helix, code). |
-| `/` | Full-text search across every markdown file in the project. Ripgrep when available. |
+| `e` | Edit the selected file in `$EDITOR` (nvim, vim, helix, code). Local notes only. |
+| `/` | Full-text search across every markdown file in the project. Ripgrep when available; routed to the active device. |
+| `H` | Toggle which **device** you're viewing notes from (local → each reachable tailnet peer → back). |
 | `o` | Open in Obsidian via `obsidian://` URI (macOS only; hidden if Obsidian not installed). |
 
 ccmux **browses, renders, and searches** notes — it does not create or
@@ -79,6 +80,53 @@ scaffolded `docs/01_Specs/`, `docs/02_Architecture/`, and
 scaffolding. Writing notes — whatever shape and convention you want —
 is the user's (or their agent's) job. The `docs/` convention is still
 honored by the listing if you use it; it's just no longer imposed.
+
+## Cross-Device Access
+
+Notes live on whichever machine holds the project, but you can read any
+device's notes from anywhere on your tailnet — that's the "context that
+follows you" promise. The Notes screen's device toggle (`H`) cycles the
+active device through the local machine and every reachable ccmuxd peer
+(configured hosts + auto-discovered tailnet peers). Switching device
+re-scopes the project picker, the note list, the preview, and search to
+that device's daemon. The active device is shown in the screen header
+(`● <device>`); an unreachable peer surfaces an explicit error rather
+than silently falling back to local notes.
+
+Remote access is **read-only**: the preview renders remote markdown, but
+`e` (edit) and `n` (new note) are disabled for a remote device because
+the file lives on another machine's disk. Create/edit happens on the
+device that owns the project.
+
+### Daemon API
+
+ccmuxd serves the notes vault over its tailnet-bound HTTP API (the same
+`100.x.x.x:7474` listener used elsewhere). The client (`internal/daemon.Client`)
+exposes `Notes`, `NoteContent`, and `SearchNotes`, each working against
+the local Unix socket or a remote peer transparently:
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /v1/notes?project=<name>` | List the project's markdown files. |
+| `GET /v1/notes?project=<name>&file=<rel>` | Read one file's body (path-traversal validated). |
+| `GET /v1/notes/search?project=<name>&q=<query>` | Search the project's vault (ripgrep-backed). |
+
+`project` is resolved against the daemon's configured projects root, so a
+caller can only ever reference projects ccmux already lists.
+
+### CLI
+
+The same access is scriptable via `ccmux notes`:
+
+```bash
+ccmux notes list  <project> [--host <name>]     # list a vault's files
+ccmux notes read  <project> <file> [--host <name>]   # print one note
+ccmux notes search <project> <query> [--host <name>] # search the vault
+```
+
+Without `--host` the command targets the local device; `--host <name>`
+selects a configured host (a typo'd name is an error, never a silent
+fallback to local).
 
 ## Optional: Tailnet Web Viewer (P2)
 

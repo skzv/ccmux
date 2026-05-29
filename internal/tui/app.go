@@ -680,6 +680,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.network.SetHosts(a.hosts)
 		a.projectsM.SetHosts(a.hosts)
 		a.sessionsM.SetHosts(a.hosts)
+		a.notes.SetHosts(a.hosts)
 		a.sessionsM.SetDefaultDir(a.cfg.Sessions.DefaultDir)
 		a.sessionsM.SetDefaultAgent(a.cfg.Agents.Default)
 		a.sessionsM.SetAgentCommands(a.cfg.AgentCommands())

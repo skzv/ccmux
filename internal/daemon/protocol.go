@@ -192,6 +192,15 @@ type NoteContent struct {
 	Content string `json:"content"`
 }
 
+// SearchHit is one match from GET /v1/notes/search?project=<name>&q=<query>.
+// Mirrors internal/notes.SearchHit minus the absolute on-disk Path, which
+// is meaningless to a remote caller.
+type SearchHit struct {
+	Rel     string `json:"rel"`      // slash-separated path from the project root
+	LineNum int    `json:"line_num"` // 1-based matching line number
+	Snippet string `json:"snippet"`  // the matching line, trimmed
+}
+
 // PreviewResponse is returned by GET /v1/sessions/{name}/preview. The
 // Content field is the raw capture-pane output (ANSI sequences stripped
 // by tmux) — clients can render it monospaced as-is. Lines is the
