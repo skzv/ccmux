@@ -1,40 +1,40 @@
-╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ Settings                                                                                                             │
-│                                                                                                                      │
-│ Moshi (mobile push)                                                                                                  │
-│   · moshi-hook not installed.                                                                                        │
-│   Run ccmux moshi-setup in a shell to install + pair.                                                                │
-│                                                                                                                      │
-│ Subscription                                                                                                         │
-│   subscription.tier      [max5x]                                                                                     │
-│                                                                                                                      │
-│ Projects                                                                                                             │
-│ ▌ projects.root          /Users/me/Projects                                                                          │
-│   Where ccmux looks for projects (~/Projects default).                                                               │
-│   > /Users/me/Projects                                                                                               │
-│   enter to save, esc to cancel                                                                                       │
-│                                                                                                                      │
-│ Agents                                                                                                               │
-│   agents.default         [claude]                                                                                    │
-│   sessions.attach_mode   [mirror]                                                                                    │
-│   update.auto_check      [on]                                                                                        │
-│   theme                  catppuccin-mocha  (read-only)                                                               │
-│                                                                                                                      │
-│ Sleep prevention                                                                                                     │
-│   mode             [safe]                                                                                            │
-│   idle release     10 minutes                                                                                        │
-│   low-batt cutoff  20%                                                                                               │
-│   dangerous mode auto-downgrades below the cutoff                                                                    │
-│                                                                                                                      │
-│ Daemon                                                                                                               │
-│   poll interval    2s                                                                                                │
-│   needs-input idle 3s                                                                                                │
-│   tailnet listen   [off] (port 7474)                                                                                 │
-│                                                                                                                      │
-│ Hosts                                                                                                                │
-│   (none pinned — tailnet peers running ccmuxd are auto-discovered.                                                   │
-│    Use `ccmux host add` only for non-Tailscale hosts or non-default ports.)                                          │
-│                                                                                                                      │
-│                                                                                                                      │
-╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭──────────────────────────────────────────────────────────╮ ╭─────────────────────────────────────────────────────────╮
+│ Settings                                                 │ │ projects.root                                           │
+│                                                          │ │ /Users/me/Projects                                      │
+│ Moshi (mobile push)                                      │ │                                                         │
+│   · moshi-hook not installed.                            │ │ Where ccmux looks for projects (~/Projects default).    │
+│   Run ccmux moshi-setup in a shell to install + pair.    │ │                                                         │
+│                                                          │ │ > /Users/me/Projects                                    │
+│ Subscription                                             │ │ enter to save, esc to cancel                            │
+│   claude.tier            [max5x]                         │ │                                                         │
+│   codex.tier             (default)                       │ │                                                         │
+│   antigravity.tier       (default)                       │ │                                                         │
+│   cursor.tier            (default)                       │ │                                                         │
+│                                                          │ │                                                         │
+│ Projects                                                 │ │                                                         │
+│ ▌ projects.root          /Users/me/Projects              │ │                                                         │
+│                                                          │ │                                                         │
+│ Agents                                                   │ │                                                         │
+│   agents.default         [claude]                        │ │                                                         │
+│   sessions.attach_mode   [mirror]                        │ │                                                         │
+│   update.auto_check      [on]                            │ │                                                         │
+│   theme                  catppuccin-mocha  (read-only)   │ │                                                         │
+│                                                          │ │                                                         │
+│ Sleep prevention                                         │ │                                                         │
+│   mode             [safe]                                │ │                                                         │
+│   idle release     10 minutes                            │ │                                                         │
+│   low-batt cutoff  20%                                   │ │                                                         │
+│   dangerous mode auto-downgrades below the cutoff        │ │                                                         │
+│                                                          │ │                                                         │
+│ Daemon                                                   │ │                                                         │
+│   poll interval    2s                                    │ │                                                         │
+│   needs-input idle 3s                                    │ │                                                         │
+│   tailnet listen   [off] (port 7474)                     │ │                                                         │
+│                                                          │ │                                                         │
+│ Hosts                                                    │ │                                                         │
+│   (none pinned — tailnet peers running ccmuxd are auto-  │ │                                                         │
+│ discovered.                                              │ │                                                         │
+│    Use `ccmux host add` only for non-Tailscale hosts or  │ │                                                         │
+│ non-default ports.)                                      │ │                                                         │
+╰──────────────────────────────────────────────────────────╯ ╰─────────────────────────────────────────────────────────╯
 ? help · q quit · i info · e edit config · 1-7 screens · enter save · esc cancel                                        

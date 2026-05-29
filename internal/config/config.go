@@ -269,14 +269,60 @@ type NotificationsConfig struct {
 	Bell bool `toml:"bell"`
 }
 
-// SubscriptionConfig declares which Claude subscription tier the user is
-// on so the dashboard can show "X of Y messages used in the 5h window."
-// Set to "" or "api" if you're on API/pay-as-you-go rather than a
-// subscription — the dashboard then shows raw token totals + estimated
-// dollar cost without a quota bar.
+// SubscriptionConfig declares the user's subscription tier per agent
+// so the dashboard can size the right quota bar (e.g. Claude's 5-hour
+// message window) and so per-agent screens can read accurate
+// entitlements. Set an entry to "" or "api" if you're on API /
+// pay-as-you-go for that agent — the dashboard then shows raw token
+// totals + estimated dollar cost without a quota bar for that agent.
+//
+// History: this struct started Claude-only (`tier = "max5x"`). To
+// stay compatible with every existing config + tool that reads or
+// writes `subscription.tier`, Tier IS the Claude entry — it's not
+// duplicated in Tiers. Tiers carries only the *additional* per-agent
+// entries (codex, antigravity, cursor, …). TierFor / SetTierFor
+// route to the right field transparently so callers don't have to
+// know the split.
 type SubscriptionConfig struct {
-	// Tier: "api" | "pro" | "max5x" | "max20x". Default "api".
-	Tier string `toml:"tier"`
+	// Tier is the Claude subscription tier. Top-level TOML key for
+	// back-compat — every config written before per-agent tiers
+	// landed has `subscription.tier = "..."` here.
+	Tier string `toml:"tier,omitempty"`
+
+	// Tiers is the per-non-claude-agent tier map, keyed by canonical
+	// agent ID ("codex", "antigravity", "cursor", …). Empty / missing
+	// entries read as "api" (pay-as-you-go). The Claude tier
+	// deliberately does NOT live here — it stays in Tier so older
+	// binaries reading the file still find it.
+	Tiers map[string]string `toml:"tiers,omitempty"`
+}
+
+// TierFor returns the tier for agentID. Claude reads from the
+// top-level `tier` field for back-compat; every other agent reads
+// from the `tiers` map. Returns "" when the agent has no recorded
+// tier — callers should treat that as "api / unset".
+func (s SubscriptionConfig) TierFor(agentID string) string {
+	if agentID == "claude" {
+		return s.Tier
+	}
+	if v, ok := s.Tiers[agentID]; ok {
+		return v
+	}
+	return ""
+}
+
+// SetTierFor records the tier for agentID. Claude writes to the
+// top-level `tier` field; every other agent writes to the `tiers`
+// map (allocating it on first write).
+func (s *SubscriptionConfig) SetTierFor(agentID, tier string) {
+	if agentID == "claude" {
+		s.Tier = tier
+		return
+	}
+	if s.Tiers == nil {
+		s.Tiers = map[string]string{}
+	}
+	s.Tiers[agentID] = tier
 }
 
 // Host is a remote ccmuxd the local TUI knows how to connect to.

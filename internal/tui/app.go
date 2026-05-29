@@ -259,6 +259,10 @@ func New(cfg config.Config, version string) App {
 	a.sessionsM.SetAgentCommands(cfg.AgentCommands())
 	a.projectsM.SetDefaultAgent(cfg.Agents.Default)
 	a.projectsM.SetAgentCommands(cfg.AgentCommands())
+	// Hide per-agent subscription-tier rows in Settings for agents the
+	// user can't run (PATH binary or a setup-pinned command). Detected
+	// once here via fast LookPath probes; Claude always shows regardless.
+	a.settings.SetAvailableAgents(availableAgentIDs(cfg.AgentCommands()))
 	// Seed the live headless-visibility toggle from config. Users
 	// can flip it at runtime with H; the config value is just the
 	// starting position.
@@ -268,6 +272,18 @@ func New(cfg config.Config, version string) App {
 		a.tour.Open()
 	}
 	return a
+}
+
+// availableAgentIDs returns the IDs of agents ccmux can launch on this
+// machine (PATH binary or a setup-pinned command override). Used to
+// hide irrelevant per-agent tier rows from Settings.
+func availableAgentIDs(commands agent.Commands) []agent.ID {
+	avail := agent.AllAvailable(context.Background(), commands)
+	ids := make([]agent.ID, 0, len(avail))
+	for _, a := range avail {
+		ids = append(ids, a.ID())
+	}
+	return ids
 }
 
 // Init is called once at startup.
@@ -549,8 +565,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// the user hasn't explicitly declared one ("api" is the
 		// default-empty marker) — a hand-set tier in config.toml always
 		// wins. Push the updated config into the screens that render it.
-		if (a.cfg.Subscription.Tier == "" || a.cfg.Subscription.Tier == "api") && msg.Tier != "api" {
-			a.cfg.Subscription.Tier = msg.Tier
+		// Writes through SetTierFor("claude", …) so the per-agent map
+		// + the legacy Tier field stay in sync.
+		claudeTier := a.cfg.Subscription.TierFor("claude")
+		if (claudeTier == "" || claudeTier == "api") && msg.Tier != "api" {
+			a.cfg.Subscription.SetTierFor("claude", msg.Tier)
 			a.dashboard.SetConfig(a.cfg)
 			a.settings.SetConfig(a.cfg)
 		}

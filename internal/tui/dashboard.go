@@ -431,7 +431,7 @@ func (m dashboardModel) renderClaudeWindowSection() []string {
 		headlineCount = a.Messages
 		headlineLabel = "msgs"
 	}
-	limit := planMessageLimit(m.cfg.Subscription.Tier)
+	limit := planMessageLimit(m.cfg.Subscription.TierFor("claude"))
 
 	count := lipgloss.NewStyle().Foreground(st.P.Lavender).Bold(true).
 		Render(fmt.Sprintf("%d", headlineCount))
@@ -556,10 +556,13 @@ func (m dashboardModel) renderUsageOverlay(st styles.Styles, width, height int) 
 		lines = append(lines, st.Muted.Render("(loading transcripts…)"))
 	}
 
-	// Subscription tier + the (est.) caveat.
-	if tier := m.cfg.Subscription.Tier; tier != "" {
+	// Subscription tier + the (est.) caveat. Sourced per-agent so a
+	// future change can render the active agent's quota row; today
+	// the 5-hour window concept is Claude-only so the label is
+	// explicit about scope.
+	if tier := m.cfg.Subscription.TierFor("claude"); tier != "" {
 		limit := planMessageLimit(tier)
-		lines = append(lines, st.Subtitle.Render("Subscription"))
+		lines = append(lines, st.Subtitle.Render("Subscription · Claude · 5h window"))
 		lines = append(lines, fmt.Sprintf("  tier            %s", tier))
 		if limit > 0 {
 			lines = append(lines,
