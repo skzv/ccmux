@@ -2,15 +2,15 @@
 │ ccmux ◀                              │ │ README.md                                                                   │
 │ ● local                              │ │ ─────────────────────────────────────────────────────────────────────────── │
 │                                      │ │                                                                             │
-│ ● (project root)                     │ │                                                                             │
-│  ▌ README.md                         │ │                                                                             │
-│    CLAUDE.md                         │ │                                                                             │
+│ ▌ README.md                          │ │                                                                             │
+│   CLAUDE.md                          │ │                                                                             │
+│   ▸ docs/                            │ │                                                                             │
 │                                      │ │                                                                             │
-│     01_Specs/                        │ │                                                                             │
-│      00_Vision.md                    │ │                                                                             │
 │                                      │ │                                                                             │
-│     02_Architecture/                 │ │                                                                             │
-│      00_System_Design.md             │ │                                                                             │
+│                                      │ │                                                                             │
+│                                      │ │                                                                             │
+│                                      │ │                                                                             │
+│                                      │ │                                                                             │
 │                                      │ │                                                                             │
 │                                      │ │                                                                             │
 │                                      │ │                                                                             │
@@ -37,4 +37,4 @@
 │                                      │ │                                                                             │
 │                                      │ │ tab: focus list   j/k: scroll (currently focused: list)   100%              │
 ╰──────────────────────────────────────╯ ╰─────────────────────────────────────────────────────────────────────────────╯
-? help · q quit · enter open · n new note · e edit · / search · i info · p / space switch project · H device            
+? help · q quit · enter open · →/← expand/collapse · n new note · e edit · / search · i info · H device                 

@@ -223,6 +223,7 @@ func (m *notesModel) switchToDevice(label string) tea.Cmd {
 	if len(devProjects) == 0 {
 		m.project = nil
 		m.entries = nil
+		m.expanded = make(map[string]bool)
 		m.loading = false
 		m.previewSrc = ""
 		m.previewRel = ""
@@ -237,9 +238,11 @@ func (m *notesModel) switchToDevice(label string) tea.Cmd {
 	if cached, ok := m.entriesCache[m.cacheKey(&p)]; ok {
 		m.entries = cached
 		m.loading = false
+		m.applyDefaultFolds()
 		return m.refreshPreview()
 	}
 	m.entries = nil
+	m.expanded = make(map[string]bool)
 	m.loading = true
 	return tea.Batch(m.loadEntriesCmd(p), m.loadingSpinner.Tick)
 }

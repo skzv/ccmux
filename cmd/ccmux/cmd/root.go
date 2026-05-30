@@ -17,6 +17,7 @@ func Execute(version string) error {
 }
 
 var projectsRootFlag string
+var expandNotesFlag bool
 
 var rootCmd = &cobra.Command{
 	Use:   "ccmux [projects-dir]",
@@ -41,7 +42,7 @@ different projects root without rewriting config:
 		if override == "" && len(args) == 1 {
 			override = args[0]
 		}
-		return tui.Run(versionString, override)
+		return tui.Run(versionString, override, expandNotesFlag)
 	},
 }
 
@@ -49,6 +50,8 @@ func init() {
 	rootCmd.Version = versionString
 	rootCmd.PersistentFlags().StringVar(&projectsRootFlag, "projects", "",
 		"override the projects directory for this run (defaults to ~/Projects or config.toml)")
+	rootCmd.Flags().BoolVar(&expandNotesFlag, "expand-notes", false,
+		"open the Notes folder tree fully expanded (default: folders start collapsed)")
 	rootCmd.AddCommand(
 		newAttachCmd(),
 		newNewCmd(),

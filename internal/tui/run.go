@@ -22,7 +22,7 @@ import (
 // CCMUX_DEBUG=1 enables a per-run log at
 // ~/.local/state/ccmux/ccmux.log so the user can tail bugs they
 // couldn't otherwise capture interactively.
-func Run(version string, projectsOverride string) error {
+func Run(version string, projectsOverride string, expandNotes bool) error {
 	initDebugLog()
 	defer closeDebugLog()
 	if dbg := debugLogger(); dbg != nil {
@@ -32,6 +32,12 @@ func Run(version string, projectsOverride string) error {
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "config:", err)
+	}
+	// `--expand-notes` is a per-run override: it can force the Notes
+	// folder tree open, but never forces it collapsed (that's the
+	// default and the config-driven choice).
+	if expandNotes {
+		cfg.Notes.ExpandFolders = true
 	}
 	if projectsOverride != "" {
 		abs, err := filepath.Abs(projectsOverride)

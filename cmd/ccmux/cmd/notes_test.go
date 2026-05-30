@@ -74,3 +74,28 @@ func TestResolveNotesAddr_UnknownHost(t *testing.T) {
 		t.Fatal("expected an error for an unknown host name")
 	}
 }
+
+// TestExpandNotesFlag_Registered — the `--expand-notes` flag is wired on
+// the root command, defaults to false (folders start collapsed), and
+// parses to true when passed. This is the CLI half of the notes
+// folder-tree feature; the TUI half (notesModel fold state) is covered
+// in internal/tui.
+func TestExpandNotesFlag_Registered(t *testing.T) {
+	f := rootCmd.Flags().Lookup("expand-notes")
+	if f == nil {
+		t.Fatal("root command is missing the --expand-notes flag")
+	}
+	if f.DefValue != "false" {
+		t.Errorf("--expand-notes default = %q, want \"false\" (collapsed)", f.DefValue)
+	}
+
+	// Reset and parse the flag to confirm it flips the bound variable.
+	expandNotesFlag = false
+	if err := rootCmd.Flags().Parse([]string{"--expand-notes"}); err != nil {
+		t.Fatalf("parsing --expand-notes: %v", err)
+	}
+	if !expandNotesFlag {
+		t.Error("--expand-notes did not set expandNotesFlag to true")
+	}
+	expandNotesFlag = false // leave global state clean for other tests
+}

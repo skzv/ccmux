@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -46,10 +47,26 @@ type notesModel struct {
 	loading      bool                     // true while a Vault.List walk is in flight
 	cursor       int
 	focus        notesFocus
-	preview      viewport.Model
-	previewSrc   string // raw markdown bytes; glamour-rendered into the viewport whenever the source or size changes
-	previewRel   string // rel-path of the file backing previewSrc (so we don't re-read the same file)
-	editor       string
+
+	// expanded is the folder-fold state for the file tree: a folder's
+	// direct children are rendered only when expanded[Dir] is true.
+	// Folders default to collapsed (the zero map), so opening a project
+	// with a deep notes tree shows just the top-level folder headers
+	// plus any root-level files. `cursor` indexes the *visible* rows
+	// (see visibleRows), so a collapsed folder's children are neither
+	// rendered nor reachable. Root-level files (Dir == "") are always
+	// visible.
+	expanded map[string]bool
+
+	// expandByDefault seeds `expanded` with every folder when a project
+	// loads, so the tree opens fully expanded. Set from
+	// config.Notes.ExpandFolders / `ccmux --expand-notes`. Default false
+	// (collapsed).
+	expandByDefault bool
+	preview         viewport.Model
+	previewSrc      string // raw markdown bytes; glamour-rendered into the viewport whenever the source or size changes
+	previewRel      string // rel-path of the file backing previewSrc (so we don't re-read the same file)
+	editor          string
 
 	// termWidth / termHeight cache the last WindowSizeMsg that
 	// reached the App. We need them in refreshPreview to wrap
@@ -107,6 +124,26 @@ const (
 	focusPreview
 )
 
+// noteRowKind tags a row in the visible file tree as either a folder
+// header (navigable + collapsible) or a file (openable + previewable).
+type noteRowKind int
+
+const (
+	rowFolder noteRowKind = iota
+	rowFile
+)
+
+// noteRow is one entry in the flattened, currently-visible file tree.
+// The cursor indexes a []noteRow (built by visibleRows), so it can
+// land on folder headers — that's what makes them togglable. For a
+// file row, entryIdx points back into m.entries; for a folder row it's
+// -1 and `dir` is the folder's slash-separated path.
+type noteRow struct {
+	kind     noteRowKind
+	dir      string // folder path (rowFolder) or the file's containing Dir (rowFile)
+	entryIdx int    // index into m.entries for rowFile; -1 for rowFolder
+}
+
 func newNotes(st styles.Styles, km Keymap) notesModel {
 	vp := viewport.New(80, 20)
 	ti := textinput.New()
@@ -125,7 +162,16 @@ func newNotes(st styles.Styles, km Keymap) notesModel {
 		entriesCache:   make(map[string][]notes.Entry),
 		loadingSpinner: sp,
 		deviceName:     localDeviceLabel,
+		expanded:       make(map[string]bool),
 	}
+}
+
+// SetExpandFolders sets whether the folder tree opens fully expanded
+// (true) or collapsed (false, the default). Wired from
+// config.Notes.ExpandFolders and the `--expand-notes` run flag. Takes
+// effect on the next project load.
+func (m *notesModel) SetExpandFolders(expand bool) {
+	m.expandByDefault = expand
 }
 
 // SetProject is called by the App when the focused project changes.
@@ -138,6 +184,7 @@ func (m *notesModel) SetProject(p *project.Project) tea.Cmd {
 	if p == nil {
 		m.project = nil
 		m.entries = nil
+		m.expanded = make(map[string]bool)
 		m.previewSrc = ""
 		m.previewRel = ""
 		m.preview.SetContent("")
@@ -158,9 +205,11 @@ func (m *notesModel) SetProject(p *project.Project) tea.Cmd {
 	if cached, ok := m.entriesCache[m.cacheKey(p)]; ok {
 		m.entries = cached
 		m.loading = false
+		m.applyDefaultFolds()
 		return m.refreshPreview()
 	}
 	m.entries = nil
+	m.expanded = make(map[string]bool)
 	m.loading = true
 	pvCmd := m.refreshPreview()
 	return tea.Batch(m.loadEntriesCmd(*p), m.loadingSpinner.Tick, pvCmd)
@@ -320,10 +369,10 @@ func (m *notesModel) refreshPreview() tea.Cmd {
 		if m.cursor >= 0 && m.cursor < len(m.searchResults) {
 			rel = m.searchResults[m.cursor].Rel
 		}
-	} else {
-		if len(m.entries) > 0 && m.cursor >= 0 && m.cursor < len(m.entries) {
-			rel = m.entries[m.cursor].Rel
-		}
+	} else if e := m.selectedEntry(); e != nil {
+		// Only file rows have a preview; a folder header under the
+		// cursor clears the pane.
+		rel = e.Rel
 	}
 	if rel == "" {
 		m.previewSrc = ""
@@ -561,9 +610,8 @@ func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
 		m.deviceErr = ""
 		m.entries = msg.Entries
 		m.entriesCache[m.cacheKey(m.project)] = msg.Entries
-		if m.cursor >= len(m.entries) {
-			m.cursor = max0(len(m.entries) - 1)
-		}
+		m.applyDefaultFolds()
+		m.clampCursor()
 		return m, m.refreshPreview()
 	case notesPreviewLoadedMsg:
 		// Drop a stale fetch: the cursor (and thus previewRel) may have
@@ -680,23 +728,32 @@ func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
 			}
 			return m, nil
 		case "right", "l":
-			// Right/l from the file list moves focus into the
-			// preview pane (mirrors tab). Already there? No-op.
-			// Intercepted at the global level so the viewport's
-			// own right-key handling doesn't swallow it. `l` mirrors
-			// vim's right-motion key.
+			// In the file tree, right/l expands the folder under the
+			// cursor (or drills into an already-expanded one); on a
+			// file row it falls through to moving focus into the
+			// preview pane (the legacy behaviour). During an active
+			// search the list is flat, so right just moves to preview.
+			// `l` mirrors vim's right-motion key. Intercepted at the
+			// global level so the viewport's own right-key handling
+			// doesn't swallow it.
 			if m.focus == focusList {
-				m.focus = focusPreview
-				return m, nil
+				if m.hasActiveSearch() {
+					m.focus = focusPreview
+					return m, nil
+				}
+				return m, m.handleRight()
 			}
 		case "left", "h":
-			// Left/h from the preview pane moves focus back to
-			// the file list (mirrors tab). Already on the list?
-			// No-op so left in the list doesn't steal a future
-			// per-screen binding.
+			// Left/h from the preview pane moves focus back to the
+			// file list (mirrors tab). In the tree it collapses the
+			// folder under the cursor, or jumps out to the enclosing
+			// parent folder header.
 			if m.focus == focusPreview {
 				m.focus = focusList
 				return m, nil
+			}
+			if m.focus == focusList && !m.hasActiveSearch() {
+				return m, m.handleLeft()
 			}
 		}
 
@@ -759,12 +816,19 @@ func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
 	return m, nil
 }
 
+// selected returns the entry backing the preview pane: the file under
+// the cursor in tree mode (nil when the cursor is on a folder header),
+// or a synthetic entry carrying the search hit's path/rel in search
+// mode. renderPreview only reads Path/Rel off it.
 func (m notesModel) selected() *notes.Entry {
-	if m.cursor < 0 || m.cursor >= len(m.entries) {
+	if m.hasActiveSearch() {
+		if m.cursor >= 0 && m.cursor < len(m.searchResults) {
+			h := m.searchResults[m.cursor]
+			return &notes.Entry{Path: h.Path, Rel: h.Rel}
+		}
 		return nil
 	}
-	e := m.entries[m.cursor]
-	return &e
+	return m.selectedEntry()
 }
 
 // hasActiveSearch reports whether the search results pane is showing
@@ -775,17 +839,18 @@ func (m notesModel) hasActiveSearch() bool {
 }
 
 // listLen returns the number of rows the user can navigate over —
-// search results when a query is active, entries otherwise.
+// search results when a query is active, otherwise the currently
+// visible tree rows (collapsed folders' children excluded).
 func (m notesModel) listLen() int {
 	if m.hasActiveSearch() {
 		return len(m.searchResults)
 	}
-	return len(m.entries)
+	return len(m.visibleRows())
 }
 
 // selectedPath returns the absolute path of the row under the cursor,
-// honoring whether we're showing entries or search hits. Returns "" on
-// an out-of-bounds cursor.
+// honoring whether we're showing search hits or the file tree. Returns
+// "" when the cursor is out of bounds or sits on a folder header.
 func (m notesModel) selectedPath() string {
 	if m.hasActiveSearch() {
 		if m.cursor < 0 || m.cursor >= len(m.searchResults) {
@@ -793,10 +858,226 @@ func (m notesModel) selectedPath() string {
 		}
 		return m.searchResults[m.cursor].Path
 	}
-	if m.cursor < 0 || m.cursor >= len(m.entries) {
-		return ""
+	if e := m.selectedEntry(); e != nil {
+		return e.Path
 	}
-	return m.entries[m.cursor].Path
+	return ""
+}
+
+// selectedRow returns the visible tree row under the cursor. It reports
+// false in search mode (the flat hit list isn't a tree) and on an
+// out-of-bounds cursor.
+func (m notesModel) selectedRow() (noteRow, bool) {
+	if m.hasActiveSearch() {
+		return noteRow{}, false
+	}
+	vis := m.visibleRows()
+	if m.cursor < 0 || m.cursor >= len(vis) {
+		return noteRow{}, false
+	}
+	return vis[m.cursor], true
+}
+
+// selectedEntry returns the file entry under the cursor, or nil when
+// the cursor is on a folder header (or in search mode / out of bounds).
+func (m notesModel) selectedEntry() *notes.Entry {
+	r, ok := m.selectedRow()
+	if !ok || r.kind != rowFile || r.entryIdx < 0 || r.entryIdx >= len(m.entries) {
+		return nil
+	}
+	e := m.entries[r.entryIdx]
+	return &e
+}
+
+// clampCursor keeps the cursor within the current navigable-row bounds.
+// Called after any change that can shrink the visible list (load, fold
+// collapse, search exit) so the cursor never points past the end.
+func (m *notesModel) clampCursor() {
+	n := m.listLen()
+	if n == 0 {
+		m.cursor = 0
+		return
+	}
+	if m.cursor >= n {
+		m.cursor = n - 1
+	}
+	if m.cursor < 0 {
+		m.cursor = 0
+	}
+}
+
+// applyDefaultFolds (re)initializes the fold state for the loaded
+// entries: everything collapsed, unless expandByDefault is set, in
+// which case every folder (including synthesized ancestors) is
+// expanded.
+func (m *notesModel) applyDefaultFolds() {
+	m.expanded = make(map[string]bool)
+	if !m.expandByDefault {
+		return
+	}
+	for _, d := range m.allFolderDirs() {
+		m.expanded[d] = true
+	}
+}
+
+// allFolderDirs returns every folder path implied by the entries,
+// including intermediate ancestors that hold no direct files (e.g.
+// "docs" when only "docs/01_Specs/x.md" exists).
+func (m notesModel) allFolderDirs() []string {
+	set := map[string]bool{}
+	for _, e := range m.entries {
+		for d := e.Dir; d != ""; d = parentDir(d) {
+			set[d] = true
+		}
+	}
+	out := make([]string, 0, len(set))
+	for d := range set {
+		out = append(out, d)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// visibleRows flattens the entry list into the rows currently on
+// screen: root-level files first (always visible), then a depth-first
+// walk of the folder tree that descends into a folder only when it's
+// expanded. The cursor indexes the returned slice.
+func (m notesModel) visibleRows() []noteRow {
+	filesByDir := map[string][]int{}
+	folderSet := map[string]bool{}
+	for i, e := range m.entries {
+		filesByDir[e.Dir] = append(filesByDir[e.Dir], i)
+		for d := e.Dir; d != ""; d = parentDir(d) {
+			folderSet[d] = true
+		}
+	}
+	childFolders := map[string][]string{}
+	for d := range folderSet {
+		p := parentDir(d)
+		childFolders[p] = append(childFolders[p], d)
+	}
+	for p := range childFolders {
+		sort.Strings(childFolders[p])
+	}
+
+	var rows []noteRow
+	var walk func(dir string)
+	walk = func(dir string) {
+		// Files directly in this folder come before its sub-folders,
+		// matching the entry sort (Dir-then-Rel) and the old grouping.
+		for _, idx := range filesByDir[dir] {
+			rows = append(rows, noteRow{kind: rowFile, dir: dir, entryIdx: idx})
+		}
+		for _, child := range childFolders[dir] {
+			rows = append(rows, noteRow{kind: rowFolder, dir: child, entryIdx: -1})
+			if m.expanded[child] {
+				walk(child)
+			}
+		}
+	}
+	walk("") // root is always expanded; its files are always visible
+	return rows
+}
+
+// handleRight implements right/l in the file tree: expand a collapsed
+// folder, drill into an already-expanded one, or (on a file row) move
+// focus to the preview pane.
+func (m *notesModel) handleRight() tea.Cmd {
+	r, ok := m.selectedRow()
+	if !ok {
+		m.focus = focusPreview
+		return nil
+	}
+	if r.kind == rowFolder {
+		if !m.expanded[r.dir] {
+			m.expanded[r.dir] = true
+			return nil
+		}
+		// Already expanded → step onto its first child (the row
+		// immediately after the header, since walk emits children
+		// right after an expanded folder).
+		if m.cursor+1 < m.listLen() {
+			m.cursor++
+			return m.refreshPreview()
+		}
+		return nil
+	}
+	m.focus = focusPreview
+	return nil
+}
+
+// handleLeft implements left/h in the file tree: collapse the expanded
+// folder under the cursor, or jump out to the enclosing parent folder
+// header (from a file row or a collapsed folder). A no-op at the top
+// level with nothing to collapse.
+func (m *notesModel) handleLeft() tea.Cmd {
+	r, ok := m.selectedRow()
+	if !ok {
+		return nil
+	}
+	if r.kind == rowFolder && m.expanded[r.dir] {
+		m.collapseFolder(r.dir)
+		return m.refreshPreview()
+	}
+	// File row → its containing folder; collapsed folder → its parent.
+	targetDir := r.dir
+	if r.kind == rowFolder {
+		targetDir = parentDir(r.dir)
+	}
+	if targetDir == "" {
+		return nil
+	}
+	vis := m.visibleRows()
+	for i, row := range vis {
+		if row.kind == rowFolder && row.dir == targetDir {
+			m.cursor = i
+			return m.refreshPreview()
+		}
+	}
+	return nil
+}
+
+// collapseFolder hides a folder's children. If the cursor was on one of
+// those (now-hidden) descendants, it moves up to the folder's header so
+// the selection never lands on an invisible row; otherwise it just
+// re-clamps.
+func (m *notesModel) collapseFolder(dir string) {
+	r, ok := m.selectedRow()
+	moveToHeader := ok && descendantOf(r, dir)
+	m.expanded[dir] = false
+	if moveToHeader {
+		vis := m.visibleRows()
+		for i, row := range vis {
+			if row.kind == rowFolder && row.dir == dir {
+				m.cursor = i
+				break
+			}
+		}
+		return
+	}
+	m.clampCursor()
+}
+
+// descendantOf reports whether row r lives inside folder dir's subtree
+// (a nested folder/file, or a file directly in dir). The folder dir's
+// own header row is not its own descendant.
+func descendantOf(r noteRow, dir string) bool {
+	if dir == "" {
+		return false
+	}
+	if strings.HasPrefix(r.dir, dir+"/") {
+		return true
+	}
+	return r.kind == rowFile && r.dir == dir
+}
+
+// parentDir returns the parent folder of a slash-separated folder path,
+// or "" (the root) for a top-level folder.
+func parentDir(dir string) string {
+	if i := strings.LastIndex(dir, "/"); i >= 0 {
+		return dir[:i]
+	}
+	return ""
 }
 
 // runSearch is the tea.Cmd that fires Vault.Search in the background
@@ -846,6 +1127,7 @@ func (m notesModel) HelpBarProps(width int) components.HelpBarProps {
 			{Key: "?", Label: "help", Priority: 10},
 			{Key: "q", Label: "quit", Priority: 10},
 			{Key: "enter", Label: "open", Priority: 8},
+			{Key: "→/←", Label: "expand/collapse", Priority: 8},
 			{Key: "n", Label: "new note", Priority: 8},
 			{Key: "e", Label: "edit", Priority: 7},
 			{Key: "/", Label: "search", Priority: 6},
@@ -993,63 +1275,49 @@ func (m notesModel) noteRows(width int) (rows []string, cursorRow int) {
 		}
 		return rows, cursorRow
 	}
-	// Sub-section indent scales with folder depth so docs/01_Specs/
-	// sits visually beneath docs/, not flush-left with it. The
-	// left pane is only ~width/3 cells wide so we use the tight SM
-	// step (1 cell) — the hierarchy reads clearly without eating
-	// the visible filename column. Files indent one step further
-	// than their containing folder; the project-root group (Dir
-	// == "") sits at depth 0.
+	// Sub-section indent scales with tree depth so docs/01_Specs/ sits
+	// visually beneath docs/, not flush-left with it. The left pane is
+	// only ~width/3 cells wide so we use the tight SM step (1 cell) —
+	// the hierarchy reads clearly without eating the visible filename
+	// column. Top-level folders sit at indent 0; root-level files are
+	// shown bare at the top. A folder header carries a fold glyph (▸
+	// collapsed, ▾ expanded). Folder and file rows both pass through
+	// RenderListRow so the selected row gets the unified accent bar.
 	step := m.st.Spacing.SM
-	// currentDir is the folder the cursor is in — its header gets
-	// the "active" treatment (Sapphire dot + bold bright FG) so
-	// the user can see at a glance which group they're navigating
-	// through. Other headers stay muted.
-	currentDir := ""
-	if m.cursor >= 0 && m.cursor < len(m.entries) {
-		currentDir = m.entries[m.cursor].Dir
-	}
-	activeHeaderStyle := lipgloss.NewStyle().Foreground(m.st.P.FG).Bold(true)
-	dotStyle := lipgloss.NewStyle().Foreground(m.st.P.Sapphire)
-	lastDir := "\x00" // sentinel: no real Dir equals this
-	for i, e := range m.entries {
-		if e.Dir != lastDir {
-			if len(rows) > 0 {
-				rows = append(rows, "")
-			}
-			headerIndent := strings.Repeat(" ", folderDepth(e.Dir)*step)
-			label := folderHeader(e.Dir)
-			var headerLine string
-			if e.Dir == currentDir {
-				headerLine = headerIndent + dotStyle.Render("● ") + activeHeaderStyle.Render(label)
-			} else {
-				headerLine = headerIndent + "  " + m.st.Subtitle.Render(label)
-			}
-			rows = append(rows, headerLine)
-			lastDir = e.Dir
-		}
-		if i == m.cursor {
+	for i, r := range m.visibleRows() {
+		sel := i == m.cursor
+		if sel {
 			cursorRow = len(rows)
 		}
-		fileIndentN := (folderDepth(e.Dir) + 1) * step
-		fileIndent := strings.Repeat(" ", fileIndentN)
-		rowBodyW := rowW - fileIndentN
-		if rowBodyW < 1 {
-			rowBodyW = 1
+		if r.kind == rowFolder {
+			level := strings.Count(r.dir, "/") // top-level folder == 0
+			indent := strings.Repeat(" ", level*step)
+			glyph := "▸ "
+			if m.expanded[r.dir] {
+				glyph = "▾ "
+			}
+			content := m.st.Subtitle.Render(glyph + folderHeader(r.dir))
+			bodyW := rowW - level*step
+			if bodyW < 1 {
+				bodyW = 1
+			}
+			rows = append(rows, indent+components.RenderListRow(m.st, content, sel, bodyW))
+			continue
 		}
-		rows = append(rows, fileIndent+components.RenderListRow(m.st, e.Display, i == m.cursor, rowBodyW))
+		// File row: root files at indent 0, files in a folder one step
+		// deeper than the folder header.
+		level := 0
+		if r.dir != "" {
+			level = strings.Count(r.dir, "/") + 1
+		}
+		indent := strings.Repeat(" ", level*step)
+		bodyW := rowW - level*step
+		if bodyW < 1 {
+			bodyW = 1
+		}
+		rows = append(rows, indent+components.RenderListRow(m.st, m.entries[r.entryIdx].Display, sel, bodyW))
 	}
 	return rows, cursorRow
-}
-
-// folderDepth returns the depth (number of slash-separated path
-// segments) for a folder Dir. The project root (Dir == "") is depth
-// 0; "docs" is depth 1; "docs/01_Specs" is depth 2.
-func folderDepth(dir string) int {
-	if dir == "" {
-		return 0
-	}
-	return strings.Count(dir, "/") + 1
 }
 
 // folderHeader renders the group header for a folder of notes. The
