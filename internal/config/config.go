@@ -263,17 +263,23 @@ type NotesConfig struct {
 }
 
 // NotificationsConfig controls how the daemon signals needs_input
-// transitions. The audible BEL is the universal fallback — every iOS
-// terminal client supports it — and power users with moshi-hook
-// installed get richer pushes via that channel on top. The two
+// transitions. The terminal BEL is the universal fallback — every iOS
+// terminal client supports it — and macOS hosts can opt into named
+// system sounds when terminal bells are muted. Power users with
+// moshi-hook installed get richer pushes via that channel on top. The two
 // channels are complementary (audible cue at your laptop + push on
-// your phone), not duplicates: ccmux always rings the bell when
+// your phone), not duplicates: ccmux always plays a local sound when
 // Bell=true regardless of whether moshi-hook is paired.
 type NotificationsConfig struct {
-	// Bell — ring the terminal BEL on needs_input transitions.
+	// Bell — play a local audible notification on needs_input transitions.
 	// Default true. Set to false to mute completely (e.g. for a
 	// silent office, or when you rely solely on phone pushes).
 	Bell bool `toml:"bell"`
+
+	// Sound selects the local audible notification backend. Empty and
+	// "terminal" use terminal BEL. On macOS, a system sound name such
+	// as "Ping", "Glass", or "Tink" plays that .aiff via afplay.
+	Sound string `toml:"sound,omitempty"`
 }
 
 // SubscriptionConfig declares the user's subscription tier per agent
@@ -384,7 +390,8 @@ func Defaults() Config {
 			AutoLogSessions: true,
 		},
 		Notifications: NotificationsConfig{
-			Bell: true,
+			Bell:  true,
+			Sound: "terminal",
 		},
 		Sessions: SessionsConfig{
 			// Empty = resolve to $HOME on the daemon host at session-

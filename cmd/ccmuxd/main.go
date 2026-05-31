@@ -312,7 +312,7 @@ func newServer(cfg config.Config) *server {
 		seen:       map[string]*tracked{},
 		startedAt:  time.Now(),
 		capture:    tmux.CapturePane,
-		bell:       tmux.RingBell,
+		bell:       notificationBell(cfg.Notifications),
 		readAgent:  project.ReadAgent,
 		tokens:     daemon.NewTokenStore(),
 		events:     daemon.NewEventBus(),
