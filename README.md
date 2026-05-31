@@ -144,7 +144,7 @@ One screen for "is my agent installed and signed in?" Per-agent CLI version, con
 <img src="docs/vhs/out/cuj10_setup_doctor.gif" alt="ccmux setup wizard interactively checking and offering to install tmux, mosh, tailscale, claude, gh — then running ccmux doctor as a non-interactive verification pass." width="900" />
 </div>
 
-`ccmux setup` is the interactive wizard. It checks `tmux` / `mosh` / `tailscale` / `claude` / `gh` and offers to `brew install` whatever's missing. `ccmux doctor` is the non-interactive health check — perfect for scripting or when something stops working.
+`ccmux setup` is the interactive wizard. It checks `tmux` / `mosh` / `tailscale` / `claude` / `gh` and offers to `brew install` whatever's missing. The first time you launch `ccmux` on an unconfigured machine it offers to run setup for you (decline once and it won't ask again). For dotfiles / provisioning, `ccmux setup --yes` runs non-interactively — it takes the recommended answer at every prompt (install deps, generate the SSH key, install the daemon autostart) and skips the integrations that can't be scripted (Moshi pairing, Tailscale/`gh` browser auth). `ccmux doctor` is the non-interactive health check — perfect for scripting or when something stops working.
 
 ---
 
@@ -310,7 +310,7 @@ bell = true                          # ring local terminal BEL on needs_input
 
 ### 🩺 Setup, doctor, update
 
-- `ccmux setup` — interactive wizard, checks every dep, offers `brew install` for missing pieces
+- `ccmux setup` — interactive wizard, checks every dep, offers `brew install` for missing pieces; `--yes` runs it non-interactively for scripts, and the first launch on a fresh machine offers to run it for you
 - `ccmux doctor` — non-interactive health check (great for scripting)
 - `ccmux update` — pulls the git checkout, rebuilds, reloads ccmuxd
 - `ccmux uninstall` — clean removal, never touches your projects or `~/.claude/`

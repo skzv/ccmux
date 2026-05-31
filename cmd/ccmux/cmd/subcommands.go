@@ -198,13 +198,24 @@ func newKillCmd() *cobra.Command {
 // just verifies what's already done and prompts only for missing
 // pieces.
 func newSetupCmd() *cobra.Command {
-	return &cobra.Command{
+	var assumeYes bool
+	c := &cobra.Command{
 		Use:   "setup",
 		Short: "Interactive first-run setup wizard",
+		Long: `Walk through deps, Tailscale, Moshi, the SSH key, config, and the
+ccmuxd autostart service. Idempotent — safe to re-run.
+
+Pass --yes (-y) to run non-interactively: every prompt takes its
+recommended answer (install missing deps, generate the SSH key, install
+the ccmuxd autostart service), and integrations that can't be scripted
+(Moshi pairing, Tailscale/gh browser auth) are reported and skipped.
+Handy for dotfiles and provisioning scripts.`,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return setupwizard.Run(context.Background(), os.Stdout)
+			return setupwizard.RunWithOptions(context.Background(), os.Stdout, setupwizard.Options{AssumeYes: assumeYes})
 		},
 	}
+	c.Flags().BoolVarP(&assumeYes, "yes", "y", false, "non-interactive: take recommended answers, skip interactive integrations")
+	return c
 }
 
 // printDoctorDetail writes a captured diagnostic (a command's stderr, a
