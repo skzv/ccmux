@@ -132,6 +132,36 @@ func TestPollOnce_BellOnNeedsInput(t *testing.T) {
 	}
 }
 
+// TestPollOnce_RefreshesAgentID covers stale agent sidecars: if a
+// session was first seen as one agent and the project metadata changes,
+// the daemon must update the classifier before deciding whether to
+// ring. Otherwise a stale fallback classifier can spam needs-input
+// bells for a different running TUI.
+func TestPollOnce_RefreshesAgentID(t *testing.T) {
+	dir := pollSandbox(t)
+	mustTmux(t, "new-session", "-d", "-s", "c-agent", "-c", dir)
+
+	srv := newServer(testDaemonCfg(dir))
+	srv.startSleepManager()
+	srv.capture = func(context.Context, string, int) (string, error) {
+		return "stable pane output", nil
+	}
+	srv.readAgent = func(string) agent.ID { return agent.IDClaude }
+	srv.seen["c-agent"] = &tracked{
+		last:        "stable pane output",
+		lastChange:  time.Now().Add(-time.Hour),
+		state:       agent.StateActive,
+		agentID:     agent.IDCursor,
+		projectPath: dir,
+	}
+
+	srv.pollOnce(context.Background(), time.Second)
+
+	if got := srv.seen["c-agent"].agentID; got != agent.IDClaude {
+		t.Fatalf("agentID = %q after poll, want refreshed %q", got, agent.IDClaude)
+	}
+}
+
 // TestPollOnce_CaptureFailureSurfaced pins the fix for the silently
 // swallowed capture error: a capture failure must be logged, and the
 // session must keep its prior state rather than being dropped or
