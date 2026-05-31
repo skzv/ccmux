@@ -69,6 +69,11 @@ func shouldNudgeSetup(cfg config.Config, interactive bool) bool {
 // so repeat launches aren't nagged. Skipped entirely under a
 // non-interactive stdin (scripts, pipes).
 func maybeNudgeSetup() {
+	// Escape hatch for CI, scripts, and anyone who never wants the prompt
+	// (also how the e2e harness keeps the TUI tests nudge-free).
+	if os.Getenv("CCMUX_NO_SETUP_NUDGE") != "" {
+		return
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		return

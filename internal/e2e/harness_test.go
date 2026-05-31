@@ -193,6 +193,10 @@ func newEnv(t *testing.T) *Env {
 	// contain installed ccmux binaries so e2e tests cannot accidentally
 	// exercise the user's local install.
 	t.Setenv("PATH", e2ePath())
+	// The fixtures represent a configured ccmux, not a first run, so
+	// suppress the launch-time "run setup?" nudge — otherwise it would
+	// intercept the PTY TUI tests' input.
+	t.Setenv("CCMUX_NO_SETUP_NUDGE", "1")
 	root := filepath.Join(home, "Projects")
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatalf("mkdir projects root: %v", err)
