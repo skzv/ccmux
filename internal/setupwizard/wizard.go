@@ -872,8 +872,8 @@ func stepDaemonService(_ context.Context, out io.Writer) error {
 		return nil
 	}
 	if !s.BinaryInstalled {
-		fmt.Fprintf(out, "  %s  ccmuxd not at %s — run `make install` first\n",
-			stWarn.Render("⚠"), s.BinaryPath)
+		fmt.Fprintf(out, "  %s  ccmuxd binary not found next to ccmux or on PATH — reinstall ccmux\n",
+			stWarn.Render("⚠"))
 		return nil
 	}
 
