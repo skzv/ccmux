@@ -71,12 +71,13 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 	for _, ts := range tss {
 		live[ts.Name] = true
 		t, ok := s.seen[ts.Name]
+		agentID := s.projectAgent(ts.Path)
 		if !ok {
 			t = &tracked{
 				created:     ts.Created,
 				lastChange:  now,
 				state:       agent.StateUnknown,
-				agentID:     project.ReadAgent(ts.Path),
+				agentID:     agentID,
 				projectPath: ts.Path,
 			}
 			s.seen[ts.Name] = t
@@ -88,6 +89,9 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 					Path: ts.Path,
 				},
 			})
+		} else {
+			t.agentID = agentID
+			t.projectPath = ts.Path
 		}
 		snaps = append(snaps, pollSnap{
 			ts:       ts,
@@ -193,6 +197,13 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 		s.maybePushForStateTransition(p.name, p.prev, p.next)
 	}
 	s.sleeper.SetActive(anyActive)
+}
+
+func (s *server) projectAgent(projectPath string) agent.ID {
+	if s.readAgent != nil {
+		return s.readAgent(projectPath)
+	}
+	return project.ReadAgent(projectPath)
 }
 
 // lookupTmuxSession returns the snapshotted tmux.Session for `name`

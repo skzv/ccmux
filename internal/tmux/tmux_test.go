@@ -151,6 +151,22 @@ func TestParseList_CLocaleCorruption_RegressionDocumentsBug(t *testing.T) {
 	}
 }
 
+func TestClientTTYs_FiltersEmptyUnsafeAndDuplicateRows(t *testing.T) {
+	raw := []byte(strings.Join([]string{
+		"/dev/ttys001",
+		"",
+		"not-a-device",
+		"/tmp/fake",
+		"/dev/ttys001",
+		" /dev/pts/4 ",
+	}, "\n"))
+	got := clientTTYs(raw)
+	want := []string{"/dev/ttys001", "/dev/pts/4"}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("clientTTYs = %#v, want %#v", got, want)
+	}
+}
+
 func TestSessionNameForPath(t *testing.T) {
 	cases := []struct{ in, want string }{
 		// Original cases — `.` → `_` substitution is preserved.

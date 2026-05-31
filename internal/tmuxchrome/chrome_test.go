@@ -110,6 +110,29 @@ func TestOptions_WindowSizeLatest(t *testing.T) {
 	}
 }
 
+func TestOptions_SuppressesNativeTmuxBellForwarding(t *testing.T) {
+	opts := Options("c-foo", "p", false, false, "Ctrl-b")
+	asMap := map[string]string{}
+	for _, kv := range opts {
+		asMap[kv[0]] = kv[1]
+	}
+	if got := asMap["bell-action"]; got != "none" {
+		t.Errorf("bell-action = %q, want none", got)
+	}
+	win := windowOptions()
+	if len(win) != 1 || win[0][0] != "monitor-bell" || win[0][1] != "on" {
+		t.Fatalf("windowOptions = %#v, want monitor-bell on", win)
+	}
+}
+
+func TestWindowTargetsFromIndexes_AllWindowsInSession(t *testing.T) {
+	got := windowTargetsFromIndexes("c-foo", []byte("1\n2\n\n10\n"))
+	want := []string{"c-foo:1", "c-foo:2", "c-foo:10"}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("windowTargetsFromIndexes = %#v, want %#v", got, want)
+	}
+}
+
 // TestOptions_NestedSwitchesDetachHint — when ccmux's outer tmux is
 // running and we got here via `tmux switch-client`, plain "prefix + d"
 // would close the whole client. The chrome must instead tell the user

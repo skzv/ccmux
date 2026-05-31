@@ -203,15 +203,14 @@ type tracked struct {
 	promptCount int
 	created     time.Time
 	// agentID is the AI agent this session is running, sourced from
-	// <project>/.ccmux/agent on first sight. Cached so we don't stat
-	// the sidecar every poll tick. The classifier for state detection
-	// is `agent.ByID(agentID).Classify(…)` — that's what lets Codex
-	// and Antigravity sessions get their own heuristics instead of
-	// borrowing Claude's box-drawing prompt detector.
+	// <project>/.ccmux/agent and refreshed by the poll loop. The
+	// classifier for state detection is `agent.ByID(agentID).Classify(…)`
+	// — that's what lets Codex and Antigravity sessions get their own
+	// heuristics instead of borrowing Claude's box-drawing prompt
+	// detector.
 	agentID agent.ID
 	// projectPath is the working directory of the tmux session, used
-	// to resolve the agent sidecar. Captured at session-add time and
-	// not re-read on subsequent ticks.
+	// to resolve the agent sidecar.
 	projectPath string
 }
 
@@ -254,8 +253,9 @@ type server struct {
 	// implementations; tests override them to drive pollOnce
 	// deterministically without a real pane. capture reads a session's
 	// pane content; bell signals a needs-input transition.
-	capture func(ctx context.Context, name string, lines int) (string, error)
-	bell    func(ctx context.Context, name string) error
+	capture   func(ctx context.Context, name string, lines int) (string, error)
+	bell      func(ctx context.Context, name string) error
+	readAgent func(projectPath string) agent.ID
 }
 
 // newServer builds a server with its default (real, tmux-backed)
@@ -312,7 +312,8 @@ func newServer(cfg config.Config) *server {
 		seen:       map[string]*tracked{},
 		startedAt:  time.Now(),
 		capture:    tmux.CapturePane,
-		bell:       func(ctx context.Context, name string) error { return tmux.SendKeys(ctx, name, "\a") },
+		bell:       notificationBell(cfg.Notifications),
+		readAgent:  project.ReadAgent,
 		tokens:     daemon.NewTokenStore(),
 		events:     daemon.NewEventBus(),
 		sshUser:    sshUser,
@@ -398,14 +399,13 @@ func (s *server) listSessions(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			t = &tracked{created: ts.Created, state: agent.StateUnknown}
 		}
-		// Agent is read once at session-add time and cached on `tracked`;
-		// for sessions we've seen via the poll loop it's already
+		// For sessions we've seen via the poll loop this is already
 		// populated. For pre-existing sessions (e.g. the daemon just
 		// started and hasn't tickled the poll loop yet), fall back to
 		// reading the sidecar on the fly. Fast — single os.ReadFile.
 		agentID := t.agentID
 		if agentID == "" {
-			agentID = project.ReadAgent(ts.Path)
+			agentID = s.projectAgent(ts.Path)
 		}
 		out = append(out, daemon.SessionState{
 			Name: ts.Name, Host: "local", Path: ts.Path,

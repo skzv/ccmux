@@ -133,9 +133,9 @@ func needsKeychainProbe(s Status) bool {
 	return s.BinaryInstalled && !s.Paired && s.StatusErr == nil
 }
 
-// SuppressBell returns true if ccmuxd should skip injecting a BEL into
-// session panes on needs-input transitions, because moshi-hook is handling
-// notifications. We don't want both firing.
+// SuppressBell returns true if ccmuxd should skip terminal BEL
+// notifications on needs-input transitions, because moshi-hook is
+// handling notifications. We don't want both firing.
 func (s Status) SuppressBell() bool {
 	return s.HooksInstalled || (s.BinaryInstalled && s.Paired)
 }

@@ -75,6 +75,7 @@ func Apply(ctx context.Context, session, projectLabel string, moshiReachable, ne
 		// to surface.
 		_ = cmd.Run()
 	}
+	applyWindowOptions(ctx, session)
 	if nested && returnBinding.ShouldBind {
 		_ = ensureNestedReturnBinding(ctx, returnBinding.Key)
 	}
@@ -270,10 +271,56 @@ func optionsWithNestedReturnBinding(session, projectLabel string, moshiReachable
 		// it overrides any `window-size smallest` in their ~/.tmux.conf
 		// for ccmux sessions specifically.
 		{"window-size", "latest"},
+		// ccmux owns audible notifications. Agent CLIs can emit BEL
+		// themselves; suppress tmux's native bell forwarding so those
+		// bytes do not create duplicate sounds.
+		{"bell-action", "none"},
 		// Terminal title push: see titleFmt above.
 		{"set-titles", "on"},
 		{"set-titles-string", titleFmt},
 	}
+}
+
+func windowOptions() [][]string {
+	return [][]string{
+		// Keep tmux intercepting pane BELs so bell-action=none can
+		// suppress them. ccmux emits its own notification bell outside
+		// the pane via tmux.RingBell.
+		{"monitor-bell", "on"},
+	}
+}
+
+func applyWindowOptions(ctx context.Context, session string) {
+	targets := windowTargets(ctx, session)
+	if len(targets) == 0 {
+		targets = []string{session}
+	}
+	for _, target := range targets {
+		for _, kv := range windowOptions() {
+			args := append([]string{"set-window-option", "-t", target, "-q", kv[0]}, kv[1])
+			_ = exec.CommandContext(ctx, "tmux", args...).Run()
+		}
+	}
+}
+
+func windowTargets(ctx context.Context, session string) []string {
+	out, err := exec.CommandContext(ctx, "tmux", "list-windows", "-t", session, "-F", "#{window_index}").Output()
+	if err != nil {
+		return nil
+	}
+	return windowTargetsFromIndexes(session, out)
+}
+
+func windowTargetsFromIndexes(session string, raw []byte) []string {
+	out := []string{}
+	for _, line := range strings.Split(string(raw), "\n") {
+		idx := strings.TrimSpace(line)
+		if idx == "" {
+			continue
+		}
+		out = append(out, session+":"+idx)
+	}
+	return out
 }
 
 func nestedReturnHint(prefix string, binding NestedReturnBinding) string {
@@ -336,6 +383,15 @@ func Reset(ctx context.Context, session string) error {
 	}
 	for _, key := range opts {
 		_ = exec.CommandContext(ctx, "tmux", "set-option", "-t", session, "-u", key).Run()
+	}
+	targets := windowTargets(ctx, session)
+	if len(targets) == 0 {
+		targets = []string{session}
+	}
+	for _, target := range targets {
+		for _, kv := range windowOptions() {
+			_ = exec.CommandContext(ctx, "tmux", "set-window-option", "-t", target, "-u", kv[0]).Run()
+		}
 	}
 	return nil
 }

@@ -193,13 +193,57 @@ func CapturePane(ctx context.Context, name string, lines int) (string, error) {
 }
 
 // SendKeys sends a literal key sequence to the named session.
-// Use this to inject a BEL byte for notification triggers (`SendKeys(ctx, name, "\a")`).
 func SendKeys(ctx context.Context, name, keys string) error {
 	cmd := command(ctx, "tmux", "send-keys", "-t", exactPane(name), keys)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("tmux send-keys: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+// RingBell sends BEL directly to every attached tmux client for the session.
+// Do not use send-keys for this: BEL is Ctrl-G, and interactive agents such
+// as Claude Code and Codex bind Ctrl-G to "open prompt in external editor".
+func RingBell(ctx context.Context, name string) error {
+	cmd := command(ctx, "tmux", "list-clients", "-t", exactSession(name), "-F", "#{client_tty}")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("tmux list-clients: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	var errs []string
+	for _, tty := range clientTTYs(out) {
+		if err := writeBellToTTY(tty); err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", tty, err))
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("tmux ring bell: %s", strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+func clientTTYs(raw []byte) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, line := range strings.Split(string(raw), "\n") {
+		tty := strings.TrimSpace(line)
+		if tty == "" || seen[tty] || !strings.HasPrefix(tty, "/dev/") {
+			continue
+		}
+		seen[tty] = true
+		out = append(out, tty)
+	}
+	return out
+}
+
+func writeBellToTTY(tty string) error {
+	f, err := os.OpenFile(tty, os.O_WRONLY, 0)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = f.Write([]byte{'\a'})
+	return err
 }
 
 // SendText types `text` into the named session's pane verbatim. The
