@@ -76,11 +76,11 @@ func notesWith(entries []notes.Entry, cursor int) notesModel {
 	return m
 }
 
-// TestNotes_ListsFilesOutsideDocs — the list now surfaces markdown
-// anywhere in the project, grouped by folder, with the project root
-// labelled explicitly so README.md / CLAUDE.md aren't headerless.
-// Each row sits one design-system step (2 cells) inside its folder
-// header per the redesign-tui-notes sub-section indent rule.
+// TestNotes_ListsFilesOutsideDocs — the list surfaces markdown anywhere
+// in the project, as a collapsible folder tree. Root-level files are
+// always visible; foldered notes appear only when their (synthesized)
+// top-level folder is expanded. Each row sits one design-system step
+// inside its folder header per the sub-section indent rule.
 func TestNotes_ListsFilesOutsideDocs(t *testing.T) {
 	m := notesWith([]notes.Entry{
 		{Rel: "README.md", Dir: "", Display: "README"},
@@ -88,53 +88,187 @@ func TestNotes_ListsFilesOutsideDocs(t *testing.T) {
 		{Rel: "docs/01_Specs/00_Vision.md", Dir: "docs/01_Specs", Display: "Vision"},
 		{Rel: "openspec/specs/spec.md", Dir: "openspec/specs", Display: "spec"},
 	}, 0)
+
+	// Collapsed by default: root files show, top-level folder headers
+	// show, but nested files/headers stay hidden until expanded.
+	collapsed := m.renderList(70, 40, false)
+	assertPresent(t, collapsed, "README", "CLAUDE", "docs/", "openspec/")
+	// "Vision" and "01_Specs" are unique to the hidden nested rows.
+	// (We avoid asserting "spec" absent — it's a substring of the
+	// always-visible "openspec/" header.)
+	assertAbsent(t, collapsed, "Vision", "01_Specs")
+
+	// Expand every folder so the deep entries surface.
+	m.expanded = map[string]bool{
+		"docs": true, "docs/01_Specs": true,
+		"openspec": true, "openspec/specs": true,
+	}
 	out := m.renderList(70, 40, false)
 
-	// Files from the project root and from non-docs/ folders both show.
+	// Files from the project root and from nested folders all show.
 	assertPresent(t, out, "README", "CLAUDE", "Vision", "spec")
-	// Folder headers show only the last segment plus the explicit
-	// (project root) label. The depth-based indent conveys the
-	// hierarchy, so parent prefixes aren't repeated on every header.
-	assertPresent(t, out, "(project root)", "01_Specs/", "specs/")
+	// Nested folder headers show only the last segment — the indent
+	// conveys the hierarchy, so parent prefixes aren't repeated.
+	assertPresent(t, out, "docs/", "01_Specs/", "openspec/", "specs/")
 
-	// Depth-scaled sub-section indent: each path segment shifts both
-	// the folder header and its files by one design-system step
-	// (s.Spacing.SM = 1 cell — tight because the left pane is
-	// narrow). So project-root files indent 1, docs/01_Specs/
-	// (depth 2) files indent 3, etc. The plain-ANSI search lets us
-	// pin exact column positions independent of SGR escape sequences.
+	// Tree-depth indent: top-level folders sit at indent 0, root files
+	// at indent 0, and each level adds one design-system step
+	// (s.Spacing.SM). So a file in docs/01_Specs (tree depth 2) indents
+	// 2 steps. The plain-ANSI search pins column positions independent
+	// of SGR escape sequences.
 	plain := stripGoldenANSI(out)
 	step := styles.Default().Spacing.SM
-	wantPrefix := func(depth int, label string) string {
-		// Each row also carries the unselected list-row prefix
-		// (2 spaces). Selected rows replace those with "▌ "; we
-		// pick non-selected labels for these assertions.
-		return strings.Repeat(" ", (depth+1)*step) + "  " + label
+	// Each row carries the unselected list-row prefix (2 spaces);
+	// selected rows replace those with "▌ ". We pick non-selected
+	// labels for these assertions.
+	wantFile := func(level int, label string) string {
+		return strings.Repeat(" ", level*step) + "  " + label
 	}
-	if !strings.Contains(plain, wantPrefix(0, "CLAUDE")) {
-		t.Errorf("expected CLAUDE at indent for depth 0 (project root):\n%s", plain)
+	if !strings.Contains(plain, wantFile(0, "CLAUDE")) {
+		t.Errorf("expected CLAUDE at indent for a root file (level 0):\n%s", plain)
 	}
-	if !strings.Contains(plain, wantPrefix(2, "Vision")) {
-		t.Errorf("expected Vision at indent for depth 2 (docs/01_Specs):\n%s", plain)
+	if !strings.Contains(plain, wantFile(2, "Vision")) {
+		t.Errorf("expected Vision at indent for docs/01_Specs (level 2):\n%s", plain)
 	}
-	if !strings.Contains(plain, wantPrefix(2, "spec")) {
-		t.Errorf("expected spec at indent for depth 2 (openspec/specs):\n%s", plain)
+	if !strings.Contains(plain, wantFile(2, "spec")) {
+		t.Errorf("expected spec at indent for openspec/specs (level 2):\n%s", plain)
 	}
 
-	// Headers show only the last path segment, not the full path —
-	// the depth-based indent already conveys hierarchy, so repeating
-	// `docs/` on every header wastes column space.
-	if !strings.Contains(plain, "01_Specs/") {
-		t.Errorf("expected last-segment header `01_Specs/`:\n%s", plain)
-	}
+	// Headers show only the last path segment, not the full path.
 	if strings.Contains(plain, "docs/01_Specs/") {
 		t.Errorf("header should not include parent path `docs/`:\n%s", plain)
 	}
-	if !strings.Contains(plain, "specs/") {
-		t.Errorf("expected last-segment header `specs/` for openspec/specs:\n%s", plain)
-	}
 	if strings.Contains(plain, "openspec/specs/") {
 		t.Errorf("header should not include parent path `openspec/`:\n%s", plain)
+	}
+}
+
+// TestNotes_FoldNavigation exercises the collapse/expand keymap on the
+// file tree: folders start collapsed, → expands and drills in, ←
+// collapses and jumps out, and the cursor never lands on a hidden row.
+func TestNotes_FoldNavigation(t *testing.T) {
+	entries := []notes.Entry{
+		{Rel: "README.md", Dir: "", Display: "README"},
+		{Rel: "docs/01_Specs/00_Vision.md", Dir: "docs/01_Specs", Display: "Vision"},
+		{Rel: "docs/01_Specs/01_Catalog.md", Dir: "docs/01_Specs", Display: "Catalog"},
+	}
+
+	// Collapsed default: visible rows are [README, docs(folder)].
+	m := notesWith(entries, 1) // cursor on the "docs" folder header
+	rows := m.visibleRows()
+	if len(rows) != 2 {
+		t.Fatalf("collapsed visible rows = %d, want 2 (README + docs/)", len(rows))
+	}
+	if rows[1].kind != rowFolder || rows[1].dir != "docs" {
+		t.Fatalf("row[1] = %+v, want docs folder header", rows[1])
+	}
+
+	// Down from a collapsed folder must NOT descend into hidden children.
+	mDown, _ := m.Update(keyMsg("down"))
+	if got := mDown.visibleRows()[mDown.cursor]; got.dir == "docs/01_Specs" {
+		t.Errorf("down entered a collapsed folder's child: %+v", got)
+	}
+
+	// → on the collapsed "docs" expands it (cursor stays on docs).
+	m2, _ := m.Update(keyMsg("right"))
+	if !m2.expanded["docs"] {
+		t.Fatal("right did not expand docs")
+	}
+	if r, _ := m2.selectedRow(); r.dir != "docs" || r.kind != rowFolder {
+		t.Errorf("cursor moved off docs on expand: %+v", r)
+	}
+	// Now visible: README, docs/, docs/01_Specs/ (still collapsed).
+	if n := len(m2.visibleRows()); n != 3 {
+		t.Fatalf("after expanding docs, rows = %d, want 3", n)
+	}
+
+	// → again drills into the first child (the 01_Specs sub-folder).
+	m3, _ := m2.Update(keyMsg("right"))
+	if r, _ := m3.selectedRow(); r.dir != "docs/01_Specs" {
+		t.Errorf("right did not drill into first child: %+v", r)
+	}
+
+	// → expands 01_Specs; → once more lands on a file (Vision).
+	m4, _ := m3.Update(keyMsg("right"))
+	m5, _ := m4.Update(keyMsg("right"))
+	if e := m5.selectedEntry(); e == nil || e.Display != "Vision" {
+		t.Errorf("expected to drill onto Vision file, got %v", e)
+	}
+
+	// ← from the Vision file jumps to its parent folder header.
+	m6, _ := m5.Update(keyMsg("left"))
+	if r, _ := m6.selectedRow(); r.kind != rowFolder || r.dir != "docs/01_Specs" {
+		t.Errorf("left from file did not jump to parent header: %+v", r)
+	}
+
+	// ← collapses the now-selected 01_Specs folder.
+	m7, _ := m6.Update(keyMsg("left"))
+	if m7.expanded["docs/01_Specs"] {
+		t.Error("left did not collapse docs/01_Specs")
+	}
+}
+
+// TestNotes_CollapseKeepsCursorVisible guards the cursor-safety rule:
+// collapsing a folder whose descendant is selected moves the cursor up
+// to the folder header so it never points at a hidden row.
+func TestNotes_CollapseKeepsCursorVisible(t *testing.T) {
+	entries := []notes.Entry{
+		{Rel: "docs/a.md", Dir: "docs", Display: "a"},
+		{Rel: "docs/b.md", Dir: "docs", Display: "b"},
+	}
+	m := notesWith(entries, 0)
+	m.expanded = map[string]bool{"docs": true}
+	// Visible: [docs/, a, b]. Put the cursor on file "b".
+	m.cursor = 2
+	if e := m.selectedEntry(); e == nil || e.Display != "b" {
+		t.Fatalf("setup: cursor not on file b, got %v", e)
+	}
+
+	// Collapse docs directly (simulating a collapse while a child is
+	// selected). The cursor must retreat to the docs header.
+	m.collapseFolder("docs")
+	if m.expanded["docs"] {
+		t.Fatal("docs should be collapsed")
+	}
+	r, ok := m.selectedRow()
+	if !ok || r.kind != rowFolder || r.dir != "docs" {
+		t.Errorf("cursor did not retreat to docs header: %+v (ok=%v)", r, ok)
+	}
+}
+
+// TestNotes_ExpandFoldersDefault — with SetExpandFolders(true) a freshly
+// loaded project opens with every folder expanded.
+func TestNotes_ExpandFoldersDefault(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "docs", "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "docs", "sub", "deep.md"), []byte("# d"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	m := newNotes(styles.Default(), DefaultKeymap())
+	m.SetExpandFolders(true)
+	cmd := m.SetProject(&project.Project{Name: "p", Path: dir})
+	loaded, ok := findMsg[notesEntriesLoadedMsg](flattenCmd(cmd))
+	if !ok {
+		t.Fatal("no notesEntriesLoadedMsg from SetProject")
+	}
+	m2, _ := m.Update(loaded)
+	if !m2.expanded["docs"] || !m2.expanded["docs/sub"] {
+		t.Errorf("expand-all default did not seed folds: %+v", m2.expanded)
+	}
+	// The deep file is visible because every ancestor folder is
+	// pre-expanded. Assert on the row tree rather than the rendered
+	// Display label (which is derived from the H1, not the filename).
+	foundDeep := false
+	for _, r := range m2.visibleRows() {
+		if r.kind == rowFile && m2.entries[r.entryIdx].Dir == "docs/sub" {
+			foundDeep = true
+		}
+	}
+	if !foundDeep {
+		t.Errorf("deep file not visible despite expand-all default; visible rows=%d", len(m2.visibleRows()))
 	}
 }
 
@@ -175,7 +309,9 @@ func TestNotes_LongListWindowsAroundCursor(t *testing.T) {
 			Display: fmt.Sprintf("file%02d", i),
 		})
 	}
-	m := notesWith(entries, 55)
+	m := notesWith(entries, 0)
+	m.expanded = map[string]bool{"docs": true}
+	m.cursor = 56 // row 0 is the docs/ header; file55 is row 56
 	out := m.renderList(70, 20, false)
 
 	assertNoOverflow(t, out, 70)

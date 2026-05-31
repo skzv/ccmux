@@ -253,6 +253,13 @@ type NotesConfig struct {
 	// AutoLogSessions — append a session-start line to today's Agent Log
 	// when a Claude session starts via ccmux. Default true.
 	AutoLogSessions bool `toml:"auto_log_sessions"`
+
+	// ExpandFolders — open the Notes folder tree fully expanded instead
+	// of collapsed. Default false: folders start collapsed so a project
+	// with a deep notes tree shows just the top-level headers; press
+	// →/l to expand a folder, ←/h to collapse it. Override for a single
+	// run with `ccmux --expand-notes`.
+	ExpandFolders bool `toml:"expand_folders"`
 }
 
 // NotificationsConfig controls how the daemon signals needs_input

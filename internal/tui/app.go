@@ -268,6 +268,10 @@ func New(cfg config.Config, version string) App {
 	// can flip it at runtime with H; the config value is just the
 	// starting position.
 	a.conversationsM.SetShowHeadless(cfg.Conversations.ShowHeadless)
+	// Notes folder tree opens collapsed unless the user opts into
+	// fully-expanded via config (or `ccmux --expand-notes`, which sets
+	// this flag in cfg before New is called).
+	a.notes.SetExpandFolders(cfg.Notes.ExpandFolders)
 	// First-run tour: open automatically if the user hasn't completed it yet.
 	if !cfg.Tour.Shown {
 		a.tour.Open()

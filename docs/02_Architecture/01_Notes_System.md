@@ -44,22 +44,44 @@ list surfaces *every* markdown file in the project — `README.md`,
 not just the `docs/` subtree. Version-control, dependency, and
 build-output directories (`.git`, `node_modules`, `vendor`, `dist`,
 `build`, `target`) are pruned. New notes created from the tab still
-land under `docs/` (the canonical home). Two-pane layout:
+land under `docs/` (the canonical home).
+
+### Collapsible folder tree
+
+The list is a **collapsible tree**, not a flat dump. Projects with a
+deep notes tree (many folders, hundreds of files) would otherwise scroll
+far past the pane, so **folders open collapsed**: when you enter a
+project you see only the root-level files plus the top-level folder
+headers. You expand the branches you care about and leave the rest
+folded. Navigation (`↑`/`↓`) walks only the *visible* rows, so a
+collapsed folder's contents are skipped entirely.
+
+- `→` / `l` — expand the folder under the cursor; on an already-expanded
+  folder, step into its first child; on a file row, move focus to the
+  preview pane.
+- `←` / `h` — collapse the folder under the cursor; on a file or a
+  collapsed folder, jump out to the enclosing parent folder header. From
+  the preview pane, `←` returns focus to the list.
+
+Collapsing a folder while one of its descendants is selected moves the
+cursor up to that folder's header, so the selection never lands on a
+hidden row. Folder headers carry a fold glyph: `▸` collapsed, `▾`
+expanded. The default is collapsed; pass `ccmux --expand-notes` (or set
+`[notes] expand_folders = true` in `config.toml`) to open the tree fully
+expanded instead. A search (`/`) shows a flat result list independent of
+fold state; clearing it restores the tree.
+
+Two-pane layout (folders collapsed on open):
 
 ```
-┌───── docs/ ──────────────┐  ┌──── 01_Specs/00_Initial_Concept.md ─────┐
-│ ▼ 01_Specs              │  │                                          │
-│   • 00_Initial_Concept  │  │  # Initial Concept                       │
-│   • 01_Auth_Flow        │  │                                          │
-│ ▼ 02_Architecture       │  │  ## Problem                              │
-│   • 00_System_Design    │  │                                          │
-│   • 01_Database_Choice  │  │  Building this because…                  │
-│ ▼ 03_Agent_Logs         │  │                                          │
-│   • 2026-05-09          │  │  ## Approach                             │
-│   • 2026-05-10  ←       │  │                                          │
+┌───── ccmux ◀ ────────────┐  ┌──── README.md ──────────────────────────┐
+│ ▌ README.md             │  │                                          │
+│   CLAUDE.md             │  │  # ccmux                                 │
+│   ▸ docs/               │  │                                          │
+│   ▸ openspec/           │  │  A TUI for Claude Code session…          │
+│                         │  │                                          │
 └──────────────────────────┘  └──────────────────────────────────────────┘
-  ↑↓: navigate  n: new  e: edit in $EDITOR  /: search  o: open in Obsidian*
-                                                       * if installed on host
+  ↑↓: navigate  →/←: expand/collapse  n: new  e: edit  /: search  H: device
 ```
 
 Rendering: Glamour with the active theme. Wikilinks (`[[foo]]`) and markdown links resolve within the project tree. The renderer caches output keyed by `(path, mtime)` so re-opening a note is instant.
@@ -68,6 +90,8 @@ Rendering: Glamour with the active theme. Wikilinks (`[[foo]]`) and markdown lin
 
 | Action | Result |
 |---|---|
+| `→` / `l` | Expand the folder under the cursor (or drill into an expanded one); on a file, focus the preview. |
+| `←` / `h` | Collapse the folder under the cursor (or jump out to its parent header); from the preview, return to the list. |
 | `e` | Edit the selected file in `$EDITOR` (nvim, vim, helix, code). Local notes only. |
 | `/` | Full-text search across every markdown file in the project. Ripgrep when available; routed to the active device. |
 | `H` | Toggle which **device** you're viewing notes from (local → each reachable tailnet peer → back). |

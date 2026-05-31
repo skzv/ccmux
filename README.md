@@ -122,7 +122,7 @@ Dashboard rows on non-default agents get a small `[codex]`, `[antigravity]`, `[c
 <img src="docs/vhs/out/cuj06_notes.gif" alt="ccmux notes screen browsing markdown files in the project tree, showing a Glamour-rendered preview and a ripgrep search for refresh token." width="900" />
 </div>
 
-Per-project Notes tab — every `.md` file in the project, grouped by folder, with markdown rendered inline by [Glamour](https://github.com/charmbracelet/glamour). Ripgrep-backed `/` search. Plain markdown on disk is the source of truth. No sync service. No cloud. Press `e` to edit a note in `$EDITOR`; ccmux reads notes, writing them is the agent's job.
+Per-project Notes tab — every `.md` file in the project, organized as a collapsible folder tree, with markdown rendered inline by [Glamour](https://github.com/charmbracelet/glamour). Folders open **collapsed** so a deep notes tree doesn't bury you: `→`/`l` expands a folder (or drills in), `←`/`h` collapses it (or jumps out to the parent). Want it all open? Launch with `ccmux --expand-notes` or set `[notes] expand_folders = true`. Ripgrep-backed `/` search. Plain markdown on disk is the source of truth. No sync service. No cloud. Press `e` to edit a note in `$EDITOR`; ccmux reads notes, writing them is the agent's job.
 
 Notes follow you across devices: press `H` to toggle which machine you're viewing notes from — the local box or any reachable ccmuxd peer on your tailnet. The list, preview, and search all re-scope to the selected device (read-only for remote). Scriptable too: `ccmux notes list|read|search <project> [--host <name>]`.
 
@@ -289,7 +289,8 @@ bell = true                          # ring local terminal BEL on needs_input
 
 ### 📝 Notes, terminal-native
 
-- Per-project Notes tab — every `.md` file in the project, grouped by folder, rendered by Glamour
+- Per-project Notes tab — every `.md` file in the project, as a collapsible folder tree, rendered by Glamour
+- Folders open collapsed; `→`/`←` (or `l`/`h`) expand/collapse them — or open everything with `ccmux --expand-notes`
 - Ripgrep-backed `/` search; plain markdown on disk is the source of truth (no required cloud)
 - Browse, preview, edit-in-`$EDITOR` — ccmux reads your notes; writing them is the agent's job
 - Cross-device: `H` toggles which device's notes you're viewing (local or any tailnet peer); also via `ccmux notes list|read|search --host <name>`
