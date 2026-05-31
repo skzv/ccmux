@@ -49,10 +49,7 @@ func Probe() Status {
 	if err != nil {
 		return s
 	}
-	s.BinaryPath = filepath.Join(home, ".local", "bin", "ccmuxd")
-	if _, err := os.Stat(s.BinaryPath); err == nil {
-		s.BinaryInstalled = true
-	}
+	s.BinaryPath, s.BinaryInstalled = resolveCcmuxdBinary(home)
 	switch s.OS {
 	case "darwin":
 		probeDarwin(&s, home)
@@ -173,11 +170,74 @@ func managedPath(home string, commands agent.Commands, defaults ...string) strin
 	return strings.Join(parts, ":")
 }
 
+// resolveCcmuxdBinary finds the ccmuxd that pairs with the running
+// ccmux binary and reports whether it actually exists on disk. ccmuxd
+// is installed next to ccmux in every supported layout — Homebrew
+// (/opt/homebrew/bin), `make install` (~/.local/bin), and a source
+// build (bin/) — so we look beside the running binary first, then on
+// PATH, and only fall back to the legacy ~/.local/bin default when
+// nothing is found (so a "not installed" message still names a sane
+// path). The returned path is what the launchd/systemd service execs.
+func resolveCcmuxdBinary(home string) (path string, installed bool) {
+	exe, _ := os.Executable()
+	return resolveCcmuxdFrom(exe, home, fileExists, exec.LookPath)
+}
+
+// CcmuxdBinary resolves the ccmuxd that pairs with the running ccmux
+// and reports whether it exists on disk. Exported so `ccmux daemon
+// start` and `ccmux daemon unit` resolve the binary the same way the
+// installed launchd/systemd service does — instead of each rolling its
+// own (previously ~/.local/bin-hardcoded) lookup.
+func CcmuxdBinary() (path string, installed bool) {
+	home, _ := os.UserHomeDir()
+	return resolveCcmuxdBinary(home)
+}
+
+// resolveCcmuxdFrom is the testable core of resolveCcmuxdBinary: the
+// running ccmux path, the home dir, and the filesystem/PATH probes are
+// all injectable.
+func resolveCcmuxdFrom(exe, home string, exists func(string) bool, lookPath func(string) (string, error)) (string, bool) {
+	for _, dir := range candidateBinDirs(exe) {
+		cand := filepath.Join(dir, "ccmuxd")
+		if exists(cand) {
+			return cand, true
+		}
+	}
+	if p, err := lookPath("ccmuxd"); err == nil && p != "" {
+		return p, true
+	}
+	return filepath.Join(home, ".local", "bin", "ccmuxd"), false
+}
+
+// candidateBinDirs lists the directories to search for a sibling
+// ccmuxd: the directory of ccmux as it was invoked (kept first because
+// it's the stable path — /opt/homebrew/bin is a symlink farm that
+// survives `brew upgrade`, whereas the resolved Cellar path is
+// version-pinned), then the directory after resolving symlinks. An
+// empty exe yields no directories.
+func candidateBinDirs(exe string) []string {
+	if exe == "" {
+		return nil
+	}
+	dirs := []string{filepath.Dir(exe)}
+	if real, err := filepath.EvalSymlinks(exe); err == nil {
+		if rd := filepath.Dir(real); rd != dirs[0] {
+			dirs = append(dirs, rd)
+		}
+	}
+	return dirs
+}
+
+func fileExists(p string) bool {
+	fi, err := os.Stat(p)
+	return err == nil && !fi.IsDir()
+}
+
 // requireBinary fails fast if ccmuxd isn't where the service config
 // would expect it. Shared by both Install paths.
 func requireBinary(s Status) error {
 	if !s.BinaryInstalled {
-		return fmt.Errorf("ccmuxd not found at %s — run `make install` first", s.BinaryPath)
+		return fmt.Errorf("ccmuxd binary not found next to ccmux or on PATH — reinstall ccmux (or run `make install` from a source checkout)")
 	}
 	return nil
 }

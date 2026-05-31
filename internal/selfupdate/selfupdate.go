@@ -1,8 +1,10 @@
-// Package selfupdate detects whether the local ccmux git checkout is
-// behind its upstream. ccmux installs from source (`git clone` +
-// `make install`), so "is there an update?" is answered by a
-// `git fetch` plus a commit-count comparison — not a release-feed
-// poll.
+// Package selfupdate detects whether a source/`make install` ccmux
+// checkout is behind its upstream. For that install path "is there an
+// update?" is answered by a `git fetch` plus a commit-count comparison
+// — not a release-feed poll. Packaged installs (Homebrew, release
+// tarballs) have no checkout to compare against, so RepoRoot returns an
+// error and no banner is shown; those update through their package
+// manager (`ccmux update` hands brew installs to `brew upgrade`).
 //
 // This package only CHECKS. It never pulls, rebuilds, or restarts
 // anything; that's `ccmux update`'s job, run by the user. The TUI
@@ -111,28 +113,64 @@ func Check(ctx context.Context) (Result, error) {
 	return Result{Behind: behind, Branch: branch, RepoRoot: root}, nil
 }
 
-// RepoRoot resolves the ccmux git checkout: first by walking up from
-// the running binary's directory, then falling back to
-// ~/Projects/ccmux. Returns an error when neither yields a directory
-// that looks like the ccmux repo — which is the expected outcome for
-// a binary-distribution install, and the caller treats it as "no
-// update check possible."
+// RepoRoot resolves the ccmux git checkout this binary updates from:
+// first by walking up from the running binary's directory, then — only
+// for a `make install` binary — falling back to ~/Projects/ccmux.
+// Returns an error when neither applies, which the caller treats as
+// "no update check possible" (the expected outcome for a Homebrew or
+// other packaged install, whose updates come from a package manager,
+// not a git pull).
 func RepoRoot() (string, error) {
-	if exe, err := os.Executable(); err == nil {
-		if real, err := filepath.EvalSymlinks(exe); err == nil {
-			exe = real
+	exe, err := os.Executable()
+	if err != nil {
+		exe = ""
+	}
+	home, _ := os.UserHomeDir()
+	return repoRootFrom(exe, home)
+}
+
+// repoRootFrom is the testable core of RepoRoot. `exe` is the running
+// ccmux binary (may be ""); `home` is the user's home dir (may be "").
+func repoRootFrom(exe, home string) (string, error) {
+	if exe != "" {
+		real := exe
+		if r, err := filepath.EvalSymlinks(exe); err == nil {
+			real = r
 		}
-		if root := findCcmuxRoot(filepath.Dir(exe)); root != "" {
+		if root := findCcmuxRoot(filepath.Dir(real)); root != "" {
 			return root, nil
 		}
 	}
-	if home, err := os.UserHomeDir(); err == nil {
+	// The ~/Projects/ccmux fallback is valid ONLY for a `make install`
+	// binary: make install copies ccmux to ~/.local/bin and leaves the
+	// checkout at ~/Projects/ccmux, so the running binary sits outside
+	// its checkout. A Homebrew binary, a release tarball, or any other
+	// packaged install must NOT borrow an unrelated ~/Projects/ccmux
+	// clone — without this guard a brew install reported "N commits
+	// behind main" against whatever stale clone happened to live there.
+	if exe != "" && home != "" && isMakeInstallBinary(exe, home) {
 		guess := filepath.Join(home, "Projects", "ccmux")
 		if looksLikeCcmuxRepo(guess) {
 			return guess, nil
 		}
 	}
-	return "", fmt.Errorf("no ccmux git checkout found (binary install?) — update check skipped")
+	return "", fmt.Errorf("no ccmux git checkout for this binary — update check skipped (packaged install?)")
+}
+
+// isMakeInstallBinary reports whether `exe` is the binary `make
+// install` produces: a plain copy at ~/.local/bin/ccmux. Checks the
+// path as invoked and after resolving symlinks.
+func isMakeInstallBinary(exe, home string) bool {
+	localBin := filepath.Join(home, ".local", "bin")
+	if filepath.Dir(exe) == localBin {
+		return true
+	}
+	if real, err := filepath.EvalSymlinks(exe); err == nil {
+		if filepath.Dir(real) == localBin {
+			return true
+		}
+	}
+	return false
 }
 
 // findCcmuxRoot walks up from `start` looking for the ccmux repo

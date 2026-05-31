@@ -537,9 +537,9 @@ func defaultDaemonStartDeps() daemonStartDeps {
 	return daemonStartDeps{
 		running: runningCcmuxdPID,
 		spawn: func() (int, error) {
-			bin, err := exec.LookPath("ccmuxd")
-			if err != nil {
-				return 0, fmt.Errorf("ccmuxd not on PATH: %w (run `make install`?)", err)
+			bin, ok := daemonservice.CcmuxdBinary()
+			if !ok {
+				return 0, fmt.Errorf("ccmuxd binary not found next to ccmux or on PATH — reinstall ccmux")
 			}
 			dCmd := exec.Command(bin)
 			detachProcess(dCmd) // OS-specific: setsid on unix, DETACHED_PROCESS on windows
@@ -613,6 +613,11 @@ func newDaemonCmd() *cobra.Command {
 					fmt.Printf("service file:    %s (systemd-user unit)\n", svc.ServicePath)
 				default:
 					fmt.Printf("OS:              %s (no auto-install path)\n", svc.OS)
+				}
+				if svc.BinaryInstalled {
+					fmt.Printf("ccmuxd binary:   %s\n", svc.BinaryPath)
+				} else {
+					fmt.Println("ccmuxd binary:   not found (looked next to ccmux + PATH) — reinstall ccmux")
 				}
 				if svc.ServiceExists {
 					fmt.Println("file exists:     yes")
@@ -737,10 +742,7 @@ any binary-path changes.`,
 			Use:   "unit",
 			Short: "Print the recommended systemd-user unit (Linux manual install)",
 			RunE: func(_ *cobra.Command, _ []string) error {
-				bin, err := exec.LookPath("ccmuxd")
-				if err != nil {
-					bin = "$HOME/.local/bin/ccmuxd"
-				}
+				bin, _ := daemonservice.CcmuxdBinary()
 				fmt.Println("# Save to ~/.config/systemd/user/ccmuxd.service, then:")
 				fmt.Println("#   systemctl --user daemon-reload")
 				fmt.Println("#   systemctl --user enable --now ccmuxd")
