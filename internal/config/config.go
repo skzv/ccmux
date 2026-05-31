@@ -28,6 +28,7 @@ type Config struct {
 	Update        UpdateConfig        `toml:"update"`
 	Subscription  SubscriptionConfig  `toml:"subscription"`
 	Tour          TourConfig          `toml:"tour"`
+	Setup         SetupConfig         `toml:"setup"`
 	Hosts         []Host              `toml:"host"`
 	APNs          APNsConfig          `toml:"apns"`
 	FCM           FCMConfig           `toml:"fcm"`
@@ -194,6 +195,18 @@ type UpdateConfig struct {
 type TourConfig struct {
 	Shown        bool   `toml:"shown"`
 	ShownVersion string `toml:"shown_version"`
+}
+
+// SetupConfig tracks first-run setup state, which drives the launch-time
+// "ccmux isn't set up yet — run setup?" nudge.
+type SetupConfig struct {
+	// Completed is set true when `ccmux setup` finishes. While it's
+	// false, `ccmux` offers to run setup on launch.
+	Completed bool `toml:"completed"`
+	// NudgeDismissed suppresses the launch nudge after the user declines
+	// it once, so an unconfigured machine isn't nagged every launch. Once
+	// Completed is true the nudge never fires regardless of this flag.
+	NudgeDismissed bool `toml:"nudge_dismissed"`
 }
 
 type ProjectsConfig struct {
