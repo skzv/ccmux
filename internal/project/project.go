@@ -209,3 +209,27 @@ func expandHome(p string) (string, error) {
 	}
 	return p, nil
 }
+
+// ResolveRoot returns the effective projects root for creating and
+// finding projects: a configured value with a leading "~/" expanded and
+// made absolute, or the ~/Projects default when empty. Every
+// create-a-project and find-a-project-under-the-root path funnels
+// through this so scaffolding lands exactly where Discover looks —
+// otherwise a config `root = "~/Projects"` (which the docs suggest)
+// would create a literal "~" directory under the daemon's $HOME.
+func ResolveRoot(root string) string {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, "Projects")
+		}
+		return root
+	}
+	if expanded, err := expandHome(root); err == nil {
+		root = expanded
+	}
+	if abs, err := filepath.Abs(root); err == nil {
+		root = abs
+	}
+	return root
+}
