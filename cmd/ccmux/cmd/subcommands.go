@@ -109,9 +109,14 @@ func newNewCmd() *cobra.Command {
 		Short: "Create a project directory and start its agent session",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			opts := scaffold.Options{Name: args[0]}
 			cfg, _ := config.Load()
-			opts.Commands = cfg.AgentCommands()
+			// Create under the configured projects root (README:
+			// "Creates ~/Projects/<name>"), not the current directory.
+			opts := scaffold.Options{
+				Name:     args[0],
+				Dir:      filepath.Join(project.ResolveRoot(cfg.Projects.Root), args[0]),
+				Commands: cfg.AgentCommands(),
+			}
 			if agentFlag != "" {
 				id, ok := agent.ParseID(agentFlag)
 				if !ok {

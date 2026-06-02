@@ -434,12 +434,7 @@ func (s *server) createSession(w http.ResponseWriter, r *http.Request) {
 	}
 	path := req.Path
 	if path == "" {
-		home, _ := os.UserHomeDir()
-		root := s.cfg.Projects.Root
-		if root == "" {
-			root = filepath.Join(home, "Projects")
-		}
-		path = filepath.Join(root, req.Project)
+		path = filepath.Join(project.ResolveRoot(s.cfg.Projects.Root), req.Project)
 	}
 	if _, err := os.Stat(path); err != nil {
 		http.Error(w, "project path not found: "+path, http.StatusNotFound)
@@ -1063,11 +1058,7 @@ func (s *server) handleProjects(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) listProjects(w http.ResponseWriter, _ *http.Request) {
 	host, _ := os.Hostname()
-	root := s.cfg.Projects.Root
-	if root == "" {
-		home, _ := os.UserHomeDir()
-		root = filepath.Join(home, "Projects")
-	}
+	root := project.ResolveRoot(s.cfg.Projects.Root)
 	ps, _ := project.Discover(root)
 	out := make([]daemon.ProjectInfo, 0, len(ps))
 	for _, p := range ps {
@@ -1104,12 +1095,7 @@ func (s *server) createProject(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "name must be a single non-hidden path segment", http.StatusBadRequest)
 		return
 	}
-	root := s.cfg.Projects.Root
-	if root == "" {
-		home, _ := os.UserHomeDir()
-		root = filepath.Join(home, "Projects")
-	}
-	dir := filepath.Join(root, name)
+	dir := filepath.Join(project.ResolveRoot(s.cfg.Projects.Root), name)
 
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
