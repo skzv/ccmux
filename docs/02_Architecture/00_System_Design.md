@@ -146,21 +146,38 @@ ccmuxd serves the same JSON-over-HTTP protocol on two listeners:
 - **Local (always on):** Unix socket at `~/.local/state/ccmux/ccmuxd.sock`, file mode 0600.
 - **Tailnet (opt-in via config):** HTTP on the Tailscale interface, default `100.x.x.x:7474`. Bound only to the tailnet IP (looked up via `tailscale ip -4`), never `0.0.0.0`.
 
-Endpoints:
+Endpoints (the full reference — request/response types, errors, the trust
+model — lives in [`05_HTTP_API.md`](05_HTTP_API.md); that's the contract for
+external integrators such as the Moshi app):
 
 ```
+GET    /v1/health                         → HealthInfo
+GET    /v1/peers                          → []PeerInfo
 GET    /v1/sessions                       → []SessionState
-GET    /v1/sessions/{name}                → SessionState
-POST   /v1/sessions                       → SessionState         (create)
+POST   /v1/sessions                       → SessionState   (create-or-attach)
+POST   /v1/sessions/bare                  → NewBareSessionResponse
 POST   /v1/sessions/{name}/kill           → 204
-POST   /v1/sessions/{name}/snapshot       → SnapshotID
-GET    /v1/snapshots                      → []Snapshot
-GET    /v1/metrics?since=…                → AggregatedMetrics
-GET    /v1/health                         → {ok, hostname, version, sessions}
-WATCH  /v1/events                         → SSE stream of SessionEvent
+POST   /v1/sessions/{name}/rename         → SessionState
+POST   /v1/sessions/{name}/send-keys      → 204
+GET    /v1/sessions/{name}/preview        → PreviewResponse
+GET    /v1/sessions/{name}/attach         → WebSocket (interactive PTY)
+GET    /v1/projects                       → []ProjectInfo
+POST   /v1/projects                       → NewProjectResponse
+GET    /v1/conversations                  → []Conversation
+GET    /v1/usage?window=…                  → AgentUsage
+GET    /v1/notes?project=…[&file=…]        → []NoteEntry | NoteContent
+GET    /v1/notes/search?project=…&q=…      → []SearchHit
+GET    /v1/events                         → SSE stream of SessionEvent
+POST   /v1/pair-token (unix socket only)  → PairTokenResponse
+POST   /v1/pair                           → PairResponse
+POST   /v1/devices                        → 204
+POST   /v1/devices/test                   → 204
 ```
 
-Same schema on both transports. The client uses the local socket when possible (faster, no encryption overhead) and HTTP for configured remote hosts.
+There is **no application-level auth** — the tailnet is the trust boundary
+(see the API reference). Same schema on both transports. The client uses the
+local socket when possible (faster, no encryption overhead) and HTTP for
+configured remote hosts.
 
 Why the daemon at all (vs. TUI shelling out to tmux every render)?
 

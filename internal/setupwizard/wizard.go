@@ -562,11 +562,9 @@ func stepTailscale(_ context.Context, out io.Writer) error {
 // Delegates the actual brew tap + brew install dance to the moshi
 // package; we just orchestrate consent.
 func stepMoshi(ctx context.Context, out io.Writer) error {
-	// A native ccmux iOS app with one-scan QR pairing (`ccmux pair`) is
-	// on the way but hasn't shipped — so the wizard doesn't walk through
-	// ccmux pairing yet. Moshi covers mobile push in the meantime.
-	fmt.Fprintln(out, stMuted.Render("  Native ccmux iOS app + one-scan pairing — coming soon."))
-	fmt.Fprintln(out, stMuted.Render("  Until it ships, Moshi handles mobile push notifications."))
+	// Moshi is the mobile push path. (ccmuxd also exposes a pairing +
+	// push API — see docs/02_Architecture/05_HTTP_API.md — that a mobile
+	// client can integrate; the wizard doesn't walk through that here.)
 
 	s := moshi.Detect(ctx)
 	if s.BinaryInstalled && s.Paired && s.HooksInstalled && s.ServiceRunning {

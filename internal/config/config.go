@@ -38,7 +38,7 @@ type Config struct {
 // notify paired iPhones when sessions finish or need input. Off by
 // default — flip Enabled=true and fill in KeyPath/KeyID/TeamID once
 // the Apple Developer account has Push Notifications enabled for the
-// iOS app's bundle id.
+// mobile app's bundle id.
 type APNsConfig struct {
 	Enabled     bool   `toml:"enabled"`
 	KeyPath     string `toml:"key_path"`    // path to AuthKey_XXXXXXXXXX.p8

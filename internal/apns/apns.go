@@ -46,7 +46,7 @@ type Sender struct {
 }
 
 // Notification is the daemon-side view of one push: a title/body
-// plus the session id, which the iOS app uses to thread together
+// plus the session id, which a mobile client uses to thread together
 // repeated notifications for the same session.
 type Notification struct {
 	Title     string

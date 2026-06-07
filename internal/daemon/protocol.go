@@ -212,7 +212,7 @@ type PreviewResponse struct {
 }
 
 // UsageSummary is per-agent token + cost activity over a rolling
-// window, returned by GET /v1/usage. Drives the iOS app's dashboard
+// window, returned by GET /v1/usage. Drives a mobile client's dashboard
 // usage card and any future "what am I spending" surface.
 type UsageSummary struct {
 	HasData       bool    `json:"has_data"` // false → no transcripts found

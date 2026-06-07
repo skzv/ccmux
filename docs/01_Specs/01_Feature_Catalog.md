@@ -2,7 +2,7 @@
 
 Every feature, scoped to a release phase. Phase 1 is "v0.1 — the ambitious MVP." Phases 2–4 are roadmap.
 
-Legend: `[P1]` Phase 1, `[P2]` Phase 2, `[P3]` Phase 3, `[L]` Long-term / native iOS app.
+Legend: `[P1]` Phase 1, `[P2]` Phase 2, `[P3]` Phase 3, `[L]` Long-term.
 
 ---
 
@@ -75,7 +75,7 @@ Legend: `[P1]` Phase 1, `[P2]` Phase 2, `[P3]` Phase 3, `[L]` Long-term / native
 | Health pings remote hosts every 10s; greys out unreachable ones                         | P1    |                                                                                                                                                                            |
 | Per-host config: default user, mosh server path, tmux socket                            | P2    |                                                                                                                                                                            |
 | ccmuxd autodiscovers other ccmuxd instances on the tailnet via mDNS                     | P3    | Zero-config add for tailnet peers.                                                                                                                                         |
-| End-to-end remote TUI streaming (no need to mosh+attach — render frames over Tailscale) | L     | Big project, native iOS app would also use this.                                                                                                                           |
+| End-to-end remote TUI streaming (no need to mosh+attach — render frames over Tailscale) | L     | Big project; a mobile client would also use this.                                                                                                                          |
 
 ## Claude Code Configuration Management
 
@@ -121,7 +121,7 @@ A "Claude" screen in the TUI that surfaces and edits the settings Claude Code it
 | Per-session mute toggle                                                 | P2    |                                                                                                       |
 | ntfy.sh forward (optional): also push to your phone as a backup channel | P3    |                                                                                                       |
 | Email digest of session activity (optional)                             | L     |                                                                                                       |
-| Native iOS push via custom app                                          | L     |                                                                                                       |
+| Push notifications to mobile clients via the ccmuxd HTTP API (APNs/FCM) | L     | Daemon-side push; consumed by mobile clients (Moshi today). No first-party ccmux app.                  |
 
 ## TUI Quality of Life
 
@@ -180,16 +180,17 @@ A "Claude" screen in the TUI that surfaces and edits the settings Claude Code it
 | VHS-recorded demo GIF in README                                                  | P1    | Critical for traction.               |
 | Animated splash on first launch (subtle)                                         | P1    |                                      |
 
-## Long-Term (native iOS app)
+## Long-Term (mobile / HTTP API)
 
-| Feature                                                       | Phase | Notes                                                  |
-| ------------------------------------------------------------- | ----- | ------------------------------------------------------ |
-| SwiftUI app that talks to ccmuxd over Tailscale               | L     | gRPC or JSON-over-HTTP; designed alongside ccmuxd IPC. |
-| Native iOS push via APNs                                      | L     |                                                        |
-| Touch-optimized session list (swipe-to-attach, swipe-to-kill) | L     |                                                        |
-| Claude conversation view built for thumb input                | L     |                                                        |
-| Obsidian-Sync-aware vault viewer in the same app              | L     |                                                        |
-| Apple Watch glance: "1 session waiting for input"             | L     |                                                        |
+ccmux does not ship a first-party mobile app. The integration surface is the **ccmuxd HTTP API** ([`docs/02_Architecture/05_HTTP_API.md`](../02_Architecture/05_HTTP_API.md)); third-party mobile clients (e.g. [Moshi](https://getmoshi.app/)) build the touch experience on top of it. The Moshi app is the mobile path today.
+
+| Feature                                                            | Phase | Notes                                                                          |
+| ------------------------------------------------------------------ | ----- | ------------------------------------------------------------------------------ |
+| Stabilize + version the ccmuxd HTTP API as a public contract       | L     | JSON-over-HTTP over Tailscale; the surface any mobile client integrates against. |
+| Push notifications to mobile clients (APNs/FCM) via the daemon      | L     | Daemon-side dispatch; clients register device tokens through the API.           |
+| Endpoints for a touch session list (attach / kill / preview)        | L     | Mobile clients render swipe-to-attach / swipe-to-kill over these routes.        |
+| Conversation/transcript endpoints for a thumb-input client          | L     | Exposes Claude transcript data for a mobile UI to render.                       |
+| Tailnet markdown/notes endpoints for an in-client vault viewer      | L     | Reuses the web-viewer rendering path; consumable by any mobile client.          |
 
 ---
 
