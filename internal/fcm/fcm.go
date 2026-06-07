@@ -2,10 +2,10 @@
 //
 // This package is dormant by default — Sender.Send is a no-op until
 // the daemon's [fcm] config provides a credentials file and project
-// id, AND the Android client (skzv/ccmux-android) ships a build with
-// Firebase Messaging enabled. The shape mirrors internal/apns so the
-// daemon's dispatcher can route per device-record provider without
-// special-casing either gateway.
+// id, AND an Android mobile client (FCM is the Android push transport)
+// ships a build with Firebase Messaging enabled. The shape mirrors
+// internal/apns so the daemon's dispatcher can route per device-record
+// provider without special-casing either gateway.
 //
 // When wiring the real FCM v1 sender in a follow-up:
 //

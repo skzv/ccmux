@@ -176,7 +176,7 @@ Installs [moshi-hook](https://getmoshi.app/) on the Mac, runs **Easy Pair** (a Q
 
 Plain BEL fallback works in any iOS terminal client (Blink Shell, Termius) — you lose the categories, that's it. For headless / scripted setups: `ccmux moshi-setup --token <token>` bypasses the QR flow.
 
-**Native apps:** dedicated iOS and Android apps that talk to `ccmuxd` directly over your tailnet are in active development.
+> Building your own mobile client? `ccmuxd` exposes an HTTP API (list / attach over a WebSocket PTY / send-keys / events / notes / usage, plus a pairing + push flow) — see the [HTTP API reference](docs/02_Architecture/05_HTTP_API.md).
 
 ---
 
@@ -446,6 +446,7 @@ To also remove `moshi-hook`: `brew services stop moshi-hook && brew uninstall mo
 ```
 
 Full design: [`docs/02_Architecture/00_System_Design.md`](docs/02_Architecture/00_System_Design.md).
+HTTP API (for integrators / mobile clients): [`docs/02_Architecture/05_HTTP_API.md`](docs/02_Architecture/05_HTTP_API.md).
 TUI design system: [`docs/02_Architecture/04_TUI_Design_System.md`](docs/02_Architecture/04_TUI_Design_System.md).
 
 ---
@@ -457,7 +458,7 @@ Phasing in [`ROADMAP.md`](ROADMAP.md). Headline:
 - **v0.1** — TUI, sessions, notes, setup wizard, daemon, local + server + mixed modes, terminal-bell notifications, Homebrew tap
 - **v0.2** — Snapshots, themes, command palette, tailnet web viewer for notes, cost tracking from Claude transcripts
 - **v0.3** — Multi-select session ops, activity heatmap, daily-journal rollups, mDNS host discovery
-- **Long term** — Native SwiftUI iOS app talking directly to ccmuxd over Tailscale
+- **Long term** — richer mobile clients on top of the [ccmuxd HTTP API](docs/02_Architecture/05_HTTP_API.md) — the surface the [Moshi](https://getmoshi.app/) app and other clients build on
 
 Infrastructure follow-ups tracked in [`docs/01_Specs/03_Testing_And_CI.md`](docs/01_Specs/03_Testing_And_CI.md):
 

@@ -8,8 +8,8 @@ import (
 )
 
 // TokenStore issues one-time pair tokens with a TTL.
-// Used by `ccmux pair` (unix socket) to generate tokens that the iOS
-// app consumes via POST /v1/pair on the tailnet.
+// Used by `ccmux pair` (unix socket) to generate tokens that a mobile
+// client consumes via POST /v1/pair on the tailnet.
 type TokenStore struct {
 	mu     sync.Mutex
 	tokens map[string]time.Time // token → expiry
