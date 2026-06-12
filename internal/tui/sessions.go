@@ -221,7 +221,7 @@ func (m sessionsModel) renderList(width, height int) string {
 			"",
 			m.st.Muted.Render("No sessions yet."),
 			"",
-			"Press "+m.st.Key.Render("3")+" to open Projects and create one.",
+			"Press "+m.st.Key.Render(screenKey(ScreenProjects))+" to open Projects and create one.",
 		)
 		return m.st.Pane.Width(width - 2).Height(height - 2).Render(body)
 	}
