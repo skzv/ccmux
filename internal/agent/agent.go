@@ -91,6 +91,13 @@ type Agent interface {
 
 // Commands holds user-configured executable paths for agents. Empty
 // fields preserve the default binary-on-PATH behavior for that agent.
+//
+// ClaudeModel is the optional default model ccmux pins for new
+// Claude sessions it launches. Non-empty values are exported as
+// `ANTHROPIC_MODEL` in front of the shell-command chain so the value
+// survives the `claude --continue || claude || zsh` fallback (a
+// flag-based `--model X` would only apply to the first invocation).
+// Empty inherits Claude Code's own settings.json / built-in default.
 type Commands struct {
 	Claude      string
 	Codex       string
@@ -98,6 +105,7 @@ type Commands struct {
 	Cursor      string
 	Pi          string
 	Grok        string
+	ClaudeModel string
 }
 
 // All returns every supported agent in canonical order
@@ -266,7 +274,7 @@ func Candidates(a Agent) []string {
 // agent-specific shape from the built-in implementations.
 func LaunchCmd(id ID, continueFlag bool, commands Commands) string {
 	a := ByID(id)
-	return launchCmdWithBinary(a, configuredBinary(a.ID(), a.Binary(), commands), continueFlag)
+	return launchCmdWithBinary(a, configuredBinary(a.ID(), a.Binary(), commands), continueFlag, commands.ClaudeModel)
 }
 
 // ResumeArgs resolves the argv vector for resuming one specific
@@ -333,17 +341,29 @@ func commandOverride(id ID, commands Commands) string {
 	return ""
 }
 
-func launchCmdWithBinary(a Agent, binary string, continueFlag bool) string {
+func launchCmdWithBinary(a Agent, binary string, continueFlag bool, claudeModel string) string {
 	cmd := shellQuote(binary)
+	// Pin ANTHROPIC_MODEL for Claude only; other agents read their
+	// model selection from their own config files. Use `export` (not
+	// a per-command FOO=bar prefix) so the value persists across the
+	// `claude || claude || zsh` fallback chain — a per-command prefix
+	// would only apply to the first invocation, leaving the user's
+	// retry shell or the bare shell fallback running un-pinned.
+	prefix := ""
+	if a.ID() == IDClaude {
+		if model := strings.TrimSpace(claudeModel); model != "" {
+			prefix = "export ANTHROPIC_MODEL=" + shellQuote(model) + "; "
+		}
+	}
 	if !continueFlag {
-		return cmd
+		return prefix + cmd
 	}
 	switch a.ID() {
 	case IDCursor:
-		return cmd + " resume || " + cmd + " || zsh || bash || sh"
+		return prefix + cmd + " resume || " + cmd + " || zsh || bash || sh"
 	}
 	// claude / codex / antigravity / pi all take `--continue`.
-	return cmd + " --continue || " + cmd + " || zsh || bash || sh"
+	return prefix + cmd + " --continue || " + cmd + " || zsh || bash || sh"
 }
 
 // ShellQuote quotes one shell token using POSIX single-quote rules.

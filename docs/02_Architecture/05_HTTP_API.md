@@ -240,6 +240,50 @@ Ripgrep-backed search across a project's markdown vault.
 
 ---
 
+### Models
+
+#### `GET /v1/models`
+Returns the Claude model catalog the daemon has discovered, merged with a
+curated in-binary fallback list. Drives the model picker in the TUI and
+`ccmux agents models` on the CLI; useful to integrators who want to surface
+the same set without re-deriving it. Refreshes from Anthropic's
+[Models API](https://platform.claude.com/docs/en/api/models-list) every 24h
+in the background when `ANTHROPIC_API_KEY` is set on the daemon's environment;
+without a key the response is the curated list (`source: "fallback"`).
+- **Query:** `?refresh=true` forces a synchronous re-fetch before responding.
+  Returns the cached catalog on refresh failure.
+- **Response `200`:** `Catalog`.
+
+```json
+{
+  "models": [
+    {
+      "id": "claude-opus-4-8",
+      "display_name": "Claude Opus 4.8",
+      "family": "opus",
+      "max_input_tokens": 1000000,
+      "max_tokens": 128000,
+      "capabilities": {
+        "vision": true,
+        "thinking_adaptive": true,
+        "structured_outputs": true,
+        "effort_max": true
+      },
+      "source": "api"
+    }
+  ],
+  "fetched_at": "2026-06-12T05:24:44Z",
+  "source": "api"
+}
+```
+
+`source` (per-model and on the envelope) ∈ `api | fallback`. Live entries
+override curated ones on ID match; curated entries fill gaps for models the
+caller's account can't list. `family` is derived from the ID (`opus | sonnet
+| haiku`, or empty for unrecognised IDs) — purely for grouping in pickers.
+
+---
+
 ### Live updates
 
 #### `GET /v1/events` — Server-Sent Events

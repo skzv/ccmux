@@ -28,6 +28,7 @@ import (
 
 	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/apns"
+	"github.com/skzv/ccmux/internal/claudemodels"
 	"github.com/skzv/ccmux/internal/clipboard"
 	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/conversations"
@@ -109,6 +110,9 @@ func run() error {
 
 	// Poll loop.
 	go srv.pollLoop(ctx)
+	// Background model-catalog refresh. Separate goroutine so it
+	// can't stall the high-frequency poll loop on a slow API call.
+	go srv.modelRefreshLoop(ctx)
 
 	// Unix socket listener.
 	sockPath, err := daemon.SocketPath()
@@ -249,6 +253,13 @@ type server struct {
 	moshiCheckAt time.Time
 	moshiMu      sync.Mutex
 
+	// models is the Claude model catalog service. Reads from disk
+	// cache; refreshes from the Anthropic Models API in the background
+	// every 24h when an API key is set. Always non-nil — falls back
+	// to a curated in-binary list when no key is present so the
+	// picker still has something useful to show. See internal/claudemodels.
+	models *claudemodels.Service
+
 	// Poll-loop seams. Defaulted by newServer to the real tmux-backed
 	// implementations; tests override them to drive pollOnce
 	// deterministically without a real pane. capture reads a session's
@@ -307,6 +318,17 @@ func newServer(cfg config.Config) *server {
 		fcmSender, _ = fcm.New(fcm.Config{})
 	}
 
+	// Model catalog. CachePath errors only when $HOME is unresolvable —
+	// log and degrade to an in-memory-only Service (writes silently
+	// fail, but the in-binary fallback list is still served). Picking
+	// up ANTHROPIC_API_KEY at startup is the simplest sane model;
+	// users who set it later restart the daemon.
+	modelCache, err := claudemodels.CachePath()
+	if err != nil {
+		log.Printf("ccmuxd: model cache path unresolved (%v) — serving fallback list only", err)
+	}
+	models := claudemodels.New(modelCache, os.Getenv("ANTHROPIC_API_KEY"))
+
 	return &server{
 		cfg:        cfg,
 		seen:       map[string]*tracked{},
@@ -322,7 +344,21 @@ func newServer(cfg config.Config) *server {
 		fcmSender:  fcmSender,
 		apnsSlots:  make(chan struct{}, 16),
 		fcmSlots:   make(chan struct{}, 16),
+		models:     models,
 	}
+}
+
+// freshCommands re-reads ~/.config/ccmux/config.toml so a launch picks
+// up any setting the user changed since the daemon started — most
+// notably `[claude] default_model`. The whole config read is cheap
+// (one tiny TOML file) and only happens at session-create time, not
+// in the poll loop. Falls back to the startup-cached cfg on read
+// errors so a temporarily-corrupt config file can't break new-session.
+func (s *server) freshCommands() agent.Commands {
+	if cfg, err := config.Load(); err == nil {
+		return cfg.AgentCommands()
+	}
+	return s.cfg.AgentCommands()
 }
 
 // routes registers every tailnet-safe endpoint. Anything that an
@@ -348,6 +384,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/v1/usage", s.handleUsage)
 	mux.HandleFunc("/v1/notes/search", s.handleNotesSearch)
 	mux.HandleFunc("/v1/notes", s.handleNotes)
+	mux.HandleFunc("/v1/models", s.handleModels)
 }
 
 // localOnlyRoutes registers endpoints that must never be reachable from
@@ -478,7 +515,7 @@ func (s *server) createSession(w http.ResponseWriter, r *http.Request) {
 		// "claude --continue || claude || zsh" regardless, which
 		// meant Codex / Antigravity projects launched claude from
 		// remote starts.
-		launch := projectLaunchCmd(path, req.Continue, s.cfg.AgentCommands())
+		launch := projectLaunchCmd(path, req.Continue, s.freshCommands())
 		if err := tmux.New(ctx, session, path, launch); err != nil {
 			http.Error(w, "tmux new-session: "+err.Error(), http.StatusInternalServerError)
 			return
@@ -550,7 +587,7 @@ func (s *server) createBareSession(w http.ResponseWriter, r *http.Request) {
 		// Order: explicit request agent → daemon's
 		// sessions.default_agent → $SHELL. Bare sessions don't carry
 		// --continue because they're not tied to a project transcript.
-		launch := bareSessionLaunchCmd(req.Agent, s.cfg.Agents.Default, s.cfg.AgentCommands())
+		launch := bareSessionLaunchCmd(req.Agent, s.cfg.Agents.Default, s.freshCommands())
 		if err := tmux.New(ctx, name, path, launch); err != nil {
 			http.Error(w, "tmux new-session: "+err.Error(), http.StatusInternalServerError)
 			return
@@ -1108,7 +1145,7 @@ func (s *server) createProject(w http.ResponseWriter, r *http.Request) {
 		Name:     name,
 		Dir:      dir,
 		Agent:    chosenAgent,
-		Commands: s.cfg.AgentCommands(),
+		Commands: s.freshCommands(),
 	})
 	if err != nil {
 		http.Error(w, "start: "+err.Error(), http.StatusInternalServerError)

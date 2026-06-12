@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/skzv/ccmux/internal/claudemodels"
 )
 
 // Tunables for the cached transports built by LocalClient / RemoteClient.
@@ -174,6 +176,23 @@ func (c *Client) Sessions(ctx context.Context) ([]SessionState, error) {
 func (c *Client) Health(ctx context.Context) (HealthInfo, error) {
 	var out HealthInfo
 	if err := c.getJSON(ctx, "/v1/health", &out); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
+// Models returns the daemon's Claude model catalog — discovered via
+// the Anthropic Models API when an API key is set on the daemon's
+// environment, merged with a curated in-binary fallback list. Used
+// by the TUI's model picker and by `ccmux agents models`. Pass
+// refresh=true to force a synchronous re-fetch on the daemon side.
+func (c *Client) Models(ctx context.Context, refresh bool) (claudemodels.Catalog, error) {
+	path := "/v1/models"
+	if refresh {
+		path += "?refresh=true"
+	}
+	var out claudemodels.Catalog
+	if err := c.getJSON(ctx, path, &out); err != nil {
 		return out, err
 	}
 	return out, nil

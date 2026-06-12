@@ -147,5 +147,6 @@ func init() {
 		newResumeCmd(),
 		newDeleteConversationCmd(),
 		newNotesCmd(),
+		newAgentsCmd(),
 	)
 }

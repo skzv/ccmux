@@ -13,6 +13,8 @@ import (
 
 	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/claudeconfig"
+	"github.com/skzv/ccmux/internal/claudemodels"
+	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/tui/components"
 	"github.com/skzv/ccmux/internal/tui/styles"
 )
@@ -40,9 +42,19 @@ type claudeModel struct {
 	lastBackup     string
 	picker         pickerKind
 	pickerCursor   int
-	browser        agentBrowser
-	editor         string
-	narrow         bool // terminal is below the layout breakpoint
+	// ccmuxDefaultModel is the per-machine model pin loaded from
+	// ~/.config/ccmux/config.toml [claude] default_model. Mirrors the
+	// model / effort pattern above (string + a way to display the
+	// "(inherit Claude Code)" case). Empty means no pin.
+	ccmuxDefaultModel string
+	// catalog is the live model list shown by pickerCcmuxModel. Loaded
+	// lazily on first open from the daemon's on-disk cache; falls back
+	// to the curated in-binary list when the cache file isn't there
+	// (fresh install, daemon not running, etc).
+	catalog claudemodels.Catalog
+	browser agentBrowser
+	editor  string
+	narrow  bool // terminal is below the layout breakpoint
 }
 
 // pickerKind identifies which modal picker is currently open on the
@@ -51,8 +63,20 @@ type pickerKind int
 
 const (
 	pickerNone pickerKind = iota
+	// pickerModel chooses an alias (opus / sonnet / haiku / opusplan) or
+	// "inherit". Writes Claude Code's ~/.claude/settings.json so the pick
+	// applies to every claude invocation, including ones outside ccmux.
+	// Aliases auto-track Anthropic's current bindings (today opus = 4.7,
+	// tomorrow whatever they ship next).
 	pickerModel
 	pickerEffort
+	// pickerCcmuxModel pins a specific model for sessions ccmux itself
+	// launches. Writes ~/.config/ccmux/config.toml's [claude] section
+	// and translates to `ANTHROPIC_MODEL=<id>` at session start. Per-
+	// machine; doesn't touch Claude Code's own settings. The list is
+	// the daemon's live-discovered catalog (or the curated fallback
+	// when the daemon hasn't fetched yet).
+	pickerCcmuxModel
 )
 
 func newClaude(st styles.Styles, km Keymap) claudeModel {
@@ -72,6 +96,9 @@ func (m *claudeModel) reload() {
 	m.skills, _ = claudeconfig.ListSkills()
 	m.model, m.modelSource = claudeconfig.EffectiveModel()
 	m.effort, m.effortSource = claudeconfig.EffectiveEffortLevel()
+	if cfg, err := config.Load(); err == nil {
+		m.ccmuxDefaultModel = cfg.Claude.DefaultModel
+	}
 	m.yolo, m.yoloSource = claudeconfig.EffectiveYoloMode()
 	if m.settings != nil {
 		m.alwaysThinking = m.settings.AlwaysThinkingEnabled
@@ -130,6 +157,20 @@ func (m claudeModel) Update(msg tea.Msg) (claudeModel, tea.Cmd) {
 			6,
 		)
 
+	case claudeCcmuxModelChangedMsg:
+		if msg.Err != nil {
+			return m, toastCmd(toastError, "ccmux model pin: "+msg.Err.Error(), 5)
+		}
+		m.reload()
+		display := msg.New
+		if display == "" {
+			display = "(no pin — inherit Claude Code)"
+		}
+		return m, toastCmd(toastSuccess,
+			fmt.Sprintf("ccmux default model set to %s — applies on next session launch", display),
+			6,
+		)
+
 	case claudeYoloChangedMsg:
 		if msg.Err != nil {
 			return m, toastCmd(toastError, "yolo: "+msg.Err.Error(), 5)
@@ -162,6 +203,27 @@ func (m claudeModel) Update(msg tea.Msg) (claudeModel, tea.Cmd) {
 			return m, cmd
 		}
 		switch msg.String() {
+		case "M":
+			m.picker = pickerCcmuxModel
+			m.pickerCursor = 0
+			// Lazy-load the catalog the first time the user opens
+			// this picker. The daemon writes the cache file on a 24h
+			// timer; if it doesn't exist yet (fresh install / daemon
+			// just started), Read() returns a zero-value Catalog and
+			// Service.withFallback would normally fill in. Since the
+			// TUI is reading the cache directly, we apply the same
+			// merge-with-fallback logic inline.
+			if !m.catalogLoaded() {
+				m.loadCatalog()
+			}
+			// Pre-position on the user's current pin so the cursor
+			// lands on it.
+			for i, mdl := range m.catalogPickerModels() {
+				if mdl.ID == m.ccmuxDefaultModel {
+					m.pickerCursor = i
+					break
+				}
+			}
 		case "m":
 			m.picker = pickerModel
 			m.pickerCursor = 0
@@ -217,6 +279,8 @@ func (m claudeModel) updatePicker(msg tea.KeyMsg) (claudeModel, tea.Cmd) {
 		optsLen = len(claudeconfig.KnownModels())
 	case pickerEffort:
 		optsLen = len(claudeconfig.KnownEffortLevels())
+	case pickerCcmuxModel:
+		optsLen = len(m.catalogPickerModels())
 	}
 	switch msg.String() {
 	case "esc":
@@ -245,6 +309,16 @@ func (m claudeModel) updatePicker(msg tea.KeyMsg) (claudeModel, tea.Cmd) {
 			return m, func() tea.Msg {
 				backup, err := claudeconfig.SetEffortLevel(chosen)
 				return claudeEffortChangedMsg{New: chosen, Backup: backup, Err: err}
+			}
+		case pickerCcmuxModel:
+			rows := m.catalogPickerModels()
+			if cursor >= len(rows) {
+				return m, nil
+			}
+			chosen := rows[cursor].ID
+			return m, func() tea.Msg {
+				err := setCcmuxClaudeDefault(chosen)
+				return claudeCcmuxModelChangedMsg{New: chosen, Err: err}
 			}
 		}
 	}
@@ -511,10 +585,25 @@ func (m claudeModel) viewPicker(width, height int) string {
 		for _, o := range claudeconfig.KnownEffortLevels() {
 			rows = append(rows, pickerRow{Label: o.Label, Desc: o.Desc})
 		}
+	case pickerCcmuxModel:
+		title = "Pin a model for ccmux-launched sessions"
+		for _, mdl := range m.catalogPickerModels() {
+			rows = append(rows, pickerRow{
+				Label: ccmuxModelLabel(mdl, m.ccmuxDefaultModel),
+				Desc:  ccmuxModelDesc(mdl),
+			})
+		}
+	}
+	subtitle := "Writes to " + m.paths.Settings + " (backed up first)."
+	if m.picker == pickerCcmuxModel {
+		// Different surface, different file — make sure the user
+		// knows where the pick is going to land.
+		subtitle = "Writes [claude] default_model in ~/.config/ccmux/config.toml. " +
+			"Applied as ANTHROPIC_MODEL when ccmux launches a Claude session."
 	}
 	lines := []string{
 		st.Emphasis.Render(title),
-		st.Subtitle.Render("Writes to " + m.paths.Settings + " (backed up first)."),
+		st.Subtitle.Render(subtitle),
 	}
 	// When an environment variable shadows the file value, picking a
 	// row here still writes settings.json but the env var keeps
@@ -761,4 +850,112 @@ func readFileOr(path, fallback string) string {
 		return fallback
 	}
 	return string(b)
+}
+
+// catalogLoaded reports whether m.catalog has been populated. The
+// zero value of claudemodels.Catalog has no Models and a zero
+// FetchedAt; we treat any Models slice as "loaded" so the second
+// open of pickerCcmuxModel doesn't re-read disk for no reason.
+func (m claudeModel) catalogLoaded() bool { return len(m.catalog.Models) > 0 }
+
+// loadCatalog reads the daemon's models.json cache from disk. The
+// daemon writes this file on its 24h refresh tick; the TUI just
+// consumes it as a static snapshot. A missing/corrupt file falls
+// through to the curated in-binary list so the picker is never
+// empty on a fresh install or with the daemon stopped.
+//
+// Synchronous — the cache file is small (a few KB) and this only
+// runs once per picker open. No goroutine / tea.Cmd dance.
+func (m *claudeModel) loadCatalog() {
+	if path, err := claudemodels.CachePath(); err == nil {
+		if cat, err := (claudemodels.Cache{Path: path}).Read(); err == nil && len(cat.Models) > 0 {
+			m.catalog = cat
+			// Merge curated fallback in case the API returned a
+			// trimmed set the user's account can see (subscription
+			// users without an API key get fallback-only here, but
+			// that's fine — it's the same list every release ships).
+			m.catalog.Models = claudemodels.Merge(m.catalog.Models, claudemodels.Fallback())
+			claudemodels.Sort(m.catalog.Models)
+			return
+		}
+	}
+	m.catalog = claudemodels.Catalog{
+		Models: claudemodels.Fallback(),
+		Source: claudemodels.SourceFallback,
+	}
+	claudemodels.Sort(m.catalog.Models)
+}
+
+// catalogPickerModels returns the rows shown in pickerCcmuxModel,
+// prepended with a synthetic "" entry meaning "no pin — inherit
+// Claude Code's setting". Returning a real slice (not a pointer)
+// keeps callers from accidentally mutating the underlying catalog.
+func (m claudeModel) catalogPickerModels() []claudemodels.Model {
+	out := make([]claudemodels.Model, 0, len(m.catalog.Models)+1)
+	// Sentinel row: no pin. ID="" matches the empty-string check in
+	// agent.LaunchCmd, so picking this clears the override.
+	out = append(out, claudemodels.Model{ID: "", DisplayName: "(no pin — inherit Claude Code default)"})
+	out = append(out, m.catalog.Models...)
+	return out
+}
+
+// ccmuxModelLabel renders a catalog row's primary cell. Adds a
+// " [current]" tag to the row that matches the user's existing pin
+// so they can spot it without reading every line.
+func ccmuxModelLabel(mdl claudemodels.Model, current string) string {
+	label := mdl.ID
+	if mdl.DisplayName != "" {
+		label = mdl.DisplayName + "  " + mdl.ID
+	}
+	if mdl.ID == current {
+		label += "  [current]"
+	}
+	return label
+}
+
+// ccmuxModelDesc renders the per-row secondary text: source (api vs
+// fallback) plus a coarse capability summary. Trimmed deliberately —
+// the picker is narrow and a long descriptor line wraps badly.
+func ccmuxModelDesc(mdl claudemodels.Model) string {
+	if mdl.ID == "" {
+		return "Don't set ANTHROPIC_MODEL — let Claude Code choose."
+	}
+	parts := []string{string(mdl.Source)}
+	if mdl.MaxInput >= 1_000_000 {
+		parts = append(parts, "1M ctx")
+	} else if mdl.MaxInput >= 200_000 {
+		parts = append(parts, "200K ctx")
+	}
+	if mdl.Capabilities["vision"] {
+		parts = append(parts, "vision")
+	}
+	if mdl.Capabilities["thinking_adaptive"] {
+		parts = append(parts, "thinking")
+	}
+	return strings.Join(parts, " · ")
+}
+
+// setCcmuxClaudeDefault is the model write — read the on-disk config,
+// mutate Claude.DefaultModel, write back. Wrapped here (not inline in
+// the picker handler) so a test can verify the precise behavior
+// without standing up a Bubble Tea program. Trims whitespace so an
+// accidental stray space in a future caller can't leak to the launch
+// command (where it would set ANTHROPIC_MODEL=" haiku ").
+func setCcmuxClaudeDefault(model string) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	cfg.Claude.DefaultModel = strings.TrimSpace(model)
+	return config.Save(cfg)
+}
+
+// claudeCcmuxModelChangedMsg is the result of a pickerCcmuxModel
+// commit. Mirrors the claudeModelChangedMsg pattern but for the
+// ccmux-side default, so the toast/reload flow in Update() can
+// branch on a clear discriminated type instead of guessing which
+// model was set.
+type claudeCcmuxModelChangedMsg struct {
+	New string
+	Err error
 }
