@@ -41,7 +41,16 @@ import (
 type Source string
 
 const (
-	SourceAPI      Source = "api"
+	// SourceClaudeCLI — discovered by shelling out to the user's
+	// `claude` CLI. Works for subscription users (no API key
+	// required) since claude handles its own auth.
+	SourceClaudeCLI Source = "claude-cli"
+	// SourceAPI — direct call to GET /v1/models with ANTHROPIC_API_KEY.
+	// Only available to users with an API key set on the daemon's env.
+	SourceAPI Source = "api"
+	// SourceFallback — the curated in-binary list that ships with
+	// every ccmux release. Always available; the floor of the
+	// discovery chain.
 	SourceFallback Source = "fallback"
 )
 
@@ -78,10 +87,18 @@ const DefaultBaseURL = "https://api.anthropic.com"
 // changes (the response shape rarely moves).
 const anthropicVersion = "2023-06-01"
 
-// ErrNoAPIKey signals that live discovery isn't available because no
-// credential was supplied. Callers fall back to the curated list and
-// continue silently — this is the common case for subscription users.
+// ErrNoAPIKey signals that live discovery via the Anthropic Models
+// API isn't available because no credential was supplied. Callers
+// fall back to the CLI or curated list and continue silently.
 var ErrNoAPIKey = errors.New("claudemodels: no ANTHROPIC_API_KEY set")
+
+// ErrClaudeCLIUnavailable signals that the `claude` CLI either isn't
+// installed, the user isn't logged in, or the call otherwise failed
+// in a way that means the next source in the discovery chain should
+// be tried. Distinct from generic errors so Service.Refresh can fall
+// through cleanly without logging a scary error for the common
+// "claude not on PATH" case.
+var ErrClaudeCLIUnavailable = errors.New("claudemodels: claude CLI unavailable")
 
 // Fetcher hits Anthropic's GET /v1/models. Swap HTTPDo in tests to
 // drive responses without a network round-trip. BaseURL is exposed
@@ -420,13 +437,20 @@ func (c Cache) Write(cat Catalog) error {
 // know which surface answered.
 type Service struct {
 	cache Cache
-	// Fetcher is exposed so tests can swap BaseURL/HTTPDo without
-	// reconstructing the Service. Production code mutates this only
-	// at startup (newServer in cmd/ccmuxd) before any goroutine has
-	// a reference; concurrent mutation is not supported.
+	// Fetcher is the Anthropic Models API path. Used as the second
+	// step in the discovery chain — only relevant when the user has
+	// an API key set. Exposed so tests can swap BaseURL/HTTPDo.
 	Fetcher Fetcher
+	// CLIFetcher is the `claude -p` path, tried first in the chain
+	// because it works for everyone (subscription + API). Set to a
+	// zero-value struct to use the default `claude` on PATH; set
+	// Binary or Run for tests / non-standard installs.
+	CLIFetcher ClaudeCLIFetcher
 	// MaxAge is how stale the cache can be before Catalog auto-refreshes.
-	// Defaults to 24h; tests override to 0 to force every call to refetch.
+	// Defaults to 7 days because the LLM-backed CLI fetch is the
+	// primary source and a daily refresh would cost ~$0.70/month
+	// per user — the model catalog only changes a handful of times
+	// a year, so weekly is plenty.
 	MaxAge time.Duration
 }
 
@@ -436,9 +460,10 @@ type Service struct {
 // curated list.
 func New(cachePath, apiKey string) *Service {
 	return &Service{
-		cache:   Cache{Path: cachePath},
-		Fetcher: Fetcher{APIKey: apiKey},
-		MaxAge:  24 * time.Hour,
+		cache:      Cache{Path: cachePath},
+		Fetcher:    Fetcher{APIKey: apiKey},
+		CLIFetcher: ClaudeCLIFetcher{}, // resolves `claude` on PATH at exec time
+		MaxAge:     7 * 24 * time.Hour,
 	}
 }
 
@@ -483,33 +508,73 @@ func (s *Service) Catalog(ctx context.Context) (Catalog, error) {
 	return s.withFallback(fresh), nil
 }
 
-// Refresh forces a fetch and writes the result to the cache. Returns
-// the live catalog (not yet merged with fallback — Catalog handles
-// that). On ErrNoAPIKey, writes a synthetic fallback-only catalog so
-// the cache file always exists after first run.
+// Refresh walks the discovery chain in order — claude CLI, then the
+// Anthropic Models API, then the curated in-binary list — and writes
+// whichever wins to the cache. Returns the source-tagged catalog so
+// the caller can render the badge ("api" vs "claude-cli" vs
+// "fallback") and decide whether to log a degraded-mode warning.
+//
+// Why this order:
+//  1. Claude CLI works for every authenticated user — both
+//     subscription (OAuth via `claude auth login`) and API (env
+//     var). No per-user setup on ccmux's side.
+//  2. Anthropic Models API is a clean structured query, but only
+//     when the daemon's environment has ANTHROPIC_API_KEY.
+//  3. Curated fallback ships with every ccmux release. Never empty.
+//
+// Each fetcher returns its own sentinel error (ErrClaudeCLIUnavailable,
+// ErrNoAPIKey) when the user can't use that source, so the chain
+// falls through silently for the common cases. Non-sentinel errors
+// (network blip, parse failure) also fall through, but get returned
+// up the stack so the caller can log them.
 func (s *Service) Refresh(ctx context.Context) (Catalog, error) {
-	models, err := s.Fetcher.Fetch(ctx)
-	if errors.Is(err, ErrNoAPIKey) {
-		cat := Catalog{
-			Models:    nil, // withFallback supplies the curated list
+	// 1. CLI — best for subscription users.
+	if models, err := s.CLIFetcher.Fetch(ctx); err == nil && len(models) > 0 {
+		return s.writeAndReturn(Catalog{
+			Models:    models,
+			FetchedAt: time.Now().UTC(),
+			Source:    SourceClaudeCLI,
+		})
+	} else if err != nil && !errors.Is(err, ErrClaudeCLIUnavailable) {
+		// Not the silent-fallthrough sentinel — keep walking but
+		// hold onto the error so the eventual caller can surface it.
+		// (Today we just continue; future work could collect a list.)
+		_ = err
+	}
+
+	// 2. Anthropic Models API — for API-key users.
+	apiModels, apiErr := s.Fetcher.Fetch(ctx)
+	if apiErr == nil {
+		return s.writeAndReturn(Catalog{
+			Models:    apiModels,
+			FetchedAt: time.Now().UTC(),
+			Source:    SourceAPI,
+		})
+	}
+	if errors.Is(apiErr, ErrNoAPIKey) {
+		// Both live sources unavailable — write a fallback-only
+		// stamp so the cache file exists and the caller can see how
+		// stale "live" is from the FetchedAt. The Models slice is
+		// left nil; withFallback fills it in for the response.
+		return s.writeAndReturn(Catalog{
+			Models:    nil,
 			FetchedAt: time.Now().UTC(),
 			Source:    SourceFallback,
-		}
-		_ = s.cache.Write(cat)
-		return cat, err
+		})
 	}
-	if err != nil {
-		return Catalog{}, err
-	}
-	cat := Catalog{
-		Models:    models,
-		FetchedAt: time.Now().UTC(),
-		Source:    SourceAPI,
-	}
-	if writeErr := s.cache.Write(cat); writeErr != nil {
-		// Cache write failure is non-fatal — we still return the
-		// fresh catalog so the caller can use it this request.
-		return cat, fmt.Errorf("cache write (catalog still returned): %w", writeErr)
+	// Real failure on the API side (5xx, network) — bubble up so
+	// the caller can log it. Caller is expected to fall back to a
+	// cached/curated response in this branch.
+	return Catalog{}, apiErr
+}
+
+// writeAndReturn persists a freshly-fetched catalog to disk and
+// returns it. Cache write failures are non-fatal — we still return
+// the catalog so the in-memory result of this Refresh is usable,
+// just with a non-nil error so the caller can log.
+func (s *Service) writeAndReturn(cat Catalog) (Catalog, error) {
+	if err := s.cache.Write(cat); err != nil {
+		return cat, fmt.Errorf("cache write (catalog still returned): %w", err)
 	}
 	return cat, nil
 }

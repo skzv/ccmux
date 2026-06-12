@@ -530,6 +530,37 @@ func TestResumeArgs_ConfiguredCommands(t *testing.T) {
 	}
 }
 
+// TestResumeArgs_ClaudeModelWrapsInShell — when Commands.ClaudeModel
+// is set, Claude's resume argv has to thread the pin through. Since
+// the argv form doesn't carry env, the implementation wraps in
+// `sh -c 'export ANTHROPIC_MODEL=…; claude --resume …'`. Other agents
+// pass through unchanged.
+func TestResumeArgs_ClaudeModelWrapsInShell(t *testing.T) {
+	cmds := Commands{ClaudeModel: "claude-opus-4-8"}
+	got := ResumeArgs(IDClaude, "abc-123", cmds)
+	if len(got) != 3 || got[0] != "sh" || got[1] != "-c" {
+		t.Fatalf("want sh -c wrapper, got %v", got)
+	}
+	want := "export ANTHROPIC_MODEL=claude-opus-4-8; claude --resume abc-123"
+	if got[2] != want {
+		t.Errorf("shell line:\n got=%q\nwant=%q", got[2], want)
+	}
+
+	// Sanity: empty ClaudeModel produces the bare argv (no shell wrap).
+	bare := ResumeArgs(IDClaude, "abc-123", Commands{})
+	if len(bare) != 3 || bare[0] != "claude" {
+		t.Errorf("no-model resume should be bare argv, got %v", bare)
+	}
+
+	// Non-Claude agents must not pick up ANTHROPIC_MODEL on resume.
+	codex := ResumeArgs(IDCodex, "abc-123", cmds)
+	for _, a := range codex {
+		if strings.Contains(a, "ANTHROPIC_MODEL") {
+			t.Errorf("codex resume should not carry ANTHROPIC_MODEL: %v", codex)
+		}
+	}
+}
+
 func agentIDs(as []Agent) []ID {
 	out := make([]ID, len(as))
 	for i, a := range as {

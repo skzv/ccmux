@@ -11,13 +11,13 @@ import (
 )
 
 // modelRefreshInterval is how often the daemon re-fetches the model
-// catalog from Anthropic's API. 24h tracks "Anthropic ships at most a
-// few model launches per quarter" — long enough that we don't pile
-// HTTP calls on a service that rarely changes, short enough that a new
-// model lands in the picker within a day of its announcement. The
-// in-binary fallback list ships with every ccmux release, so users
-// without an API key still get prompt coverage by upgrading.
-const modelRefreshInterval = 24 * time.Hour
+// catalog. The primary discovery path is `claude -p` (an LLM call,
+// ~$0.024 per refresh), and the catalog only meaningfully changes a
+// handful of times per year, so weekly is the right cadence: ~$0.10/
+// month per user, with new models landing in the picker within a
+// week of Anthropic shipping them. Users who want it now run
+// `ccmux agents models --refresh`.
+const modelRefreshInterval = 7 * 24 * time.Hour
 
 // modelRefreshLoop runs an immediate startup refresh, then re-fetches
 // the catalog on a 24h interval until ctx is cancelled. Runs in its

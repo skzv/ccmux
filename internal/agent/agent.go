@@ -279,13 +279,33 @@ func LaunchCmd(id ID, continueFlag bool, commands Commands) string {
 
 // ResumeArgs resolves the argv vector for resuming one specific
 // conversation with optional configured command substitution.
+//
+// For Claude specifically, when commands.ClaudeModel is non-empty
+// the argv is wrapped in `sh -c 'export ANTHROPIC_MODEL=…; claude
+// --resume …'` so the pinned model applies on resume too — the bare
+// argv form can't carry an env var. Other agents pass through
+// unchanged; their model selection lives in their own config files.
 func ResumeArgs(id ID, conversationID string, commands Commands) []string {
 	if conversationID == "" {
 		return nil
 	}
 	switch id {
 	case IDClaude:
-		return []string{configuredBinary(IDClaude, "claude", commands), "--resume", conversationID}
+		argv := []string{configuredBinary(IDClaude, "claude", commands), "--resume", conversationID}
+		if model := strings.TrimSpace(commands.ClaudeModel); model != "" {
+			// Build a shell-quoted equivalent of the argv, prefixed
+			// with the export. shellQuote handles the unlikely case
+			// of weird characters in the binary path or conversation
+			// ID (the latter is typically a UUID but UUIDs aren't
+			// always what callers send).
+			quoted := make([]string, len(argv))
+			for i, a := range argv {
+				quoted[i] = shellQuote(a)
+			}
+			line := "export ANTHROPIC_MODEL=" + shellQuote(model) + "; " + strings.Join(quoted, " ")
+			return []string{"sh", "-c", line}
+		}
+		return argv
 	case IDCodex:
 		return []string{configuredBinary(IDCodex, "codex", commands), "resume", conversationID}
 	case IDAntigravity:

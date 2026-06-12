@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -223,9 +224,10 @@ func TestCache_RoundTrip(t *testing.T) {
 func TestService_NoAPIKey_FallsBackToCurated(t *testing.T) {
 	dir := t.TempDir()
 	s := New(filepath.Join(dir, "models.json"), "")
+	disableCLIFetcher(s) // CLI is the new first-class source; this test scopes to API
 	cat, err := s.Catalog(context.Background())
-	if !errors.Is(err, ErrNoAPIKey) {
-		t.Fatalf("want ErrNoAPIKey, got %v", err)
+	if err != nil {
+		t.Fatalf("Catalog unexpected error: %v", err)
 	}
 	if cat.Source != SourceFallback {
 		t.Errorf("source should be fallback, got %q", cat.Source)
@@ -257,6 +259,7 @@ func TestService_LiveFetch_CachesAndMergesFallback(t *testing.T) {
 	dir := t.TempDir()
 	s := New(filepath.Join(dir, "models.json"), "k")
 	s.Fetcher.BaseURL = srv.URL
+	disableCLIFetcher(s)
 
 	cat, err := s.Catalog(context.Background())
 	if err != nil {
@@ -298,7 +301,7 @@ func TestService_StaleCache_TriggersRefresh(t *testing.T) {
 	// Pre-seed with an "ancient" cache (8 days ago).
 	if err := cache.Write(Catalog{
 		Models:    []Model{{ID: "claude-opus-4-7"}},
-		FetchedAt: time.Now().Add(-8 * 24 * time.Hour),
+		FetchedAt: time.Now().Add(-30 * 24 * time.Hour), // stale vs 7d MaxAge
 		Source:    SourceAPI,
 	}); err != nil {
 		t.Fatalf("seed cache: %v", err)
@@ -306,6 +309,7 @@ func TestService_StaleCache_TriggersRefresh(t *testing.T) {
 
 	s := New(cache.Path, "k")
 	s.Fetcher.BaseURL = srv.URL
+	disableCLIFetcher(s)
 
 	if _, err := s.Catalog(context.Background()); err != nil {
 		t.Fatalf("Catalog: %v", err)
@@ -326,7 +330,7 @@ func TestService_RefreshFailure_SurfacesCache(t *testing.T) {
 	cache := Cache{Path: filepath.Join(dir, "models.json")}
 	seeded := Catalog{
 		Models:    []Model{{ID: "claude-opus-4-7", Family: "opus"}},
-		FetchedAt: time.Now().Add(-25 * time.Hour), // stale → triggers refresh
+		FetchedAt: time.Now().Add(-30 * 24 * time.Hour), // stale (>7d MaxAge) → triggers refresh
 		Source:    SourceAPI,
 	}
 	if err := cache.Write(seeded); err != nil {
@@ -334,6 +338,7 @@ func TestService_RefreshFailure_SurfacesCache(t *testing.T) {
 	}
 	s := New(cache.Path, "k")
 	s.Fetcher.BaseURL = srv.URL
+	disableCLIFetcher(s)
 
 	cat, err := s.Catalog(context.Background())
 	if err == nil {
@@ -372,6 +377,30 @@ func TestCachePath_RespectsXDG(t *testing.T) {
 	if got != want {
 		t.Errorf("CachePath = %q, want %q", got, want)
 	}
+}
+
+// disableCLIFetcher steers a Service so its CLI fetcher is never the
+// answer. Tests that scope to the API-or-fallback paths need this
+// because the developer's own machine almost certainly has `claude`
+// installed AND logged in — left enabled, the chain would happily
+// hit the real LLM (billable!) during `go test`.
+//
+// We disable by replacing Run with a thunk that returns a sentinel.
+// LookPath still sees a real binary on the developer's PATH; the
+// Run swap intercepts before the actual exec.
+func disableCLIFetcher(s *Service) {
+	s.CLIFetcher.Run = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		// `false` is POSIX and always exits non-zero — gives the Fetch
+		// a clean "ran but failed" path. cmd.Run returns an
+		// *exec.ExitError; ClaudeCLIFetcher's wrap treats that as a
+		// generic error (not ErrClaudeCLIUnavailable), so the chain
+		// continues to the API tier as if claude isn't installed.
+		return exec.CommandContext(ctx, "false")
+	}
+	// Also clear Binary so LookPath at the top of Fetch doesn't
+	// confuse a developer with claude installed for what tests are
+	// really exercising — the Run hook is the seam.
+	s.CLIFetcher.Binary = "/nonexistent/claude-disabled-in-test"
 }
 
 // helpers

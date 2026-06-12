@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -19,9 +20,9 @@ import (
 func TestHandleModels_NoAPIKey_ReturnsFallback(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", dir) // sandboxes the cache file
-	srv := &server{
-		models: claudemodels.New(filepath.Join(dir, "models.json"), ""),
-	}
+	svc := claudemodels.New(filepath.Join(dir, "models.json"), "")
+	disableTestCLIFetcher(svc)
+	srv := &server{models: svc}
 
 	r := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	w := httptest.NewRecorder()
@@ -100,6 +101,7 @@ func TestHandleModels_RefreshQuery_HitsAPI(t *testing.T) {
 
 	dir := t.TempDir()
 	svc := claudemodels.New(filepath.Join(dir, "models.json"), "k")
+	disableTestCLIFetcher(svc)
 	// Reach in to swap the BaseURL on the embedded Fetcher. Tests in
 	// the claudemodels package do the same thing; package-internal
 	// access is fine because both files share the `claudemodels` import.
@@ -163,4 +165,17 @@ func TestHandleModels_RefreshQuery_HitsAPI(t *testing.T) {
 func swapFetcherBaseURL(t *testing.T, s *claudemodels.Service, baseURL string) {
 	t.Helper()
 	s.Fetcher.BaseURL = baseURL
+}
+
+// disableTestCLIFetcher prevents the CLI tier of the discovery chain
+// from accidentally running during tests. The developer's machine
+// likely has `claude` installed and logged in, which would mean the
+// chain answers via a real LLM call (billable, slow, non-deterministic).
+// Swap Run with a deterministic failure so the chain falls through to
+// the API tier the tests actually want to exercise.
+func disableTestCLIFetcher(s *claudemodels.Service) {
+	s.CLIFetcher.Binary = "/nonexistent/claude-disabled-in-test"
+	s.CLIFetcher.Run = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "false")
+	}
 }
