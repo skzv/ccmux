@@ -188,6 +188,67 @@ func TestAgent_LaunchCmd_NewVsContinue(t *testing.T) {
 	}
 }
 
+// TestLaunchCmd_ClaudeModelPrependsExport — when Commands.ClaudeModel
+// is set, `agent.LaunchCmd(IDClaude, …)` must prepend an `export
+// ANTHROPIC_MODEL=<id>;` so the pin survives the `claude || claude ||
+// zsh || sh` fallback chain. A per-command `FOO=bar` prefix would
+// only apply to the first invocation — see the comment in
+// launchCmdWithBinary for the reason.
+func TestLaunchCmd_ClaudeModelPrependsExport(t *testing.T) {
+	got := LaunchCmd(IDClaude, true, Commands{ClaudeModel: "claude-opus-4-8"})
+	want := "export ANTHROPIC_MODEL=claude-opus-4-8; claude --continue || claude || zsh || bash || sh"
+	if got != want {
+		t.Errorf("LaunchCmd with ClaudeModel:\n got=%q\nwant=%q", got, want)
+	}
+
+	// The fresh (no-continue) path gets the prefix too.
+	got = LaunchCmd(IDClaude, false, Commands{ClaudeModel: "opus"})
+	want = "export ANTHROPIC_MODEL=opus; claude"
+	if got != want {
+		t.Errorf("LaunchCmd fresh with ClaudeModel:\n got=%q\nwant=%q", got, want)
+	}
+
+	// Trimming: whitespace around the configured value must not leak
+	// into the shell command. A stray space would set the env to a
+	// trailing-space string, which Claude Code wouldn't match.
+	got = LaunchCmd(IDClaude, false, Commands{ClaudeModel: "  haiku  "})
+	want = "export ANTHROPIC_MODEL=haiku; claude"
+	if got != want {
+		t.Errorf("LaunchCmd should trim ClaudeModel:\n got=%q\nwant=%q", got, want)
+	}
+}
+
+// TestLaunchCmd_NoModelMatchesPriorBehavior — the empty-string default
+// must produce exactly the command we shipped before this feature
+// existed. Pinned to a literal string so a refactor that accidentally
+// adds an `export ANTHROPIC_MODEL=;` (visible bug for users with no
+// preference set) is caught here.
+func TestLaunchCmd_NoModelMatchesPriorBehavior(t *testing.T) {
+	got := LaunchCmd(IDClaude, true, Commands{})
+	want := "claude --continue || claude || zsh || bash || sh"
+	if got != want {
+		t.Errorf("LaunchCmd no-model regression:\n got=%q\nwant=%q", got, want)
+	}
+}
+
+// TestLaunchCmd_ClaudeModelDoesNotApplyToOtherAgents — Commands.ClaudeModel
+// is Claude-specific. Setting it must NOT prepend ANTHROPIC_MODEL to a
+// Codex/Antigravity/Cursor/Pi/Grok launch — those agents read model
+// selection from their own config files, and a stray ANTHROPIC_MODEL
+// in their env could confuse downstream tooling.
+func TestLaunchCmd_ClaudeModelDoesNotApplyToOtherAgents(t *testing.T) {
+	commands := Commands{ClaudeModel: "claude-opus-4-8"}
+	for _, a := range All() {
+		if a.ID() == IDClaude {
+			continue
+		}
+		got := LaunchCmd(a.ID(), false, commands)
+		if strings.Contains(got, "ANTHROPIC_MODEL") {
+			t.Errorf("%s LaunchCmd should not carry ANTHROPIC_MODEL: %q", a.ID(), got)
+		}
+	}
+}
+
 // TestAgent_InitialPrompt_SubstitutesNameAndDesc — every agent's
 // prompt template must echo the user's name + description back; a
 // regression here would mean Claude/Codex/Antigravity all start their
@@ -466,6 +527,37 @@ func TestResumeArgs_ConfiguredCommands(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestResumeArgs_ClaudeModelWrapsInShell — when Commands.ClaudeModel
+// is set, Claude's resume argv has to thread the pin through. Since
+// the argv form doesn't carry env, the implementation wraps in
+// `sh -c 'export ANTHROPIC_MODEL=…; claude --resume …'`. Other agents
+// pass through unchanged.
+func TestResumeArgs_ClaudeModelWrapsInShell(t *testing.T) {
+	cmds := Commands{ClaudeModel: "claude-opus-4-8"}
+	got := ResumeArgs(IDClaude, "abc-123", cmds)
+	if len(got) != 3 || got[0] != "sh" || got[1] != "-c" {
+		t.Fatalf("want sh -c wrapper, got %v", got)
+	}
+	want := "export ANTHROPIC_MODEL=claude-opus-4-8; claude --resume abc-123"
+	if got[2] != want {
+		t.Errorf("shell line:\n got=%q\nwant=%q", got[2], want)
+	}
+
+	// Sanity: empty ClaudeModel produces the bare argv (no shell wrap).
+	bare := ResumeArgs(IDClaude, "abc-123", Commands{})
+	if len(bare) != 3 || bare[0] != "claude" {
+		t.Errorf("no-model resume should be bare argv, got %v", bare)
+	}
+
+	// Non-Claude agents must not pick up ANTHROPIC_MODEL on resume.
+	codex := ResumeArgs(IDCodex, "abc-123", cmds)
+	for _, a := range codex {
+		if strings.Contains(a, "ANTHROPIC_MODEL") {
+			t.Errorf("codex resume should not carry ANTHROPIC_MODEL: %v", codex)
+		}
 	}
 }
 

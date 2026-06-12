@@ -240,6 +240,66 @@ Ripgrep-backed search across a project's markdown vault.
 
 ---
 
+### Models
+
+#### `GET /v1/models`
+Returns the Claude model catalog the daemon has discovered, merged with a
+curated in-binary fallback list. Drives the model picker in the TUI and
+`ccmux agents models` on the CLI. Refreshed every 7 days in the background;
+force a re-fetch with `?refresh=true`.
+
+The daemon walks a three-tier discovery chain:
+
+1. **`claude` CLI** (`source: "claude-cli"`) — shells out to
+   `claude -p --output-format json --json-schema …` with a tight prompt and
+   reads the `structured_output.models` field from the response envelope.
+   Works for any authenticated `claude` install — subscription (OAuth via
+   `claude auth login`) or API users. The primary path.
+2. **Anthropic Models API** (`source: "api"`) — direct `GET /v1/models` with
+   `ANTHROPIC_API_KEY`. Tried when the CLI is unavailable (not installed,
+   not logged in).
+3. **Curated fallback** (`source: "fallback"`) — the list that ships with
+   every ccmux release. Always available.
+
+Each tier returns its own sentinel error on "user can't use this source", so
+the chain falls through silently for the common cases. The cache is written
+on every successful refresh, so a degraded mode (e.g. CLI logged out) just
+keeps serving the previous good catalog.
+- **Query:** `?refresh=true` forces a synchronous re-fetch before responding.
+  Returns the cached catalog on refresh failure.
+- **Response `200`:** `Catalog`.
+
+```json
+{
+  "models": [
+    {
+      "id": "claude-opus-4-8",
+      "display_name": "Claude Opus 4.8",
+      "family": "opus",
+      "max_input_tokens": 1000000,
+      "max_tokens": 128000,
+      "capabilities": {
+        "vision": true,
+        "thinking_adaptive": true,
+        "structured_outputs": true,
+        "effort_max": true
+      },
+      "source": "api"
+    }
+  ],
+  "fetched_at": "2026-06-12T05:24:44Z",
+  "source": "api"
+}
+```
+
+`source` (per-model and on the envelope) ∈ `claude-cli | api | fallback`.
+Live entries override curated ones on ID match; curated entries fill gaps
+for models the caller's account can't list. `family` is derived from the ID
+(`opus | sonnet | haiku`, or empty for unrecognised IDs) — purely for
+grouping in pickers.
+
+---
+
 ### Live updates
 
 #### `GET /v1/events` — Server-Sent Events

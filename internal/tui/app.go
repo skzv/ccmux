@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -108,6 +109,20 @@ func allScreens() []Screen {
 		out[i] = Screen(i)
 	}
 	return out
+}
+
+// screenKey returns the digit a user presses to jump to the given
+// Screen — the same number the tab bar renders as `[N] Name`. Derived
+// from the iota order in the Screen const block, which is the single
+// source of truth for tab order.
+//
+// Use this anywhere user-facing copy references a tab by number
+// (empty-state hints like "Press 2 to open Projects", the first-run
+// tour). Never hand-write the digit: a future reorder of the const
+// block would silently make the copy lie. TestNoLiteralTabKeyDigits
+// fails the build if anyone tries.
+func screenKey(s Screen) string {
+	return strconv.Itoa(int(s) + 1)
 }
 
 // tabBarMinWidth is the minimum terminal cols at which the WIDE tab

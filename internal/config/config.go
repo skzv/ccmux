@@ -25,6 +25,7 @@ type Config struct {
 	Sessions      SessionsConfig      `toml:"sessions"`
 	Conversations ConversationsConfig `toml:"conversations"`
 	Agents        AgentsConfig        `toml:"agents"`
+	Claude        ClaudeConfig        `toml:"claude"`
 	Update        UpdateConfig        `toml:"update"`
 	Subscription  SubscriptionConfig  `toml:"subscription"`
 	Tour          TourConfig          `toml:"tour"`
@@ -158,6 +159,28 @@ type AgentCommandConfig struct {
 	Command string `toml:"command,omitempty"`
 }
 
+// ClaudeConfig holds Claude-specific runtime preferences distinct from
+// Claude Code's own ~/.claude/settings.json. Today this is just the
+// default model ccmux passes to claude sessions it launches — pin a
+// concrete model (e.g. "claude-opus-4-8") or an alias ("opus") here
+// without editing Claude Code's settings.
+//
+// Why a separate file: ccmux is a per-machine TUI; Claude Code's
+// settings.json is global to the user (shared across machines on an
+// NFS home dir, sshfs mount, etc). The ccmux default is per-machine
+// and only applies to sessions ccmux itself launches — running
+// `claude` directly outside ccmux keeps whatever settings.json says.
+type ClaudeConfig struct {
+	// DefaultModel is passed to `claude --model <value>` when ccmux
+	// launches a new Claude session. Accepts a concrete vendor model
+	// ID ("claude-opus-4-8"), a short alias ("opus" / "sonnet" /
+	// "haiku" / "opusplan"), or "" to inherit Claude Code's own
+	// default. Discoverable via the model picker (TUI) or
+	// `ccmux agents models` (CLI). An explicit ANTHROPIC_MODEL env
+	// var takes precedence — see internal/agent.
+	DefaultModel string `toml:"default_model,omitempty"`
+}
+
 // AgentCommands converts config's persisted shape into the runtime
 // command override shape used by internal/agent. Keeping the conversion
 // here prevents launch sites from knowing the TOML layout.
@@ -169,6 +192,7 @@ func (c Config) AgentCommands() agent.Commands {
 		Cursor:      strings.TrimSpace(c.Agents.Cursor.Command),
 		Pi:          strings.TrimSpace(c.Agents.Pi.Command),
 		Grok:        strings.TrimSpace(c.Agents.Grok.Command),
+		ClaudeModel: strings.TrimSpace(c.Claude.DefaultModel),
 	}
 }
 
