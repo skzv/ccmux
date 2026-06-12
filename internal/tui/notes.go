@@ -1148,7 +1148,7 @@ func (m notesModel) View(width, height int) string {
 			"",
 			m.st.Muted.Render("No project selected."),
 			"",
-			"Press " + m.st.Key.Render("p") + " here to pick one, or " + m.st.Key.Render("3") + " to go to the Projects tab.",
+			"Press " + m.st.Key.Render("p") + " here to pick one, or " + m.st.Key.Render(screenKey(ScreenProjects)) + " to go to the Projects tab.",
 		}
 		if len(m.selectableDeviceLabels()) > 1 {
 			bodyLines = append(bodyLines,
