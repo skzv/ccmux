@@ -37,4 +37,4 @@
 │                                                         │                                                             
 │                                                         │                                                             
 ╰─────────────────────────────────────────────────────────╯                                                             
-? help · q quit · enter attach · n new · x kill · u usage · R rename · r refresh · 1-7 screens                          
+? help · q quit · enter attach · n new · x kill · u usage · p preview · R rename · r refresh · 1-7 screens              

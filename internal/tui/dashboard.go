@@ -147,6 +147,7 @@ func (m dashboardModel) HelpBarProps(width int) components.HelpBarProps {
 			{Key: "n", Label: "new", Priority: 7},
 			{Key: "x", Label: "kill", Priority: 6},
 			{Key: "u", Label: "usage", Priority: 5},
+			{Key: "p", Label: "preview", Priority: 5},
 			{Key: "R", Label: "rename", Priority: 4},
 			{Key: "r", Label: "refresh", Priority: 3},
 			{Key: "1-7", Label: "screens", Priority: 2},
