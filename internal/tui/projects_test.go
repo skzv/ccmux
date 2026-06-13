@@ -3,12 +3,14 @@ package tui
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/skzv/ccmux/internal/agent"
+	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/project"
 	"github.com/skzv/ccmux/internal/tui/styles"
 )
@@ -540,5 +542,55 @@ func TestProjects_CursorVisibleWhenScrolledPastWindow(t *testing.T) {
 	// windowing — otherwise the window isn't actually doing its job.
 	if strings.Contains(out, "project-00") {
 		t.Errorf("project-00 still visible when cursor is at row 28 — windowing didn't shift")
+	}
+}
+
+// TestLocalProjectDir_UnderConfiguredRoot — regression for the bug
+// where new projects created from the Projects screen landed in $HOME
+// instead of the configured projects root. createProjectCmd's local
+// path must place the directory under Projects.Root (matching the
+// daemon's createProject), not resolve the bare name against the TUI
+// working directory.
+func TestLocalProjectDir_UnderConfiguredRoot(t *testing.T) {
+	var cfg config.Config
+	cfg.Projects.Root = "/tmp/ccmux-projects-test"
+	got := localProjectDir(cfg, "myproj")
+	want := filepath.Join("/tmp/ccmux-projects-test", "myproj")
+	if got != want {
+		t.Errorf("localProjectDir = %q, want %q", got, want)
+	}
+}
+
+// TestLocalProjectDir_EmptyRootDefaultsToHomeProjects — an unset root
+// must resolve to ~/Projects (via project.ResolveRoot), never to the
+// bare cwd. This is the exact default-config case the user hit.
+func TestLocalProjectDir_EmptyRootDefaultsToHomeProjects(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home dir")
+	}
+	var cfg config.Config // Projects.Root == ""
+	got := localProjectDir(cfg, "myproj")
+	want := filepath.Join(home, "Projects", "myproj")
+	if got != want {
+		t.Errorf("localProjectDir(empty root) = %q, want %q", got, want)
+	}
+}
+
+// TestLocalProjectDir_ExpandsTilde — a "~/..."-style root from
+// config.toml must expand to an absolute path under $HOME, so the
+// created project is discoverable by the same Discover(root) walk
+// the Projects screen lists from.
+func TestLocalProjectDir_ExpandsTilde(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home dir")
+	}
+	var cfg config.Config
+	cfg.Projects.Root = "~/Code"
+	got := localProjectDir(cfg, "myproj")
+	want := filepath.Join(home, "Code", "myproj")
+	if got != want {
+		t.Errorf("localProjectDir(~/Code) = %q, want %q", got, want)
 	}
 }
