@@ -2478,8 +2478,18 @@ func (a App) attachOrCreateLocal(p project.Project) tea.Cmd {
 
 		if len(sessions) == 0 && len(convs) == 0 {
 			// Nothing to choose between — create and attach directly.
+			//
+			// Fresh context for the create: conversationsForProject above
+			// walks the whole transcript tree (~/.claude, ~/.codex, …)
+			// synchronously and ignores ctx, so on a heavy tree it can
+			// burn the original 3s budget before we get here. Reusing
+			// that already-elapsed ctx made tmux.New fail with "context
+			// deadline exceeded" — which bit brand-new projects in
+			// particular, since they always reach this branch.
+			nctx, ncancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer ncancel()
 			session := p.SessionName()
-			if err := tmux.New(ctx, session, path, launch); err != nil {
+			if err := tmux.New(nctx, session, path, launch); err != nil {
 				return toastMsg{Text: "start session: " + err.Error(), Kind: toastError, Until: time.Now().Add(5 * time.Second)}
 			}
 			return projectSessionReadyMsg{Session: session, Project: label}

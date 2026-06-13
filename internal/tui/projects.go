@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -626,18 +627,38 @@ func createProjectCmd(submit newProjectSubmitMsg) tea.Cmd {
 		}
 		// Local case: pass the picker's chosen agent through so the
 		// sidecar gets written and the launch command matches.
-		opts := scaffold.Options{
-			Name:  submit.Name,
-			Agent: submit.Agent,
-		}
 		cfg, _ := config.Load()
-		opts.Commands = cfg.AgentCommands()
+		opts := scaffold.Options{
+			Name: submit.Name,
+			// Place the new project under the configured projects root,
+			// exactly as the daemon's createProject does. Without an
+			// explicit Dir, scaffold.PrepareDir falls back to
+			// filepath.Abs(Name), which resolves against the TUI
+			// process's working directory (typically $HOME) — so a
+			// project created from the Projects screen would land in ~
+			// instead of ~/Projects.
+			Dir:      localProjectDir(cfg, submit.Name),
+			Agent:    submit.Agent,
+			Commands: cfg.AgentCommands(),
+		}
 		session, err := scaffold.StartSession(context.Background(), opts)
 		if err != nil {
 			return toastMsg{Text: "new project: " + err.Error(), Kind: toastError, Until: time.Now().Add(6 * time.Second)}
 		}
 		return projectSessionReadyMsg{Session: session, Project: submit.Name}
 	}
+}
+
+// localProjectDir resolves the absolute directory a locally-created
+// project lands in: under the configured projects root, identical to
+// what the daemon's createProject computes. Extracted so the path
+// resolution is unit-testable without standing up tmux (StartSession
+// shells out). The historical bug this guards against: leaving Dir
+// empty let scaffold.PrepareDir fall back to filepath.Abs(Name),
+// which resolves against the TUI's working directory ($HOME) and
+// dropped new projects in ~ instead of ~/Projects.
+func localProjectDir(cfg config.Config, name string) string {
+	return filepath.Join(project.ResolveRoot(cfg.Projects.Root), name)
 }
 
 // textInputBlink is a small wrapper around textinput.Blink so we don't have
