@@ -26,6 +26,16 @@ type SessionState struct {
 	// whose project we couldn't resolve (which the client should treat
 	// as claude for back-compat).
 	Agent string `json:"agent,omitempty"`
+	// Seen reports whether the user has looked at this session since
+	// the last state change. False means "the agent did something the
+	// user hasn't yet reviewed" — e.g. it transitioned to needs_input
+	// or active→idle while nobody was attached. Attaching to the
+	// session marks it seen. Drives the dashboard's attention-priority
+	// rollup (needs_input > unseen-idle > working > seen-idle > unknown)
+	// and the bell/push suppression for the currently-attached session.
+	// Defaults to true (a session you've never had output from is by
+	// definition reviewed-empty, not unreviewed).
+	Seen bool `json:"seen"`
 }
 
 // HealthInfo is returned by GET /v1/health. Used by clients to ping

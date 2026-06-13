@@ -79,6 +79,9 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 				state:       agent.StateUnknown,
 				agentID:     agentID,
 				projectPath: ts.Path,
+				// Newly-discovered session has produced no output the
+				// user could have missed yet — start at reviewed.
+				seen: true,
 			}
 			s.seen[ts.Name] = t
 			createdEvents = append(createdEvents, daemon.SessionEvent{
@@ -159,26 +162,29 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 			t.last = r.pane
 			t.lastChange = time.Now()
 		}
-		if r.newState == agent.StateNeedsInput && t.state != agent.StateNeedsInput {
-			bellNames = append(bellNames, r.name)
+		ts, _ := lookupTmuxSession(snaps, r.name)
+		decision := decideAttention(t.state, r.newState, t.seen, ts.Attached)
+		t.seen = decision.NewSeen
+		if decision.IncPromptCount {
 			t.promptCount++
+		}
+		if decision.RingBell {
+			bellNames = append(bellNames, r.name)
 		}
 		prev := t.state
 		t.state = r.newState
-		if r.newState != prev {
-			kind := "state_change"
-			if r.newState == agent.StateNeedsInput {
-				kind = "needs_input"
-			}
-			ts, _ := lookupTmuxSession(snaps, r.name)
+		if decision.EmitStateEvent {
 			stateEvents = append(stateEvents, daemon.SessionEvent{
 				At:   time.Now(),
-				Kind: kind,
+				Kind: decision.StateEventKind,
 				Session: daemon.SessionState{
 					Name: r.name, Host: "local", State: string(r.newState),
 					Path: ts.Path,
+					Seen: t.seen,
 				},
 			})
+		}
+		if decision.SendPush {
 			pushes = append(pushes, struct {
 				name       string
 				prev, next agent.State
@@ -208,6 +214,58 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 		s.maybePushForStateTransition(p.name, p.prev, p.next)
 	}
 	s.sleeper.SetActive(anyActive)
+}
+
+// attentionDecision is the per-session outcome of one poll tick: the
+// new seen bit, whether to ring the bell / send a push / emit the
+// state-change event, and the event kind to use. Pulled out as a
+// pure function so the lifecycle is unit-testable end-to-end without
+// standing up a tmux server (the surrounding pollOnce is integration-
+// tagged).
+type attentionDecision struct {
+	NewSeen        bool
+	RingBell       bool
+	SendPush       bool
+	IncPromptCount bool
+	EmitStateEvent bool
+	StateEventKind string // "state_change" or "needs_input"
+}
+
+// decideAttention computes the per-session decision for one poll
+// tick. Encodes the Phase 2 rules:
+//
+//   - Seen bit: an attached user is by definition watching → seen=true.
+//     A state change while NOT attached produces output the user
+//     should review → seen=false. Otherwise the previous seen value
+//     is preserved.
+//   - Bell/push suppression: the bell rings and a push is dispatched
+//     ONLY when the state transitions to needs_input AND the user
+//     isn't already attached. The dashboard event is still emitted
+//     so the TUI updates instantly.
+//   - PromptCount: incremented on every fresh needs_input transition
+//     (attached or not — it's a lifetime count, not a "did we notify"
+//     count). Drives the usage/quota panel.
+func decideAttention(prev, next agent.State, prevSeen, attached bool) attentionDecision {
+	d := attentionDecision{NewSeen: prevSeen}
+	if attached {
+		d.NewSeen = true
+	}
+	if next == agent.StateNeedsInput && prev != agent.StateNeedsInput {
+		d.IncPromptCount = true
+		d.RingBell = !attached
+	}
+	if next != prev {
+		d.EmitStateEvent = true
+		d.StateEventKind = "state_change"
+		if next == agent.StateNeedsInput {
+			d.StateEventKind = "needs_input"
+		}
+		if !attached {
+			d.NewSeen = false
+			d.SendPush = true
+		}
+	}
+	return d
 }
 
 func (s *server) projectAgent(projectPath string) agent.ID {
