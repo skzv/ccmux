@@ -1193,8 +1193,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// `T` re-opens the first-run tour at step 0. Capital so it doesn't
 		// collide with vim-style `t` someone might add to a per-screen
-		// nav binding later.
-		if msg.String() == "T" {
+		// nav binding later. Same modal-text guard as `i`/`u` so typing a
+		// capital T into a filter / rename / new-project / notes-search
+		// field doesn't yank the user into the tour mid-input.
+		if msg.String() == "T" && !a.modalCapturingText() {
 			a.tour.Open()
 			return a, nil
 		}
