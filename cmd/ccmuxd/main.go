@@ -222,6 +222,13 @@ type tracked struct {
 	// projectPath is the working directory of the tmux session, used
 	// to resolve the agent sidecar.
 	projectPath string
+	// seen is the reviewed/unreviewed flag exposed via daemon.SessionState.
+	// Set false when the agent transitions to a state the user should
+	// look at (needs_input, or active→idle while not attached); set
+	// true once a tmux client is attached. Default true so sessions
+	// the daemon just discovered don't immediately scream for
+	// attention until they actually do something.
+	seen bool
 }
 
 type server struct {
@@ -440,7 +447,11 @@ func (s *server) listSessions(w http.ResponseWriter, r *http.Request) {
 	for _, ts := range tss {
 		t, ok := s.seen[ts.Name]
 		if !ok {
-			t = &tracked{created: ts.Created, state: agent.StateUnknown}
+			// A session the poll loop hasn't tickled yet: treat as
+			// seen=true (nothing for the user to review yet) rather
+			// than implicitly unseen, otherwise restarting ccmuxd
+			// would resurface every old session as "needs attention".
+			t = &tracked{created: ts.Created, state: agent.StateUnknown, seen: true}
 		}
 		// For sessions we've seen via the poll loop this is already
 		// populated. For pre-existing sessions (e.g. the daemon just
@@ -456,6 +467,7 @@ func (s *server) listSessions(w http.ResponseWriter, r *http.Request) {
 			Created: ts.Created, LastChange: t.lastChange,
 			State: string(t.state), PromptCount: t.promptCount,
 			Agent: string(agentID),
+			Seen:  t.seen,
 		})
 	}
 	writeJSON(w, out)

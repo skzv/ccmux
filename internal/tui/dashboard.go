@@ -796,6 +796,16 @@ func renderSessionLine(st styles.Styles, s daemon.SessionState, inner int) strin
 		nameStyle = lipgloss.NewStyle().Foreground(st.P.Mauve).Bold(true).Underline(true)
 	}
 
+	// Unseen marker: a small filled dot before the state glyph signals
+	// "the agent did something you haven't looked at." Skipped while
+	// the user is attached (they're literally looking) and skipped on
+	// states that don't carry meaning ("unknown" with !seen would just
+	// be noise after a daemon restart).
+	unseenBadge := ""
+	if !s.Seen && !s.Attached && s.State != string(agent.StateUnknown) {
+		unseenBadge = lipgloss.NewStyle().Foreground(st.Semantic.Accent).Bold(true).Render("• ")
+	}
+
 	age := ""
 	if !s.LastChange.IsZero() {
 		age = humanDuration(time.Since(s.LastChange))
@@ -831,7 +841,7 @@ func renderSessionLine(st styles.Styles, s daemon.SessionState, inner int) strin
 	suffix += hostTag
 	suffix += agentTag
 
-	prefix := hostDot + " " + state + " " + attachedBadge
+	prefix := hostDot + " " + unseenBadge + state + " " + attachedBadge
 
 	// Truncate name so the rendered line fits in `inner` cells. We use
 	// lipgloss.Width on the styled fragments so ANSI doesn't fool us.

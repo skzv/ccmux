@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -17,6 +18,21 @@ import (
 	"github.com/skzv/ccmux/internal/tui/components"
 	"github.com/skzv/ccmux/internal/tui/styles"
 )
+
+// sortByAttention re-orders the sessions slice in-place by descending
+// attention priority (most-urgent first), breaking ties by Name. The
+// priority comes from agent.AttentionPriority — see its docstring for
+// the ranking. Stable so an unchanged list stays put across renders.
+func sortByAttention(ss []daemon.SessionState) {
+	sort.SliceStable(ss, func(i, j int) bool {
+		pi := agent.AttentionPriority(agent.State(ss[i].State), ss[i].Seen)
+		pj := agent.AttentionPriority(agent.State(ss[j].State), ss[j].Seen)
+		if pi != pj {
+			return pi > pj
+		}
+		return ss[i].Name < ss[j].Name
+	})
+}
 
 // sessionsModel is the full session list with a details pane.
 // Under narrow terminals (< 120 cols), a condensed detail is shown.
@@ -66,6 +82,12 @@ func (m *sessionsModel) SetSessions(ss []daemon.SessionState) {
 	if m.cursor >= 0 && m.cursor < len(m.sessions) {
 		selectedName = m.sessions[m.cursor].Name
 	}
+	// Re-sort by attention priority so a session waiting on the user
+	// (needs_input / done-but-unreviewed / error) surfaces above
+	// still-working rows. Stable secondary key on Name keeps the order
+	// deterministic when several rows share a priority, so repeated
+	// renders don't flicker the same set of names.
+	sortByAttention(ss)
 	m.sessions = ss
 	if selectedName != "" {
 		for i, s := range ss {

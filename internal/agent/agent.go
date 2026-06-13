@@ -171,6 +171,42 @@ func ParseID(s string) (ID, bool) {
 // the sidecar is implicitly Claude.
 func Default() Agent { return Claude{} }
 
+// AttentionPriority ranks (state, seen) pairs by how badly the user
+// should notice them — higher is more urgent. The dashboard /
+// Sessions list / project rollups use this to bubble the most
+// important row to the top so a single glance tells the user where to
+// look next.
+//
+// Ranking, highest first:
+//
+//   - 4: NeedsInput. The agent is waiting on the user; always loudest.
+//   - 3: Done-unreviewed (Idle && !seen). Finished after the user
+//     stopped watching — they should look before issuing the next
+//     prompt. This is the key UX move: a finished-but-unseen agent
+//     outranks a still-working one, because the first is asking for
+//     the user's input (review) while the second is fine on its own.
+//   - 2: Working (Active). Agent is doing useful work; informational.
+//   - 1: Reviewed-idle (Idle && seen). Done and acknowledged.
+//   - 0: Unknown. Nothing to say.
+//
+// Error rolls up at the same level as NeedsInput so the dashboard
+// still flags a crashed session as urgent — the user almost
+// certainly wants to inspect or restart it.
+func AttentionPriority(state State, seen bool) int {
+	switch state {
+	case StateNeedsInput, StateError:
+		return 4
+	case StateIdle:
+		if !seen {
+			return 3
+		}
+		return 1
+	case StateActive:
+		return 2
+	}
+	return 0
+}
+
 // AllInstalled returns the subset of All() whose Binary() resolves on
 // $PATH. Used by:
 //

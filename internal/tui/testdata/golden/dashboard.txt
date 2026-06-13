@@ -1,12 +1,12 @@
    Hello.                                                                                                               
 ╭─────────────────────────────────────────────────────────╮ ╭──────────────────────────────────────────────────────────╮
-│ Sessions  (3 · 1 active · 1 idle · 1 waiting)           │ │ ccmux-redesign                                           │
-│                                                         │ │ on local · ccmux                                         │
-│ ▌ ● ▶ ⊙ ccmux-redesign  attached 3m                     │ │                                                          │
-│   ● ◌ ccmux-debug  25m                                  │ │ state    ▶ active                                        │
-│   ● ! infra-watcher  5m  @atelier                       │ │ path     /Users/me/repos/ccmux                           │
-│                                                         │ │ attached ⊙ yes                                           │
-│                                                         │ │ created  2h ago                                          │
+│ Sessions  (3 · 1 active · 1 idle · 1 waiting)           │ │ infra-watcher                                            │
+│                                                         │ │ on atelier · infra                                       │
+│ ▌ ● • ! infra-watcher  5m  @atelier                     │ │                                                          │
+│   ● • ◌ ccmux-debug  25m                                │ │ state    ! needs_input                                   │
+│   ● ▶ ⊙ ccmux-redesign  attached 3m                     │ │ path                                                     │
+│                                                         │ │ attached no                                              │
+│                                                         │ │ created  1h ago                                          │
 │                                                         │ ╰──────────────────────────────────────────────────────────╯
 │                                                         │ ╭──────────────────────────────────────────────────────────╮
 │                                                         │ │ Devices   ● sputnik (this)   ● atelier                   │
