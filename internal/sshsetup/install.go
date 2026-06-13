@@ -108,10 +108,24 @@ func (in *installer) Install(ctx context.Context, t Target, password string, key
 	if err != nil {
 		return fmt.Errorf("load private key %s: %w", key.PrivatePath, err)
 	}
+	// Rebuild the host-key callback for the validation hop. knownhosts.New
+	// reads known_hosts ONCE into an in-memory db at construction, so the
+	// callback from the password hop (hkCB) still believes this host is
+	// unknown — even though the password hop's TOFU just appended its key
+	// to disk. Reusing hkCB here makes the validation hop re-run TOFU
+	// (accept-and-append) instead of VERIFYING against the recorded key,
+	// which defeats the whole point of the second connection: a MITM
+	// presenting key A on the password hop and key B on the validation
+	// hop would be accepted on both. A fresh callback reads the now-
+	// updated file and flags a mismatch.
+	hkCBValidate, err := tofuHostKeyCallback()
+	if err != nil {
+		return fmt.Errorf("known_hosts (validate): %w", err)
+	}
 	keyClient, err := in.dial(cctx, t.Addr(), &ssh.ClientConfig{
 		User:            user,
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
-		HostKeyCallback: hkCB,
+		HostKeyCallback: hkCBValidate,
 		Timeout:         10 * time.Second,
 	})
 	if err != nil {
