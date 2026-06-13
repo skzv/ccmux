@@ -261,3 +261,36 @@ func itoa(i int) string {
 	}
 	return string(digits)
 }
+
+// TestManager_VeryDangerous_LockStartFails_RevertsOverride — regression
+// for a stranded system-wide override. When the sudo override succeeds
+// but the lock process then fails to Start (e.g. caffeinate missing),
+// engage must revert the override before reporting Off. Otherwise the
+// machine is left with system sleep globally disabled while ccmux
+// believes the lock is Off — and a later SetActive would stack a second
+// override on top.
+func TestManager_VeryDangerous_LockStartFails_RevertsOverride(t *testing.T) {
+	overrideCalls := []bool{}
+	m := NewManager(ModeVeryDangerous, 0)
+	// Lock process whose Start() fails: a non-existent binary.
+	m.startLockProc = func(Mode) *exec.Cmd { return exec.Command("/nonexistent/ccmux-test-lockproc") }
+	m.runOverride = func(_ context.Context, on bool) error {
+		overrideCalls = append(overrideCalls, on)
+		return nil
+	}
+	m.readBattery = func(context.Context) (BatteryStatus, error) {
+		return BatteryStatus{HasBattery: false}, nil
+	}
+
+	m.SetActive(true)
+
+	// Engage failed → effective Off.
+	if got := m.Effective(); got != ModeOff {
+		t.Errorf("Effective after failed lock start = %q, want off", got)
+	}
+	// The override must have been applied (true) AND reverted (false) —
+	// not left stranded ON.
+	if len(overrideCalls) != 2 || overrideCalls[0] != true || overrideCalls[1] != false {
+		t.Errorf("override toggles = %v, want [true false] (applied then reverted)", overrideCalls)
+	}
+}
