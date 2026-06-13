@@ -26,6 +26,7 @@ import (
 	"github.com/skzv/ccmux/internal/conversations"
 	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/moshi"
+	"github.com/skzv/ccmux/internal/openrouterusage"
 	"github.com/skzv/ccmux/internal/project"
 	"github.com/skzv/ccmux/internal/remoteattach"
 	"github.com/skzv/ccmux/internal/selfupdate"
@@ -404,6 +405,7 @@ func (a App) refreshUsageCmd() tea.Cmd {
 		agg, claudeErr := claudeusage.Walk(window)
 		codex, _ := usage.WalkCodex(window)
 		antigravity, _ := usage.WalkAntigravity(window)
+		others := usage.WalkOthers(window)
 		// Run ccusage alongside the transcript walk — it's an npx
 		// invocation so it takes a second, but it's the most accurate
 		// source for billing-block burn rate and projections.
@@ -417,7 +419,32 @@ func (a App) refreshUsageCmd() tea.Cmd {
 				IsActive:            b.IsActive,
 			}
 		}
-		return usageLoadedMsg{Agg: agg, Codex: codex, Antigravity: antigravity, CcusageBlock: blk, Err: claudeErr}
+		return usageLoadedMsg{Agg: agg, Codex: codex, Antigravity: antigravity, Others: others, CcusageBlock: blk, OpenRouter: a.openRouterSpend(), Err: claudeErr}
+	}
+}
+
+// openRouterSpend fetches the configured OpenRouter account spend for
+// the dashboard's usage panel. Returns a disabled (zero) value with no
+// network call when [openrouter] isn't enabled — the common case. A
+// configured-but-failing fetch returns Enabled=true with ErrMsg so the
+// panel shows why the figure is missing rather than a silent blank.
+func (a App) openRouterSpend() daemon.OpenRouterSpend {
+	or := a.cfg.OpenRouter
+	if !or.Enabled || strings.TrimSpace(or.APIKey) == "" {
+		return daemon.OpenRouterSpend{Enabled: false}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	sp, err := openrouterusage.New(or.APIKey, or.BaseURL).Spend(ctx)
+	if err != nil {
+		return daemon.OpenRouterSpend{Enabled: true, ErrMsg: err.Error()}
+	}
+	return daemon.OpenRouterSpend{
+		Enabled:    true,
+		Usage:      sp.Usage,
+		Limit:      sp.Limit,
+		Remaining:  sp.Remaining,
+		IsFreeTier: sp.IsFreeTier,
 	}
 }
 
@@ -686,7 +713,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// hint" rendering.
 		a.dashboard.SetCodexUsage(msg.Codex)
 		a.dashboard.SetAntigravityUsage(msg.Antigravity)
+		a.dashboard.SetOtherUsage(msg.Others)
 		a.dashboard.SetCcusageBlock(msg.CcusageBlock)
+		a.dashboard.SetOpenRouterSpend(msg.OpenRouter)
 		return a, nil
 
 	case sessionsLoadedMsg:

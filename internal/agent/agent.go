@@ -148,6 +148,21 @@ type Commands struct {
 	Pi          string
 	Grok        string
 	ClaudeModel string
+
+	// OpenRouter routing. OpenRouterAgents is the set of agent IDs the
+	// user opted into routing through OpenRouter (config [openrouter]
+	// route_agents); OpenRouterBaseURL overrides the default API root.
+	// When an agent is in the set, LaunchCmd injects OPENAI_BASE_URL +
+	// OPENAI_API_KEY (the latter via the shell's OPENROUTER_API_KEY, so
+	// no literal secret lands in the command).
+	OpenRouterAgents  map[ID]bool
+	OpenRouterBaseURL string
+}
+
+// RoutesThroughOpenRouter reports whether the given agent was opted
+// into OpenRouter routing.
+func (c Commands) RoutesThroughOpenRouter(id ID) bool {
+	return c.OpenRouterAgents[id]
 }
 
 // All returns every supported agent in canonical order. Order matters:
@@ -411,7 +426,7 @@ func Candidates(a Agent) []string {
 // agent-specific shape from the built-in implementations.
 func LaunchCmd(id ID, continueFlag bool, commands Commands) string {
 	a := ByID(id)
-	return launchCmdWithBinary(a, configuredBinary(a.ID(), a.Binary(), commands), continueFlag, commands.ClaudeModel)
+	return launchCmdWithBinary(a, configuredBinary(a.ID(), a.Binary(), commands), continueFlag, commands)
 }
 
 // ResumeArgs resolves the argv vector for resuming one specific
@@ -498,7 +513,7 @@ func commandOverride(id ID, commands Commands) string {
 	return ""
 }
 
-func launchCmdWithBinary(a Agent, binary string, continueFlag bool, claudeModel string) string {
+func launchCmdWithBinary(a Agent, binary string, continueFlag bool, commands Commands) string {
 	cmd := shellQuote(binary)
 	// Pin ANTHROPIC_MODEL for Claude only; other agents read their
 	// model selection from their own config files. Use `export` (not
@@ -508,9 +523,27 @@ func launchCmdWithBinary(a Agent, binary string, continueFlag bool, claudeModel 
 	// retry shell or the bare shell fallback running un-pinned.
 	prefix := ""
 	if a.ID() == IDClaude {
-		if model := strings.TrimSpace(claudeModel); model != "" {
+		if model := strings.TrimSpace(commands.ClaudeModel); model != "" {
 			prefix = "export ANTHROPIC_MODEL=" + shellQuote(model) + "; "
 		}
+	}
+	// OpenRouter routing: for agents the user opted into (config
+	// [openrouter] route_agents), point the agent's OpenAI-compatible
+	// client at OpenRouter. Only makes sense for agents that honor
+	// OPENAI_BASE_URL / OPENAI_API_KEY (codex, opencode, kilo, …);
+	// the config is the opt-in, so ccmux doesn't guess.
+	//
+	// The key is read from the shell's OPENROUTER_API_KEY at launch
+	// rather than embedded literally — a literal key in the command
+	// string would surface in `ps` and in ccmux's own pane captures.
+	// The user sets OPENROUTER_API_KEY once in their shell profile.
+	if commands.RoutesThroughOpenRouter(a.ID()) {
+		base := strings.TrimSpace(commands.OpenRouterBaseURL)
+		if base == "" {
+			base = "https://openrouter.ai/api/v1"
+		}
+		prefix += "export OPENAI_BASE_URL=" + shellQuote(base) + "; " +
+			`export OPENAI_API_KEY="${OPENROUTER_API_KEY:-$OPENAI_API_KEY}"; `
 	}
 	if !continueFlag {
 		return prefix + cmd

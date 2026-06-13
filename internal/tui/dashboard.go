@@ -44,6 +44,10 @@ type dashboardModel struct {
 	// to decide between "real numbers" and "install hint".
 	codexUsage       usage.AgentSummary
 	antigravityUsage usage.AgentSummary
+	// otherUsage holds the second-wave agents (OpenCode, Kimi, …) that
+	// have usage in the window — only the ones actually in use, so the
+	// panel doesn't render a wall of placeholders for the full roster.
+	otherUsage []usage.NamedSummary
 
 	// updateAvailable is set by App when the launch-time auto-update
 	// check finds the local checkout behind upstream. Zero value
@@ -55,6 +59,12 @@ type dashboardModel struct {
 	// the last call failed — the usage panel silently skips the block
 	// summary when nil.
 	ccusage *ccusageBlock
+
+	// openRouter holds the OpenRouter account spend pulled when
+	// [openrouter] is enabled in config. Enabled=false (the default)
+	// renders no row; Enabled=true with ErrMsg shows why the figure is
+	// missing instead of a silent blank.
+	openRouter daemon.OpenRouterSpend
 
 	// now is a deterministic clock injection used by golden tests so
 	// the wall-clock render in statsPanel doesn't vary by run. Zero
@@ -101,9 +111,17 @@ func (m *dashboardModel) SetUsage(a *claudeusage.Aggregate) {
 func (m *dashboardModel) SetCodexUsage(s usage.AgentSummary)       { m.codexUsage = s }
 func (m *dashboardModel) SetAntigravityUsage(s usage.AgentSummary) { m.antigravityUsage = s }
 
+// SetOtherUsage receives the second-wave agents' usage rows (only the
+// agents with data in the window).
+func (m *dashboardModel) SetOtherUsage(o []usage.NamedSummary) { m.otherUsage = o }
+
 // SetCcusageBlock receives billing-block data from `npx ccusage blocks`.
 // Nil clears any previous value (e.g., when ccusage becomes unreachable).
 func (m *dashboardModel) SetCcusageBlock(b *ccusageBlock) { m.ccusage = b }
+
+// SetOpenRouterSpend receives the OpenRouter account spend from the
+// usage refresh. A zero value (Enabled=false) clears the row.
+func (m *dashboardModel) SetOpenRouterSpend(s daemon.OpenRouterSpend) { m.openRouter = s }
 
 // SetUpdateAvailable records a positive auto-update check so the
 // dashboard renders the "update available" banner. Called by App
@@ -406,6 +424,26 @@ func (m dashboardModel) usagePanel(width int) string {
 	rows = append(rows, " "+agentSectionHeading(st, agent.IDAntigravity, "Antigravity · recent"))
 	rows = append(rows, m.renderOtherAgentSection(m.antigravityUsage)...)
 	rows = append(rows, "")
+	// Second-wave agents (OpenCode, Kimi, …) — one heading + row each,
+	// only for the agents that actually have usage in the window. The
+	// accent colour comes from the same AgentAccent source as every
+	// other agent surface, so a new agent's row is colour-consistent
+	// with its dashboard tag and project dot.
+	for _, o := range m.otherUsage {
+		id := agent.ID(o.Agent)
+		title := agent.ByID(id).DisplayName() + " · recent"
+		rows = append(rows, " "+agentSectionHeading(st, id, title))
+		rows = append(rows, m.renderOtherAgentSection(o.Summary)...)
+		rows = append(rows, "")
+	}
+	// OpenRouter spend — only when [openrouter] is enabled in config.
+	// Different shape from the per-agent token rows (dollars against the
+	// key, not a token window) so it reads as its own section.
+	if m.openRouter.Enabled {
+		rows = append(rows, " "+st.Subtitle.Render("OpenRouter · account"))
+		rows = append(rows, m.renderOpenRouterSection()...)
+		rows = append(rows, "")
+	}
 	rows = append(rows, " "+st.Muted.Render("press ")+st.Key.Render("u")+
 		st.Muted.Render(" for top projects · cache hit rate · per-prompt cost"))
 
@@ -715,6 +753,33 @@ func (m dashboardModel) renderOtherAgentSection(s usage.AgentSummary) []string {
 		line += st.Muted.Render("  ·  ~") + cost + st.Muted.Render(" est.")
 	} else {
 		line += st.Muted.Render("  ·  no cost estimate")
+	}
+	return []string{line}
+}
+
+// renderOpenRouterSection renders the OpenRouter account-spend body:
+// either the error (configured key, failed fetch) or the spend line —
+// "$X.XX spent · $Y.YY of $Z.ZZ remaining" (or "· uncapped" when the
+// key has no limit), with a free-tier tag when applicable.
+func (m dashboardModel) renderOpenRouterSection() []string {
+	st := m.st
+	or := m.openRouter
+	if or.ErrMsg != "" {
+		return []string{"   " + st.StateNeedsInput.Render("unavailable") + st.Muted.Render("  ·  "+or.ErrMsg)}
+	}
+	bold := func(s string) string {
+		return lipgloss.NewStyle().Foreground(st.P.Lavender).Bold(true).Render(s)
+	}
+	line := "   " + bold(fmt.Sprintf("$%.2f", or.Usage)) + st.Muted.Render(" spent")
+	// Remaining == -1 is the uncapped sentinel; otherwise show the cap.
+	if or.Remaining < 0 || or.Limit <= 0 {
+		line += st.Muted.Render("  ·  uncapped")
+	} else {
+		line += st.Muted.Render("  ·  ") + bold(fmt.Sprintf("$%.2f", or.Remaining)) +
+			st.Muted.Render(fmt.Sprintf(" of $%.2f left", or.Limit))
+	}
+	if or.IsFreeTier {
+		line += st.Muted.Render("  ·  free tier")
 	}
 	return []string{line}
 }
