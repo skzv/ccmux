@@ -139,6 +139,7 @@ func init() {
 		newDoctorCmd(),
 		newDaemonCmd(),
 		newHostCmd(),
+		newMCPCmd(),
 		newMoshiSetupCmd(),
 		newUninstallCmd(),
 		newRenameCmd(),
