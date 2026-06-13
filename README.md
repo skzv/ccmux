@@ -279,6 +279,15 @@ bell = true                          # ring local terminal BEL on needs_input
 - `ccmux doctor` enumerates installed agents; setup wizard points at the right install command for each
 - Moshi push integration is currently Claude-only — Codex / Antigravity sessions get the audible terminal bell (still triggers a generic iOS push). Phase-2 work tracked in [`docs/01_Specs/02_Multi_Agent.md`](docs/01_Specs/02_Multi_Agent.md)
 
+### 🔌 MCP server
+
+- `ccmux-mcp` ships in the same brew install — a Model Context Protocol server agents can plug into to see and act on every session
+- Wire it up in `~/.claude/settings.json` (or any MCP-aware client): `{"mcpServers": {"ccmux": {"command": "ccmux-mcp"}}}`
+- Read-only by default: `list_sessions`, `read_pane`, `list_projects`, `list_conversations`, `get_usage`, `list_machines`, notes ones, daemon health
+- `--allow-mutate` exposes `spawn_session`, `send_keys`, `kill_session` — opt-in, hidden from `tools/list` until the flag is on
+- `CCMUX_HOST=mini.tail-xxxxx.ts.net:7474 ccmux-mcp` points it at a tailnet peer's daemon — an agent on the laptop can drive sessions on the Mac mini
+- Full spec: [`docs/01_Specs/04_MCP_Server.md`](docs/01_Specs/04_MCP_Server.md)
+
 ### 🤖 Claude Code config management
 
 - Dedicated "Claude" screen for everything in `~/.claude/`

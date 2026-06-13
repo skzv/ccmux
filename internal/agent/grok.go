@@ -2,7 +2,6 @@ package agent
 
 import (
 	"path/filepath"
-	"strings"
 	"time"
 )
 
@@ -71,11 +70,10 @@ func (Grok) InitialPrompt(name, description string) string {
 // Classify uses the same conservative quiet-pane heuristic as the other
 // non-Claude agents until we have real grok pane fixtures.
 func (Grok) Classify(pane string, lastChange time.Time, idleThreshold time.Duration) State {
-	if strings.TrimSpace(pane) == "" {
-		return StateUnknown
-	}
-	if time.Since(lastChange) >= idleThreshold {
-		return StateNeedsInput
-	}
-	return StateActive
+	return engineClassify(IDGrok, pane, "", lastChange, idleThreshold)
+}
+
+// ClassifyWithTitle routes through the data-driven engine.
+func (Grok) ClassifyWithTitle(pane, title string, lastChange time.Time, idleThreshold time.Duration) State {
+	return engineClassify(IDGrok, pane, title, lastChange, idleThreshold)
 }

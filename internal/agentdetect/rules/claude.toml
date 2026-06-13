@@ -1,0 +1,41 @@
+id = "claude"
+
+# Highest priority: OSC-title spinner. The Phase 1 PR added this
+# signal explicitly for claude; rules here keep that semantic.
+[[rules]]
+id = "title_spinner_working"
+state = "working"
+priority = 1100
+region = "osc_title"
+regex = ['^[\x{2800}-\x{28FF}]']
+
+# Rounded box-drawing prompt frame on the last non-empty line of the
+# pane. Mirrors looksLikeClaudePrompt's contract: at least one of
+# ╭╮╰╯ AND a second hit from {╭╮╰╯│─>}. Encoded as two priorities so
+# the engine respects the "rounded glyph required" rule first.
+[[rules]]
+id = "claude_prompt_frame"
+state = "blocked"
+priority = 900
+region = "last_line"
+regex = ['[╭╮╰╯]']
+any = [
+  { regex = ['╭'] },
+  { regex = ['╮'] },
+  { regex = ['╰'] },
+  { regex = ['╯'] },
+  { regex = ['│'] },
+  { regex = ['─'] },
+  { regex = ['>'] },
+]
+
+# Shell prompt at the tail = claude crashed.
+[[rules]]
+id = "claude_shell_prompt"
+state = "error"
+priority = 800
+region = "last_line"
+regex = ['[\$#%]\s*$']
+not = [
+  { regex = ['[╭╮╰╯]'] },
+]

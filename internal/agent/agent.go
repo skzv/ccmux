@@ -89,6 +89,34 @@ type Agent interface {
 	Classify(pane string, lastChange time.Time, idleThreshold time.Duration) State
 }
 
+// TitleAwareAgent is the optional interface an Agent implements to
+// receive the OSC-set pane title (#{pane_title}) as a second
+// detection signal. Agent CLIs broadcast their state in the title
+// far more reliably than they do in the body — a braille spinner
+// while working, explicit strings like "Action Required" when
+// blocked — so a title-aware implementation gets both signals and
+// the engine prioritizes the cleaner one.
+//
+// Optional rather than required so adding the signal doesn't force
+// every Agent's tests to be updated at once; the poll loop uses the
+// title-aware path automatically when available, otherwise falls
+// back to legacy Classify.
+type TitleAwareAgent interface {
+	Agent
+	ClassifyWithTitle(pane, title string, lastChange time.Time, idleThreshold time.Duration) State
+}
+
+// ClassifyState is the dispatcher: routes to ClassifyWithTitle on
+// agents that implement it, falls back to Classify otherwise.
+// Centralized so the poll loop is one line and a future migration to
+// title-aware-everywhere touches one place.
+func ClassifyState(a Agent, pane, title string, lastChange time.Time, idleThreshold time.Duration) State {
+	if ta, ok := a.(TitleAwareAgent); ok {
+		return ta.ClassifyWithTitle(pane, title, lastChange, idleThreshold)
+	}
+	return a.Classify(pane, lastChange, idleThreshold)
+}
+
 // Commands holds user-configured executable paths for agents. Empty
 // fields preserve the default binary-on-PATH behavior for that agent.
 //

@@ -1,0 +1,17 @@
+id = "cursor"
+
+# Same title-spinner contract as the other agents.
+[[rules]]
+id = "title_spinner_working"
+state = "working"
+priority = 1100
+region = "osc_title"
+regex = ['^[\x{2800}-\x{28FF}]']
+
+# Cursor agent's input prompt: caret on the last line.
+[[rules]]
+id = "body_prompt_caret"
+state = "idle"
+priority = 700
+region = "last_line"
+line_regex = ['^\s*[>❯]\s*$']
