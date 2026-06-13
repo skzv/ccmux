@@ -89,27 +89,28 @@ type Agent interface {
 	Classify(pane string, lastChange time.Time, idleThreshold time.Duration) State
 }
 
-// TitleAwareAgent is the optional interface an Agent implements to
-// receive the OSC-set pane title (#{pane_title}) as a second
-// detection signal. Agent CLIs broadcast their state in the title
-// far more reliably than they do in the body — a braille spinner
-// while working, explicit strings like "Action Required" when
-// blocked — so a title-aware implementation gets both signals and
-// the engine prioritizes the cleaner one.
+// TitleAwareAgent is the optional interface an Agent can implement to
+// receive the pane's OSC-set title (#{pane_title}) as a second
+// detection signal. Agent CLIs set the title to a braille spinner
+// while working and to strings like "Action Required" when blocked —
+// far more reliable than scraping the pane body. Implementations
+// should treat title-based evidence as higher-priority than body
+// scraping when present, falling through to body-only logic when the
+// title is empty.
 //
-// Optional rather than required so adding the signal doesn't force
-// every Agent's tests to be updated at once; the poll loop uses the
-// title-aware path automatically when available, otherwise falls
-// back to legacy Classify.
+// Optional rather than required so adding the second signal doesn't
+// force every Agent's tests to be updated at once; the poll loop
+// uses the title-aware path automatically when the implementation
+// satisfies this interface, otherwise it calls the legacy Classify.
 type TitleAwareAgent interface {
 	Agent
 	ClassifyWithTitle(pane, title string, lastChange time.Time, idleThreshold time.Duration) State
 }
 
-// ClassifyState is the dispatcher: routes to ClassifyWithTitle on
-// agents that implement it, falls back to Classify otherwise.
-// Centralized so the poll loop is one line and a future migration to
-// title-aware-everywhere touches one place.
+// ClassifyState dispatches to ClassifyWithTitle when available,
+// falling back to the legacy Classify. Centralized so the poll loop
+// stays one line and a future migration to title-aware-everywhere
+// touches one place.
 func ClassifyState(a Agent, pane, title string, lastChange time.Time, idleThreshold time.Duration) State {
 	if ta, ok := a.(TitleAwareAgent); ok {
 		return ta.ClassifyWithTitle(pane, title, lastChange, idleThreshold)

@@ -120,11 +120,22 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 			log.Printf("ccmuxd: capture-pane %s: %v", sn.ts.Name, err)
 			continue
 		}
+		// Read the OSC-set pane title alongside the body. tmux.PaneTitle
+		// swallows session-gone errors as "" so it never aborts a poll
+		// tick — body classification still runs the same.
+		title := ""
+		if s.paneTitle != nil {
+			title, _ = s.paneTitle(ctx, sn.ts.Name)
+		}
 		lastCh := sn.lastCh
 		if pane != sn.prevLast {
 			lastCh = time.Now()
 		}
-		newSt := agent.ByID(sn.agentID).Classify(pane, lastCh, idleNeeds)
+		// ClassifyState routes through ClassifyWithTitle when the agent
+		// implements TitleAwareAgent, otherwise falls back to the
+		// legacy body-only Classify. So agents that don't implement
+		// the new path keep their exact pre-Phase-1 behavior.
+		newSt := agent.ClassifyState(agent.ByID(sn.agentID), pane, title, lastCh, idleNeeds)
 		results = append(results, result{name: sn.ts.Name, pane: pane, newState: newSt})
 	}
 

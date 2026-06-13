@@ -280,3 +280,22 @@ func TestAttachArgs_SessionNameWithSpecials(t *testing.T) {
 		}
 	}
 }
+
+// TestPaneTitle_MissingSessionIsEmpty — `tmux display-message` errors
+// when the target session/pane doesn't exist. PaneTitle deliberately
+// swallows that error and returns "" so the poll loop's title signal
+// never aborts a tick on a session that vanished between List and
+// PaneTitle. Verified against a known-bad session name that no tmux
+// server should be serving.
+func TestPaneTitle_MissingSessionIsEmpty(t *testing.T) {
+	// Use a name that includes the per-test PID + nanos so even a
+	// developer with an exotic real session can't accidentally collide.
+	bogus := "ccmux-paneTitle-bogus-DOES-NOT-EXIST"
+	got, err := PaneTitle(t.Context(), bogus)
+	if err != nil {
+		t.Errorf("PaneTitle on a missing session should not return an error, got: %v", err)
+	}
+	if got != "" {
+		t.Errorf("missing session should return empty string, got: %q", got)
+	}
+}

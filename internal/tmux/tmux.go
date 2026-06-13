@@ -199,6 +199,40 @@ func CapturePane(ctx context.Context, name string, lines int) (string, error) {
 	return string(out), nil
 }
 
+// PaneTitle returns the current value of `#{pane_title}` for the named
+// session's active pane. This is the title the *inner* program (the
+// agent CLI) set via the OSC 2 escape sequence — distinct from the
+// outer tmux/terminal title controlled by `set-titles-string`.
+//
+// Agent CLIs broadcast their state here far more reliably than they
+// do in the pane body: braille spinner chars while working, strings
+// like "Action Required" when blocked. Reading it is a small `tmux
+// display-message -p` shell-out — orders of magnitude smaller than
+// capture-pane — and feeds straight into the classifier as a high-
+// priority signal alongside the body.
+//
+// Returns "" with no error on a missing session (consistent with
+// "title not available") so callers can pass the result straight
+// through without special-casing absent sessions.
+func PaneTitle(ctx context.Context, name string) (string, error) {
+	args := []string{"display-message", "-p", "-t", exactPane(name), "#{pane_title}"}
+	cmd := command(ctx, "tmux", args...)
+	out, err := cmd.Output()
+	if err != nil {
+		// `display-message` errors if the session is gone or the pane
+		// id is malformed. Treat both as "no title" — the classifier
+		// will fall back to body-only detection, identical behavior
+		// to before this signal existed.
+		return "", nil
+	}
+	// display-message terminates with a newline; trim once.
+	s := string(out)
+	if n := len(s); n > 0 && s[n-1] == '\n' {
+		s = s[:n-1]
+	}
+	return s, nil
+}
+
 // SendKeys sends a literal key sequence to the named session.
 func SendKeys(ctx context.Context, name, keys string) error {
 	cmd := command(ctx, "tmux", "send-keys", "-t", exactPane(name), keys)
