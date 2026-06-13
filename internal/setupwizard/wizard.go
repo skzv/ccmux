@@ -100,6 +100,7 @@ func RunWithOptions(ctx context.Context, out io.Writer, opts Options) error {
 		{"Moshi (mobile push)", stepMoshi},
 		{"Local SSH key (~/.ssh/id_ed25519)", stepSSHKey},
 		{"ccmux config", stepConfig},
+		{"ccmux-mcp registration (Claude Code)", stepMCP},
 		{"ccmuxd autostart", stepDaemonService},
 	}
 

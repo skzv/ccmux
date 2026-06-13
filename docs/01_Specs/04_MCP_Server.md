@@ -32,6 +32,15 @@ Read-only by default. To expose the mutating tools, pass `--allow-mutate`:
 
 Codex, Cursor, and any other MCP-aware client follow the same shape — point at the `ccmux-mcp` binary, optionally pass `--allow-mutate`.
 
+### Setup helpers
+
+Don't want to hand-edit `settings.json`? Two paths do it for you:
+
+- **Setup wizard.** `ccmux setup` now includes a "ccmux-mcp registration (Claude Code)" step that detects Claude Code on PATH and offers to register the entry — with a follow-up prompt for `--allow-mutate`. Idempotent; re-running detects the existing registration and reports the mode.
+- **CLI.** `ccmux mcp register [--allow-mutate]` does the same thing without the wizard chrome. `ccmux mcp status` reports whether ccmux is registered and in which mode.
+
+Both write a timestamped backup to `~/.claude/backups/` before mutating, preserve any other `mcpServers` entries you already have, and round-trip unknown JSON keys verbatim via the `internal/claudeconfig` round-trip discipline.
+
 ## Target a remote daemon
 
 ```bash
