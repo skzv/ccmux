@@ -32,6 +32,11 @@ type Keymap struct {
 	Kill     key.Binding
 	Rename   key.Binding
 	EditInEd key.Binding
+	// Preview toggles the side-by-side pane preview on the Sessions
+	// screen: a read-only view of the selected session's recent pane
+	// content, refreshed each second. Off by default so the keystroke
+	// list stays short for users who don't want it.
+	Preview key.Binding
 
 	// Conversations-screen actions
 	ToggleHeadless key.Binding
@@ -63,6 +68,7 @@ func DefaultKeymap() Keymap {
 		Kill:     key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "kill")),
 		Rename:   key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "rename")),
 		EditInEd: key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit")),
+		Preview:  key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "preview")),
 
 		ToggleHeadless: key.NewBinding(key.WithKeys("H"), key.WithHelp("H", "toggle headless")),
 	}

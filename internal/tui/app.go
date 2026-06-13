@@ -1408,6 +1408,21 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// Forward to the active screen.
 	var cmd tea.Cmd
+	// Preview-pane messages must reach sessionsM even when another
+	// screen is active — otherwise the per-second tick chain dies
+	// the moment the user navigates away, and re-entering Sessions
+	// leaves the preview stuck on stale content until they toggle
+	// it off and back on. We pre-route only when the active screen
+	// isn't Sessions; on Sessions the regular switch below handles
+	// it, and double-routing would multiply the tick chain.
+	if a.screen != ScreenSessions {
+		switch msg.(type) {
+		case previewLoadedMsg, previewTickMsg:
+			var pcmd tea.Cmd
+			a.sessionsM, pcmd = a.sessionsM.Update(msg)
+			cmd = pcmd
+		}
+	}
 	switch a.screen {
 	case ScreenSessions:
 		// Dashboard always updates (handles usage ticks, refresh msgs).
