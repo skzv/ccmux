@@ -781,7 +781,15 @@ func newHostCmd() *cobra.Command {
 			Short: "Add a remote ccmuxd host",
 			Args:  cobra.ExactArgs(2),
 			RunE: func(_ *cobra.Command, args []string) error {
-				cfg, _ := config.Load()
+				// Abort on a Load error instead of proceeding: Load
+				// returns Defaults() alongside the error on a corrupt or
+				// unreadable config.toml, and Save truncates the file —
+				// so swallowing the error would wipe every other host and
+				// all other settings on the next write.
+				cfg, err := config.Load()
+				if err != nil {
+					return fmt.Errorf("load config (not modifying it): %w", err)
+				}
 				cfg.Hosts = append(cfg.Hosts, config.Host{Name: args[0], Address: args[1], Mosh: true, Port: 7474})
 				return config.Save(cfg)
 			},
@@ -791,7 +799,12 @@ func newHostCmd() *cobra.Command {
 			Short: "Remove a remote ccmuxd host",
 			Args:  cobra.ExactArgs(1),
 			RunE: func(_ *cobra.Command, args []string) error {
-				cfg, _ := config.Load()
+				// Same guard as `host add`: never rewrite config.toml from
+				// a Defaults()-on-error config — it would erase everything.
+				cfg, err := config.Load()
+				if err != nil {
+					return fmt.Errorf("load config (not modifying it): %w", err)
+				}
 				out := cfg.Hosts[:0]
 				for _, h := range cfg.Hosts {
 					if h.Name != args[0] {

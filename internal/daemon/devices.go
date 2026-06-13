@@ -76,10 +76,25 @@ func OpenDeviceStore(path string) (*DeviceStore, error) {
 	switch {
 	case err == nil:
 		var list []DeviceRegistration
-		if json.Unmarshal(raw, &list) == nil {
-			for _, r := range list {
-				s.byID[r.PublicKeyHash] = r
+		if uerr := json.Unmarshal(raw, &list); uerr != nil {
+			// The file exists but doesn't parse (truncated, hand-edited,
+			// version skew). DO NOT silently fall through to an empty
+			// in-memory store: the first Register/Remove flush would
+			// os.Rename a fresh file over this one and permanently
+			// destroy the device bindings that might still be
+			// recoverable. Move the bad file aside first so it's
+			// preserved, then start fresh. If we can't even move it,
+			// fail loudly rather than risk clobbering it — every device
+			// path already guards a nil store, so push just stays off.
+			bak := path + ".corrupt"
+			if rerr := os.Rename(path, bak); rerr != nil {
+				return nil, fmt.Errorf("device store %s is corrupt (%v) and could not be set aside: %w", path, uerr, rerr)
 			}
+			// s.byID is already the empty map — return the fresh store.
+			return s, nil
+		}
+		for _, r := range list {
+			s.byID[r.PublicKeyHash] = r
 		}
 	case errors.Is(err, os.ErrNotExist):
 		// fresh store
