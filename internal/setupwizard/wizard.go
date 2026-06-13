@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
@@ -542,12 +543,16 @@ func stepGitHubAuth(ctx context.Context, out io.Writer) error {
 
 // stepTailscale: verify the daemon is running and we're signed into a
 // tailnet.
-func stepTailscale(_ context.Context, out io.Writer) error {
+func stepTailscale(ctx context.Context, out io.Writer) error {
 	if _, err := exec.LookPath("tailscale"); err != nil {
 		fmt.Fprintln(out, stWarn.Render("  tailscale not on PATH — skipped"))
 		return nil
 	}
-	if out2, err := exec.Command("tailscale", "ip", "-4").Output(); err == nil && strings.TrimSpace(string(out2)) != "" {
+	// Honor the wizard's context (and CLAUDE.md's exec-with-context rule)
+	// so a wedged `tailscale` CLI can't hang the setup step indefinitely.
+	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if out2, err := exec.CommandContext(cctx, "tailscale", "ip", "-4").Output(); err == nil && strings.TrimSpace(string(out2)) != "" {
 		ip := strings.TrimSpace(string(out2))
 		fmt.Fprintf(out, "  %s  signed in, tailnet IP: %s\n", stOK.Render("✓"), ip)
 		return nil

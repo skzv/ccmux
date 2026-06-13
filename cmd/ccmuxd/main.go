@@ -170,7 +170,7 @@ func run() error {
 	// excludes localOnlyRoutes — a tailnet peer must not be able to mint
 	// pair tokens for itself.
 	if cfg.Daemon.ListenTailnet {
-		if addr, err := tailscaleAddr(cfg.Daemon.TailnetPort); err == nil {
+		if addr, err := tailscaleAddr(ctx, cfg.Daemon.TailnetPort); err == nil {
 			tailnetMux := http.NewServeMux()
 			srv.routes(tailnetMux)
 			tailnetSrv := newHTTPServer(tailnetMux)
@@ -482,7 +482,7 @@ func (s *server) createSession(w http.ResponseWriter, r *http.Request) {
 	// keep names safe for `tmux new-session -s`.
 	var session string
 	if name := strings.TrimSpace(req.Name); name != "" {
-		if strings.ContainsAny(name, "/\\:") {
+		if badSessionName(name) {
 			http.Error(w, "name must not contain /, \\, or :", http.StatusBadRequest)
 			return
 		}
@@ -570,7 +570,7 @@ func (s *server) createBareSession(w http.ResponseWriter, r *http.Request) {
 	}
 	// Reject obviously-bad names — the same rule createProject uses,
 	// for the same reason (we'll pass it to tmux as -s).
-	if strings.ContainsAny(name, "/\\:") {
+	if badSessionName(name) {
 		http.Error(w, "name must not contain /, \\, or :", http.StatusBadRequest)
 		return
 	}
@@ -625,6 +625,15 @@ func (s *server) applyChrome(ctx context.Context, session, projectLabel string) 
 	_ = tmuxchrome.Apply(ctx, session, projectLabel, moshiReachable, false)
 }
 
+// badSessionName reports whether a session name contains a character
+// that tmux would interpret as a target qualifier — `:` selects a
+// window/pane, `/` and `\` are path separators. Centralizes the rule
+// the create/rename/bare handlers share so every name that reaches a
+// tmux `-t` argument is validated the same way.
+func badSessionName(name string) bool {
+	return strings.ContainsAny(name, "/\\:")
+}
+
 func (s *server) handleSessionsItem(w http.ResponseWriter, r *http.Request) {
 	// /v1/sessions/<name>[/<subaction>]
 	tail := strings.TrimPrefix(r.URL.Path, "/v1/sessions/")
@@ -632,6 +641,16 @@ func (s *server) handleSessionsItem(w http.ResponseWriter, r *http.Request) {
 	name := parts[0]
 	if name == "" {
 		http.Error(w, "session name required", http.StatusBadRequest)
+		return
+	}
+	// Validate the path-derived name BEFORE routing to any subaction.
+	// kill/send-keys/preview/attach all pass this straight to tmux as a
+	// `-t` target; without this guard a `:` in the URL name could
+	// mis-target an unrelated window/pane of another session (the
+	// create/rename handlers already reject these, but the item
+	// handlers didn't).
+	if badSessionName(name) {
+		http.Error(w, "name must not contain /, \\, or :", http.StatusBadRequest)
 		return
 	}
 	if len(parts) == 1 {
@@ -685,7 +704,7 @@ func (s *server) handleRename(w http.ResponseWriter, r *http.Request, name strin
 	// Same rule createSession/createBareSession enforce: tmux interprets
 	// `name:window.pane` as a target spec, so a rename to "victim:0"
 	// would let later send-keys land in an unrelated tmux session.
-	if strings.ContainsAny(req.Name, "/\\:") {
+	if badSessionName(req.Name) {
 		http.Error(w, "name must not contain /, \\, or :", http.StatusBadRequest)
 		return
 	}
@@ -1166,8 +1185,14 @@ func (s *server) createProject(w http.ResponseWriter, r *http.Request) {
 }
 
 // tailscaleAddr returns "<tailscale_ip>:<port>" if Tailscale is running, else error.
-func tailscaleAddr(port int) (string, error) {
-	out, err := exec.Command("tailscale", "ip", "-4").Output()
+func tailscaleAddr(ctx context.Context, port int) (string, error) {
+	// Bound the shell-out: CLAUDE.md requires every exec.Command to take
+	// a context, and this is called from a request handler (handlePairToken)
+	// with no other timeout. A 5s ceiling keeps a wedged `tailscale` CLI
+	// from blocking the pairing request indefinitely.
+	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(cctx, "tailscale", "ip", "-4").Output()
 	if err != nil {
 		return "", err
 	}

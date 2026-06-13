@@ -672,6 +672,15 @@ func newDaemonCmd() *cobra.Command {
 			RunE: func(_ *cobra.Command, _ []string) error {
 				out, err := exec.Command("pkill", "-x", "ccmuxd").CombinedOutput()
 				if err != nil {
+					// pkill exits 1 when nothing matched — i.e. ccmuxd
+					// isn't running. That's a successful no-op for
+					// `stop`, not an error, so don't fail the command
+					// (a non-zero exit breaks `ccmux daemon stop && …`
+					// chains and scripted teardown).
+					if ee, ok := err.(*exec.ExitError); ok && ee.ExitCode() == 1 {
+						fmt.Println("ccmuxd is not running")
+						return nil
+					}
 					return fmt.Errorf("%w (%s)", err, strings.TrimSpace(string(out)))
 				}
 				fmt.Println("ccmuxd stopped")

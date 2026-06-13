@@ -421,14 +421,33 @@ func (c Cache) Write(cat Catalog) error {
 	if err != nil {
 		return fmt.Errorf("encode model cache: %w", err)
 	}
-	tmp := c.Path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	// Unique temp name per write (os.CreateTemp), not a fixed
+	// "<path>.tmp". The background refresh loop and a forced
+	// ?refresh=true can write concurrently; a shared temp name lets one
+	// writer's Rename fire after the other's, racing on the same temp
+	// file and producing a spurious "rename: no such file" error.
+	tmp, err := os.CreateTemp(filepath.Dir(c.Path), "models-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create tmp cache: %w", err)
+	}
+	tmpName := tmp.Name()
+	renamed := false
+	defer func() {
+		if !renamed {
+			_ = os.Remove(tmpName)
+		}
+	}()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
 		return fmt.Errorf("write tmp cache: %w", err)
 	}
-	if err := os.Rename(tmp, c.Path); err != nil {
-		_ = os.Remove(tmp)
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close tmp cache: %w", err)
+	}
+	if err := os.Rename(tmpName, c.Path); err != nil {
 		return fmt.Errorf("rename cache: %w", err)
 	}
+	renamed = true
 	return nil
 }
 

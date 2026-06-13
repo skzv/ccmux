@@ -90,17 +90,18 @@ func hasAnyLocale(env []string) bool {
 
 func TestParseList_HappyPath(t *testing.T) {
 	// Exactly the format `tmux list-sessions -F listFormat` produces in
-	// a UTF-8 locale — tabs between fields, newline between rows.
+	// a UTF-8 locale — tabs between fields, newline between rows. Field
+	// order: name, created, activity, attached, windows, path (path last).
 	raw := []byte(strings.Join([]string{
-		"0\t1778364516\t1778367593\t/Users/skz/src\t0\t1",
-		"c-foo\t1778469669\t1778523925\t/Users/skz/Projects/foo\t1\t2",
+		"0\t1778364516\t1778367593\t0\t1\t/Users/skz/src",
+		"c-foo\t1778469669\t1778523925\t1\t2\t/Users/skz/Projects/foo",
 		"",
 	}, "\n"))
 	got := parseList(raw)
 	if len(got) != 2 {
 		t.Fatalf("parseList returned %d sessions, want 2", len(got))
 	}
-	if got[0].Name != "0" || got[0].Attached || got[0].Windows != 1 {
+	if got[0].Name != "0" || got[0].Attached || got[0].Windows != 1 || got[0].Path != "/Users/skz/src" {
 		t.Errorf("session 0: %+v", got[0])
 	}
 	if got[1].Name != "c-foo" || !got[1].Attached || got[1].Windows != 2 || got[1].Path != "/Users/skz/Projects/foo" {
@@ -126,10 +127,29 @@ func TestParseList_Empty(t *testing.T) {
 
 func TestParseList_TooFewFieldsSkipped(t *testing.T) {
 	raw := []byte("not-enough\tfields\n" +
-		"ok\t1\t2\t/path\t0\t1\n")
+		"ok\t1\t2\t0\t1\t/path\n")
 	got := parseList(raw)
 	if len(got) != 1 || got[0].Name != "ok" {
 		t.Fatalf("expected only the well-formed row, got %v", got)
+	}
+}
+
+// TestParseList_TabInPath — a directory path containing a tab must not
+// shift the attached/windows columns. session_path is the last field
+// and parseList uses SplitN, so the path absorbs the embedded tab
+// rather than spilling into a phantom column (which previously
+// mis-parsed attached/windows).
+func TestParseList_TabInPath(t *testing.T) {
+	raw := []byte("c-weird\t100\t200\t1\t3\t/Users/skz/od\td name\n")
+	got := parseList(raw)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(got))
+	}
+	if got[0].Path != "/Users/skz/od\td name" {
+		t.Errorf("path with tab not preserved: %q", got[0].Path)
+	}
+	if !got[0].Attached || got[0].Windows != 3 {
+		t.Errorf("tab in path shifted columns: attached=%v windows=%d", got[0].Attached, got[0].Windows)
 	}
 }
 
