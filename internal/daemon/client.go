@@ -33,7 +33,27 @@ const (
 	idleConnTimeout     = 30 * time.Second
 	maxIdleConns        = 4
 	maxIdleConnsPerHost = 2
-	requestTimeout      = 5 * time.Second
+	// backstopTimeout is a defensive ceiling applied ONLY to requests
+	// whose context carries no deadline of its own. The per-call
+	// context is the real budget — every caller passes a WithTimeout
+	// context sized to the operation (a few seconds for a poll, up to
+	// 90s for a remote project create). We deliberately do NOT set
+	// http.Client.Timeout, because that is a whole-request ceiling the
+	// caller's longer context cannot extend: it silently truncated
+	// slow remote creates at 5s, surfacing a client-side error while
+	// the daemon ran to completion and left an orphan session. The
+	// backstop only catches a future caller that forgets a deadline,
+	// so it's generous.
+	backstopTimeout = 120 * time.Second
+	// maxResponseBytes caps how much JSON the client will read from a
+	// daemon response. The daemon already caps INBOUND bodies at 64KiB
+	// so a peer can't OOM it; this is the symmetric protection on the
+	// client side, since RemoteClient decodes responses from a separate
+	// trust boundary (a ccmuxd on another tailnet host that could be
+	// compromised, buggy, or version-mismatched). Generous vs. the
+	// daemon's inbound cap because legitimate list responses (many
+	// sessions / conversations) are bigger than any single request.
+	maxResponseBytes = 16 << 20 // 16 MiB
 )
 
 // Client speaks the ccmuxd JSON protocol. One Client = one ccmuxd, whether
@@ -102,7 +122,9 @@ func LocalClient() (*Client, error) {
 				MaxIdleConns:        maxIdleConns,
 				MaxIdleConnsPerHost: maxIdleConnsPerHost,
 			},
-			Timeout: requestTimeout,
+			// No whole-request Timeout — per-call context is the budget
+			// (see backstopTimeout). A global Timeout here truncated
+			// long-running creates at 5s and orphaned remote sessions.
 		}
 		localClientVal = &Client{hc: hc, base: "http://unix", scheme: "unix", addr: path}
 	})
@@ -124,7 +146,9 @@ func RemoteClient(addr string) *Client {
 				MaxIdleConns:        maxIdleConns,
 				MaxIdleConnsPerHost: maxIdleConnsPerHost,
 			},
-			Timeout: requestTimeout,
+			// No whole-request Timeout — per-call context is the budget
+			// (see backstopTimeout). A global Timeout here truncated
+			// long-running creates at 5s and orphaned remote sessions.
 		},
 		base:   "http://" + addr,
 		scheme: "http",
@@ -292,7 +316,29 @@ func (c *Client) SearchNotes(ctx context.Context, project, query string) ([]Sear
 // Addr returns a human description of this client's target.
 func (c *Client) Addr() string { return c.scheme + "://" + c.addr }
 
+// ensureDeadline returns a context guaranteed to carry a deadline. If
+// the caller already set one (the normal case — every client call
+// wraps WithTimeout), it's used as-is. Only a deadline-less context
+// gets the defensive backstop, so we never truncate a real per-call
+// budget but also never hang forever on a forgotten deadline.
+func ensureDeadline(ctx context.Context) (context.Context, context.CancelFunc) {
+	if _, ok := ctx.Deadline(); ok {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, backstopTimeout)
+}
+
+// decodeCapped decodes a JSON response body behind an io.LimitReader so
+// an oversized or never-terminating response from a remote daemon can't
+// drive the client to OOM. The whole-request context still bounds wall
+// time; this bounds bytes.
+func decodeCapped(body io.Reader, out any) error {
+	return json.NewDecoder(io.LimitReader(body, maxResponseBytes)).Decode(out)
+}
+
 func (c *Client) getJSON(ctx context.Context, path string, out any) error {
+	ctx, cancel := ensureDeadline(ctx)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+path, nil)
 	if err != nil {
 		return err
@@ -305,10 +351,12 @@ func (c *Client) getJSON(ctx context.Context, path string, out any) error {
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("ccmuxd %s GET %s: status %d", c.addr, path, resp.StatusCode)
 	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	return decodeCapped(resp.Body, out)
 }
 
 func (c *Client) post(ctx context.Context, path string, body, out any) error {
+	ctx, cancel := ensureDeadline(ctx)
+	defer cancel()
 	// Important: pass an untyped nil io.Reader when there's no body —
 	// a typed-nil *bytesReader satisfies the interface and trips
 	// net/http's "non-nil body" path, which then nil-dereferences in
@@ -337,7 +385,7 @@ func (c *Client) post(ctx context.Context, path string, body, out any) error {
 		return fmt.Errorf("ccmuxd %s POST %s: status %d", c.addr, path, resp.StatusCode)
 	}
 	if out != nil {
-		return json.NewDecoder(resp.Body).Decode(out)
+		return decodeCapped(resp.Body, out)
 	}
 	return nil
 }
