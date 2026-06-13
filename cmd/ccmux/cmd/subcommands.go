@@ -583,6 +583,32 @@ func runDaemonStart(out io.Writer, deps daemonStartDeps) error {
 	return nil
 }
 
+// waitForDaemonHealth polls the local ccmuxd's /v1/health until it
+// answers or `timeout` elapses, returning true on the first success.
+// Used after a restart to confirm the daemon is actually serving (not
+// just that a process exists), so callers report the settled state
+// instead of a transient mid-restart gap. A health check — not a bare
+// pgrep — because during the handoff the OLD process may still be
+// alive but no longer listening; only the NEW one answers health.
+func waitForDaemonHealth(timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		cli, err := daemon.LocalClient()
+		if err == nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+			_, herr := cli.Health(ctx)
+			cancel()
+			if herr == nil {
+				return true
+			}
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
 // runningCcmuxdPID returns the pid of a live ccmuxd via `pgrep -x`,
 // or ok=false when none is running. `-x` matches the exact process
 // name so it can't be confused by, say, `ccmux daemon start` itself
@@ -707,11 +733,24 @@ so install scripts can call it unconditionally.`,
 				if err != nil {
 					return err
 				}
-				if s.Running {
+				// daemonservice.Restart() issues the bounce and returns
+				// immediately, but the new daemon needs a beat to re-bind
+				// the socket. Probing right away (as we used to) reported
+				// "not running" mid-restart even though it was coming back
+				// — the confusing message after `make install`. Poll the
+				// IPC health endpoint so we report the SETTLED state: a
+				// successful health check means it's actually serving.
+				if waitForDaemonHealth(8 * time.Second) {
 					fmt.Println("✓ ccmuxd restarted")
-				} else {
-					fmt.Println("note: ccmuxd is not running — start it with `ccmux daemon start` or `ccmux daemon install`")
+					return nil
 				}
+				if s.Running {
+					// Process is up but not answering health yet — almost
+					// certainly still warming up, not a failure.
+					fmt.Println("✓ ccmuxd restarted (still warming up)")
+					return nil
+				}
+				fmt.Println("note: ccmuxd is not running — start it with `ccmux daemon start` or `ccmux daemon install`")
 				return nil
 			},
 		},

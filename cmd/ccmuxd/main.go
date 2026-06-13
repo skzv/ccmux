@@ -136,7 +136,13 @@ func run() error {
 	// with a short timeout. If dial succeeds, another ccmuxd is alive
 	// and we refuse to start. If dial fails (no socket file, or stale
 	// socket from a crash), it's safe to clean up and bind.
-	if isAnotherDaemonAlive(sockPath, 300*time.Millisecond) {
+	// Wait briefly for any existing daemon to release the socket. During
+	// a restart the previous instance is mid-graceful-shutdown when we
+	// start, so a single probe would spuriously yield and leave the
+	// daemon down until launchd's respawn throttle. A genuinely
+	// persistent peer is still detected (waitForSocketHandoff returns
+	// false after the window) and we exit cleanly.
+	if !waitForSocketHandoff(sockPath, 3*time.Second) {
 		// Wrap the sentinel so main() can errors.Is() to it and exit 0.
 		// See errPeerAlreadyServing for why this isn't a regular error.
 		return fmt.Errorf(
