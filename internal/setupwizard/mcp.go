@@ -199,4 +199,3 @@ func MCPStatus() (mode string, registered bool, err error) {
 	}
 	return "read-only", true, nil
 }
-
