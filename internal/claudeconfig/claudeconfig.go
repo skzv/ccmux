@@ -82,8 +82,52 @@ type Settings struct {
 // HookGroup is one entry in settings.hooks.<lifecycle>.
 type HookGroup struct {
 	Hooks []Hook `json:"hooks"`
-	// Other fields (e.g. "matchers") preserved as raw.
+	// Other fields (notably "matcher", which scopes a hook to specific
+	// tools like Bash) are preserved verbatim through Extra. Without
+	// the custom (Un)MarshalJSON below, the standard library would
+	// silently drop them — turning a tool-scoped hook into an
+	// all-tools hook on any ccmux settings write.
 	Extra map[string]json.RawMessage `json:"-"`
+}
+
+// UnmarshalJSON splits the modelled `hooks` array from every other key
+// (e.g. `matcher`), stashing the rest in Extra so they survive a
+// write. Pointer receiver: encoding/json calls this even for slice /
+// map elements (`[]HookGroup`, `map[string][]HookGroup`) because those
+// elements are addressable.
+func (h *HookGroup) UnmarshalJSON(data []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*h = HookGroup{Extra: map[string]json.RawMessage{}}
+	for k, v := range raw {
+		switch k {
+		case "hooks":
+			if err := json.Unmarshal(v, &h.Hooks); err != nil {
+				return err
+			}
+		default:
+			h.Extra[k] = v
+		}
+	}
+	return nil
+}
+
+// MarshalJSON re-emits the modelled `hooks` array alongside every
+// preserved Extra key. The known field is written last so it always
+// wins over a stray same-named Extra entry.
+func (h HookGroup) MarshalJSON() ([]byte, error) {
+	out := make(map[string]any, len(h.Extra)+1)
+	for k, v := range h.Extra {
+		var a any
+		_ = json.Unmarshal(v, &a)
+		out[k] = a
+	}
+	// `hooks` has no omitempty in the original tag, so always emit it
+	// (preserving the prior struct-marshal behavior, incl. null for nil).
+	out["hooks"] = h.Hooks
+	return json.Marshal(out)
 }
 
 // Hook is one runnable hook record.
@@ -95,8 +139,12 @@ type Hook struct {
 }
 
 // MCPServer is one MCP server entry. Schema is whatever Claude Code
-// recognizes — we store as RawMessage so additions/changes don't break
-// us. Knowable fields can be parsed by callers as needed.
+// recognizes — we model the common fields and preserve everything
+// else (notably `headers`, which on http/sse servers commonly holds
+// an Authorization bearer token, plus `disabled`, `timeout`, …)
+// through Extra. Without the custom (Un)MarshalJSON below, any ccmux
+// settings write would silently strip those fields and break the
+// server's auth.
 type MCPServer struct {
 	Type    string                     `json:"type,omitempty"` // "stdio", "http", "sse"
 	Command string                     `json:"command,omitempty"`
@@ -104,6 +152,71 @@ type MCPServer struct {
 	Env     map[string]string          `json:"env,omitempty"`
 	URL     string                     `json:"url,omitempty"`
 	Extra   map[string]json.RawMessage `json:"-"`
+}
+
+// UnmarshalJSON routes the modelled fields and stashes the rest in
+// Extra. Pointer receiver works for `map[string]MCPServer` values
+// because encoding/json unmarshals each into an addressable temp.
+func (m *MCPServer) UnmarshalJSON(data []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*m = MCPServer{Extra: map[string]json.RawMessage{}}
+	for k, v := range raw {
+		switch k {
+		case "type":
+			if err := json.Unmarshal(v, &m.Type); err != nil {
+				return err
+			}
+		case "command":
+			if err := json.Unmarshal(v, &m.Command); err != nil {
+				return err
+			}
+		case "args":
+			if err := json.Unmarshal(v, &m.Args); err != nil {
+				return err
+			}
+		case "env":
+			if err := json.Unmarshal(v, &m.Env); err != nil {
+				return err
+			}
+		case "url":
+			if err := json.Unmarshal(v, &m.URL); err != nil {
+				return err
+			}
+		default:
+			m.Extra[k] = v
+		}
+	}
+	return nil
+}
+
+// MarshalJSON re-emits the modelled fields (honoring the original
+// omitempty semantics) plus every preserved Extra key.
+func (m MCPServer) MarshalJSON() ([]byte, error) {
+	out := make(map[string]any, len(m.Extra)+5)
+	for k, v := range m.Extra {
+		var a any
+		_ = json.Unmarshal(v, &a)
+		out[k] = a
+	}
+	if m.Type != "" {
+		out["type"] = m.Type
+	}
+	if m.Command != "" {
+		out["command"] = m.Command
+	}
+	if len(m.Args) > 0 {
+		out["args"] = m.Args
+	}
+	if len(m.Env) > 0 {
+		out["env"] = m.Env
+	}
+	if m.URL != "" {
+		out["url"] = m.URL
+	}
+	return json.Marshal(out)
 }
 
 // Permissions is the allow/deny pair Claude Code uses to skip
