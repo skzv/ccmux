@@ -233,13 +233,46 @@ type UsageSummary struct {
 	EstimatedCost float64 `json:"estimated_cost"` // USD at published API rates
 }
 
-// AgentUsage groups all three supported agents into one response so a
-// client can render a unified "today's activity" card in a single
-// round trip.
+// AgentUsage groups the per-agent token summaries plus the OpenRouter
+// account spend into one response so a client can render a unified
+// "today's activity" card in a single round trip.
 type AgentUsage struct {
-	Claude      UsageSummary `json:"claude"`
-	Codex       UsageSummary `json:"codex"`
-	Antigravity UsageSummary `json:"antigravity"`
+	Claude      UsageSummary    `json:"claude"`
+	Codex       UsageSummary    `json:"codex"`
+	Antigravity UsageSummary    `json:"antigravity"`
+	OpenRouter  OpenRouterSpend `json:"openrouter"`
+	// Others carries per-agent summaries for the second-wave agents
+	// (OpenCode, Kimi, …) read via the generic JSONL walker. Only
+	// agents with actual usage in the window appear — the list is empty
+	// for a user who only runs Claude/Codex. Additive: existing clients
+	// that ignore this field keep working.
+	Others []OtherUsage `json:"others,omitempty"`
+}
+
+// OtherUsage is one second-wave agent's usage row.
+type OtherUsage struct {
+	Agent string       `json:"agent"`
+	Usage UsageSummary `json:"usage"`
+}
+
+// OpenRouterSpend is the OpenRouter account spend, returned in
+// AgentUsage when the daemon has an OpenRouter key configured. It's a
+// different shape from UsageSummary — OpenRouter reports dollars spent
+// against the key (not a per-window token count), so a client renders
+// it as a "spend / limit" line rather than a token row.
+type OpenRouterSpend struct {
+	// Enabled is false when no OpenRouter key is configured; clients
+	// skip the row entirely in that case. ErrMsg is non-empty when a
+	// key IS configured but the fetch failed (bad key, network) so the
+	// dashboard can show why instead of a silent blank.
+	Enabled bool   `json:"enabled"`
+	ErrMsg  string `json:"err_msg,omitempty"`
+	// Usage is total USD spent on the key; Limit is the key's credit
+	// cap (0 = uncapped). Remaining is Limit-Usage, or -1 when uncapped.
+	Usage      float64 `json:"usage"`
+	Limit      float64 `json:"limit"`
+	Remaining  float64 `json:"remaining"`
+	IsFreeTier bool    `json:"is_free_tier"`
 }
 
 // Conversation is one past agent transcript on disk. Returned by

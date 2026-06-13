@@ -30,6 +30,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/skzv/ccmux/internal/agent"
+	"github.com/skzv/ccmux/internal/agentusage"
 	"github.com/skzv/ccmux/internal/claudeusage"
 	"github.com/skzv/ccmux/internal/codexusage"
 )
@@ -56,6 +58,56 @@ type AgentSummary struct {
 // specific) are accounted in the rich Claude panel separately.
 func (s AgentSummary) TotalTokens() int {
 	return s.InputTokens + s.OutputTokens
+}
+
+// NamedSummary pairs an agent ID with its usage summary, for the
+// dashboard's dynamic per-agent rows (only agents with actual usage are
+// returned by WalkOthers, so the panel sizes to what you use).
+type NamedSummary struct {
+	Agent   string
+	Summary AgentSummary
+}
+
+// genericWalkAgents are the second-wave agents whose usage we read with
+// the format-agnostic JSONL walker (internal/agentusage) rather than a
+// bespoke parser. Claude / Codex have their own rich Walk* above;
+// Antigravity's transcripts are opaque protobuf (handled separately).
+var genericWalkAgents = []agent.ID{
+	agent.IDOpenCode, agent.IDKimi, agent.IDDroid, agent.IDCopilot,
+	agent.IDQoder, agent.IDKilo, agent.IDHermes, agent.IDAmp, agent.IDKiro,
+}
+
+// WalkOthers runs the generic JSONL walker over every second-wave
+// agent's transcript root and returns summaries only for the agents
+// that actually have usage in the window. Agents with no recognizable
+// data are omitted entirely (not returned as empty rows), so the
+// dashboard shows a row only for an agent you actually use — the roster
+// is large enough now that rendering 9 "no conversations yet"
+// placeholders would be noise.
+func WalkOthers(window time.Duration) []NamedSummary {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	var out []NamedSummary
+	for _, id := range genericWalkAgents {
+		root := agent.ByID(id).TranscriptsRoot(home)
+		s, err := agentusage.Walk(root, window)
+		if err != nil || !s.HasData {
+			continue
+		}
+		out = append(out, NamedSummary{
+			Agent: string(id),
+			Summary: AgentSummary{
+				HasData:      true,
+				Window:       window,
+				Prompts:      s.Prompts,
+				InputTokens:  s.InputTokens,
+				OutputTokens: s.OutputTokens,
+			},
+		})
+	}
+	return out
 }
 
 // WalkClaude returns the cross-agent summary for Claude Code by
