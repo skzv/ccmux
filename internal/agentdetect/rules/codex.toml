@@ -1,0 +1,42 @@
+id = "codex"
+
+# OSC-title spinner: leading braille glyph means "working." Universal
+# across spinner styles — every standard frame in this Unicode block
+# is a spinner character.
+[[rules]]
+id = "title_spinner_working"
+state = "working"
+priority = 1100
+region = "osc_title"
+regex = ['^[\x{2800}-\x{28FF}]']
+
+# OSC-title "Action Required" — codex's explicit "blocked" broadcast.
+[[rules]]
+id = "title_action_required"
+state = "blocked"
+priority = 1100
+region = "osc_title"
+contains = ["Action Required"]
+
+# Body footer: the canonical "press enter to confirm" prompt. Codex's
+# wording varies slightly across versions; the `any` block covers the
+# observed shapes.
+[[rules]]
+id = "body_confirm_prompt"
+state = "blocked"
+priority = 900
+region = "bottom_non_empty_lines(3)"
+any = [
+  { contains = ["press enter to confirm"] },
+  { contains = ["enter to submit"] },
+  { contains = ["allow command?"] },
+]
+
+# Idle prompt indicator: a `>` (or `❯`) at the start of the last line
+# with no other content. Codex's input box is single-line.
+[[rules]]
+id = "body_prompt_caret"
+state = "idle"
+priority = 700
+region = "last_line"
+line_regex = ['^\s*[>❯]\s*$']

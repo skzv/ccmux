@@ -1,0 +1,18 @@
+id = "pi"
+
+# Title-spinner rule. Pi's TUI uses braille frames while thinking,
+# matching the cross-agent convention.
+[[rules]]
+id = "title_spinner_working"
+state = "working"
+priority = 1100
+region = "osc_title"
+regex = ['^[\x{2800}-\x{28FF}]']
+
+# `Working...` body marker — pi's documented "agent is thinking" line.
+[[rules]]
+id = "body_working_marker"
+state = "working"
+priority = 900
+region = "bottom_non_empty_lines(3)"
+contains = ["Working..."]
