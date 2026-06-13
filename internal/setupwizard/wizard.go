@@ -417,6 +417,24 @@ func installHintFor(id agent.ID) string {
 		return "curl -fsSL https://pi.dev/install.sh | sh"
 	case agent.IDGrok:
 		return "curl -fsSL https://x.ai/cli/install.sh | bash  (or npm i -g @xai-official/grok)"
+	case agent.IDOpenCode:
+		return "curl -fsSL https://opencode.ai/install | bash  (or npm i -g opencode-ai)"
+	case agent.IDKimi:
+		return "npm i -g @moonshot/kimi-code"
+	case agent.IDDroid:
+		return "curl -fsSL https://app.factory.ai/cli | sh"
+	case agent.IDCopilot:
+		return "npm i -g @github/copilot"
+	case agent.IDQoder:
+		return "npm i -g @qoder/cli"
+	case agent.IDKilo:
+		return "npm i -g @kilocode/cli"
+	case agent.IDHermes:
+		return "uv tool install hermes-agent"
+	case agent.IDAmp:
+		return "npm i -g @sourcegraph/amp"
+	case agent.IDKiro:
+		return "see https://kiro.dev/docs/cli"
 	}
 	return ""
 }

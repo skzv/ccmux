@@ -505,6 +505,24 @@ func agentInstallHint(id agent.ID) string {
 		return "`curl -fsSL https://pi.dev/install.sh | sh` (or `npm i -g @earendil-works/pi-coding-agent`)"
 	case agent.IDGrok:
 		return "`curl -fsSL https://x.ai/cli/install.sh | bash` (or `npm i -g @xai-official/grok`)"
+	case agent.IDOpenCode:
+		return "`curl -fsSL https://opencode.ai/install | bash` (or `npm i -g opencode-ai`)"
+	case agent.IDKimi:
+		return "`npm i -g @moonshot/kimi-code` (or see Kimi Code docs)"
+	case agent.IDDroid:
+		return "`curl -fsSL https://app.factory.ai/cli | sh` (or see Factory docs)"
+	case agent.IDCopilot:
+		return "`npm i -g @github/copilot` (or see GitHub Copilot CLI docs)"
+	case agent.IDQoder:
+		return "`npm i -g @qoder/cli` (or see Qoder docs)"
+	case agent.IDKilo:
+		return "`npm i -g @kilocode/cli` (or see Kilo Code docs)"
+	case agent.IDHermes:
+		return "`uv tool install hermes-agent` (or see https://hermes-agent.nousresearch.com)"
+	case agent.IDAmp:
+		return "`npm i -g @sourcegraph/amp` (or see Amp docs at ampcode.com)"
+	case agent.IDKiro:
+		return "see Kiro CLI install at https://kiro.dev/docs/cli"
 	}
 	return ""
 }

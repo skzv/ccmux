@@ -12,17 +12,74 @@ import (
 // TestAll_CanonicalOrder pins the canonical agent ordering. Order is
 // load-bearing: pickers default to the first installed entry, so a
 // reshuffle that put Codex first would silently change every new
-// user's default agent.
+// user's default agent. The first six (the original wave) MUST stay in
+// their exact positions so the Claude-first default never drifts; the
+// second wave follows in registration order.
 func TestAll_CanonicalOrder(t *testing.T) {
 	got := All()
-	if len(got) != 6 {
-		t.Fatalf("All() len = %d, want 6", len(got))
+	wantIDs := []ID{
+		IDClaude, IDCodex, IDAntigravity, IDCursor, IDPi, IDGrok,
+		IDOpenCode, IDKimi, IDDroid, IDCopilot, IDQoder, IDKilo, IDHermes, IDAmp, IDKiro,
 	}
-	wantIDs := []ID{IDClaude, IDCodex, IDAntigravity, IDCursor, IDPi, IDGrok}
+	if len(got) != len(wantIDs) {
+		t.Fatalf("All() len = %d, want %d", len(got), len(wantIDs))
+	}
 	for i, a := range got {
 		if a.ID() != wantIDs[i] {
 			t.Errorf("All()[%d].ID() = %q, want %q", i, a.ID(), wantIDs[i])
 		}
+	}
+	// The first six positions are the load-bearing ones: Claude must be
+	// first (the default), and the original order must be preserved.
+	if got[0].ID() != IDClaude {
+		t.Errorf("All()[0] = %q, want claude (the default must stay first)", got[0].ID())
+	}
+}
+
+// TestAll_EveryAgentIsComplete — every registered agent must answer the
+// full Agent interface with non-empty identity + paths, satisfy
+// TitleAwareAgent (so the daemon's title-aware classifier reaches it),
+// and round-trip through ByID/ParseID. This is the guard that adding an
+// agent to the const block but forgetting ByID/ParseID (or vice-versa)
+// fails loudly instead of panicking at runtime.
+func TestAll_EveryAgentIsComplete(t *testing.T) {
+	home := "/home/tester"
+	for _, a := range All() {
+		id := a.ID()
+		t.Run(string(id), func(t *testing.T) {
+			if a.DisplayName() == "" {
+				t.Error("empty DisplayName")
+			}
+			if a.Binary() == "" {
+				t.Error("empty Binary")
+			}
+			if a.LaunchCmd(false) == "" || a.LaunchCmd(true) == "" {
+				t.Error("empty LaunchCmd")
+			}
+			if !strings.HasPrefix(a.ConfigRoot(home), home) {
+				t.Errorf("ConfigRoot %q not under home", a.ConfigRoot(home))
+			}
+			if !strings.HasPrefix(a.TranscriptsRoot(home), home) {
+				t.Errorf("TranscriptsRoot %q not under home", a.TranscriptsRoot(home))
+			}
+			if a.InitialPrompt("proj", "desc") == "" {
+				t.Error("empty InitialPrompt")
+			}
+			// Title-aware: the poll loop routes through ClassifyState,
+			// which only passes the OSC title to agents implementing
+			// TitleAwareAgent. An agent that forgets ClassifyWithTitle
+			// silently loses the title signal.
+			if _, ok := a.(TitleAwareAgent); !ok {
+				t.Error("does not implement TitleAwareAgent — title signal is lost for this agent")
+			}
+			// Registration round-trips.
+			if ByID(id).ID() != id {
+				t.Errorf("ByID(%q) round-trip failed", id)
+			}
+			if got, ok := ParseID(string(id)); !ok || got != id {
+				t.Errorf("ParseID(%q) = (%q, %v), want (%q, true)", id, got, ok, id)
+			}
+		})
 	}
 }
 

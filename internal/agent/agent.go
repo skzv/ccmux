@@ -1,9 +1,10 @@
-// Package agent abstracts over Claude Code, Codex (OpenAI),
-// Antigravity CLI (Google), Cursor, and pi (Earendil Works) — the
-// interactive AI coding agents ccmux can supervise inside a tmux
-// session. Adding another agent later is a matter of dropping a new
-// `Agent` implementation alongside the existing ones and registering
-// it in All().
+// Package agent abstracts over the interactive AI coding agents ccmux
+// can supervise inside a tmux session — Claude Code, Codex, Antigravity,
+// Cursor, pi, Grok, and a growing second wave (OpenCode, Kimi, Droid,
+// Copilot, Qoder, Kilo, Hermes, Amp, Kiro). Adding another agent later
+// is a matter of dropping a new `Agent` implementation alongside the
+// existing ones and registering it in All() / ByID() / ParseID() (the
+// agent test suite enforces that those three stay in sync).
 //
 // Why this exists: ccmux's first cut was Claude-only. Every layer
 // (session command, state classifier, usage panel, config tab,
@@ -37,6 +38,18 @@ const (
 	IDCursor      ID = "cursor"
 	IDPi          ID = "pi"
 	IDGrok        ID = "grok"
+	// Second wave of terminal coding agents. Same strategy-interface
+	// shape as the originals; each reads AGENTS.md for project context
+	// (the cross-agent convention) and resolves by binary name on PATH.
+	IDOpenCode ID = "opencode"
+	IDKimi     ID = "kimi"
+	IDDroid    ID = "droid"
+	IDCopilot  ID = "copilot"
+	IDQoder    ID = "qoder"
+	IDKilo     ID = "kilo"
+	IDHermes   ID = "hermes"
+	IDAmp      ID = "amp"
+	IDKiro     ID = "kiro"
 )
 
 // State enumerates the high-level lifecycle of an agent session, mirrored
@@ -137,12 +150,35 @@ type Commands struct {
 	ClaudeModel string
 }
 
-// All returns every supported agent in canonical order
-// (claude → codex → antigravity → cursor). Order matters: pickers default to
-// the first installed entry, and that lets us bias new users toward
-// Claude without making it special-case in UI code.
+// All returns every supported agent in canonical order. Order matters:
+// pickers default to the first installed entry, and that lets us bias
+// new users toward Claude without making it special-case in UI code.
+// The first six are the original wave; the rest are additional terminal
+// coding agents ccmux can supervise (still PATH-resolved, still
+// AGENTS.md-centric for project context).
 func All() []Agent {
-	return []Agent{Claude{}, Codex{}, Antigravity{}, Cursor{}, Pi{}, Grok{}}
+	return []Agent{
+		Claude{}, Codex{}, Antigravity{}, Cursor{}, Pi{}, Grok{},
+		OpenCode{}, Kimi{}, Droid{}, Copilot{}, Qoder{}, Kilo{}, Hermes{}, Amp{}, Kiro{},
+	}
+}
+
+// agentsMdInitialPrompt is the shared bootstrap message ccmux types
+// into a fresh session for every AGENTS.md-centric agent (Codex,
+// Cursor, pi, Grok, and the whole second wave). Claude has its own
+// /init-style prompt; the rest converge on this one because they all
+// read AGENTS.md for persistent project context, so the ritual is
+// identical. Kept in one place so a wording change lands everywhere at
+// once instead of being copy-pasted per agent file.
+func agentsMdInitialPrompt(name, description string) string {
+	if description == "" {
+		description = "(no description yet — please ask me what I'm building)"
+	}
+	return `I'm starting a new project called "` + name + `". ` + description + ` ` +
+		`Please: (1) Ask me 2-3 targeted questions about the concept, stack, and immediate goals. ` +
+		`(2) From my answers, write AGENTS.md at the project root so you have persistent context next time. ` +
+		`(3) The project already has docs/01_Specs/ (specs/PRDs), docs/02_Architecture/ (ADRs), and docs/03_Agent_Logs/ (daily scratchpad). Use them. ` +
+		`(4) Pick the right source-code layout for the language/stack we choose and create those directories.`
 }
 
 // ByID returns the Agent for a known ID. Falls back to Default() for
@@ -167,6 +203,24 @@ func ByID(id ID) Agent {
 		return Pi{}
 	case IDGrok:
 		return Grok{}
+	case IDOpenCode:
+		return OpenCode{}
+	case IDKimi:
+		return Kimi{}
+	case IDDroid:
+		return Droid{}
+	case IDCopilot:
+		return Copilot{}
+	case IDQoder:
+		return Qoder{}
+	case IDKilo:
+		return Kilo{}
+	case IDHermes:
+		return Hermes{}
+	case IDAmp:
+		return Amp{}
+	case IDKiro:
+		return Kiro{}
 	}
 	panic("agent: unknown ID " + string(id))
 }
@@ -191,6 +245,24 @@ func ParseID(s string) (ID, bool) {
 		return IDPi, true
 	case IDGrok:
 		return IDGrok, true
+	case IDOpenCode:
+		return IDOpenCode, true
+	case IDKimi:
+		return IDKimi, true
+	case IDDroid:
+		return IDDroid, true
+	case IDCopilot:
+		return IDCopilot, true
+	case IDQoder:
+		return IDQoder, true
+	case IDKilo:
+		return IDKilo, true
+	case IDHermes:
+		return IDHermes, true
+	case IDAmp:
+		return IDAmp, true
+	case IDKiro:
+		return IDKiro, true
 	}
 	return "", false
 }

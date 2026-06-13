@@ -428,7 +428,7 @@ func (m projectsModel) renderList(width, height int, narrow bool) string {
 	// user can correlate the per-row dots to the agent that runs
 	// each project. Only emitted when the list has rows — the
 	// legend is meaningless against an empty pane.
-	rows = append(rows, renderAgentLegend(m.st))
+	rows = append(rows, renderAgentLegend(m.st, vis))
 	if m.filterActive || m.filter.Value() != "" {
 		// Filter prompt line lives beneath the header. Show the live
 		// match count so the user can tell whether they need to keep
@@ -542,20 +542,35 @@ func projectHost(p project.Project) string {
 	return p.Host
 }
 
-// renderAgentLegend renders the per-agent color key shown at the top
-// of the Projects list. It enumerates agent.All() so a future agent
-// addition appears in the legend without touching this file. Format:
-// `agents:  ● claude  ● codex  ● antigravity  ● cursor`. The dots are
-// rendered through Styles.AgentAccent so the legend and per-row dots
-// always agree on the same color for the same agent.
-func renderAgentLegend(st styles.Styles) string {
+// renderAgentLegend renders the per-agent color key shown at the top of
+// the Projects list. It lists only the agents actually in use by the
+// visible projects — the legend exists to decode the per-row dots, so a
+// dot that never appears in the list is noise. With a six-agent roster
+// the full legend fit one line; now that the roster is larger, scoping
+// to in-use agents keeps it to one line and relevant. Agents are shown
+// in canonical agent.All() order so the legend ordering is stable
+// regardless of project order. Format:
+// `agents:  ● claude  ● codex`. Dots render through Styles.AgentAccent
+// so the legend and per-row dots always agree on the same color.
+func renderAgentLegend(st styles.Styles, projects []project.Project) string {
+	inUse := map[agent.ID]bool{}
+	for _, p := range projects {
+		id := p.Agent
+		if id == "" {
+			id = agent.IDClaude // unset sidecar resolves to claude
+		}
+		inUse[id] = true
+	}
 	parts := []string{st.Muted.Render("agents:")}
 	for _, a := range agent.All() {
+		if !inUse[a.ID()] {
+			continue
+		}
 		dot := st.AgentAccent(a.ID()).Render("•")
 		// Lowercase agent ID (not DisplayName) — the IDs are short
-		// enough to fit on one line in a 60-cell pane, and they're
-		// already the canonical strings the rest of the codebase
-		// uses (the `.ccmux/agent` sidecar, the CLI, the toast).
+		// enough to fit on one line, and they're already the canonical
+		// strings the rest of the codebase uses (the `.ccmux/agent`
+		// sidecar, the CLI, the toast).
 		parts = append(parts, dot+" "+st.Muted.Render(string(a.ID())))
 	}
 	return strings.Join(parts, "  ")

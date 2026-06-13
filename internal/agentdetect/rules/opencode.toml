@@ -1,0 +1,32 @@
+id = "opencode"
+
+# OSC-title braille spinner → working (universal across agents).
+[[rules]]
+id = "title_spinner_working"
+state = "working"
+priority = 1100
+region = "osc_title"
+regex = ['^[\x{2800}-\x{28FF}]']
+
+# Permission gate: OpenCode draws a "△ Permission required" panel when
+# it needs the user to approve a tool call.
+[[rules]]
+id = "body_permission_required"
+state = "blocked"
+priority = 900
+region = "whole_recent"
+any = [
+  { contains = ["Permission required"] },
+  { contains = ["permission denied, retry?"] },
+]
+
+# Working footer: the interrupt hint shows only while a turn is running.
+[[rules]]
+id = "body_working_footer"
+state = "working"
+priority = 800
+region = "bottom_non_empty_lines(3)"
+any = [
+  { contains = ["esc to interrupt"] },
+  { contains = ["working"] },
+]

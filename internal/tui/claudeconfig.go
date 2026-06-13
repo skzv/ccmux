@@ -55,7 +55,33 @@ type claudeModel struct {
 	browser agentBrowser
 	editor  string
 	narrow  bool // terminal is below the layout breakpoint
+
+	// Unified vertical navigation. The Claude screen is two stacked
+	// zones: the settings rows at the top (model / effort / thinking /
+	// yolo / CLAUDE.md / settings.json) and the configured-items
+	// browser below. focusTop reports which zone owns up/down/enter;
+	// rowCursor is the selected settings row while focusTop is true.
+	// Arrowing down past the last settings row hands focus to the
+	// browser; arrowing up at the browser's first item hands it back.
+	// This is what makes "just use the arrow keys to move through every
+	// setting" work — before, the top rows weren't selectable at all.
+	rowCursor int
+	focusTop  bool
 }
+
+// Claude settings rows that the unified cursor walks, in render order.
+// Enter on the selected row runs its action (open a picker, toggle a
+// flag, or open a file in $EDITOR); the dedicated letter keys still
+// work as shortcuts regardless of where the cursor sits.
+const (
+	claudeRowModel = iota
+	claudeRowEffort
+	claudeRowAlwaysThinking
+	claudeRowYolo
+	claudeRowClaudeMd
+	claudeRowSettings
+	claudeActionRowCount // sentinel: number of settings rows
+)
 
 // pickerKind identifies which modal picker is currently open on the
 // Claude screen. pickerNone means no modal is showing.
@@ -80,7 +106,7 @@ const (
 )
 
 func newClaude(st styles.Styles, km Keymap) claudeModel {
-	m := claudeModel{st: st, km: km, editor: pickEditor(), browser: newAgentBrowser(st)}
+	m := claudeModel{st: st, km: km, editor: pickEditor(), browser: newAgentBrowser(st), focusTop: true}
 	m.reload()
 	return m
 }
@@ -195,91 +221,178 @@ func (m claudeModel) Update(msg tea.Msg) (claudeModel, tea.Cmd) {
 		if m.picker != pickerNone {
 			return m.updatePicker(msg)
 		}
-		// Route to the embedded browser first. It consumes navigation
-		// (j/k/arrows/enter); any letter key it doesn't bind falls
-		// through to the model-/effort-/yolo-picker shortcuts below.
-		if b, cmd, handled := m.browser.Update(msg); handled {
+		// Unified vertical navigation across the two stacked zones.
+		// focusTop = the settings rows own up/down/enter; otherwise the
+		// browser does. The zones hand off at their boundaries so a
+		// single stream of arrow presses walks every setting top to
+		// bottom and back.
+		switch msg.String() {
+		case "down", "j":
+			if m.focusTop {
+				if m.rowCursor < claudeActionRowCount-1 {
+					m.rowCursor++
+				} else if m.browser.HasItems() {
+					m.focusTop = false
+					m.browser.GotoFirstItem()
+				}
+				return m, nil
+			}
+			b, cmd, _ := m.browser.Update(msg)
+			m.browser = b
+			return m, cmd
+		case "up", "k":
+			if m.focusTop {
+				if m.rowCursor > 0 {
+					m.rowCursor--
+				}
+				return m, nil
+			}
+			if m.browser.AtFirstItem() {
+				m.focusTop = true
+				m.rowCursor = claudeActionRowCount - 1
+				return m, nil
+			}
+			b, cmd, _ := m.browser.Update(msg)
+			m.browser = b
+			return m, cmd
+		case "enter":
+			if m.focusTop {
+				return m.activateRow(m.rowCursor)
+			}
+			b, cmd, _ := m.browser.Update(msg)
 			m.browser = b
 			return m, cmd
 		}
+		// Non-vertical browser keys (left/right pane toggle, g/G, page
+		// scrolling) only apply while the browser is focused.
+		if !m.focusTop {
+			if b, cmd, handled := m.browser.Update(msg); handled {
+				m.browser = b
+				return m, cmd
+			}
+		}
+		// Dedicated letter shortcuts — work regardless of which zone has
+		// focus, so muscle memory (m for model, e for effort, …) keeps
+		// working without arrowing to the row first. They also move the
+		// row cursor to the row they act on so the highlight follows.
 		switch msg.String() {
 		case "M":
-			m.picker = pickerCcmuxModel
-			m.pickerCursor = 0
-			// Lazy-load the catalog the first time the user opens
-			// this picker. The daemon writes the cache file on a 24h
-			// timer; if it doesn't exist yet (fresh install / daemon
-			// just started), Read() returns a zero-value Catalog and
-			// Service.withFallback would normally fill in. Since the
-			// TUI is reading the cache directly, we apply the same
-			// merge-with-fallback logic inline.
-			if !m.catalogLoaded() {
-				m.loadCatalog()
-			}
-			// Pre-position on the user's current pin so the cursor
-			// lands on it.
-			for i, mdl := range m.catalogPickerModels() {
-				if mdl.ID == m.ccmuxDefaultModel {
-					m.pickerCursor = i
-					break
-				}
-			}
+			return m.openCcmuxModelPicker(), nil
 		case "m":
-			m.picker = pickerModel
-			m.pickerCursor = 0
-			// Pre-position on the EFFECTIVE model so the cursor lands
-			// on whatever Claude Code actually uses right now, not just
-			// what's in settings.json. Reading settings.Model misses
-			// the case where $ANTHROPIC_MODEL overrides: the picker
-			// would open on "Inherit" because settings.Model is empty,
-			// the user picks the model they ALREADY use, nothing
-			// visibly changes, and they conclude the picker is broken.
-			cur := normalizeModelAlias(m.model)
-			for i, opt := range claudeconfig.KnownModels() {
-				if opt.Alias == cur {
-					m.pickerCursor = i
-					break
-				}
-			}
+			m.rowCursor, m.focusTop = claudeRowModel, true
+			return m.openModelPicker(), nil
 		case "e":
-			m.picker = pickerEffort
-			m.pickerCursor = 0
-			// Guard m.settings: reload() leaves it nil when
-			// ReadSettings fails (malformed or permission-denied
-			// settings.json). Without this guard, opening the Claude
-			// screen on a broken config and pressing `e` nil-derefs and
-			// crashes the whole TUI — exactly when the user came here to
-			// fix that config. Pre-positioning is best-effort, so a nil
-			// settings just leaves the cursor at 0.
-			cur := ""
-			if m.settings != nil {
-				cur = strings.ToLower(strings.TrimSpace(m.settings.EffortLevel))
-			}
-			for i, opt := range claudeconfig.KnownEffortLevels() {
-				if opt.Value == cur {
-					m.pickerCursor = i
-					break
-				}
-			}
+			m.rowCursor, m.focusTop = claudeRowEffort, true
+			return m.openEffortPicker(), nil
 		case "a":
-			toggled := !m.alwaysThinking
-			return m, func() tea.Msg {
-				backup, err := claudeconfig.SetAlwaysThinking(toggled)
-				return claudeAlwaysThinkingChangedMsg{New: toggled, Backup: backup, Err: err}
-			}
+			m.rowCursor, m.focusTop = claudeRowAlwaysThinking, true
+			return m, m.toggleAlwaysThinkingCmd()
 		case "y":
-			toggled := !m.yolo
-			return m, func() tea.Msg {
-				backup, err := claudeconfig.SetYoloMode(toggled)
-				return claudeYoloChangedMsg{New: toggled, Backup: backup, Err: err}
-			}
+			m.rowCursor, m.focusTop = claudeRowYolo, true
+			return m, m.toggleYoloCmd()
 		case "c":
+			m.rowCursor, m.focusTop = claudeRowClaudeMd, true
 			return m, openClaudeFileCmd(m.editor, m.paths.GlobalCLAUDEMd, true)
-		case "j":
-			return m, openClaudeFileCmd(m.editor, m.paths.Settings, false)
 		}
 	}
 	return m, nil
+}
+
+// activateRow runs the action for a settings row when the user presses
+// Enter on it. Mirrors the dedicated letter shortcuts so the two paths
+// (arrow-to-row + Enter, or the letter key) always do the same thing.
+func (m claudeModel) activateRow(row int) (claudeModel, tea.Cmd) {
+	switch row {
+	case claudeRowModel:
+		return m.openModelPicker(), nil
+	case claudeRowEffort:
+		return m.openEffortPicker(), nil
+	case claudeRowAlwaysThinking:
+		return m, m.toggleAlwaysThinkingCmd()
+	case claudeRowYolo:
+		return m, m.toggleYoloCmd()
+	case claudeRowClaudeMd:
+		return m, openClaudeFileCmd(m.editor, m.paths.GlobalCLAUDEMd, true)
+	case claudeRowSettings:
+		return m, openClaudeFileCmd(m.editor, m.paths.Settings, false)
+	}
+	return m, nil
+}
+
+// openModelPicker opens the Claude Code model picker (settings.json),
+// pre-positioned on the effective model. Reading the EFFECTIVE model
+// (not settings.Model) matters: when $ANTHROPIC_MODEL overrides, the
+// picker would otherwise open on "Inherit", the user re-picks the model
+// they already use, nothing changes, and the picker looks broken.
+func (m claudeModel) openModelPicker() claudeModel {
+	m.picker = pickerModel
+	m.pickerCursor = 0
+	cur := normalizeModelAlias(m.model)
+	for i, opt := range claudeconfig.KnownModels() {
+		if opt.Alias == cur {
+			m.pickerCursor = i
+			break
+		}
+	}
+	return m
+}
+
+// openEffortPicker opens the reasoning-effort picker, pre-positioned on
+// the current value. Guards a nil settings (reload leaves it nil on a
+// malformed settings.json) so opening the picker on a broken config
+// can't nil-deref — exactly when the user came here to fix it.
+func (m claudeModel) openEffortPicker() claudeModel {
+	m.picker = pickerEffort
+	m.pickerCursor = 0
+	cur := ""
+	if m.settings != nil {
+		cur = strings.ToLower(strings.TrimSpace(m.settings.EffortLevel))
+	}
+	for i, opt := range claudeconfig.KnownEffortLevels() {
+		if opt.Value == cur {
+			m.pickerCursor = i
+			break
+		}
+	}
+	return m
+}
+
+// openCcmuxModelPicker opens the "pin a model for ccmux-launched
+// sessions" picker (writes ~/.config/ccmux/config.toml, not Claude
+// Code's settings). Lazy-loads the model catalog on first open and
+// pre-positions on the current pin.
+func (m claudeModel) openCcmuxModelPicker() claudeModel {
+	m.picker = pickerCcmuxModel
+	m.pickerCursor = 0
+	if !m.catalogLoaded() {
+		m.loadCatalog()
+	}
+	for i, mdl := range m.catalogPickerModels() {
+		if mdl.ID == m.ccmuxDefaultModel {
+			m.pickerCursor = i
+			break
+		}
+	}
+	return m
+}
+
+// toggleAlwaysThinkingCmd / toggleYoloCmd return the persist-and-report
+// command for the two boolean settings rows. Extracted so the Enter
+// activation and the letter shortcut share one implementation.
+func (m claudeModel) toggleAlwaysThinkingCmd() tea.Cmd {
+	toggled := !m.alwaysThinking
+	return func() tea.Msg {
+		backup, err := claudeconfig.SetAlwaysThinking(toggled)
+		return claudeAlwaysThinkingChangedMsg{New: toggled, Backup: backup, Err: err}
+	}
+}
+
+func (m claudeModel) toggleYoloCmd() tea.Cmd {
+	toggled := !m.yolo
+	return func() tea.Msg {
+		backup, err := claudeconfig.SetYoloMode(toggled)
+		return claudeYoloChangedMsg{New: toggled, Backup: backup, Err: err}
+	}
 }
 
 func (m claudeModel) updatePicker(msg tea.KeyMsg) (claudeModel, tea.Cmd) {
@@ -335,6 +448,16 @@ func (m claudeModel) updatePicker(msg tea.KeyMsg) (claudeModel, tea.Cmd) {
 	return m, nil
 }
 
+// PickerOpen reports whether a modal picker (model / effort / ccmux-
+// model) is currently showing. agentsModel.View consults this to render
+// the centered picker overlay instead of the normal bordered body. The
+// body render path (ViewBody) deliberately omits the picker so the
+// agents screen owns its own chrome — but that means the picker only
+// renders through View(), and the agents screen must call View() when
+// this is true. Without that, pressing `m` sets the picker state but it
+// never appears (the bug that made the model picker look dead).
+func (m claudeModel) PickerOpen() bool { return m.picker != pickerNone }
+
 func (m claudeModel) View(width, height int) string {
 	m.narrow = isNarrow(width) // m is a value copy; the mutation stays local
 	if m.picker != pickerNone {
@@ -355,17 +478,24 @@ func (m claudeModel) View(width, height int) string {
 func (m claudeModel) ViewBody(width, height int) string {
 	m.narrow = isNarrow(width)
 	st := m.st
+	// When the top zone has focus, highlight the selected settings row;
+	// otherwise the browser owns the visible selection so no top row is
+	// marked (selected = -1).
+	selected := -1
+	if m.focusTop {
+		selected = m.rowCursor
+	}
 	header := []string{
 		st.Emphasis.Render("Claude Code Configuration"),
 		"",
 		st.AgentAccent(agent.IDClaude).Render("Defaults"),
 	}
-	header = append(header, m.renderDefaultsRows()...)
+	header = append(header, m.renderDefaultsRows(selected)...)
 	header = append(header,
 		"",
 		st.AgentAccent(agent.IDClaude).Render("Config files"),
 	)
-	header = append(header, m.renderConfigFilesRows()...)
+	header = append(header, m.renderConfigFilesRows(selected)...)
 	header = append(header, "")
 	headerStr := strings.Join(header, "\n")
 	headerH := lipgloss.Height(headerStr)
@@ -386,7 +516,7 @@ func (m claudeModel) ViewBody(width, height int) string {
 // under the Defaults header — model, effort, always-thinking, yolo.
 // Label column is padded to 18 cells so the value column aligns
 // across all four rows; source column is muted parenthetical.
-func (m claudeModel) renderDefaultsRows() []string {
+func (m claudeModel) renderDefaultsRows(selected int) []string {
 	st := m.st
 	thinkLabel := "off"
 	if m.alwaysThinking {
@@ -396,32 +526,43 @@ func (m claudeModel) renderDefaultsRows() []string {
 	if m.yolo {
 		yoloLabel = "on"
 	}
-	row := func(label, value, source string) string {
-		out := "  " + fmt.Sprintf("%-18s", label) + st.Emphasis.Render(value)
+	row := func(idx int, label, value, source string) string {
+		out := m.rowMarker(idx, selected) + fmt.Sprintf("%-18s", label) + st.Emphasis.Render(value)
 		if source != "" {
 			out += "  " + st.Muted.Render("(from "+source+")")
 		}
 		return out
 	}
 	return []string{
-		row("model", m.model, m.modelSource),
-		row("effort", m.effort, m.effortSource),
-		row("always-thinking", thinkLabel, ""),
-		row("yolo mode", yoloLabel, m.yoloSource),
+		row(claudeRowModel, "model", m.model, m.modelSource),
+		row(claudeRowEffort, "effort", m.effort, m.effortSource),
+		row(claudeRowAlwaysThinking, "always-thinking", thinkLabel, ""),
+		row(claudeRowYolo, "yolo mode", yoloLabel, m.yoloSource),
 	}
 }
 
-// renderConfigFilesRows lists the two Claude config-file paths the
-// `c` and `j` keys edit. Path column is muted so the file name is the
-// visual anchor; HelpBar already advertises c / j as the action keys.
-func (m claudeModel) renderConfigFilesRows() []string {
+// rowMarker returns the 2-cell left gutter for a settings row: an
+// accent "▌ " bar when the row is the active selection, two spaces
+// otherwise. Same width either way so the value columns stay aligned.
+func (m claudeModel) rowMarker(idx, selected int) string {
+	if idx == selected {
+		return m.st.AgentAccent(agent.IDClaude).Render("▌") + " "
+	}
+	return "  "
+}
+
+// renderConfigFilesRows lists the two Claude config-file paths. Path
+// column is muted so the file name is the visual anchor; the rows are
+// selectable (Enter opens the file in $EDITOR) and `c` still opens
+// CLAUDE.md directly.
+func (m claudeModel) renderConfigFilesRows(selected int) []string {
 	st := m.st
-	row := func(name, path string) string {
-		return "  " + fmt.Sprintf("%-18s", name) + st.Muted.Render(summarizePath(path))
+	row := func(idx int, name, path string) string {
+		return m.rowMarker(idx, selected) + fmt.Sprintf("%-18s", name) + st.Muted.Render(summarizePath(path))
 	}
 	return []string{
-		row("CLAUDE.md", m.paths.GlobalCLAUDEMd),
-		row("settings.json", m.paths.Settings),
+		row(claudeRowClaudeMd, "CLAUDE.md", m.paths.GlobalCLAUDEMd),
+		row(claudeRowSettings, "settings.json", m.paths.Settings),
 	}
 }
 

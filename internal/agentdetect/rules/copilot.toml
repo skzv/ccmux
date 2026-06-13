@@ -1,0 +1,25 @@
+id = "copilot"
+
+# OSC-title braille spinner → working.
+[[rules]]
+id = "title_spinner_working"
+state = "working"
+priority = 1100
+region = "osc_title"
+regex = ['^[\x{2800}-\x{28FF}]']
+
+# Confirmation prompt: Copilot CLI shows an "enter to confirm/select/
+# submit" + "esc to cancel" pair when waiting on the user.
+[[rules]]
+id = "body_confirm_prompt"
+state = "blocked"
+priority = 900
+region = "bottom_non_empty_lines(3)"
+all = [
+  { contains = ["esc to cancel"] },
+  { any = [
+    { contains = ["enter to confirm"] },
+    { contains = ["enter to select"] },
+    { contains = ["enter to submit"] },
+  ] },
+]

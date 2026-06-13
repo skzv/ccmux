@@ -1,0 +1,29 @@
+id = "kilo"
+
+# OSC-title braille spinner → working.
+[[rules]]
+id = "title_spinner_working"
+state = "working"
+priority = 1100
+region = "osc_title"
+regex = ['^[\x{2800}-\x{28FF}]']
+
+# Permission gate: Kilo is an OpenCode-compatible fork, so it draws the
+# same "△ Permission required" panel.
+[[rules]]
+id = "body_permission_required"
+state = "blocked"
+priority = 900
+region = "whole_recent"
+contains = ["Permission required"]
+
+# Working footer: the interrupt hint shows while a turn runs.
+[[rules]]
+id = "body_working_footer"
+state = "working"
+priority = 800
+region = "bottom_non_empty_lines(3)"
+any = [
+  { contains = ["esc to interrupt"] },
+  { contains = ["working"] },
+]

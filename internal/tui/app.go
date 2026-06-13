@@ -985,6 +985,23 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.attach.spinFrame++
 		return a, attachSpinTickCmd()
 
+	case previewLoadedMsg, previewTickMsg:
+		// Session-preview pane plumbing. These are NOT key messages, so
+		// they must be handled as their own top-level cases (every
+		// other custom msg in this switch is). Routing them to
+		// sessionsM here — rather than relying on the screen-forward
+		// tail below — keeps the once-a-second tick chain alive even
+		// when the user has navigated away from the Sessions screen
+		// (the preview stays warm so re-entering shows live content,
+		// not a stale frame). sessionsM.Update self-terminates the
+		// chain when the user toggles the pane off, so this is not a
+		// leak. Returning the cmd directly (instead of letting the
+		// screen-forward switch overwrite it) is what previously
+		// dropped the next tick when another screen was active.
+		var cmd tea.Cmd
+		a.sessionsM, cmd = a.sessionsM.Update(msg)
+		return a, cmd
+
 	case tea.MouseMsg:
 		if a.confirm.open() {
 			return a.updateConfirmationMouse(msg)
@@ -1034,7 +1051,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// M (shift-M) opens the Matrix overlay from any navigation surface,
 		// mirroring T which reopens the tour. Suppressed when a text-input
 		// modal has focus so a session named "My-project" doesn't hijack.
-		if msg.String() == "M" && !a.modalCapturingText() {
+		//
+		// Excluded on the Agents screen: there `M` opens the ccmux-model
+		// picker (pin a model for ccmux-launched sessions). The real
+		// feature wins over the easter egg on the one screen that binds
+		// the same key — otherwise the picker is silently dead, shadowed
+		// here before the keystroke ever reaches the screen.
+		if msg.String() == "M" && !a.modalCapturingText() && a.screen != ScreenAgents {
 			a.matrix.Open()
 			a.matrix.SetSize(a.width, a.height)
 			return a, matrixTick()
@@ -1408,21 +1431,6 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// Forward to the active screen.
 	var cmd tea.Cmd
-	// Preview-pane messages must reach sessionsM even when another
-	// screen is active — otherwise the per-second tick chain dies
-	// the moment the user navigates away, and re-entering Sessions
-	// leaves the preview stuck on stale content until they toggle
-	// it off and back on. We pre-route only when the active screen
-	// isn't Sessions; on Sessions the regular switch below handles
-	// it, and double-routing would multiply the tick chain.
-	if a.screen != ScreenSessions {
-		switch msg.(type) {
-		case previewLoadedMsg, previewTickMsg:
-			var pcmd tea.Cmd
-			a.sessionsM, pcmd = a.sessionsM.Update(msg)
-			cmd = pcmd
-		}
-	}
 	switch a.screen {
 	case ScreenSessions:
 		// Dashboard always updates (handles usage ticks, refresh msgs).
@@ -1664,10 +1672,23 @@ func (a App) homeView(width, height int) string {
 	leftW := (width - gutter) / 2
 	rightW := width - leftW - gutter
 	left := a.sessionsM.renderList(leftW, rowH)
-	right := lipgloss.JoinVertical(lipgloss.Left,
-		a.sessionsM.renderDetail(rightW, false),
-		a.dashboard.StatsView(rightW),
-	)
+	// Preview mode (`p`): the right column becomes a live, read-only
+	// view of the selected session's pane instead of the detail + stat
+	// tiles. When you're watching an agent work, the tiles are noise —
+	// the preview earns the whole column. The render path MUST live
+	// here (not in sessionsModel.View) because the wide Home screen
+	// composes its own layout and never calls sessionsModel.View — the
+	// original bug was putting the split in View, which this screen
+	// bypasses entirely.
+	var right string
+	if a.sessionsM.showPreview {
+		right = a.sessionsM.renderPreview(rightW, rowH)
+	} else {
+		right = lipgloss.JoinVertical(lipgloss.Left,
+			a.sessionsM.renderDetail(rightW, false),
+			a.dashboard.StatsView(rightW),
+		)
+	}
 	row := lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
 	return lipgloss.JoinVertical(lipgloss.Left, hero, row)
 }

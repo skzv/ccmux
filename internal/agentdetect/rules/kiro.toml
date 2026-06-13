@@ -1,0 +1,34 @@
+id = "kiro"
+
+# OSC-title braille spinner → working.
+[[rules]]
+id = "title_spinner_working"
+state = "working"
+priority = 1100
+region = "osc_title"
+regex = ['^[\x{2800}-\x{28FF}]']
+
+# Approval gate: Kiro asks the user to grant a single permission or
+# trust the tool when an action "requires approval".
+[[rules]]
+id = "body_requires_approval"
+state = "blocked"
+priority = 900
+region = "whole_recent"
+any = [
+  { contains = ["requires approval"] },
+  { contains = ["yes, single permission"] },
+  { contains = ["trust, always allow"] },
+]
+
+# Working markers: the explicit "kiro is working" footer or the
+# clock/circle spinner it cycles while a turn runs.
+[[rules]]
+id = "body_working_marker"
+state = "working"
+priority = 800
+region = "bottom_non_empty_lines(3)"
+any = [
+  { contains = ["kiro is working"] },
+  { regex = ['[◔◑◕●]'] },
+]
