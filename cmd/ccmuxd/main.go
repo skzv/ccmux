@@ -270,7 +270,11 @@ type server struct {
 	// implementations; tests override them to drive pollOnce
 	// deterministically without a real pane. capture reads a session's
 	// pane content; bell signals a needs-input transition.
-	capture   func(ctx context.Context, name string, lines int) (string, error)
+	capture func(ctx context.Context, name string, lines int) (string, error)
+	// paneTitle reads the agent CLI's OSC-set title (#{pane_title}) —
+	// a second, higher-quality detection signal alongside capture-pane.
+	// Same shape as capture so tests can inject deterministic titles.
+	paneTitle func(ctx context.Context, name string) (string, error)
 	bell      func(ctx context.Context, name string) error
 	readAgent func(projectPath string) agent.ID
 }
@@ -340,6 +344,7 @@ func newServer(cfg config.Config) *server {
 		seen:       map[string]*tracked{},
 		startedAt:  time.Now(),
 		capture:    tmux.CapturePane,
+		paneTitle:  tmux.PaneTitle,
 		bell:       notificationBell(cfg.Notifications),
 		readAgent:  project.ReadAgent,
 		tokens:     daemon.NewTokenStore(),
