@@ -405,18 +405,32 @@ func (m *notesModel) refreshPreview() tea.Cmd {
 		return remoteNoteContentCmd(addr, label, m.project.Path, m.project.Name, rel)
 	}
 
-	data, err := notes.Open(m.project.Path).Read(rel)
-	if err != nil {
-		m.previewSrc = m.st.StatusError.Render(err.Error())
-		m.previewRel = rel
-		m.preview.SetContent(m.previewSrc)
-		return nil
-	}
-	m.previewSrc = string(data)
+	// Local: read off the UI goroutine too. The remote branch above was
+	// made async deliberately; the local read was left synchronous, so a
+	// large markdown file or a slow / network-mounted home directory
+	// blocked the whole Bubble Tea render loop on every cursor move.
+	// Show a placeholder and load asynchronously, reusing the same
+	// notesPreviewLoadedMsg path (and its staleness guard) as remote.
 	m.previewRel = rel
-	m.preview.SetContent(m.renderPreviewContent(pw))
+	m.previewSrc = ""
+	m.preview.SetContent(m.st.Muted.Render("Loading…"))
 	m.preview.GotoTop()
-	return nil
+	return localNoteContentCmd(m.project.Path, rel)
+}
+
+// localNoteContentCmd reads a local note body off the UI goroutine and
+// delivers it via the same notesPreviewLoadedMsg the remote path uses,
+// so the handler's staleness check (cursor moved / project switched
+// since dispatch) covers local reads too. Keeps a slow disk read from
+// freezing the render loop.
+func localNoteContentCmd(path, rel string) tea.Cmd {
+	return func() tea.Msg {
+		data, err := notes.Open(path).Read(rel)
+		if err != nil {
+			return notesPreviewLoadedMsg{Host: localDeviceLabel, Path: path, Rel: rel, Err: err.Error()}
+		}
+		return notesPreviewLoadedMsg{Host: localDeviceLabel, Path: path, Rel: rel, Content: string(data)}
+	}
 }
 
 // renderPreviewContent runs Glamour at `wrap` cells wide and returns

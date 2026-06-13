@@ -244,7 +244,17 @@ func (m claudeModel) Update(msg tea.Msg) (claudeModel, tea.Cmd) {
 		case "e":
 			m.picker = pickerEffort
 			m.pickerCursor = 0
-			cur := strings.ToLower(strings.TrimSpace(m.settings.EffortLevel))
+			// Guard m.settings: reload() leaves it nil when
+			// ReadSettings fails (malformed or permission-denied
+			// settings.json). Without this guard, opening the Claude
+			// screen on a broken config and pressing `e` nil-derefs and
+			// crashes the whole TUI — exactly when the user came here to
+			// fix that config. Pre-positioning is best-effort, so a nil
+			// settings just leaves the cursor at 0.
+			cur := ""
+			if m.settings != nil {
+				cur = strings.ToLower(strings.TrimSpace(m.settings.EffortLevel))
+			}
 			for i, opt := range claudeconfig.KnownEffortLevels() {
 				if opt.Value == cur {
 					m.pickerCursor = i

@@ -474,3 +474,30 @@ func TestSummarizePath_PrefixIsNotComponentMatch(t *testing.T) {
 		t.Errorf("summarizePath must not match partial components: got %q", got)
 	}
 }
+
+// TestClaudeScreen_EffortPickerNoPanicOnMalformedSettings — regression
+// for a nil-pointer crash. When settings.json is malformed (or
+// permission-denied), claudeconfig.ReadSettings errors and reload()
+// leaves m.settings nil. Pressing `e` (effort picker) used to deref
+// m.settings.EffortLevel unguarded and crash the whole TUI — exactly
+// when the user opened the Claude screen to fix the broken config.
+func TestClaudeScreen_EffortPickerNoPanicOnMalformedSettings(t *testing.T) {
+	dir := fakeClaudeDir(t)
+	writeClaudeSettings(t, dir, "{ this is not valid json")
+
+	m := newClaude(styles.Default(), DefaultKeymap())
+	if m.settings != nil {
+		t.Fatal("precondition: malformed settings.json should leave m.settings nil")
+	}
+
+	// Press `e`. Must not panic; must open the effort picker.
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("pressing `e` with nil settings panicked: %v", r)
+		}
+	}()
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	if m2.picker != pickerEffort {
+		t.Errorf("`e` should open the effort picker, got picker=%v", m2.picker)
+	}
+}
