@@ -1,4 +1,4 @@
-.PHONY: build install setup uninstall run test test-e2e lint clean fmt vet daemon tui check-go bootstrap fuzz fuzz-quick tapes tapes-check release-check release-snapshot brew-test
+.PHONY: build install setup uninstall run test test-e2e lint clean fmt vet daemon tui check-go bootstrap fuzz fuzz-quick tapes tapes-check release-check release-snapshot brew-test mcp
 
 BIN_DIR    := bin
 INSTALL_DIR := $(HOME)/.local/bin
@@ -36,7 +36,7 @@ check-go:
 		exit 1; \
 	}
 
-build: check-go $(BIN_DIR)/ccmux $(BIN_DIR)/ccmuxd
+build: check-go $(BIN_DIR)/ccmux $(BIN_DIR)/ccmuxd $(BIN_DIR)/ccmux-mcp
 
 $(BIN_DIR)/ccmux: $(shell find cmd/ccmux internal -type f -name '*.go' 2>/dev/null) go.mod go.sum
 	@mkdir -p $(BIN_DIR)
@@ -47,6 +47,15 @@ $(BIN_DIR)/ccmuxd: $(shell find cmd/ccmuxd internal -type f -name '*.go' 2>/dev/
 	@mkdir -p $(BIN_DIR)
 	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/ccmuxd ./cmd/ccmuxd
 	@$(CODESIGN)
+
+$(BIN_DIR)/ccmux-mcp: $(shell find cmd/ccmux-mcp internal/daemon -type f -name '*.go' 2>/dev/null) go.mod go.sum
+	@mkdir -p $(BIN_DIR)
+	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/ccmux-mcp ./cmd/ccmux-mcp
+	@$(CODESIGN)
+
+# `make mcp` builds just the MCP server. Convenience for working on
+# the agent-facing API without rebuilding the TUI + daemon.
+mcp: check-go $(BIN_DIR)/ccmux-mcp
 
 install: build
 	@mkdir -p $(INSTALL_DIR)
@@ -61,6 +70,8 @@ install: build
 	mv -f $(INSTALL_DIR)/ccmux.new  $(INSTALL_DIR)/ccmux
 	cp $(BIN_DIR)/ccmuxd $(INSTALL_DIR)/ccmuxd.new
 	mv -f $(INSTALL_DIR)/ccmuxd.new $(INSTALL_DIR)/ccmuxd
+	cp $(BIN_DIR)/ccmux-mcp $(INSTALL_DIR)/ccmux-mcp.new
+	mv -f $(INSTALL_DIR)/ccmux-mcp.new $(INSTALL_DIR)/ccmux-mcp
 ifeq ($(UNAME_S),Darwin)
 	@# On macOS the cp-into-INSTALL_DIR stamps com.apple.provenance on
 	@# the destination, which can invalidate the ad-hoc signature
@@ -71,8 +82,10 @@ ifeq ($(UNAME_S),Darwin)
 	@# fine; the child exec hit the new provenance + stale sig).
 	@xattr -d com.apple.provenance $(INSTALL_DIR)/ccmux  2>/dev/null || true
 	@xattr -d com.apple.provenance $(INSTALL_DIR)/ccmuxd 2>/dev/null || true
+	@xattr -d com.apple.provenance $(INSTALL_DIR)/ccmux-mcp 2>/dev/null || true
 	@codesign --force --sign - $(INSTALL_DIR)/ccmux  2>/dev/null || true
 	@codesign --force --sign - $(INSTALL_DIR)/ccmuxd 2>/dev/null || true
+	@codesign --force --sign - $(INSTALL_DIR)/ccmux-mcp 2>/dev/null || true
 endif
 	@echo "Installed to $(INSTALL_DIR). Make sure it's on your PATH."
 	@# Best-effort daemon restart so the running ccmuxd picks up the

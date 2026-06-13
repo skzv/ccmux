@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
@@ -311,6 +312,73 @@ func (c *Client) SearchNotes(ctx context.Context, project, query string) ([]Sear
 		return nil, err
 	}
 	return out, nil
+}
+
+// Preview returns the last `lines` lines of the named session's active
+// pane. Empty lines arg defaults daemon-side. Used by mobile clients to
+// render a session card without a full attach, and by ccmux-mcp for the
+// `read_pane` tool.
+func (c *Client) Preview(ctx context.Context, name string, lines int) (PreviewResponse, error) {
+	q := url.Values{}
+	if lines > 0 {
+		q.Set("lines", strconv.Itoa(lines))
+	}
+	path := "/v1/sessions/" + url.PathEscape(name) + "/preview"
+	if enc := q.Encode(); enc != "" {
+		path += "?" + enc
+	}
+	var out PreviewResponse
+	if err := c.getJSON(ctx, path, &out); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
+// Conversations returns past agent transcripts (Claude / Codex /
+// Antigravity / Cursor / Pi / Grok) sorted by most-recent. Powers the
+// Conversations screen and the `list_conversations` MCP tool.
+func (c *Client) Conversations(ctx context.Context) ([]Conversation, error) {
+	var out []Conversation
+	if err := c.getJSON(ctx, "/v1/conversations", &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// Usage returns per-agent token + cost activity over a rolling window.
+// Powers the dashboard's usage panel and the `get_usage` MCP tool.
+func (c *Client) Usage(ctx context.Context) (AgentUsage, error) {
+	var out AgentUsage
+	if err := c.getJSON(ctx, "/v1/usage", &out); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
+// Peers returns every tailnet peer plus whether each runs ccmuxd.
+// Powers the Network screen and the `list_machines` MCP tool.
+func (c *Client) Peers(ctx context.Context) ([]PeerInfo, error) {
+	var out []PeerInfo
+	if err := c.getJSON(ctx, "/v1/peers", &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// SendKeys types the literal string `keys` into the named session's
+// active pane. tmux interprets common tokens (Enter, C-c, …) — see
+// internal/tmux/tmux.go for the exact escapes. Used by the MCP server's
+// mutating `send_keys` tool when --allow-mutate is on.
+func (c *Client) SendKeys(ctx context.Context, name, keys string) error {
+	path := "/v1/sessions/" + url.PathEscape(name) + "/send-keys"
+	return c.post(ctx, path, SendKeysRequest{Keys: keys}, nil)
+}
+
+// Kill terminates the named tmux session. Used by the MCP server's
+// mutating `kill_session` tool when --allow-mutate is on.
+func (c *Client) Kill(ctx context.Context, name string) error {
+	path := "/v1/sessions/" + url.PathEscape(name) + "/kill"
+	return c.post(ctx, path, nil, nil)
 }
 
 // Addr returns a human description of this client's target.

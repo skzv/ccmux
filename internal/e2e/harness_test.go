@@ -23,9 +23,10 @@ import (
 
 // Built binaries, populated once by buildBinaries (called from TestMain).
 var (
-	binDir      string
-	builtCcmux  string
-	builtCcmuxd string
+	binDir        string
+	builtCcmux    string
+	builtCcmuxd   string
+	builtCcmuxMCP string
 )
 
 // stubBinDir holds fake `claude`/`codex` agent executables — see
@@ -53,10 +54,12 @@ func buildBinaries() error {
 	binDir = dir
 	builtCcmux = filepath.Join(dir, "ccmux")
 	builtCcmuxd = filepath.Join(dir, "ccmuxd")
+	builtCcmuxMCP = filepath.Join(dir, "ccmux-mcp")
 	root := repoRoot()
 	for _, b := range []struct{ out, pkg string }{
 		{builtCcmux, "./cmd/ccmux"},
 		{builtCcmuxd, "./cmd/ccmuxd"},
+		{builtCcmuxMCP, "./cmd/ccmux-mcp"},
 	} {
 		cmd := exec.Command("go", "build", "-o", b.out, b.pkg)
 		cmd.Dir = root

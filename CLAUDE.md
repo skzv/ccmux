@@ -20,6 +20,7 @@ Components:
 
 - **`cmd/ccmux`** — the user-facing binary. Default behavior launches the TUI. Subcommands provide scripting hooks (`new`, `attach`, `list`, `kill`, `setup`, `doctor`, `host add/remove/list`).
 - **`cmd/ccmuxd`** — background daemon. Polls tmux pane content, detects when Claude is waiting for input, rings the terminal bell so the iOS terminal client raises a push notification. Manages `caffeinate` lock for sleep prevention. Persists session metrics to SQLite. Exposes both a local Unix socket _and_ (optionally) a tailnet-bound HTTP API for remote ccmux clients.
+- **`cmd/ccmux-mcp`** — MCP server (JSON-RPC 2.0 over stdio) that exposes ccmux to coding agents. Proxies tool calls to the local ccmuxd (or a tailnet peer via `CCMUX_HOST`) through the same `internal/daemon.Client` the TUI uses. Read-only by default; `--allow-mutate` exposes spawn / send-keys / kill. See [`docs/01_Specs/04_MCP_Server.md`](docs/01_Specs/04_MCP_Server.md).
 - **`internal/tui`** — Bubble Tea models and screens. Top-level app routes between Dashboard, Sessions, Projects, Notes, Setup, and Settings screens. Lipgloss handles styling, Bubbles provides the list/table/textinput/viewport widgets.
 - **`internal/tmux`** — wrapper around `tmux` CLI. All session operations (`new`, `attach`, `kill`, `list`, `capture-pane`) go through here. No direct shell-outs from the TUI layer.
 - **`internal/claude`** — Claude session detection. Reads `~/.claude/projects/<encoded-path>/` for transcripts, derives "needs input" state from pane content patterns.
