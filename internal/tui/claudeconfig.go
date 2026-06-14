@@ -47,7 +47,7 @@ type claudeModel struct {
 	// model / effort pattern above (string + a way to display the
 	// "(inherit Claude Code)" case). Empty means no pin.
 	ccmuxDefaultModel string
-	// catalog is the live model list shown by pickerCcmuxModel. Loaded
+	// catalog is the live model list shown by the model picker. Loaded
 	// lazily on first open from the daemon's on-disk cache; falls back
 	// to the curated in-binary list when the cache file isn't there
 	// (fresh install, daemon not running, etc).
@@ -89,20 +89,15 @@ type pickerKind int
 
 const (
 	pickerNone pickerKind = iota
-	// pickerModel chooses an alias (opus / sonnet / haiku / opusplan) or
-	// "inherit". Writes Claude Code's ~/.claude/settings.json so the pick
-	// applies to every claude invocation, including ones outside ccmux.
-	// Aliases auto-track Anthropic's current bindings (today opus = 4.7,
-	// tomorrow whatever they ship next).
+	// pickerModel is the unified model picker. It lists the live
+	// catalog (full IDs discovered from `claude`, or the curated
+	// fallback) plus the family aliases, and a pick writes BOTH Claude
+	// Code's ~/.claude/settings.json model AND ccmux's [claude]
+	// default_model pin — the latter re-exported as ANTHROPIC_MODEL at
+	// launch so the pick takes effect for ccmux sessions even when the
+	// shell already exports ANTHROPIC_MODEL.
 	pickerModel
 	pickerEffort
-	// pickerCcmuxModel pins a specific model for sessions ccmux itself
-	// launches. Writes ~/.config/ccmux/config.toml's [claude] section
-	// and translates to `ANTHROPIC_MODEL=<id>` at session start. Per-
-	// machine; doesn't touch Claude Code's own settings. The list is
-	// the daemon's live-discovered catalog (or the curated fallback
-	// when the daemon hasn't fetched yet).
-	pickerCcmuxModel
 )
 
 func newClaude(st styles.Styles, km Keymap) claudeModel {
@@ -180,20 +175,6 @@ func (m claudeModel) Update(msg tea.Msg) (claudeModel, tea.Cmd) {
 		}
 		return m, toastCmd(toastSuccess,
 			fmt.Sprintf("always-thinking turned %s — backup at %s", label, summarizePath(msg.Backup)),
-			6,
-		)
-
-	case claudeCcmuxModelChangedMsg:
-		if msg.Err != nil {
-			return m, toastCmd(toastError, "ccmux model pin: "+msg.Err.Error(), 5)
-		}
-		m.reload()
-		display := msg.New
-		if display == "" {
-			display = "(no pin — inherit Claude Code)"
-		}
-		return m, toastCmd(toastSuccess,
-			fmt.Sprintf("ccmux default model set to %s — applies on next session launch", display),
 			6,
 		)
 
@@ -276,9 +257,10 @@ func (m claudeModel) Update(msg tea.Msg) (claudeModel, tea.Cmd) {
 		// working without arrowing to the row first. They also move the
 		// row cursor to the row they act on so the highlight follows.
 		switch msg.String() {
-		case "M":
-			return m.openCcmuxModelPicker(), nil
-		case "m":
+		case "m", "M":
+			// One unified model picker now. `M` used to open a separate
+			// "ccmux pin" picker; both keys open the same picker so old
+			// muscle memory keeps working without the confusing split.
 			m.rowCursor, m.focusTop = claudeRowModel, true
 			return m.openModelPicker(), nil
 		case "e":
@@ -319,17 +301,27 @@ func (m claudeModel) activateRow(row int) (claudeModel, tea.Cmd) {
 	return m, nil
 }
 
-// openModelPicker opens the Claude Code model picker (settings.json),
-// pre-positioned on the effective model. Reading the EFFECTIVE model
-// (not settings.Model) matters: when $ANTHROPIC_MODEL overrides, the
-// picker would otherwise open on "Inherit", the user re-picks the model
-// they already use, nothing changes, and the picker looks broken.
+// openModelPicker opens the unified model picker. It loads the live
+// catalog (so the list reflects what `claude` actually offers — current
+// models like claude-opus-4-8, not a hardcoded alias list) and
+// pre-positions the cursor on the model ccmux will currently launch
+// with: the ccmux pin if set, otherwise the effective model (which may
+// be a shell $ANTHROPIC_MODEL or settings.json). Reading the effective
+// model — not settings.Model — matters: when $ANTHROPIC_MODEL overrides,
+// the picker would otherwise open on "Inherit", the user re-picks the
+// model they already use, and it looks broken.
 func (m claudeModel) openModelPicker() claudeModel {
 	m.picker = pickerModel
 	m.pickerCursor = 0
-	cur := normalizeModelAlias(m.model)
-	for i, opt := range claudeconfig.KnownModels() {
-		if opt.Alias == cur {
+	if !m.catalogLoaded() {
+		m.loadCatalog()
+	}
+	cur := strings.TrimSpace(m.ccmuxDefaultModel)
+	if cur == "" {
+		cur = strings.TrimSpace(m.model)
+	}
+	for i, c := range m.unifiedModelChoices() {
+		if cur != "" && (c.Settings == cur || c.Pin == cur) {
 			m.pickerCursor = i
 			break
 		}
@@ -350,25 +342,6 @@ func (m claudeModel) openEffortPicker() claudeModel {
 	}
 	for i, opt := range claudeconfig.KnownEffortLevels() {
 		if opt.Value == cur {
-			m.pickerCursor = i
-			break
-		}
-	}
-	return m
-}
-
-// openCcmuxModelPicker opens the "pin a model for ccmux-launched
-// sessions" picker (writes ~/.config/ccmux/config.toml, not Claude
-// Code's settings). Lazy-loads the model catalog on first open and
-// pre-positions on the current pin.
-func (m claudeModel) openCcmuxModelPicker() claudeModel {
-	m.picker = pickerCcmuxModel
-	m.pickerCursor = 0
-	if !m.catalogLoaded() {
-		m.loadCatalog()
-	}
-	for i, mdl := range m.catalogPickerModels() {
-		if mdl.ID == m.ccmuxDefaultModel {
 			m.pickerCursor = i
 			break
 		}
@@ -399,11 +372,9 @@ func (m claudeModel) updatePicker(msg tea.KeyMsg) (claudeModel, tea.Cmd) {
 	var optsLen int
 	switch m.picker {
 	case pickerModel:
-		optsLen = len(claudeconfig.KnownModels())
+		optsLen = len(m.unifiedModelChoices())
 	case pickerEffort:
 		optsLen = len(claudeconfig.KnownEffortLevels())
-	case pickerCcmuxModel:
-		optsLen = len(m.catalogPickerModels())
 	}
 	switch msg.String() {
 	case "esc":
@@ -422,26 +393,16 @@ func (m claudeModel) updatePicker(msg tea.KeyMsg) (claudeModel, tea.Cmd) {
 		m.picker = pickerNone
 		switch which {
 		case pickerModel:
-			chosen := claudeconfig.KnownModels()[cursor].Alias
-			return m, func() tea.Msg {
-				backup, err := claudeconfig.SetModel(chosen)
-				return claudeModelChangedMsg{New: chosen, Backup: backup, Err: err}
+			choices := m.unifiedModelChoices()
+			if cursor >= len(choices) {
+				return m, nil
 			}
+			return m, applyModelChoiceCmd(choices[cursor])
 		case pickerEffort:
 			chosen := claudeconfig.KnownEffortLevels()[cursor].Value
 			return m, func() tea.Msg {
 				backup, err := claudeconfig.SetEffortLevel(chosen)
 				return claudeEffortChangedMsg{New: chosen, Backup: backup, Err: err}
-			}
-		case pickerCcmuxModel:
-			rows := m.catalogPickerModels()
-			if cursor >= len(rows) {
-				return m, nil
-			}
-			chosen := rows[cursor].ID
-			return m, func() tea.Msg {
-				err := setCcmuxClaudeDefault(chosen)
-				return claudeCcmuxModelChangedMsg{New: chosen, Err: err}
 			}
 		}
 	}
@@ -533,12 +494,35 @@ func (m claudeModel) renderDefaultsRows(selected int) []string {
 		}
 		return out
 	}
+	modelValue, modelSource := m.modelRowDisplay()
 	return []string{
-		row(claudeRowModel, "model", m.model, m.modelSource),
+		row(claudeRowModel, "model", modelValue, modelSource),
 		row(claudeRowEffort, "effort", m.effort, m.effortSource),
 		row(claudeRowAlwaysThinking, "always-thinking", thinkLabel, ""),
 		row(claudeRowYolo, "yolo mode", yoloLabel, m.yoloSource),
 	}
+}
+
+// modelRowDisplay returns the value + source shown on the model row.
+// It reflects what ccmux will actually LAUNCH with, which is not the
+// same as Claude Code's effective model when either a ccmux pin or a
+// shell $ANTHROPIC_MODEL is in play. Precedence, highest first:
+//
+//   - ccmux pin ([claude] default_model) → ccmux re-exports this as
+//     ANTHROPIC_MODEL at launch, so it wins for ccmux sessions even
+//     over a shell ANTHROPIC_MODEL. Shown as "ccmux pin".
+//   - whatever EffectiveModel resolved (a shell $ANTHROPIC_MODEL, or
+//     settings.json, or the Claude default) — shown with that source,
+//     and the shell case is flagged as overriding so the user isn't
+//     surprised the model row doesn't match their settings.json.
+func (m claudeModel) modelRowDisplay() (value, source string) {
+	if p := strings.TrimSpace(m.ccmuxDefaultModel); p != "" {
+		return p, "ccmux pin → ANTHROPIC_MODEL"
+	}
+	if m.modelSource == "$ANTHROPIC_MODEL" {
+		return m.model, "$ANTHROPIC_MODEL in shell — overrides settings.json"
+	}
+	return m.model, m.modelSource
 }
 
 // rowMarker returns the 2-cell left gutter for a settings row: an
@@ -723,48 +707,39 @@ func (m claudeModel) skillsSummarySample() string {
 
 func (m claudeModel) viewPicker(width, height int) string {
 	st := m.st
-	var title string
+	var title, subtitle string
 	var rows []pickerRow
 	switch m.picker {
 	case pickerModel:
-		title = "Pick default model"
-		for _, o := range claudeconfig.KnownModels() {
-			rows = append(rows, pickerRow{Label: o.Label, Desc: o.Desc})
+		title = "Pick model"
+		subtitle = "Sets Claude Code's default (settings.json) AND pins it for ccmux-launched sessions."
+		for _, c := range m.unifiedModelChoices() {
+			rows = append(rows, pickerRow{Label: c.Label, Desc: c.Desc})
 		}
 	case pickerEffort:
 		title = "Pick reasoning effort"
+		subtitle = "Writes to " + m.paths.Settings + " (backed up first)."
 		for _, o := range claudeconfig.KnownEffortLevels() {
 			rows = append(rows, pickerRow{Label: o.Label, Desc: o.Desc})
 		}
-	case pickerCcmuxModel:
-		title = "Pin a model for ccmux-launched sessions"
-		for _, mdl := range m.catalogPickerModels() {
-			rows = append(rows, pickerRow{
-				Label: ccmuxModelLabel(mdl, m.ccmuxDefaultModel),
-				Desc:  ccmuxModelDesc(mdl),
-			})
-		}
-	}
-	subtitle := "Writes to " + m.paths.Settings + " (backed up first)."
-	if m.picker == pickerCcmuxModel {
-		// Different surface, different file — make sure the user
-		// knows where the pick is going to land.
-		subtitle = "Writes [claude] default_model in ~/.config/ccmux/config.toml. " +
-			"Applied as ANTHROPIC_MODEL when ccmux launches a Claude session."
 	}
 	lines := []string{
 		st.Emphasis.Render(title),
 		st.Subtitle.Render(subtitle),
 	}
-	// When an environment variable shadows the file value, picking a
-	// row here still writes settings.json but the env var keeps
-	// winning at the Claude Code layer. Surface that explicitly so
-	// the picker doesn't appear broken when nothing visibly changes.
+	// When the user's SHELL exports ANTHROPIC_MODEL, it sits above
+	// settings.json in Claude Code's precedence — so a settings.json
+	// pick alone would do nothing. The unified picker also writes the
+	// ccmux pin (which ccmux re-exports at launch, overriding the
+	// shell value for ccmux sessions), so a pick DOES take effect here.
+	// We still surface the shell var so the user knows to unset it if
+	// they want the change to apply everywhere, not just ccmux sessions.
 	if m.picker == pickerModel && m.modelSource == "$ANTHROPIC_MODEL" {
-		lines = append(lines, st.StatusWarning.Render(
-			"⚠ $ANTHROPIC_MODEL="+m.model+" is overriding settings.json. "+
-				"Unset it to let your pick take effect.",
-		))
+		lines = append(lines,
+			st.StatusWarning.Render("⚠ Your shell exports ANTHROPIC_MODEL="+m.model+"."),
+			st.Muted.Render("  Your pick is pinned for ccmux sessions (takes effect here)."),
+			st.Muted.Render("  To change it everywhere, unset ANTHROPIC_MODEL in your shell (e.g. ~/.zshrc)."),
+		)
 	}
 	lines = append(lines, "")
 	pickerW := minInt(96, width-4) - 2
@@ -785,28 +760,6 @@ func (m claudeModel) viewPicker(width, height int) string {
 type pickerRow struct {
 	Label string
 	Desc  string
-}
-
-// normalizeModelAlias maps a value returned by claudeconfig.EffectiveModel
-// — which may be a short alias ("opus"), a full ID ("claude-opus-4-7"),
-// or the literal "(default)" sentinel — to one of the picker's
-// KnownModels aliases so the cursor can pre-position correctly.
-// Unknown inputs fall through unchanged so cursor lookup still works
-// for aliases the user added directly to settings.json.
-func normalizeModelAlias(model string) string {
-	s := strings.ToLower(strings.TrimSpace(model))
-	if s == "" || s == "(default)" {
-		return "" // matches the "Inherit / no override" row
-	}
-	switch s {
-	case "claude-opus-4-7", "claude-opus-4-1", "claude-opus-4":
-		return "opus"
-	case "claude-sonnet-4-6", "claude-sonnet-4-5", "claude-sonnet-4":
-		return "sonnet"
-	case "claude-haiku-4-5", "claude-haiku-4":
-		return "haiku"
-	}
-	return s
 }
 
 // openClaudeFileCmd creates the target file if requested, then exec's
@@ -1006,7 +959,7 @@ func readFileOr(path, fallback string) string {
 // catalogLoaded reports whether m.catalog has been populated. The
 // zero value of claudemodels.Catalog has no Models and a zero
 // FetchedAt; we treat any Models slice as "loaded" so the second
-// open of pickerCcmuxModel doesn't re-read disk for no reason.
+// open of the model picker doesn't re-read disk for no reason.
 func (m claudeModel) catalogLoaded() bool { return len(m.catalog.Models) > 0 }
 
 // loadCatalog reads the daemon's models.json cache from disk. The
@@ -1037,33 +990,6 @@ func (m *claudeModel) loadCatalog() {
 	claudemodels.Sort(m.catalog.Models)
 }
 
-// catalogPickerModels returns the rows shown in pickerCcmuxModel,
-// prepended with a synthetic "" entry meaning "no pin — inherit
-// Claude Code's setting". Returning a real slice (not a pointer)
-// keeps callers from accidentally mutating the underlying catalog.
-func (m claudeModel) catalogPickerModels() []claudemodels.Model {
-	out := make([]claudemodels.Model, 0, len(m.catalog.Models)+1)
-	// Sentinel row: no pin. ID="" matches the empty-string check in
-	// agent.LaunchCmd, so picking this clears the override.
-	out = append(out, claudemodels.Model{ID: "", DisplayName: "(no pin — inherit Claude Code default)"})
-	out = append(out, m.catalog.Models...)
-	return out
-}
-
-// ccmuxModelLabel renders a catalog row's primary cell. Adds a
-// " [current]" tag to the row that matches the user's existing pin
-// so they can spot it without reading every line.
-func ccmuxModelLabel(mdl claudemodels.Model, current string) string {
-	label := mdl.ID
-	if mdl.DisplayName != "" {
-		label = mdl.DisplayName + "  " + mdl.ID
-	}
-	if mdl.ID == current {
-		label += "  [current]"
-	}
-	return label
-}
-
 // ccmuxModelDesc renders the per-row secondary text: source (api vs
 // fallback) plus a coarse capability summary. Trimmed deliberately —
 // the picker is narrow and a long descriptor line wraps badly.
@@ -1086,6 +1012,95 @@ func ccmuxModelDesc(mdl claudemodels.Model) string {
 	return strings.Join(parts, " · ")
 }
 
+// modelChoice is one row in the unified model picker. It captures both
+// targets a pick writes: Settings → ~/.claude/settings.json `model`
+// (Claude Code's global default), and Pin → ccmux's [claude]
+// default_model, which ccmux exports as ANTHROPIC_MODEL when it
+// launches a claude session. Writing both is what makes a pick take
+// effect even when the user's shell already exports ANTHROPIC_MODEL —
+// which sits above settings.json in Claude Code's precedence and would
+// otherwise silently shadow it (the "my change does nothing" gotcha
+// behind merging the old m/M pickers into one).
+type modelChoice struct {
+	Label    string
+	Desc     string
+	Settings string // settings.json model value (alias or full ID); "" clears it
+	Pin      string // ccmux ANTHROPIC_MODEL pin (full ID); "" clears the pin
+}
+
+// toastValue is the human-readable summary of what a pick did, for the
+// success toast.
+func (c modelChoice) toastValue() string {
+	if c.Settings == "" && c.Pin == "" {
+		return "(no override — inherit Claude Code default)"
+	}
+	base := c.Settings
+	if base == "" {
+		base = c.Pin
+	}
+	if c.Pin != "" {
+		base += " (pinned for ccmux sessions)"
+	}
+	return base
+}
+
+// unifiedModelChoices builds the model-picker rows: a clear/inherit
+// sentinel, every model from the live catalog (full IDs like
+// claude-opus-4-8, discovered from `claude -p` by the daemon or the
+// curated fallback), then the stable family aliases (opus / sonnet / …)
+// for "always track the latest." Full-ID rows pin ANTHROPIC_MODEL so
+// the pick wins regardless of the shell; alias rows write settings.json
+// only — they resolve to "latest" at the Claude layer, and a pin would
+// freeze them to one version.
+func (m claudeModel) unifiedModelChoices() []modelChoice {
+	out := []modelChoice{{
+		Label:    "Inherit / clear override",
+		Desc:     "Use Claude Code's default; clear ccmux's pin",
+		Settings: "", Pin: "",
+	}}
+	for _, mdl := range m.catalog.Models {
+		label := mdl.ID
+		if mdl.DisplayName != "" {
+			label = mdl.DisplayName + "  " + mdl.ID
+		}
+		out = append(out, modelChoice{
+			Label:    label,
+			Desc:     ccmuxModelDesc(mdl),
+			Settings: mdl.ID,
+			Pin:      mdl.ID,
+		})
+	}
+	for _, a := range claudeconfig.KnownModels() {
+		if a.Alias == "" {
+			continue // our own sentinel above already covers "inherit"
+		}
+		out = append(out, modelChoice{
+			Label:    a.Alias + "  (always latest " + a.Alias + ")",
+			Desc:     "Tracks Claude Code's current " + a.Alias + "; settings.json only",
+			Settings: a.Alias,
+			Pin:      "", // aliases track latest — pinning would freeze them
+		})
+	}
+	return out
+}
+
+// applyModelChoiceCmd writes both targets of a pick: settings.json
+// `model` AND ccmux's pin. Doing both in one command (rather than two
+// chained messages) keeps the success/failure reporting atomic — the
+// user sees one toast, and a failure on either write surfaces.
+func applyModelChoiceCmd(c modelChoice) tea.Cmd {
+	return func() tea.Msg {
+		backup, err := claudeconfig.SetModel(c.Settings)
+		if err != nil {
+			return claudeModelChangedMsg{New: c.Settings, Err: err}
+		}
+		if perr := setCcmuxClaudeDefault(c.Pin); perr != nil {
+			return claudeModelChangedMsg{New: c.Settings, Backup: backup, Err: perr}
+		}
+		return claudeModelChangedMsg{New: c.toastValue(), Backup: backup}
+	}
+}
+
 // setCcmuxClaudeDefault is the model write — read the on-disk config,
 // mutate Claude.DefaultModel, write back. Wrapped here (not inline in
 // the picker handler) so a test can verify the precise behavior
@@ -1099,14 +1114,4 @@ func setCcmuxClaudeDefault(model string) error {
 	}
 	cfg.Claude.DefaultModel = strings.TrimSpace(model)
 	return config.Save(cfg)
-}
-
-// claudeCcmuxModelChangedMsg is the result of a pickerCcmuxModel
-// commit. Mirrors the claudeModelChangedMsg pattern but for the
-// ccmux-side default, so the toast/reload flow in Update() can
-// branch on a clear discriminated type instead of guessing which
-// model was set.
-type claudeCcmuxModelChangedMsg struct {
-	New string
-	Err error
 }

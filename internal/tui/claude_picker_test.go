@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/skzv/ccmux/internal/claudeconfig"
+	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/tui/styles"
 )
 
@@ -22,6 +23,13 @@ func fakeClaudeDir(t *testing.T) string {
 	dir := t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", dir)
 	t.Setenv("ANTHROPIC_MODEL", "")
+	// Isolate HOME too: the unified model picker writes ccmux's own
+	// config ([claude] default_model pin) under $HOME/.config/ccmux,
+	// and loads the model catalog from $HOME/.local/state — pointing
+	// HOME at a tempdir keeps a test from touching the real config and
+	// makes the catalog deterministic (no daemon cache → curated
+	// fallback, which carries the current model IDs).
+	t.Setenv("HOME", t.TempDir())
 	return dir
 }
 
@@ -33,45 +41,19 @@ func writeClaudeSettings(t *testing.T, dir, body string) {
 	}
 }
 
-// TestNormalizeModelAlias — the helper that maps EffectiveModel output
-// (alias, full vendor ID, or "(default)" sentinel) onto the picker's
-// known-aliases so the cursor can pre-position correctly.
-func TestNormalizeModelAlias(t *testing.T) {
-	cases := []struct {
-		in, want string
-	}{
-		{"", ""},
-		{"(default)", ""},
-		{"  (default)  ", ""},
-		{"opus", "opus"},
-		{"  opus  ", "opus"},
-		{"OPUS", "opus"},
-		{"sonnet", "sonnet"},
-		{"haiku", "haiku"},
-		{"claude-opus-4-7", "opus"},
-		{"claude-opus-4-1", "opus"},
-		{"claude-opus-4", "opus"},
-		{"claude-sonnet-4-6", "sonnet"},
-		{"claude-sonnet-4-5", "sonnet"},
-		{"claude-sonnet-4", "sonnet"},
-		{"claude-haiku-4-5", "haiku"},
-		{"claude-haiku-4", "haiku"},
-		// Unknown stays as-is (lowercased + trimmed) so the cursor
-		// lookup still works for aliases the user added by hand.
-		{"unknown-model", "unknown-model"},
-		{"  custom-id  ", "custom-id"},
-		{"opusplan", "opusplan"},
+// selectedChoice returns the unified-picker row the cursor is on.
+func selectedChoice(t *testing.T, m claudeModel) modelChoice {
+	t.Helper()
+	choices := m.unifiedModelChoices()
+	if m.pickerCursor < 0 || m.pickerCursor >= len(choices) {
+		t.Fatalf("pickerCursor %d out of range (%d choices)", m.pickerCursor, len(choices))
 	}
-	for _, tc := range cases {
-		if got := normalizeModelAlias(tc.in); got != tc.want {
-			t.Errorf("normalizeModelAlias(%q) = %q, want %q", tc.in, got, tc.want)
-		}
-	}
+	return choices[m.pickerCursor]
 }
 
-// TestClaudeModel_PickerPreselectsEffectiveModel_FromSettings — when
-// settings.json has model="sonnet" and no env var, opening the picker
-// (m key) lands the cursor on the sonnet row (index 1 in KnownModels).
+// TestClaudeModel_PickerPreselectsEffectiveModel_FromSettings — with
+// settings.json model="sonnet" and no env var, opening the picker lands
+// the cursor on the row that sets "sonnet" (the alias row).
 func TestClaudeModel_PickerPreselectsEffectiveModel_FromSettings(t *testing.T) {
 	dir := fakeClaudeDir(t)
 	writeClaudeSettings(t, dir, `{"model":"sonnet"}`)
@@ -82,45 +64,65 @@ func TestClaudeModel_PickerPreselectsEffectiveModel_FromSettings(t *testing.T) {
 	if m.picker != pickerModel {
 		t.Fatalf("picker = %v, want pickerModel", m.picker)
 	}
-	want := indexOfAlias("sonnet")
-	if m.pickerCursor != want {
-		t.Fatalf("pickerCursor = %d (alias %q), want %d (sonnet)",
-			m.pickerCursor, aliasAt(m.pickerCursor), want)
+	if got := selectedChoice(t, m).Settings; got != "sonnet" {
+		t.Fatalf("cursor landed on a row that sets %q, want sonnet", got)
 	}
 }
 
 // TestClaudeModel_PickerPreselectsEffectiveModel_FromEnvVar — when
-// settings.json is empty but $ANTHROPIC_MODEL is set to a short alias,
-// the picker pre-positions on THAT alias (not "Inherit"). This is the
-// regression test for the bug the dev just fixed.
+// $ANTHROPIC_MODEL is a short alias, the picker pre-positions on THAT
+// alias, not "Inherit". Regression test for the env-override case.
 func TestClaudeModel_PickerPreselectsEffectiveModel_FromEnvVar(t *testing.T) {
 	fakeClaudeDir(t)
-	t.Setenv("ANTHROPIC_MODEL", "opus") // overrides the empty fake dir
+	t.Setenv("ANTHROPIC_MODEL", "opus")
 
 	m := newClaude(styles.Default(), DefaultKeymap())
 	m, _ = m.Update(keyMsg("m"))
 
-	want := indexOfAlias("opus")
-	if m.pickerCursor != want {
-		t.Fatalf("pickerCursor = %d (alias %q), want %d (opus). The cursor must NOT default to Inherit when an env var is overriding.",
-			m.pickerCursor, aliasAt(m.pickerCursor), want)
+	if got := selectedChoice(t, m).Settings; got != "opus" {
+		t.Fatalf("cursor landed on a row that sets %q, want opus (must not default to Inherit when env var overrides)", got)
 	}
 }
 
 // TestClaudeModel_PickerPreselectsEffectiveModel_FromEnvVarFullID —
-// same as above but the env var holds the full vendor ID. normalizeModelAlias
-// must collapse "claude-opus-4-7" → "opus" so the cursor still finds it.
+// when the env var holds a full vendor ID present in the catalog, the
+// cursor lands on that SPECIFIC catalog row (not just the family alias).
+// The unified picker carries real IDs, so it pre-positions exactly.
 func TestClaudeModel_PickerPreselectsEffectiveModel_FromEnvVarFullID(t *testing.T) {
 	fakeClaudeDir(t)
-	t.Setenv("ANTHROPIC_MODEL", "claude-opus-4-7")
+	t.Setenv("ANTHROPIC_MODEL", "claude-opus-4-8")
 
 	m := newClaude(styles.Default(), DefaultKeymap())
 	m, _ = m.Update(keyMsg("m"))
 
-	want := indexOfAlias("opus")
-	if m.pickerCursor != want {
-		t.Fatalf("pickerCursor = %d (alias %q), want %d (opus) — full vendor ID must normalize to alias",
-			m.pickerCursor, aliasAt(m.pickerCursor), want)
+	if got := selectedChoice(t, m).Settings; got != "claude-opus-4-8" {
+		t.Fatalf("cursor landed on a row that sets %q, want the exact catalog ID claude-opus-4-8", got)
+	}
+}
+
+// TestClaudeModel_PickerListsCurrentModelIDs — the headline of the
+// merge: the picker shows real, current model IDs pulled from the
+// catalog (incl. claude-opus-4-8), not a hardcoded alias-only list.
+func TestClaudeModel_PickerListsCurrentModelIDs(t *testing.T) {
+	fakeClaudeDir(t)
+	m := newClaude(styles.Default(), DefaultKeymap())
+	m, _ = m.Update(keyMsg("m"))
+	out := m.View(120, 50)
+	if !strings.Contains(out, "claude-opus-4-8") {
+		t.Errorf("model picker should list the current catalog IDs (claude-opus-4-8); got:\n%s", out)
+	}
+}
+
+// TestClaudeModel_BothMandMOpenTheSamePicker — the old uppercase-M
+// "ccmux pin" picker is gone; M now opens the unified picker, same as m.
+func TestClaudeModel_BothMandMOpenTheSamePicker(t *testing.T) {
+	fakeClaudeDir(t)
+	for _, key := range []string{"m", "M"} {
+		m := newClaude(styles.Default(), DefaultKeymap())
+		m, _ = m.Update(keyMsg(key))
+		if m.picker != pickerModel {
+			t.Errorf("key %q: picker = %v, want pickerModel", key, m.picker)
+		}
 	}
 }
 
@@ -194,50 +196,113 @@ func TestClaudeModel_PickerClosesWithEsc(t *testing.T) {
 	}
 }
 
-// TestClaudeModel_PickerSubmitWritesSettings — open the picker,
-// navigate to a known row, submit (enter). The settings.json must
-// contain the chosen alias, and the in-memory model state must reflect
-// it after the change-msg cycle has completed.
-func TestClaudeModel_PickerSubmitWritesSettings(t *testing.T) {
-	fakeClaudeDir(t)
-	m := newClaude(styles.Default(), DefaultKeymap())
+// choiceIndexBySettings finds the unified-picker row whose Settings
+// value equals `settings`, or fails the test.
+func choiceIndexBySettings(t *testing.T, m claudeModel, settings string) int {
+	t.Helper()
+	for i, c := range m.unifiedModelChoices() {
+		if c.Settings == settings {
+			return i
+		}
+	}
+	t.Fatalf("no picker row sets %q (choices: %d)", settings, len(m.unifiedModelChoices()))
+	return -1
+}
 
-	// Open the picker. With no settings + no env var, the cursor lands
-	// on "Inherit / no override". Navigate up to the haiku row at
-	// index 2 in KnownModels (opus, sonnet, haiku, opusplan, "").
-	m, _ = m.Update(keyMsg("m"))
-	// Drive the cursor to a known row deterministically.
-	m.pickerCursor = indexOfAlias("haiku")
-
-	// Submit. The handler returns a cmd that performs SetModel and
-	// emits claudeModelChangedMsg. Capture the post-enter model state
-	// (which already has picker=pickerNone), then run the cmd and feed
-	// the resulting message back so reload() fires.
+// submitPicker runs the enter→cmd→message cycle and returns the model
+// after reload(). Shared by the model-pick tests.
+func submitPicker(t *testing.T, m claudeModel) claudeModel {
+	t.Helper()
 	var cmd tea.Cmd
 	m, cmd = m.Update(keyMsg("enter"))
 	if cmd == nil {
 		t.Fatal("submit should return a cmd")
 	}
 	m, _ = m.Update(cmd())
+	if m.picker != pickerNone {
+		t.Errorf("picker should close after submit, got %v", m.picker)
+	}
+	return m
+}
 
-	// Disk-side check.
+// TestClaudeModel_PickFullIDWritesBothTargets — the core of the merge:
+// picking a specific catalog model writes BOTH settings.json `model`
+// AND ccmux's pin, so the choice takes effect for ccmux-launched
+// sessions even when the shell exports a different ANTHROPIC_MODEL.
+func TestClaudeModel_PickFullIDWritesBothTargets(t *testing.T) {
+	fakeClaudeDir(t)
+	m := newClaude(styles.Default(), DefaultKeymap())
+	m, _ = m.Update(keyMsg("m"))
+	m.pickerCursor = choiceIndexBySettings(t, m, "claude-opus-4-8")
+	m = submitPicker(t, m)
+
+	// settings.json (Claude Code global default).
 	s, err := claudeconfig.ReadSettings()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.Model != "haiku" {
-		t.Errorf("settings.json model = %q, want haiku", s.Model)
+	if s.Model != "claude-opus-4-8" {
+		t.Errorf("settings.json model = %q, want claude-opus-4-8", s.Model)
 	}
-	// In-memory check: reload() ran inside the changed-msg handler.
-	if m.settings == nil || m.settings.Model != "haiku" {
-		got := ""
-		if m.settings != nil {
-			got = m.settings.Model
-		}
-		t.Errorf("in-memory settings.Model = %q, want haiku", got)
+	// ccmux pin (re-exported as ANTHROPIC_MODEL at launch).
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
 	}
-	if m.picker != pickerNone {
-		t.Errorf("picker should close after submit, got %v", m.picker)
+	if cfg.Claude.DefaultModel != "claude-opus-4-8" {
+		t.Errorf("ccmux pin = %q, want claude-opus-4-8 (so the pick wins over a shell ANTHROPIC_MODEL)", cfg.Claude.DefaultModel)
+	}
+	// In-memory state reloaded.
+	if m.ccmuxDefaultModel != "claude-opus-4-8" {
+		t.Errorf("in-memory pin = %q, want claude-opus-4-8", m.ccmuxDefaultModel)
+	}
+}
+
+// TestClaudeModel_PickAliasWritesSettingsClearsPin — an alias row
+// ("always latest opus") writes the alias to settings.json and CLEARS
+// the pin, because aliases track the latest version and a frozen pin
+// would defeat that.
+func TestClaudeModel_PickAliasWritesSettingsClearsPin(t *testing.T) {
+	fakeClaudeDir(t)
+	// Pre-seed a pin so we can prove it gets cleared.
+	if err := setCcmuxClaudeDefault("claude-opus-4-8"); err != nil {
+		t.Fatal(err)
+	}
+	m := newClaude(styles.Default(), DefaultKeymap())
+	m, _ = m.Update(keyMsg("m"))
+	m.pickerCursor = choiceIndexBySettings(t, m, "opus") // the alias row
+	m = submitPicker(t, m)
+
+	s, _ := claudeconfig.ReadSettings()
+	if s.Model != "opus" {
+		t.Errorf("settings.json model = %q, want opus", s.Model)
+	}
+	cfg, _ := config.Load()
+	if cfg.Claude.DefaultModel != "" {
+		t.Errorf("alias pick should clear the pin; ccmux pin = %q, want empty", cfg.Claude.DefaultModel)
+	}
+}
+
+// TestClaudeModel_PickInheritClearsBoth — the inherit/clear row wipes
+// both the settings.json model and the ccmux pin.
+func TestClaudeModel_PickInheritClearsBoth(t *testing.T) {
+	dir := fakeClaudeDir(t)
+	writeClaudeSettings(t, dir, `{"model":"sonnet"}`)
+	if err := setCcmuxClaudeDefault("claude-opus-4-8"); err != nil {
+		t.Fatal(err)
+	}
+	m := newClaude(styles.Default(), DefaultKeymap())
+	m, _ = m.Update(keyMsg("m"))
+	m.pickerCursor = 0 // the "Inherit / clear override" sentinel row
+	m = submitPicker(t, m)
+
+	s, _ := claudeconfig.ReadSettings()
+	if s.Model != "" {
+		t.Errorf("inherit should clear settings.json model; got %q", s.Model)
+	}
+	cfg, _ := config.Load()
+	if cfg.Claude.DefaultModel != "" {
+		t.Errorf("inherit should clear the pin; got %q", cfg.Claude.DefaultModel)
 	}
 }
 
@@ -387,26 +452,6 @@ func TestClaudeModel_YoloToggleWritesSettings(t *testing.T) {
 	if m.yolo {
 		t.Errorf("in-memory yolo should be false after second toggle")
 	}
-}
-
-// indexOfAlias returns the position of the given alias in
-// claudeconfig.KnownModels, or -1 if not found. Test-only helper that
-// keeps the index assertions readable when KnownModels order changes.
-func indexOfAlias(alias string) int {
-	for i, o := range claudeconfig.KnownModels() {
-		if o.Alias == alias {
-			return i
-		}
-	}
-	return -1
-}
-
-func aliasAt(i int) string {
-	opts := claudeconfig.KnownModels()
-	if i < 0 || i >= len(opts) {
-		return "<oob>"
-	}
-	return opts[i].Alias
 }
 
 func indexOfEffort(value string) int {

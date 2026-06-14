@@ -379,11 +379,17 @@ func EffectiveModel() (value, source string) {
 
 // KnownModels are the headline aliases the model picker offers.
 // Custom IDs can still be set via the typed-input fallback.
+// Labels are version-agnostic on purpose — the aliases auto-track
+// Anthropic's current binding (opus → whatever the latest Opus is), so
+// pinning a version number in the label here just goes stale. The
+// model picker shows specific versioned IDs (claude-opus-4-8, …) from
+// the live catalog separately; these alias rows are the "always latest"
+// option.
 func KnownModels() []ModelOption {
 	return []ModelOption{
-		{Alias: "opus", Label: "Opus 4.7 (claude-opus-4-7)", Desc: "Most capable; best for complex tasks"},
-		{Alias: "sonnet", Label: "Sonnet 4.6 (claude-sonnet-4-6)", Desc: "Balanced cost/quality default"},
-		{Alias: "haiku", Label: "Haiku 4.5 (claude-haiku-4-5)", Desc: "Fast, cheap; routine tasks"},
+		{Alias: "opus", Label: "opus", Desc: "Latest Opus — most capable; complex tasks"},
+		{Alias: "sonnet", Label: "sonnet", Desc: "Latest Sonnet — balanced cost/quality"},
+		{Alias: "haiku", Label: "haiku", Desc: "Latest Haiku — fast, cheap; routine tasks"},
 		{Alias: "opusplan", Label: "opusplan", Desc: "Pro/Max plan auto-mix (Opus + Sonnet)"},
 		{Alias: "", Label: "Inherit / no override", Desc: "Use whatever Claude Code defaults to"},
 	}
