@@ -381,6 +381,32 @@ func (c *Client) Kill(ctx context.Context, name string) error {
 	return c.post(ctx, path, nil, nil)
 }
 
+// TelegramPairCode asks the local daemon's Telegram bridge to mint a
+// one-time pairing code. Unix-socket only (the daemon refuses it on the
+// tailnet listener). Errors when the bridge isn't enabled.
+func (c *Client) TelegramPairCode(ctx context.Context) (TelegramPairCodeResponse, error) {
+	var out TelegramPairCodeResponse
+	if err := c.post(ctx, "/v1/telegram/pair-code", nil, &out); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
+// AgentCommands returns the command catalog for the named session's
+// agent, resolved on this client's daemon (local or remote). For a
+// Claude session that includes the host user's own commands/skills.
+// Powers the Telegram bridge's agent-command autocomplete and
+// `ccmux agent commands`. Older daemons without the endpoint return a
+// 404, surfaced as an error so callers can degrade to prompt-only.
+func (c *Client) AgentCommands(ctx context.Context, name string) (AgentCommandsResponse, error) {
+	path := "/v1/sessions/" + url.PathEscape(name) + "/agent-commands"
+	var out AgentCommandsResponse
+	if err := c.getJSON(ctx, path, &out); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
 // Addr returns a human description of this client's target.
 func (c *Client) Addr() string { return c.scheme + "://" + c.addr }
 

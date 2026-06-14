@@ -101,6 +101,7 @@ func RunWithOptions(ctx context.Context, out io.Writer, opts Options) error {
 		{"Local SSH key (~/.ssh/id_ed25519)", stepSSHKey},
 		{"ccmux config", stepConfig},
 		{"ccmux-mcp registration (Claude Code)", stepMCP},
+		{"Telegram bridge (phone/watch control)", stepTelegram},
 		{"ccmuxd autostart", stepDaemonService},
 	}
 

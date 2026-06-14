@@ -337,3 +337,33 @@ type RenameRequest struct {
 type SendKeysRequest struct {
 	Keys string `json:"keys"`
 }
+
+// AgentCommand is one command the session's agent CLI understands,
+// returned by GET /v1/sessions/{name}/agent-commands. Mirrors
+// agent.AgentCommand but lives in the protocol so clients (the Telegram
+// bridge, ccmux-mcp, the CLI) don't import internal/agent. Resolved on
+// the host that runs the session, so user-authored commands/skills
+// reflect that machine.
+type AgentCommand struct {
+	Name        string `json:"name"`                  // sent verbatim, incl. leading slash
+	Description string `json:"description,omitempty"` // one-line preview
+	TakesArg    bool   `json:"takes_arg,omitempty"`   // expects an argument
+	Source      string `json:"source,omitempty"`      // "builtin" | "command" | "skill"
+}
+
+// TelegramPairCodeResponse is returned by POST /v1/telegram/pair-code
+// (unix-socket only). Code is a single-use pairing code the user sends
+// to the bot as `/start <code>`; BotUsername is the bot's @handle for a
+// tappable t.me link.
+type TelegramPairCodeResponse struct {
+	Code        string `json:"code"`
+	BotUsername string `json:"bot_username"`
+}
+
+// AgentCommandsResponse is returned by GET /v1/sessions/{name}/agent-commands:
+// the resolved agent id for the session plus its command catalog
+// (built-ins, and for Claude the host's user-defined commands/skills).
+type AgentCommandsResponse struct {
+	Agent    string         `json:"agent"`
+	Commands []AgentCommand `json:"commands"`
+}

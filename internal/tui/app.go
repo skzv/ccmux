@@ -271,6 +271,7 @@ func New(cfg config.Config, version string) App {
 	a.dashboard.SetConfig(cfg)
 	a.dashboard.SetVersion(version)
 	a.network.SetVersion(version)
+	a.network.SetTelegram(cfg.Telegram.Enabled, len(cfg.Telegram.AllowedChatIDs))
 	a.sessionsM.SetDefaultDir(cfg.Sessions.DefaultDir)
 	a.sessionsM.SetDefaultAgent(cfg.Agents.Default)
 	a.sessionsM.SetAgentCommands(cfg.AgentCommands())
@@ -1455,6 +1456,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				a.network.OpenDetail()
 			}
 			return a, nil
+		case msg.String() == "T" && a.screen == ScreenNetwork && !a.modalCapturingText():
+			// `T` mints a Telegram pairing code (shown as a toast) so the
+			// user can enroll a chat without leaving the TUI.
+			return a, pairTelegramCmd(a.cfg.Telegram.Enabled)
 		}
 	}
 

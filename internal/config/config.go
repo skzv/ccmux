@@ -34,6 +34,7 @@ type Config struct {
 	APNs          APNsConfig          `toml:"apns"`
 	FCM           FCMConfig           `toml:"fcm"`
 	OpenRouter    OpenRouterConfig    `toml:"openrouter"`
+	Telegram      TelegramConfig      `toml:"telegram"`
 }
 
 // OpenRouterConfig wires ccmux to an OpenRouter account for two things:
@@ -87,6 +88,77 @@ type FCMConfig struct {
 	Enabled         bool   `toml:"enabled"`
 	CredentialsPath string `toml:"credentials_path"` // path to firebase service-account JSON
 	ProjectID       string `toml:"project_id"`       // Firebase project id, e.g. "ccmux-mobile"
+}
+
+// DefaultPaneTailLines caps how many pane lines a Telegram alert ships
+// by default (and thus how much pane content traverses Telegram's
+// servers). Matches the daemon preview default.
+const DefaultPaneTailLines = 24
+
+// TelegramConfig wires ccmux to a Telegram bot so the daemon can alert
+// you when an agent needs input AND let you act on it — approve/deny,
+// drive the agent CLI, browse notes — from your phone or watch. The
+// bot reaches out to Telegram via long polling, so it needs no inbound
+// port and works behind NAT. Off by default; flip Enabled=true and set
+// BotToken (from @BotFather). The bot honors only chats in
+// AllowedChatIDs, which `ccmux telegram pair` enrolls.
+//
+// Treat config.toml as secret-bearing when this is set — BotToken is a
+// credential, same as the APNs/FCM keys above.
+type TelegramConfig struct {
+	Enabled  bool   `toml:"enabled"`
+	BotToken string `toml:"bot_token"`
+	// AllowedChatIDs is the allowlist: only these Telegram chat IDs can
+	// drive the bot. Populated by `ccmux telegram pair` / the TUI.
+	AllowedChatIDs []int64 `toml:"allowed_chat_ids"`
+	// AllowExec opens the arbitrary-execution tier (`/run` raw keys /
+	// shell). Off by default — the curated read/control/agent surface
+	// covers normal use without it.
+	AllowExec bool `toml:"allow_exec"`
+	// WebViewer enables the optional tailnet-only (`tailscale serve`)
+	// HTTPS markdown browser for whole-vault note navigation. Off by
+	// default; `/notes` sends rendered documents either way.
+	WebViewer bool `toml:"web_viewer"`
+	// MuteAlerts silences proactive needs-input alerts without tearing
+	// down the connection — the command surface keeps working.
+	MuteAlerts bool `toml:"mute_alerts"`
+	// PaneTailLines caps how many pane lines an alert ships to Telegram.
+	// 0 falls back to DefaultPaneTailLines.
+	PaneTailLines int `toml:"pane_tail_lines"`
+}
+
+// Allows reports whether a chat id is on the allowlist. An empty
+// allowlist allows no one — the bridge is enabled but locked until a
+// chat is paired.
+func (t TelegramConfig) Allows(chatID int64) bool {
+	for _, id := range t.AllowedChatIDs {
+		if id == chatID {
+			return true
+		}
+	}
+	return false
+}
+
+// AllowedChatIDSet returns the allowlist as a set for repeated
+// membership checks in the bridge's authorization gate.
+func (t TelegramConfig) AllowedChatIDSet() map[int64]bool {
+	if len(t.AllowedChatIDs) == 0 {
+		return nil
+	}
+	m := make(map[int64]bool, len(t.AllowedChatIDs))
+	for _, id := range t.AllowedChatIDs {
+		m[id] = true
+	}
+	return m
+}
+
+// EffectivePaneTailLines returns the configured cap, or the default
+// when unset.
+func (t TelegramConfig) EffectivePaneTailLines() int {
+	if t.PaneTailLines <= 0 {
+		return DefaultPaneTailLines
+	}
+	return t.PaneTailLines
 }
 
 // SessionsConfig holds preferences for the Sessions screen's "new
@@ -506,6 +578,12 @@ func Defaults() Config {
 			AutoCheck: true,
 		},
 		Subscription: SubscriptionConfig{Tier: "api"},
+		Telegram: TelegramConfig{
+			// Off until a token + a paired chat exist. The pane-tail cap
+			// is set so an enabled bridge ships a bounded amount of pane
+			// content even if the user never tunes it.
+			PaneTailLines: DefaultPaneTailLines,
+		},
 	}
 }
 

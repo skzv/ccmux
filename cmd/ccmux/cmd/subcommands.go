@@ -27,6 +27,7 @@ import (
 	"github.com/skzv/ccmux/internal/scaffold"
 	"github.com/skzv/ccmux/internal/setupwizard"
 	"github.com/skzv/ccmux/internal/sshsetup"
+	"github.com/skzv/ccmux/internal/telegram"
 	"github.com/skzv/ccmux/internal/tmux"
 )
 
@@ -431,6 +432,16 @@ func runDoctor() error {
 	fmt.Println("Clipboard (cross-device copy/paste via OSC 52):")
 	checkClipboardForDoctor()
 
+	// Telegram bridge — only meaningful once configured. Validates the
+	// token with getMe (token never printed) and reports paired chats.
+	fmt.Println()
+	fmt.Println("Telegram bridge (control ccmux from your phone/watch):")
+	tlines, tbad := telegramDoctorReport(cfg)
+	for _, l := range tlines {
+		fmt.Println(l)
+	}
+	bad += tbad
+
 	// SSH bootstrap status for every configured remote host. The
 	// common failure modes are subtle ("key auth not set up yet",
 	// "sshd off on the remote", "Tailscale not routing") and the
@@ -549,6 +560,49 @@ func checkClipboardForDoctor() {
 	default:
 		fmt.Printf("  ⚠ tmux set-clipboard=%s — selections won't escape tmux; run `tmux set -s set-clipboard on`\n", state)
 	}
+}
+
+// telegramValidate validates a bot token against Telegram. A package
+// var so doctor tests can substitute a fake without a network call.
+var telegramValidate = func(ctx context.Context, token string) (*telegram.User, error) {
+	return telegram.NewClient(token).GetMe(ctx)
+}
+
+// telegramDoctorReport builds the Telegram bridge health lines: whether
+// it's configured, whether Telegram accepts the token (getMe), and how
+// many chats are paired. The token itself is never included. The
+// returned bad count is >0 only on a genuine misconfiguration (a
+// rejected/conflicting token), not on "not set up" or a transient
+// network failure. Returns lines (not prints) so it's unit-testable.
+func telegramDoctorReport(cfg config.Config) (lines []string, bad int) {
+	tg := cfg.Telegram
+	if !tg.Enabled || strings.TrimSpace(tg.BotToken) == "" {
+		return []string{"  · not configured — run `ccmux telegram register` to enable"}, 0
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	defer cancel()
+	me, err := telegramValidate(ctx, tg.BotToken)
+	switch {
+	case err == nil:
+		lines = append(lines, fmt.Sprintf("  ✓ token valid (@%s)", me.Username))
+		if len(tg.AllowedChatIDs) == 0 {
+			lines = append(lines, "  ⚠ no chats paired — run `ccmux telegram pair`")
+		} else {
+			lines = append(lines, fmt.Sprintf("  ✓ %d chat(s) paired", len(tg.AllowedChatIDs)))
+		}
+		if tg.AllowExec {
+			lines = append(lines, "  ⚠ exec tier (/run) is enabled — the bot can run arbitrary input")
+		}
+	case telegram.IsUnauthorized(err):
+		bad++
+		lines = append(lines, "  ✗ token rejected by Telegram — re-run `ccmux telegram register` with a fresh @BotFather token")
+	case telegram.IsConflict(err):
+		bad++
+		lines = append(lines, "  ✗ another ccmuxd is already polling this bot token (one token = one daemon)")
+	default:
+		lines = append(lines, "  · couldn't reach Telegram to validate the token (network?) — bridge may still be fine")
+	}
+	return lines, bad
 }
 
 // daemonStartDeps groups the side-effecting bits of `ccmux daemon

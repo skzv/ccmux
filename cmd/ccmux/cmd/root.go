@@ -140,6 +140,7 @@ func init() {
 		newDaemonCmd(),
 		newHostCmd(),
 		newMCPCmd(),
+		newTelegramCmd(),
 		newMoshiSetupCmd(),
 		newUninstallCmd(),
 		newRenameCmd(),
