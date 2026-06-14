@@ -28,6 +28,10 @@ func TestAgentsClaudeGolden(t *testing.T) {
 	// "(none)" / "(no override)" treatments the snapshot captures.
 	t.Setenv("CLAUDE_CONFIG_DIR", "/Users/me/.claude")
 	t.Setenv("HOME", "/Users/me")
+	// Hermetic: a developer shell may export ANTHROPIC_MODEL (which the
+	// model row reflects as a shell override). Clear it so the golden is
+	// stable regardless of the runner's environment.
+	t.Setenv("ANTHROPIC_MODEL", "")
 
 	m := newAgents(st, km)
 	m.active = agent.IDClaude
@@ -106,6 +110,10 @@ func TestAgentsClaudeBrowserGolden(t *testing.T) {
 
 	t.Setenv("CLAUDE_CONFIG_DIR", "/Users/me/.claude")
 	t.Setenv("HOME", "/Users/me")
+	// Hermetic: a developer shell may export ANTHROPIC_MODEL (which the
+	// model row reflects as a shell override). Clear it so the golden is
+	// stable regardless of the runner's environment.
+	t.Setenv("ANTHROPIC_MODEL", "")
 
 	m := newAgents(st, km)
 	m.active = agent.IDClaude

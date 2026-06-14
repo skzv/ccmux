@@ -93,7 +93,8 @@ make lint          # gofmt + go vet + staticcheck if installed
 - `docs/02_Architecture/02_iOS_Mobile_Setup.md` — Moshi + moshi-hook (primary); Blink/Termius (fallback)
 - `docs/02_Architecture/03_Tailscale_Networking.md` — how Tailscale sits underneath the whole stack; what ccmux uses it for and what it leaves alone
 - `docs/02_Architecture/04_TUI_Design_System.md` — tokens, components, modal exception rule, indent hierarchy; the contract every screen must follow
-- `docs/04_Guides/` — user-facing setup guides published to the README
+- `docs/02_Architecture/06_Telegram_Bridge.md` — the optional Telegram control bridge: long-poll/no-inbound model, one-bot tailnet control plane, per-host agent-command catalog
+- `docs/04_Guides/` — user-facing setup guides published to the README (incl. `Telegram_Setup.md`)
 
 # Owner
 

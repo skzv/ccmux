@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/skzv/ccmux/internal/agent"
+	"github.com/skzv/ccmux/internal/agentcatalog"
 	"github.com/skzv/ccmux/internal/apns"
 	"github.com/skzv/ccmux/internal/claudemodels"
 	"github.com/skzv/ccmux/internal/clipboard"
@@ -41,6 +42,7 @@ import (
 	"github.com/skzv/ccmux/internal/scaffold"
 	"github.com/skzv/ccmux/internal/sleeplock"
 	"github.com/skzv/ccmux/internal/tailnet"
+	"github.com/skzv/ccmux/internal/telegram"
 	"github.com/skzv/ccmux/internal/tmux"
 	"github.com/skzv/ccmux/internal/tmuxchrome"
 	"github.com/skzv/ccmux/internal/usage"
@@ -114,6 +116,11 @@ func run() error {
 	// Background model-catalog refresh. Separate goroutine so it
 	// can't stall the high-frequency poll loop on a slow API call.
 	go srv.modelRefreshLoop(ctx)
+	// Optional Telegram bridge (+ its web viewer). Both self-disable when
+	// unconfigured. The viewer starts first so its URL can be handed to
+	// the bridge.
+	srv.viewerBase = srv.startWebViewer(ctx)
+	srv.startTelegram(ctx)
 
 	// Unix socket listener.
 	sockPath, err := daemon.SocketPath()
@@ -285,6 +292,17 @@ type server struct {
 	paneTitle func(ctx context.Context, name string) (string, error)
 	bell      func(ctx context.Context, name string) error
 	readAgent func(projectPath string) agent.ID
+
+	// tgBridge is the optional Telegram bridge; nil when disabled. The
+	// poll loop checks it before dispatching alerts. tgAllow is the live
+	// chat allowlist the bridge's auth closures read, kept in sync with
+	// config on pairing.
+	tgBridge *telegram.Bridge
+	tgAllow  tgAllowlist
+	// viewerBase is the tailnet URL of the optional markdown web viewer
+	// ("" when disabled), handed to the Telegram bridge for its "open in
+	// browser" button.
+	viewerBase string
 }
 
 // newServer builds a server with its default (real, tmux-backed)
@@ -414,6 +432,9 @@ func (s *server) routes(mux *http.ServeMux) {
 // structurally unable to register these.
 func (s *server) localOnlyRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/v1/pair-token", s.handlePairToken)
+	// Telegram pairing code is a secret too — only the local user (via
+	// `ccmux telegram pair`) may mint one, never a tailnet peer.
+	mux.HandleFunc("/v1/telegram/pair-code", s.handleTelegramPairCode)
 }
 
 func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -690,6 +711,8 @@ func (s *server) handleSessionsItem(w http.ResponseWriter, r *http.Request) {
 		s.handleSendKeys(w, r, name)
 	case "preview":
 		s.handlePreview(w, r, name)
+	case "agent-commands":
+		s.handleAgentCommands(w, r, name)
 	case "attach":
 		s.handleAttach(w, r, name)
 	default:
@@ -928,6 +951,54 @@ func (s *server) handlePreview(w http.ResponseWriter, r *http.Request, name stri
 		return
 	}
 	writeJSON(w, daemon.PreviewResponse{Lines: lines, Content: out})
+}
+
+// handleAgentCommands serves GET /v1/sessions/{name}/agent-commands: the
+// command catalog for the session's agent, resolved on THIS host so a
+// Claude session surfaces this machine's own ~/.claude commands/skills.
+// Powers the Telegram bridge's agent-command autocomplete.
+func (s *server) handleAgentCommands(w http.ResponseWriter, r *http.Request, name string) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+
+	agentID := s.sessionAgent(ctx, name)
+	resp := daemon.AgentCommandsResponse{Agent: string(agentID)}
+	for _, c := range agentcatalog.ResolveByID(agentID) {
+		resp.Commands = append(resp.Commands, daemon.AgentCommand{
+			Name:        c.Name,
+			Description: c.Description,
+			TakesArg:    c.TakesArg,
+			Source:      c.Source,
+		})
+	}
+	writeJSON(w, resp)
+}
+
+// sessionAgent resolves which agent a session is running: the poll
+// loop's cached value when present, else the project sidecar read off
+// the session's working directory. Empty/unknown falls back to the
+// default agent (Claude), matching listSessions.
+func (s *server) sessionAgent(ctx context.Context, name string) agent.ID {
+	s.mu.Lock()
+	var cached agent.ID
+	if t, ok := s.seen[name]; ok {
+		cached = t.agentID
+	}
+	s.mu.Unlock()
+	if cached != "" {
+		return cached
+	}
+	tss, _ := tmux.List(ctx)
+	for _, ts := range tss {
+		if ts.Name == name {
+			return s.projectAgent(ts.Path)
+		}
+	}
+	return agent.Default().ID()
 }
 
 // handlePeers returns every tailnet peer plus an indication of which

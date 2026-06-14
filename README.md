@@ -288,6 +288,16 @@ bell = true                          # ring local terminal BEL on needs_input
 - `CCMUX_HOST=mini.tail-xxxxx.ts.net:7474 ccmux-mcp` points it at a tailnet peer's daemon — an agent on the laptop can drive sessions on the Mac mini
 - Full spec: [`docs/01_Specs/04_MCP_Server.md`](docs/01_Specs/04_MCP_Server.md)
 
+### ✈️ Telegram control
+
+- An agent gets blocked, your phone buzzes, you tap **Approve** — or just reply `y`. No attach, no Mosh, no leaving the chat. From the watch too: reply `approve` / `deny` and it lands.
+- The bot reaches *out* to Telegram (long polling) — no open port, no public URL, works behind NAT. Nothing inbound.
+- **Drive the agent itself, not just the session.** Send its own slash-commands — `/model`, `/compact`, `/clear` — and free-form prompts, with autocomplete of the commands that agent actually has: Claude's built-ins *plus your own `~/.claude` commands and skills*, sourced from whichever machine runs the session.
+- **One bot, the whole tailnet.** Hosted on your always-on machine, it lists / previews / spawns / kills sessions on every peer, addressed as `host:session` — same local+remote model as the dashboard.
+- Read your project notes right in Telegram (it renders `.md` inline); flip on a tailnet-only web viewer for whole-vault browsing.
+- Setup: `ccmux telegram register --token <@BotFather token>`, then `ccmux telegram pair` and send the code to your bot. Only chats you pair can drive it. Read commands are always on; spawn/kill/send need the allowlist; raw shell (`/run`) is opt-in and **off by default**.
+- Guide: [`docs/04_Guides/Telegram_Setup.md`](docs/04_Guides/Telegram_Setup.md)
+
 ### 🤖 Claude Code config management
 
 - Dedicated "Claude" screen for everything in `~/.claude/`
