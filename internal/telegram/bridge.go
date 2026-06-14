@@ -267,7 +267,7 @@ func (b *Bridge) handleStart(ctx context.Context, m *Message) {
 
 	if b.allowed(chatID) {
 		// Already paired — treat /start as a greeting.
-		b.reply(ctx, chatID, b.welcomeText())
+		b.sendWelcome(ctx, chatID, "")
 		return
 	}
 	if code == "" {
@@ -286,7 +286,7 @@ func (b *Bridge) handleStart(ctx context.Context, m *Message) {
 		}
 	}
 	b.logf("telegram: enrolled chat %d", chatID)
-	b.reply(ctx, chatID, "✅ Paired. "+b.welcomeText())
+	b.sendWelcome(ctx, chatID, "✅ Paired. ")
 }
 
 func (b *Bridge) welcomeText() string {

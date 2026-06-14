@@ -44,6 +44,8 @@ func (b *Bridge) handleMessage(ctx context.Context, m *Message) {
 		b.handleStart(ctx, m)
 	case "/help":
 		b.cmdHelp(ctx, chatID)
+	case "/menu":
+		b.cmdMenu(ctx, chatID)
 	case "/sessions":
 		b.cmdSessions(ctx, chatID)
 	case "/projects":
@@ -82,13 +84,7 @@ func (b *Bridge) handleMessage(ctx context.Context, m *Message) {
 // --- read tier -------------------------------------------------------
 
 func (b *Bridge) cmdSessions(ctx context.Context, chatID int64) {
-	ss := b.router.AllSessions(ctx)
-	if len(ss) == 0 {
-		b.reply(ctx, chatID, "No sessions running.")
-		return
-	}
-	text, mode := formatSessions(ss)
-	b.send(ctx, SendMessageRequest{ChatID: chatID, Text: text, ParseMode: mode})
+	b.sendSessionsList(ctx, chatID, 0, 0)
 }
 
 func (b *Bridge) cmdProjects(ctx context.Context, chatID int64) {
@@ -431,9 +427,43 @@ func (b *Bridge) handleCallback(ctx context.Context, cb *CallbackQuery) {
 	case "note":
 		b.answerCB(ctx, cb.ID, "")
 		b.sendNoteDocByIndex(ctx, chatID, target)
+	case "menu":
+		// target carries the menu action.
+		b.answerCB(ctx, cb.ID, "")
+		switch target {
+		case "sessions":
+			b.sendSessionsList(ctx, chatID, callbackMessageID(cb), 0)
+		case "projects":
+			b.cmdProjects(ctx, chatID)
+		case "usage":
+			b.cmdUsage(ctx, chatID)
+		case "help":
+			b.cmdHelp(ctx, chatID)
+		}
+	case "smenu":
+		b.answerCB(ctx, cb.ID, "")
+		b.sessionActionMenu(ctx, chatID, callbackMessageID(cb), ParseTarget(target))
+	case "spage":
+		b.answerCB(ctx, cb.ID, "")
+		n, _ := strconv.Atoi(target)
+		b.sendSessionsList(ctx, chatID, callbackMessageID(cb), n)
+	case "prompt":
+		b.answerCB(ctx, cb.ID, "")
+		t := ParseTarget(target)
+		b.chats.setCurrent(chatID, t)
+		b.reply(ctx, chatID, "Type your prompt for "+t.String()+" and I'll send it to the agent.")
 	default:
 		b.answerCB(ctx, cb.ID, "")
 	}
+}
+
+// callbackMessageID returns the message a callback was attached to (0 if
+// absent), so handlers can edit it in place.
+func callbackMessageID(cb *CallbackQuery) int64 {
+	if cb.Message != nil {
+		return cb.Message.MessageID
+	}
+	return 0
 }
 
 func (b *Bridge) answerCB(ctx context.Context, id, toast string) {

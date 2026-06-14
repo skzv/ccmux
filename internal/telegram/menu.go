@@ -22,6 +22,7 @@ func (b *Bridge) botCommands() []BotCommand {
 		{Command: "projects", Description: "List projects"},
 		{Command: "usage", Description: "Token / cost summary"},
 		{Command: "notes", Description: "Browse project notes"},
+		{Command: "menu", Description: "Quick action menu"},
 		{Command: "help", Description: "Show help"},
 	}
 	if b.opts.AllowExec {
