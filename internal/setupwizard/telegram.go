@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/huh"
 
 	"github.com/skzv/ccmux/internal/config"
+	"github.com/skzv/ccmux/internal/daemonservice"
 	"github.com/skzv/ccmux/internal/telegram"
 )
 
@@ -85,6 +86,19 @@ func stepTelegram(ctx context.Context, out io.Writer) error {
 	if err := config.Save(cfg); err != nil {
 		return err
 	}
-	fmt.Fprintln(out, stMuted.Render("  saved. After the daemon restarts, run `ccmux telegram pair` to enroll your chat."))
+	// The bridge reads config at daemon startup, so a daemon that's
+	// already running needs a bounce to pick up the token. Restart it
+	// here so setup is seamless; on a fresh machine where the daemon
+	// isn't up yet, the autostart step below starts it with the token
+	// already in config.
+	switch restarted, rerr := daemonservice.RestartIfRunning(); {
+	case rerr != nil:
+		fmt.Fprintf(out, "  %s saved, but couldn't restart the daemon: %v — run `ccmux daemon restart`\n", stWarn.Render("⚠"), rerr)
+	case restarted:
+		fmt.Fprintln(out, stOK.Render("  ✓")+" saved + restarted the daemon — the bridge is starting.")
+	default:
+		fmt.Fprintln(out, stMuted.Render("  saved — the bridge starts with the daemon (the autostart step handles it)."))
+	}
+	fmt.Fprintln(out, stMuted.Render("  Then run `ccmux telegram pair` to enroll your chat."))
 	return nil
 }

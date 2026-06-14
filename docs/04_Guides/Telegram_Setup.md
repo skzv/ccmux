@@ -18,13 +18,9 @@ ccmux telegram register --token 123456789:AAE...
 CCMUX_TELEGRAM_BOT_TOKEN=123456789:AAE... ccmux telegram register
 ```
 
-This writes the token to `~/.config/ccmux/config.toml` and enables the bridge. Restart the daemon so it picks it up:
+This writes the token to `~/.config/ccmux/config.toml`, enables the bridge, and **restarts the daemon for you** so it takes effect right away (the bridge reads config at daemon startup). If no daemon is running yet, it starts with the token next time.
 
-```bash
-ccmux daemon restart
-```
-
-(Or just run `ccmux setup` — the wizard has a Telegram step that does the same thing.)
+(Or just run `ccmux setup` — the wizard has a Telegram step that does the same, restart included.)
 
 ## 3. Pair your chat
 

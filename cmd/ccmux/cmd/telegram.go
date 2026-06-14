@@ -11,6 +11,7 @@ import (
 
 	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/daemon"
+	"github.com/skzv/ccmux/internal/daemonservice"
 	"github.com/skzv/ccmux/internal/telegram"
 )
 
@@ -89,7 +90,18 @@ then run 'ccmux telegram pair'.`,
 			} else {
 				fmt.Printf("⚠ Saved, but couldn't validate the token now: %v\n", err)
 			}
-			fmt.Println("Next: restart the daemon (ccmux daemon restart), then run `ccmux telegram pair`.")
+			// Make it take effect now: the bridge reads config at daemon
+			// startup, so a live daemon needs a bounce. Auto-restart so the
+			// user doesn't hit the "registered but nothing happens" trap.
+			switch restarted, rerr := daemonservice.RestartIfRunning(); {
+			case rerr != nil:
+				fmt.Printf("⚠ Saved, but couldn't restart the daemon automatically: %v\n  Run `ccmux daemon restart` so the bridge starts.\n", rerr)
+			case restarted:
+				fmt.Println("✓ Restarted the daemon — the bridge is starting.")
+			default:
+				fmt.Println("Start the daemon (`ccmux daemon start`) to activate the bridge.")
+			}
+			fmt.Println("Then run `ccmux telegram pair`.")
 			if allowExec {
 				fmt.Println("Note: the exec tier (/run) is ENABLED — the bot can run arbitrary input.")
 			}
