@@ -1,0 +1,29 @@
+id = "droid"
+
+# OSC-title braille spinner → working.
+[[rules]]
+id = "title_spinner_working"
+state = "working"
+priority = 1100
+region = "osc_title"
+regex = ['^[\x{2800}-\x{28FF}]']
+
+# Approval selector: Droid offers a "yes, allow" / "no, cancel" choice
+# when it needs permission to act.
+[[rules]]
+id = "body_approval_selector"
+state = "blocked"
+priority = 900
+region = "bottom_non_empty_lines(4)"
+any = [
+  { contains = ["yes, allow"] },
+  { contains = ["no, cancel"] },
+]
+
+# Working footer: the stop hint shows while a turn runs.
+[[rules]]
+id = "body_working_footer"
+state = "working"
+priority = 800
+region = "bottom_non_empty_lines(3)"
+contains = ["esc to stop"]

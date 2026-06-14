@@ -131,6 +131,32 @@ func firstItemIndex(flat []agentBrowserRow) int {
 	return -1
 }
 
+// AtFirstItem reports whether the cursor sits on the first selectable
+// item (or there are no items at all). The Claude screen uses this to
+// know when an `up` keystroke at the top of the browser should hand
+// focus back to the settings rows above it.
+func (b agentBrowser) AtFirstItem() bool {
+	first := firstItemIndex(b.flat)
+	return first == -1 || b.cursor <= first
+}
+
+// HasItems reports whether the browser has any selectable item. When it
+// doesn't, the Claude screen keeps focus on the settings rows (there's
+// nowhere to hand off to).
+func (b agentBrowser) HasItems() bool { return firstItemIndex(b.flat) != -1 }
+
+// GotoFirstItem moves the cursor to the first selectable item and
+// resets focus to the list pane. The Claude screen calls this when the
+// user navigates down out of the settings rows into the browser, so
+// they land on the first item rather than wherever the cursor last sat.
+func (b *agentBrowser) GotoFirstItem() {
+	if i := firstItemIndex(b.flat); i != -1 {
+		b.cursor = i
+		b.focus = agentBrowserFocusList
+		b.updatePreview()
+	}
+}
+
 // Update handles browser-level keys and mouse-wheel events. Returns
 // the (possibly updated) browser and a tea.Cmd. When the browser
 // handles an event it returns true so the host knows to swallow it.

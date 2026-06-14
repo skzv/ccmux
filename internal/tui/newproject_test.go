@@ -328,7 +328,19 @@ func TestNextAgent(t *testing.T) {
 		{agent.IDAntigravity, agent.IDCursor},
 		{agent.IDCursor, agent.IDPi},
 		{agent.IDPi, agent.IDGrok},
-		{agent.IDGrok, agent.IDClaude},
+		// The cycle continues through the second-wave agents — the
+		// Projects "a" action must reach every supported agent — and
+		// wraps from the last one (Kiro) back to Claude.
+		{agent.IDGrok, agent.IDOpenCode},
+		{agent.IDOpenCode, agent.IDKimi},
+		{agent.IDKimi, agent.IDDroid},
+		{agent.IDDroid, agent.IDCopilot},
+		{agent.IDCopilot, agent.IDQoder},
+		{agent.IDQoder, agent.IDKilo},
+		{agent.IDKilo, agent.IDHermes},
+		{agent.IDHermes, agent.IDAmp},
+		{agent.IDAmp, agent.IDKiro},
+		{agent.IDKiro, agent.IDClaude},
 		// Edge: empty / unknown values land on the first agent.
 		{"", agent.IDClaude},
 		{agent.ID("imaginary"), agent.IDClaude},

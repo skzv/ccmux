@@ -1,0 +1,39 @@
+id = "kimi"
+
+# OSC-title braille spinner → working.
+[[rules]]
+id = "title_spinner_working"
+state = "working"
+priority = 1100
+region = "osc_title"
+regex = ['^[\x{2800}-\x{28FF}]']
+
+# Approval panel: Kimi shows a confirm prompt before running / writing /
+# applying a tool action.
+[[rules]]
+id = "body_approval_panel"
+state = "blocked"
+priority = 900
+region = "bottom_non_empty_lines(4)"
+all = [
+  { contains = ["confirm"] },
+  { any = [
+    { contains = ["run command"] },
+    { contains = ["write file"] },
+    { contains = ["apply"] },
+    { contains = ["allow"] },
+  ] },
+]
+
+# Working markers: a literal "Working" / "thinking" footer, or the
+# moon-phase spinner Kimi cycles while a turn runs (U+1F311..U+1F318).
+[[rules]]
+id = "body_working_marker"
+state = "working"
+priority = 800
+region = "bottom_non_empty_lines(3)"
+any = [
+  { contains = ["thinking"] },
+  { contains = ["working"] },
+  { regex = ['[\x{1F311}-\x{1F318}]'] },
+]

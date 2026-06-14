@@ -154,12 +154,13 @@ func (m agentsModel) HelpBarProps(width int) components.HelpBarProps {
 	switch m.active {
 	case agent.IDClaude:
 		hints = append(hints,
+			components.KeyHint{Key: "↑↓", Label: "nav", Priority: 5},
+			components.KeyHint{Key: "enter", Label: "select", Priority: 4},
 			components.KeyHint{Key: "m", Label: "model", Priority: 4},
 			components.KeyHint{Key: "e", Label: "effort", Priority: 4},
 			components.KeyHint{Key: "a", Label: "always", Priority: 3},
 			components.KeyHint{Key: "y", Label: "yolo", Priority: 3},
 			components.KeyHint{Key: "c", Label: "CLAUDE.md", Priority: 3},
-			components.KeyHint{Key: "j", Label: "settings.json", Priority: 3},
 		)
 	case agent.IDCodex, agent.IDAntigravity:
 		hints = append(hints,
@@ -186,6 +187,15 @@ func (m agentsModel) View(width, height int) string {
 	innerH := height - 2 - lipgloss.Height(header) - 1 // top/bottom border + blank
 	if innerH < 6 {
 		innerH = 6
+	}
+	// A modal picker on a sub-tab (today only Claude's model / effort /
+	// ccmux-model pickers) owns the whole Agents viewport. Render the
+	// sub-model's full View — which centers the picker — instead of its
+	// bordered ViewBody. Wrapping a centered modal in the sub-tab Pane
+	// would double-border it and break the centering; worse, ViewBody
+	// doesn't render the picker at all, so the keypress would look dead.
+	if m.active == agent.IDClaude && m.claude.PickerOpen() {
+		return m.claude.View(width, height)
 	}
 	var body string
 	switch m.active {
@@ -217,7 +227,7 @@ func (m agentsModel) View(width, height int) string {
 // agents remain visually identifiable at a glance.
 func (m agentsModel) renderSubtabs(narrow bool) string {
 	parts := []string{}
-	for _, a := range agent.All() {
+	for _, a := range agentConfigSubtabs() {
 		label := a.DisplayName()
 		accent := m.st.AgentAccent(a.ID())
 		dot := accent.Render("•")
@@ -235,10 +245,25 @@ func (m agentsModel) renderSubtabs(narrow bool) string {
 	return subtabs + "   " + m.st.Muted.Render("(tab / h·l: switch agent)")
 }
 
-// nextAgentSubtab cycles sub-tabs in agent.All() order. Wraps at the
-// ends so tab from Cursor lands on Claude.
+// agentConfigSubtabs is the fixed set of agents that get a config
+// sub-tab on the Agents screen. Deliberately NOT agent.All(): the
+// second-wave agents (OpenCode, Kimi, Droid, …) are launch-and-
+// supervise only — pickable for a project and state-detected on the
+// dashboard, but they manage their own config through their own CLIs
+// and AGENTS.md, so there's nothing for ccmux to render or edit here
+// (the same reason pi and grok are placeholder tabs). Pinning this list
+// also keeps the sub-tab row from overflowing as the agent roster
+// grows.
+func agentConfigSubtabs() []agent.Agent {
+	return []agent.Agent{
+		agent.Claude{}, agent.Codex{}, agent.Antigravity{}, agent.Cursor{}, agent.Pi{}, agent.Grok{},
+	}
+}
+
+// nextAgentSubtab cycles the config sub-tabs (agentConfigSubtabs order).
+// Wraps at the ends so tab from Grok lands back on Claude.
 func nextAgentSubtab(cur agent.ID, dir int) agent.ID {
-	all := agent.All()
+	all := agentConfigSubtabs()
 	for i, a := range all {
 		if a.ID() == cur {
 			next := (i + dir + len(all)) % len(all)

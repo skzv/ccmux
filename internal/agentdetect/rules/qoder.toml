@@ -1,0 +1,30 @@
+id = "qoder"
+
+# OSC-title braille spinner → working.
+[[rules]]
+id = "title_spinner_working"
+state = "working"
+priority = 1100
+region = "osc_title"
+regex = ['^[\x{2800}-\x{28FF}]']
+
+# Approval / confirmation: Qoder spells out what it's waiting for.
+[[rules]]
+id = "body_awaiting_user"
+state = "blocked"
+priority = 900
+region = "whole_recent"
+any = [
+  { contains = ["waiting for user confirmation"] },
+  { contains = ["awaiting approval"] },
+  { contains = ["permission required"] },
+  { contains = ["enter your response"] },
+]
+
+# Working footer: the cancel hint + spinner show while a turn runs.
+[[rules]]
+id = "body_working_footer"
+state = "working"
+priority = 800
+region = "bottom_non_empty_lines(3)"
+contains = ["esc to cancel"]

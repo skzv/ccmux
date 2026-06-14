@@ -344,13 +344,21 @@ func TestProjects_AgentLegendPresent(t *testing.T) {
 	st := styles.Default()
 	m := newProjects(st, DefaultKeymap())
 	m.SetProjects([]project.Project{
-		{Name: "p", Host: "local", Path: "/p", Agent: agent.IDClaude},
+		{Name: "a", Host: "local", Path: "/a", Agent: agent.IDClaude},
+		{Name: "b", Host: "local", Path: "/b", Agent: agent.IDCodex},
+		{Name: "c", Host: "local", Path: "/c", Agent: agent.IDCursor},
 	})
 	out := m.View(120, 30)
-	for _, want := range []string{"agents:", "claude", "codex", "antigravity", "cursor"} {
+	// The legend names every agent actually in use by a visible project.
+	for _, want := range []string{"agents:", "claude", "codex", "cursor"} {
 		if !strings.Contains(out, want) {
-			t.Errorf("legend missing %q.\noutput:\n%s", want, out)
+			t.Errorf("legend missing in-use agent %q.\noutput:\n%s", want, out)
 		}
+	}
+	// And it scopes to in-use agents only: an agent no project runs must
+	// NOT clutter the legend. (opencode is a real agent but unused here.)
+	if strings.Contains(out, "opencode") {
+		t.Errorf("legend listed an unused agent (opencode) — it should be scoped to in-use agents.\noutput:\n%s", out)
 	}
 }
 

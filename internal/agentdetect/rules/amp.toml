@@ -1,0 +1,30 @@
+id = "amp"
+
+# OSC-title braille spinner → working.
+[[rules]]
+id = "title_spinner_working"
+state = "working"
+priority = 1100
+region = "osc_title"
+regex = ['^[\x{2800}-\x{28FF}]']
+
+# Approval gate: Amp waits for approval before invoking a tool or
+# editing a file.
+[[rules]]
+id = "body_awaiting_approval"
+state = "blocked"
+priority = 900
+region = "whole_recent"
+any = [
+  { contains = ["waiting for approval"] },
+  { contains = ["allow editing file:"] },
+  { contains = ["invoke tool"] },
+]
+
+# Working footer: the cancel hint shows while a turn runs.
+[[rules]]
+id = "body_working_footer"
+state = "working"
+priority = 800
+region = "bottom_non_empty_lines(3)"
+contains = ["esc to cancel"]

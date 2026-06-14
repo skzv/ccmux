@@ -308,21 +308,21 @@ func (m *sessionsModel) maybeRefreshPreview() tea.Cmd {
 }
 
 // capturePreviewCmd reads the last N lines of the named session's
-// active pane. Local sessions go through tmux directly; remote sessions
-// route through the daemon client at the matching host (the daemon
-// already exposes `/v1/sessions/{name}/preview` for the mobile clients
-// and the MCP server).
-//
-// Variable rather than const so the test can stub it without a live
-// tmux. The wired-in production capture is the closure below.
-var capturePreviewCmd = func(s daemon.SessionState) tea.Cmd {
+// active pane. It's a package var pointing at realCapturePreviewCmd so
+// tests can stub the capture without a live tmux; production always uses
+// the real one.
+var capturePreviewCmd = realCapturePreviewCmd
+
+// realCapturePreviewCmd is the production pane capture. Local sessions
+// go through tmux directly; remote sessions are not yet wired (see the
+// sentinel below).
+func realCapturePreviewCmd(s daemon.SessionState) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		const lines = 30
-		// Local host: capture directly via tmux. Remote: fall through
-		// to the daemon client lookup. The "local" / "" check matches
-		// daemon.SessionState.Host's convention (empty = local).
+		// Local host: capture directly via tmux. The "local" / "" check
+		// matches daemon.SessionState.Host's convention (empty = local).
 		if s.Host == "" || s.Host == "local" {
 			out, err := tmux.CapturePane(ctx, s.Name, lines)
 			return previewLoadedMsg{Session: s.Name, Content: out, Err: err}
@@ -376,25 +376,13 @@ func (m sessionsModel) View(width, height int, narrow bool) string {
 		formW := minInt(80, width-4)
 		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, m.form.View(formW))
 	}
-	// Preview pane mode: list on the left, the selected session's
-	// recent pane content on the right. The bottom detail pane is
-	// dropped to give the preview vertical real estate; the row in the
-	// list already carries the state / agent / age, so the detail is
-	// the least-load-bearing piece. Narrow terminals (a phone) fall
-	// back to the default stacked layout — a horizontal split makes no
-	// sense at <120 cols.
-	if m.showPreview && !narrow && width >= 80 {
-		// 55/45 split favoring the list — wide enough to keep the
-		// session-line layout intact, narrow enough that the preview
-		// still feels like "the right half." A literal 50/50 was
-		// tested but truncated the path columns on the row at 120 cols.
-		listW := (width * 55) / 100
-		previewW := width - listW
-		return lipgloss.JoinHorizontal(lipgloss.Top,
-			m.renderList(listW, height),
-			m.renderPreview(previewW, height),
-		)
-	}
+	// NOTE: the wide Home screen renders the preview pane itself (see
+	// App.homeView) because it owns the hero + list + right-column
+	// composition and never routes through this View. This View is used
+	// only for the narrow (phone) Home path and the modal overlays
+	// above — neither of which shows a side preview — so there is no
+	// preview branch here on purpose. Earlier this method carried the
+	// split and the wide screen silently bypassed it; that was the bug.
 
 	// List on top, detail for the selected row below. The detail keeps
 	// the full key cheatsheet when the terminal is wide and collapses
@@ -411,42 +399,71 @@ func (m sessionsModel) View(width, height int, narrow bool) string {
 }
 
 // renderPreview draws the side preview pane: the selected session's
-// recent pane content, refreshed once a second. Shows a one-line
-// status row (session name + cached/loading/error state) on top of the
-// captured text.
+// recent pane content, refreshed once a second. A one-line status row
+// (session name) sits on top of the captured text. The body is tailed
+// and width-clamped so it always fits the box — when you're watching an
+// agent, the newest lines are the ones that matter, exactly like
+// `tail -f`.
 func (m sessionsModel) renderPreview(width, height int) string {
-	sel := m.Selected()
-	if sel == nil {
+	// Pane chrome: 2 cells border (L/R and T/B), plus the header line
+	// and a blank spacer below it. contentLines is what's left for the
+	// captured text.
+	header := ""
+	if sel := m.Selected(); sel != nil {
+		header = m.st.Emphasis.Render(sel.Name)
+	} else {
+		header = m.st.Muted.Render("No session selected.")
+	}
+	innerW := width - 4    // 2 border + 2 padding
+	contentH := height - 4 // 2 border + header + blank spacer
+	if contentH < 1 {
+		contentH = 1
+	}
+
+	render := func(bodyLines string) string {
 		return m.st.Pane.Width(width - 2).Height(height - 2).Render(
-			m.st.Muted.Render("No session selected."),
+			lipgloss.JoinVertical(lipgloss.Left, header, "", bodyLines),
 		)
 	}
-	header := m.st.Emphasis.Render(sel.Name)
+
+	if m.Selected() == nil {
+		return render("")
+	}
 	switch {
 	case m.previewErr != "":
 		// Show the err verbatim — the remote-not-supported sentinel and
 		// any real tmux error both fit on a couple of lines.
-		body := m.st.StateNeedsInput.Render("preview unavailable")
-		body += "\n\n" + m.st.Muted.Render(m.previewErr)
-		return m.st.Pane.Width(width - 2).Height(height - 2).Render(
-			lipgloss.JoinVertical(lipgloss.Left, header, "", body),
-		)
+		body := m.st.StateNeedsInput.Render("preview unavailable") +
+			"\n\n" + m.st.Muted.Render(m.previewErr)
+		return render(body)
 	case m.previewLoading && m.preview == "":
-		return m.st.Pane.Width(width - 2).Height(height - 2).Render(
-			lipgloss.JoinVertical(lipgloss.Left, header, "", m.st.Muted.Render("capturing…")),
-		)
-	case m.preview == "":
-		return m.st.Pane.Width(width - 2).Height(height - 2).Render(
-			lipgloss.JoinVertical(lipgloss.Left, header, "", m.st.Muted.Render("(empty pane)")),
-		)
+		return render(m.st.Muted.Render("capturing…"))
+	case strings.TrimSpace(m.preview) == "":
+		return render(m.st.Muted.Render("(empty pane)"))
 	}
-	// Show the most-recent capture, trimmed to fit. Trailing blank
-	// lines (tmux pads to pane height) get stripped so the preview
-	// settles at the bottom instead of starting halfway down the box.
-	body := strings.TrimRight(m.preview, "\n")
-	return m.st.Pane.Width(width - 2).Height(height - 2).Render(
-		lipgloss.JoinVertical(lipgloss.Left, header, "", body),
-	)
+	// Tail to the last contentH non-padding lines and clamp each to the
+	// inner width so a long agent line can't blow out the box.
+	body := tailLines(strings.TrimRight(m.preview, "\n"), contentH, innerW)
+	return render(body)
+}
+
+// tailLines returns the last `n` lines of `s`, each hard-truncated to
+// `width` display cells. Used by the preview pane so the captured
+// content always fits its box and shows the most-recent output.
+func tailLines(s string, n, width int) string {
+	if n <= 0 {
+		return ""
+	}
+	lines := strings.Split(s, "\n")
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	if width > 0 {
+		for i, ln := range lines {
+			lines[i] = truncateDisplay(ln, width)
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m sessionsModel) renderList(width, height int) string {

@@ -300,7 +300,7 @@ func TestAgents_HelpBar_PerSubtabKeys(t *testing.T) {
 	}{
 		{
 			id:     agent.IDClaude,
-			want:   []string{"m", "e", "a", "y", "c", "j", "?", "q", "h/l", "1-7"},
+			want:   []string{"m", "e", "a", "y", "c", "enter", "?", "q", "h/l", "1-7"},
 			absent: []string{"(read-only)"},
 		},
 		{
@@ -369,10 +369,12 @@ func TestAgents_SubtabRow_UsesAgentAccent(t *testing.T) {
 					id, row, wantActiveDot, wantActiveLabel)
 			}
 
-			// Inactive sub-tabs: still get a colored dot (so all four
-			// agents stay identifiable in the row), but the label
-			// drops to muted.
-			for _, other := range agent.All() {
+			// Inactive sub-tabs: still get a colored dot (so all the
+			// config-surface agents stay identifiable in the row), but
+			// the label drops to muted. Only the agents that actually
+			// get a sub-tab (agentConfigSubtabs, not the full roster)
+			// appear here.
+			for _, other := range agentConfigSubtabs() {
 				if other.ID() == id {
 					continue
 				}

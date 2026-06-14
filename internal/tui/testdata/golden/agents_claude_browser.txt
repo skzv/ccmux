@@ -4,7 +4,7 @@
 │ Claude Code Configuration                                                                                            │
 │                                                                                                                      │
 │ Defaults                                                                                                             │
-│   model             (default)  (from Claude Code default)                                                            │
+│ ▌ model             (default)  (from Claude Code default)                                                            │
 │   effort            (default)  (from Claude Code default)                                                            │
 │   always-thinking   off                                                                                              │
 │   yolo mode         off  (from Claude Code default)                                                                  │
@@ -37,4 +37,4 @@
 │                                                                                                                      │
 │ ↑↓ navigate · enter/→ focus preview                                                                                  │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-? help · q quit · tab next agent · h/l switch · ←→ pane · m model · e effort · y yolo · c CLAUDE.md · j settings.json   
+? help · q quit · tab next agent · h/l switch · ←→ pane · ↑↓ nav · enter select · m model · e effort · c CLAUDE.md      

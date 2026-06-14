@@ -133,7 +133,10 @@ func TestParseRegionArg(t *testing.T) {
 // works end-to-end: every agent we ship a rules file for is reachable
 // via RulesFor, and each rule list is non-empty.
 func TestRulesFor_LoadsBundledFiles(t *testing.T) {
-	for _, id := range []ID{"claude", "codex", "cursor", "pi", "grok", "antigravity"} {
+	for _, id := range []ID{
+		"claude", "codex", "cursor", "pi", "grok", "antigravity",
+		"opencode", "kimi", "droid", "copilot", "qoder", "kilo", "hermes", "amp", "kiro",
+	} {
 		got := RulesFor(id)
 		if len(got) == 0 {
 			t.Errorf("RulesFor(%q) returned no rules — embed.FS or TOML parsing broken", id)
@@ -188,5 +191,63 @@ func TestClassifyAgent_NoRulesError(t *testing.T) {
 	_, err := ClassifyAgent("nonexistent-agent", Input{})
 	if err == nil {
 		t.Error("expected error for unknown agent")
+	}
+}
+
+// TestClassifyAgent_SecondWaveDetection — exercises the bundled rule
+// files for the second wave of agents end to end. Each row is a
+// representative pane/title capture and the state its rules should
+// produce. This is the guard that a typo in one of the new TOML files
+// (bad region, mis-spelled operator) is caught instead of silently
+// degrading that agent to the legacy quiet-pane fallback.
+func TestClassifyAgent_SecondWaveDetection(t *testing.T) {
+	cases := []struct {
+		name  string
+		agent ID
+		in    Input
+		want  State
+	}{
+		// Universal title spinner → working, for every new agent.
+		{"opencode title spinner", "opencode", Input{Title: "⠹ building"}, StateActive},
+		{"kimi title spinner", "kimi", Input{Title: "⠼ thinking"}, StateActive},
+		{"droid title spinner", "droid", Input{Title: "⠧ working"}, StateActive},
+		{"copilot title spinner", "copilot", Input{Title: "⠏ running"}, StateActive},
+		{"qoder title spinner", "qoder", Input{Title: "⠛ working"}, StateActive},
+		{"kilo title spinner", "kilo", Input{Title: "⠹ building"}, StateActive},
+		{"hermes title spinner", "hermes", Input{Title: "⠶ working"}, StateActive},
+		{"amp title spinner", "amp", Input{Title: "⠧ working"}, StateActive},
+		{"kiro title spinner", "kiro", Input{Title: "⠏ working"}, StateActive},
+
+		// Per-agent blocked prompts → needs_input.
+		{"opencode permission", "opencode", Input{Pane: "some output\n△ Permission required\nallow this tool?"}, StateNeedsInput},
+		{"kilo permission", "kilo", Input{Pane: "△ Permission required to run command"}, StateNeedsInput},
+		{"droid approval", "droid", Input{Pane: "Run `rm -rf`?\n  yes, allow\n  no, cancel"}, StateNeedsInput},
+		{"copilot confirm", "copilot", Input{Pane: "Apply this change?\nenter to confirm · esc to cancel"}, StateNeedsInput},
+		{"qoder awaiting", "qoder", Input{Pane: "waiting for user confirmation to proceed"}, StateNeedsInput},
+		{"amp approval", "amp", Input{Pane: "allow editing file: src/main.go?"}, StateNeedsInput},
+		{"kiro approval", "kiro", Input{Pane: "This action requires approval.\n  yes, single permission"}, StateNeedsInput},
+		{"hermes dangerous", "hermes", Input{Pane: "dangerous command detected\n  allow once\n  deny"}, StateNeedsInput},
+		{"kimi approval", "kimi", Input{Pane: "Kimi wants to run command\n  ↵ confirm  ·  esc cancel"}, StateNeedsInput},
+
+		// Per-agent working footers → active.
+		{"opencode working", "opencode", Input{Pane: "generating code…\n(esc to interrupt)"}, StateActive},
+		{"droid working", "droid", Input{Pane: "editing files…\nesc to stop"}, StateActive},
+		{"qoder working", "qoder", Input{Pane: "thinking…\n(esc to cancel, ctrl+c to quit)"}, StateActive},
+		{"kiro working", "kiro", Input{Pane: "kiro is working on your request"}, StateActive},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := ClassifyAgent(tc.agent, tc.in)
+			if err != nil {
+				t.Fatalf("ClassifyAgent(%q): %v", tc.agent, err)
+			}
+			if res.MatchedRuleID == "" {
+				t.Fatalf("no rule matched for %q on %+v (would fall back to legacy heuristic)", tc.agent, tc.in)
+			}
+			if res.State != tc.want {
+				t.Errorf("ClassifyAgent(%q) state = %q (rule %q), want %q",
+					tc.agent, res.State, res.MatchedRuleID, tc.want)
+			}
+		})
 	}
 }
