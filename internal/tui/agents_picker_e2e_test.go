@@ -54,7 +54,7 @@ func TestE2E_AgentsModelPickerOpensAndRenders(t *testing.T) {
 	a := buildAgentsApp(t)
 
 	// Baseline: no picker visible.
-	if strings.Contains(agentsBody(a), "Pick default model") {
+	if strings.Contains(agentsBody(a), "Pick model") {
 		t.Fatal("picker visible before pressing `m`")
 	}
 
@@ -63,7 +63,7 @@ func TestE2E_AgentsModelPickerOpensAndRenders(t *testing.T) {
 		t.Fatal("`m` did not open the picker through App.Update — key never reached the sub-model")
 	}
 	out := agentsBody(a)
-	if !strings.Contains(out, "Pick default model") {
+	if !strings.Contains(out, "Pick model") {
 		t.Errorf("Agents screen did not render the model picker after `m`.\n--- got ---\n%s", out)
 	}
 	// The picker lists the known model aliases.
@@ -96,7 +96,7 @@ func TestE2E_AgentsModelPickerNavigatesAndCloses(t *testing.T) {
 	if a.agentsM.claude.PickerOpen() {
 		t.Error("esc did not close the picker")
 	}
-	if strings.Contains(agentsBody(a), "Pick default model") {
+	if strings.Contains(agentsBody(a), "Pick model") {
 		t.Error("picker still rendered after esc")
 	}
 }
@@ -115,20 +115,21 @@ func TestE2E_AgentsEffortPickerOpens(t *testing.T) {
 	}
 }
 
-// TestE2E_AgentsCcmuxModelPickerNotShadowedByMatrix — capital `M` on the
-// Agents screen must open the ccmux-model picker, NOT the Matrix easter
-// egg. The global `M` handler used to fire first and swallow the key.
-func TestE2E_AgentsCcmuxModelPickerNotShadowedByMatrix(t *testing.T) {
+// TestE2E_AgentsModelPickerNotShadowedByMatrix — capital `M` on the
+// Agents screen must open the (now unified) model picker, NOT the Matrix
+// easter egg. The global `M` handler used to fire first and swallow the
+// key.
+func TestE2E_AgentsModelPickerNotShadowedByMatrix(t *testing.T) {
 	a := buildAgentsApp(t)
 	a, _ = updateApp(t, a, keyMsg("M"))
 	if a.matrix.Active() {
-		t.Fatal("capital M opened the Matrix easter egg on the Agents screen — it shadowed the ccmux-model picker")
+		t.Fatal("capital M opened the Matrix easter egg on the Agents screen — it shadowed the model picker")
 	}
 	if !a.agentsM.claude.PickerOpen() {
-		t.Fatal("capital M did not open the ccmux-model picker on the Agents screen")
+		t.Fatal("capital M did not open the model picker on the Agents screen")
 	}
-	if !strings.Contains(agentsBody(a), "Pin a model") {
-		t.Error("ccmux-model picker did not render")
+	if !strings.Contains(agentsBody(a), "Pick model") {
+		t.Error("model picker did not render")
 	}
 }
 
