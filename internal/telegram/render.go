@@ -63,13 +63,14 @@ func stateLabel(state string) string {
 }
 
 // formatSessions renders the fan-out session list, one row per session,
-// host-qualified so a peer session is unambiguous.
-func formatSessions(ss []daemon.SessionState) string {
+// host-qualified (monospaced) so a peer session is unambiguous and
+// tappable to copy. Returns HTML.
+func formatSessions(ss []daemon.SessionState) (string, string) {
 	var sb strings.Builder
-	sb.WriteString("Sessions:\n")
+	sb.WriteString(htmlBold("Sessions") + "\n")
 	for _, s := range ss {
 		t := Target{Host: s.Host, Session: s.Name}
-		sb.WriteString(stateGlyph(s.State) + " " + t.String())
+		sb.WriteString(stateGlyph(s.State) + " " + htmlCode(t.String()))
 		meta := []string{}
 		if s.Project != "" {
 			meta = append(meta, s.Project)
@@ -78,17 +79,17 @@ func formatSessions(ss []daemon.SessionState) string {
 			meta = append(meta, s.Agent)
 		}
 		if len(meta) > 0 {
-			sb.WriteString("  " + strings.Join(meta, "/"))
+			sb.WriteString("  " + escapeHTMLMin(strings.Join(meta, "/")))
 		}
-		sb.WriteString("  — " + stateLabel(s.State) + "\n")
+		sb.WriteString("  — " + escapeHTMLMin(stateLabel(s.State)) + "\n")
 	}
-	return strings.TrimRight(sb.String(), "\n")
+	return strings.TrimRight(sb.String(), "\n"), "HTML"
 }
 
-// formatUsage renders the per-agent usage card compactly.
-func formatUsage(u daemon.AgentUsage) string {
+// formatUsage renders the per-agent usage card compactly. Returns HTML.
+func formatUsage(u daemon.AgentUsage) (string, string) {
 	var sb strings.Builder
-	sb.WriteString("Usage (rolling window):\n")
+	sb.WriteString(htmlBold("Usage") + " (rolling window):\n")
 	rows := []struct {
 		name string
 		s    daemon.UsageSummary
@@ -123,9 +124,9 @@ func formatUsage(u daemon.AgentUsage) string {
 		}
 	}
 	if !any {
-		return "No usage recorded in the current window."
+		return "No usage recorded in the current window.", ""
 	}
-	return strings.TrimRight(sb.String(), "\n")
+	return strings.TrimRight(sb.String(), "\n"), "HTML"
 }
 
 // codeMessage formats a header plus a monospaced body as an HTML message
@@ -133,6 +134,44 @@ func formatUsage(u daemon.AgentUsage) string {
 // arbitrary pane content can't break the parse.
 func codeMessage(header, body string) (text, parseMode string) {
 	return escapeHTMLMin(header) + "\n<pre>" + escapeHTMLMin(body) + "</pre>", "HTML"
+}
+
+// quoteMessage formats a header plus body as an HTML message where the
+// body is an *expandable* blockquote (Bot API 7.0+). On a phone the body
+// shows collapsed with a tap-to-expand affordance, so an alert leads with
+// the header + buttons and the (possibly long) pane tail stays out of the
+// way until you want it. Body is HTML-escaped.
+func quoteMessage(header, body string) (text, parseMode string) {
+	return header + "\n<blockquote expandable>" + escapeHTMLMin(body) + "</blockquote>", "HTML"
+}
+
+// htmlBold / htmlCode wrap already-escaped or to-be-escaped content in
+// the corresponding tag, escaping the inner text.
+func htmlBold(s string) string { return "<b>" + escapeHTMLMin(s) + "</b>" }
+func htmlCode(s string) string { return "<code>" + escapeHTMLMin(s) + "</code>" }
+
+// stripHTML removes Telegram HTML tags and unescapes the entities, for
+// the plain-text fallback when a rich message fails to parse. Order
+// matters: strip tags first, then unescape (so a literal "&lt;" in the
+// content doesn't get turned into a tag boundary).
+func stripHTML(s string) string {
+	var b strings.Builder
+	inTag := false
+	for _, r := range s {
+		switch {
+		case r == '<':
+			inTag = true
+		case r == '>':
+			inTag = false
+		case !inTag:
+			b.WriteRune(r)
+		}
+	}
+	out := b.String()
+	out = strings.ReplaceAll(out, "&lt;", "<")
+	out = strings.ReplaceAll(out, "&gt;", ">")
+	out = strings.ReplaceAll(out, "&amp;", "&")
+	return out
 }
 
 // escapeHTMLMin escapes the three characters Telegram's HTML parse mode

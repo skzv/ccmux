@@ -148,6 +148,13 @@ type fakeBot struct {
 	commands [][]BotCommand
 	docs     []sentDoc
 
+	// sendHook, when set, runs per SendMessage: a non-nil error is
+	// returned to the caller (to simulate e.g. a parse failure); a
+	// non-nil *Message short-circuits success; (nil, nil) falls through
+	// to the default success path. Every attempt is still recorded in
+	// `sent` so a test can inspect the HTML attempt and the plain retry.
+	sendHook func(SendMessageRequest) (*Message, error)
+
 	nextMsgID int64
 }
 
@@ -194,6 +201,13 @@ func (b *fakeBot) SendMessage(ctx context.Context, req SendMessageRequest) (*Mes
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.sent = append(b.sent, req)
+	if b.sendHook != nil {
+		if m, err := b.sendHook(req); err != nil {
+			return nil, err
+		} else if m != nil {
+			return m, nil
+		}
+	}
 	b.nextMsgID++
 	return &Message{MessageID: b.nextMsgID, Chat: Chat{ID: req.ChatID}, Text: req.Text}, nil
 }

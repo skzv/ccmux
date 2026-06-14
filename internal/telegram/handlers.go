@@ -87,7 +87,8 @@ func (b *Bridge) cmdSessions(ctx context.Context, chatID int64) {
 		b.reply(ctx, chatID, "No sessions running.")
 		return
 	}
-	b.reply(ctx, chatID, formatSessions(ss))
+	text, mode := formatSessions(ss)
+	b.send(ctx, SendMessageRequest{ChatID: chatID, Text: text, ParseMode: mode})
 }
 
 func (b *Bridge) cmdProjects(ctx context.Context, chatID int64) {
@@ -132,7 +133,8 @@ func (b *Bridge) cmdUsage(ctx context.Context, chatID int64) {
 		b.reply(ctx, chatID, "Couldn't read usage: "+err.Error())
 		return
 	}
-	b.reply(ctx, chatID, formatUsage(u))
+	text, mode := formatUsage(u)
+	b.send(ctx, SendMessageRequest{ChatID: chatID, Text: text, ParseMode: mode})
 }
 
 func (b *Bridge) cmdPreview(ctx context.Context, chatID int64, rest string) {
@@ -169,8 +171,10 @@ func (b *Bridge) previewTo(ctx context.Context, chatID int64, t Target, lines in
 	b.sendCodeOrDocument(ctx, chatID, "Preview "+t.String(), tailString(pv.Content, lines), "preview.txt")
 }
 
-// sendCodeOrDocument sends body as a monospaced code message, or — when
-// it's too long for one message — as a .txt document. This is the
+// sendCodeOrDocument sends body as an expandable-blockquote message
+// (collapsed by default, tap to expand), or — when it's too long for one
+// message — as a .txt document. header is plain text; it's bolded for the
+// inline path and used as-is for the document caption. This is the
 // output-limit safety the spec requires: never send an over-limit
 // request, attach instead.
 func (b *Bridge) sendCodeOrDocument(ctx context.Context, chatID int64, header, body, filename string) {
@@ -182,7 +186,7 @@ func (b *Bridge) sendCodeOrDocument(ctx context.Context, chatID int64, header, b
 		}
 		return
 	}
-	text, mode := codeMessage(header, body)
+	text, mode := quoteMessage(htmlBold(header), body)
 	b.send(ctx, SendMessageRequest{ChatID: chatID, Text: text, ParseMode: mode})
 }
 
@@ -351,12 +355,12 @@ func (b *Bridge) showAgentCatalog(ctx context.Context, chatID int64, t Target) {
 		return
 	}
 	var body strings.Builder
-	fmt.Fprintf(&body, "%s — %s commands:\n", t.String(), orDefault(cat.Agent, "agent"))
+	fmt.Fprintf(&body, "%s — %s commands:\n", htmlBold(t.String()), escapeHTMLMin(orDefault(cat.Agent, "agent")))
 	var rows [][]InlineKeyboardButton
 	for _, c := range cat.Commands {
-		body.WriteString(c.Name)
+		body.WriteString(htmlCode(c.Name))
 		if c.Description != "" {
-			body.WriteString(" — " + c.Description)
+			body.WriteString(" — " + escapeHTMLMin(c.Description))
 		}
 		body.WriteString("\n")
 		action := "acmd"
@@ -371,6 +375,7 @@ func (b *Bridge) showAgentCatalog(ctx context.Context, chatID int64, t Target) {
 	b.send(ctx, SendMessageRequest{
 		ChatID:      chatID,
 		Text:        strings.TrimRight(body.String(), "\n"),
+		ParseMode:   "HTML",
 		ReplyMarkup: &InlineKeyboardMarkup{InlineKeyboard: rows},
 	})
 }
@@ -476,20 +481,20 @@ func (b *Bridge) offerSessionPicker(ctx context.Context, chatID int64, action, p
 
 func (b *Bridge) cmdHelp(ctx context.Context, chatID int64) {
 	var sb strings.Builder
-	sb.WriteString("ccmux bot — what I can do:\n")
-	sb.WriteString("/sessions — list sessions (this host + tailnet peers)\n")
-	sb.WriteString("/preview <host:session> [lines] — peek at a pane\n")
-	sb.WriteString("/agent [host:session] — drive the agent CLI (its slash-commands)\n")
-	sb.WriteString("/say <host:session> <text> — send a prompt to the agent\n")
-	sb.WriteString("/new <project> [agent] — start a session\n")
-	sb.WriteString("/kill <host:session> — end a session (asks to confirm)\n")
-	sb.WriteString("/send <host:session> <text> — raw input\n")
-	sb.WriteString("/projects, /usage, /notes <project> [query]\n")
+	sb.WriteString(htmlBold("ccmux bot") + " — what I can do:\n")
+	sb.WriteString(htmlCode("/sessions") + " — list sessions (this host + tailnet peers)\n")
+	sb.WriteString(htmlCode("/preview <host:session> [lines]") + " — peek at a pane\n")
+	sb.WriteString(htmlCode("/agent [host:session]") + " — drive the agent CLI (its slash-commands)\n")
+	sb.WriteString(htmlCode("/say <host:session> <text>") + " — send a prompt to the agent\n")
+	sb.WriteString(htmlCode("/new <project> [agent]") + " — start a session\n")
+	sb.WriteString(htmlCode("/kill <host:session>") + " — end a session (asks to confirm)\n")
+	sb.WriteString(htmlCode("/send <host:session> <text>") + " — raw input\n")
+	sb.WriteString(htmlCode("/projects") + ", " + htmlCode("/usage") + ", " + htmlCode("/notes <project> [query]") + "\n")
 	if b.opts.AllowExec {
-		sb.WriteString("/run <host:session> <raw> — exec tier (enabled)\n")
+		sb.WriteString(htmlCode("/run <host:session> <raw>") + " — exec tier (enabled)\n")
 	}
-	sb.WriteString("\nWhen an agent needs you, I'll message you with Approve / Deny — or just reply y / n.")
-	b.reply(ctx, chatID, sb.String())
+	sb.WriteString("\nWhen an agent needs you, I'll message you with " + htmlBold("Approve") + " / " + htmlBold("Deny") + " — or just reply y / n.")
+	b.send(ctx, SendMessageRequest{ChatID: chatID, Text: sb.String(), ParseMode: "HTML"})
 }
 
 // firstField splits "first rest of the line" into ("first", "rest").

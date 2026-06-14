@@ -99,6 +99,19 @@ func IsUnauthorized(err error) bool {
 	return asAPIError(err, &e) && e.Code == 401
 }
 
+// IsParseError reports a 400 where Telegram couldn't parse the message's
+// formatting entities — i.e. our HTML/MarkdownV2 was malformed for this
+// content. Callers retry as plain text so a formatting slip never eats
+// the message.
+func IsParseError(err error) bool {
+	var e *APIError
+	if !asAPIError(err, &e) || e.Code != 400 {
+		return false
+	}
+	d := strings.ToLower(e.Description)
+	return strings.Contains(d, "parse") || strings.Contains(d, "entities") || strings.Contains(d, "tag")
+}
+
 func asAPIError(err error, target **APIError) bool {
 	for err != nil {
 		if e, ok := err.(*APIError); ok {

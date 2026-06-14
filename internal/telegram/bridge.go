@@ -223,11 +223,28 @@ func (b *Bridge) send(ctx context.Context, req SendMessageRequest) *Message {
 	cctx, cancel := context.WithTimeout(ctx, actionDeadline)
 	defer cancel()
 	m, err := b.bot.SendMessage(cctx, req)
-	if err != nil {
-		b.logf("telegram: sendMessage: %v", err)
+	if err == nil {
+		return m
+	}
+	// Rich formatting degrades gracefully: if Telegram rejects our
+	// entities, resend as clean plain text (tags stripped) so the
+	// message still lands. Never let formatting eat content.
+	if IsParseError(err) && req.ParseMode != "" {
+		b.logf("telegram: parse error, retrying as plain text: %v", err)
+		plain := req
+		plain.ParseMode = ""
+		plain.Text = clampPlain(stripHTML(req.Text), telegramMaxMessageChars)
+		cctx2, cancel2 := context.WithTimeout(ctx, actionDeadline)
+		defer cancel2()
+		if m2, err2 := b.bot.SendMessage(cctx2, plain); err2 == nil {
+			return m2
+		} else {
+			b.logf("telegram: plain-text retry also failed: %v", err2)
+		}
 		return nil
 	}
-	return m
+	b.logf("telegram: sendMessage: %v", err)
+	return nil
 }
 
 // --- pairing ---------------------------------------------------------

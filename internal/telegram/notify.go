@@ -128,7 +128,10 @@ func (b *Bridge) Notify(ctx context.Context, host, session, paneTail, changeID s
 	if !emit {
 		return // an unresolved alert for this session is already out
 	}
-	text, mode := codeMessage("🔔 "+target.String()+" needs input", paneTail)
+	// Lead with the session + buttons; the pane tail is an expandable
+	// blockquote (collapsed on the phone) so it's there if you want it
+	// but never buries the Approve/Deny.
+	text, mode := quoteMessage("🔔 "+htmlBold(target.String())+" needs input", paneTail)
 	kb := approvalKeyboard(target, changeID)
 	for _, chatID := range recips {
 		m := b.send(ctx, SendMessageRequest{ChatID: chatID, Text: text, ParseMode: mode, ReplyMarkup: kb})
