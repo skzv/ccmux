@@ -36,6 +36,7 @@ import (
 	"github.com/skzv/ccmux/internal/fcm"
 	"github.com/skzv/ccmux/internal/moshi"
 	"github.com/skzv/ccmux/internal/notes"
+	"github.com/skzv/ccmux/internal/openrouterusage"
 	"github.com/skzv/ccmux/internal/project"
 	"github.com/skzv/ccmux/internal/scaffold"
 	"github.com/skzv/ccmux/internal/sleeplock"
@@ -997,21 +998,65 @@ func (s *server) handleUsage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// Each walker is cheap and IO-bound; run them concurrently so a
-	// slow disk doesn't serialize three reads of ~the same fs subtree.
+	// slow disk doesn't serialize the reads. OpenRouter is a network
+	// call, so it especially benefits from running alongside the rest.
 	var (
 		wg                 sync.WaitGroup
 		claude, codex, ant usage.AgentSummary
+		others             []usage.NamedSummary
+		orSpend            daemon.OpenRouterSpend
 	)
-	wg.Add(3)
+	wg.Add(5)
 	go func() { defer wg.Done(); claude, _ = usage.WalkClaude(window) }()
 	go func() { defer wg.Done(); codex, _ = usage.WalkCodex(window) }()
 	go func() { defer wg.Done(); ant, _ = usage.WalkAntigravity(window) }()
+	go func() { defer wg.Done(); others = usage.WalkOthers(window) }()
+	go func() { defer wg.Done(); orSpend = s.openRouterSpend(r.Context()) }()
 	wg.Wait()
 	writeJSON(w, daemon.AgentUsage{
 		Claude:      toUsageSummary(claude),
 		Codex:       toUsageSummary(codex),
 		Antigravity: toUsageSummary(ant),
+		OpenRouter:  orSpend,
+		Others:      toOtherUsage(others),
 	})
+}
+
+// toOtherUsage maps the generic per-agent summaries to the wire shape.
+func toOtherUsage(in []usage.NamedSummary) []daemon.OtherUsage {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]daemon.OtherUsage, 0, len(in))
+	for _, n := range in {
+		out = append(out, daemon.OtherUsage{Agent: n.Agent, Usage: toUsageSummary(n.Summary)})
+	}
+	return out
+}
+
+// openRouterSpend fetches the configured OpenRouter account's spend.
+// Returns a disabled (zero) value with no network call when no key is
+// configured — the common case. A configured-but-failing fetch returns
+// Enabled=true with ErrMsg set so the dashboard shows why the figure is
+// missing rather than a silent blank.
+func (s *server) openRouterSpend(ctx context.Context) daemon.OpenRouterSpend {
+	cfg := s.cfg.OpenRouter
+	if !cfg.Enabled || strings.TrimSpace(cfg.APIKey) == "" {
+		return daemon.OpenRouterSpend{Enabled: false}
+	}
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	sp, err := openrouterusage.New(cfg.APIKey, cfg.BaseURL).Spend(ctx)
+	if err != nil {
+		return daemon.OpenRouterSpend{Enabled: true, ErrMsg: err.Error()}
+	}
+	return daemon.OpenRouterSpend{
+		Enabled:    true,
+		Usage:      sp.Usage,
+		Limit:      sp.Limit,
+		Remaining:  sp.Remaining,
+		IsFreeTier: sp.IsFreeTier,
+	}
 }
 
 func toUsageSummary(s usage.AgentSummary) daemon.UsageSummary {

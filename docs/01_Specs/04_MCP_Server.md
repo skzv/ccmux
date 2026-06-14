@@ -61,7 +61,7 @@ When `--host` is set, the server talks to that ccmuxd over HTTP on the tailnet i
 | `read_pane`         | last N lines of a session's active tmux pane (default 40, max 500)                                                   |
 | `list_projects`     | every project under the configured root, with agent assignment and a few metadata bits                               |
 | `list_conversations`| past Claude / Codex / Antigravity / Cursor / Pi / Grok transcripts, sorted by recency, with the resumable agent ID   |
-| `get_usage`         | aggregated per-agent token + cost over a rolling window                                                              |
+| `get_usage`         | aggregated per-agent token + cost over a rolling window — Claude / Codex / Antigravity, the second-wave agents that have usage, and OpenRouter account spend when configured |
 | `list_machines`     | tailnet peers, whether each runs ccmuxd                                                                              |
 | `list_notes`        | every markdown note in a project, grouped by directory                                                               |
 | `read_note`         | one note's full contents                                                                                             |

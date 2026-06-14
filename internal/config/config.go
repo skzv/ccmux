@@ -33,6 +33,35 @@ type Config struct {
 	Hosts         []Host              `toml:"host"`
 	APNs          APNsConfig          `toml:"apns"`
 	FCM           FCMConfig           `toml:"fcm"`
+	OpenRouter    OpenRouterConfig    `toml:"openrouter"`
+}
+
+// OpenRouterConfig wires ccmux to an OpenRouter account for two things:
+// surfacing spend in the usage panel, and (with BaseURL injected into an
+// agent's launch) routing OpenAI-compatible agents through OpenRouter's
+// model catalog. Off by default — set Enabled + APIKey to turn on the
+// spend panel; the key is the same inference key the agents use.
+//
+// The key lives in config rather than only an env var so the daemon
+// (which has no inherited shell env on launchd/systemd) can read it for
+// the usage refresh. Treat config.toml as secret-bearing when this is
+// set — same as the APNs/FCM credentials above.
+type OpenRouterConfig struct {
+	Enabled bool   `toml:"enabled"`
+	APIKey  string `toml:"api_key"`
+	// BaseURL overrides the API root (default https://openrouter.ai/api/v1)
+	// for a self-hosted gateway or a proxy. Also used as the value
+	// injected into an OpenAI-compatible agent's OPENAI_BASE_URL when
+	// the agent is launched with OpenRouter routing.
+	BaseURL string `toml:"base_url,omitempty"`
+	// RouteAgents lists the agent IDs (e.g. "codex", "opencode", "kilo")
+	// ccmux should launch routed through OpenRouter — it injects
+	// OPENAI_BASE_URL + OPENAI_API_KEY (the key via the shell's
+	// OPENROUTER_API_KEY) into those agents' launch commands. Only
+	// agents that honor the OpenAI-compatible env vars make sense here;
+	// ccmux doesn't guess, so this is an explicit opt-in. Empty = no
+	// routing (the default).
+	RouteAgents []string `toml:"route_agents,omitempty"`
 }
 
 // APNsConfig configures Apple Push Notifications so the daemon can
@@ -186,14 +215,33 @@ type ClaudeConfig struct {
 // here prevents launch sites from knowing the TOML layout.
 func (c Config) AgentCommands() agent.Commands {
 	return agent.Commands{
-		Claude:      strings.TrimSpace(c.Agents.Claude.Command),
-		Codex:       strings.TrimSpace(c.Agents.Codex.Command),
-		Antigravity: strings.TrimSpace(c.Agents.Antigravity.Command),
-		Cursor:      strings.TrimSpace(c.Agents.Cursor.Command),
-		Pi:          strings.TrimSpace(c.Agents.Pi.Command),
-		Grok:        strings.TrimSpace(c.Agents.Grok.Command),
-		ClaudeModel: strings.TrimSpace(c.Claude.DefaultModel),
+		Claude:            strings.TrimSpace(c.Agents.Claude.Command),
+		Codex:             strings.TrimSpace(c.Agents.Codex.Command),
+		Antigravity:       strings.TrimSpace(c.Agents.Antigravity.Command),
+		Cursor:            strings.TrimSpace(c.Agents.Cursor.Command),
+		Pi:                strings.TrimSpace(c.Agents.Pi.Command),
+		Grok:              strings.TrimSpace(c.Agents.Grok.Command),
+		ClaudeModel:       strings.TrimSpace(c.Claude.DefaultModel),
+		OpenRouterAgents:  c.OpenRouter.routeAgentSet(),
+		OpenRouterBaseURL: strings.TrimSpace(c.OpenRouter.BaseURL),
 	}
+}
+
+// routeAgentSet parses RouteAgents into the ID set agent.Commands
+// expects. Unknown / malformed IDs are dropped (ParseID rejects them)
+// so a typo in config silently no-ops that entry rather than routing
+// the wrong agent. Returns nil when nothing is configured.
+func (o OpenRouterConfig) routeAgentSet() map[agent.ID]bool {
+	if len(o.RouteAgents) == 0 {
+		return nil
+	}
+	set := make(map[agent.ID]bool, len(o.RouteAgents))
+	for _, s := range o.RouteAgents {
+		if id, ok := agent.ParseID(s); ok {
+			set[id] = true
+		}
+	}
+	return set
 }
 
 // UpdateConfig holds the auto-update preference. ccmux installs from a
