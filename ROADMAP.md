@@ -82,12 +82,9 @@ The headline release. Everything required to use ccmux as a daily-driver replace
 
 ## Long-term
 
-- **Native SwiftUI iOS app**
-  - Talks directly to ccmuxd over Tailscale (gRPC or refined HTTP API)
-  - Native APNs push (richer than terminal-bell)
-  - Touch-optimized session list (swipe-to-attach / swipe-to-kill)
-  - Claude conversation view built for thumb input
-  - Apple Watch glance: "1 session waiting for input"
+- **Richer mobile clients on the ccmuxd HTTP API** (see [`docs/02_Architecture/05_HTTP_API.md`](docs/02_Architecture/05_HTTP_API.md))
+  - The API already exposes list / attach (WebSocket PTY) / send-keys / preview / events / notes / usage, plus a pairing + push (APNs/FCM) flow
+  - The [Moshi](https://getmoshi.app/) app is the mobile path today; the same API is open for any other client to integrate
 - End-to-end remote TUI streaming (no need to mosh+attach; render frames over Tailscale)
 - Session pairing (tmux built-in pair feature)
 - Team mode (multi-user host, ACLs, per-user session lists)

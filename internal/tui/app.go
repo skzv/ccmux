@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,6 +26,7 @@ import (
 	"github.com/skzv/ccmux/internal/conversations"
 	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/moshi"
+	"github.com/skzv/ccmux/internal/openrouterusage"
 	"github.com/skzv/ccmux/internal/project"
 	"github.com/skzv/ccmux/internal/remoteattach"
 	"github.com/skzv/ccmux/internal/selfupdate"
@@ -108,6 +110,20 @@ func allScreens() []Screen {
 		out[i] = Screen(i)
 	}
 	return out
+}
+
+// screenKey returns the digit a user presses to jump to the given
+// Screen — the same number the tab bar renders as `[N] Name`. Derived
+// from the iota order in the Screen const block, which is the single
+// source of truth for tab order.
+//
+// Use this anywhere user-facing copy references a tab by number
+// (empty-state hints like "Press 2 to open Projects", the first-run
+// tour). Never hand-write the digit: a future reorder of the const
+// block would silently make the copy lie. TestNoLiteralTabKeyDigits
+// fails the build if anyone tries.
+func screenKey(s Screen) string {
+	return strconv.Itoa(int(s) + 1)
 }
 
 // tabBarMinWidth is the minimum terminal cols at which the WIDE tab
@@ -255,6 +271,7 @@ func New(cfg config.Config, version string) App {
 	a.dashboard.SetConfig(cfg)
 	a.dashboard.SetVersion(version)
 	a.network.SetVersion(version)
+	a.network.SetTelegram(cfg.Telegram.Enabled, len(cfg.Telegram.AllowedChatIDs))
 	a.sessionsM.SetDefaultDir(cfg.Sessions.DefaultDir)
 	a.sessionsM.SetDefaultAgent(cfg.Agents.Default)
 	a.sessionsM.SetAgentCommands(cfg.AgentCommands())
@@ -389,6 +406,7 @@ func (a App) refreshUsageCmd() tea.Cmd {
 		agg, claudeErr := claudeusage.Walk(window)
 		codex, _ := usage.WalkCodex(window)
 		antigravity, _ := usage.WalkAntigravity(window)
+		others := usage.WalkOthers(window)
 		// Run ccusage alongside the transcript walk — it's an npx
 		// invocation so it takes a second, but it's the most accurate
 		// source for billing-block burn rate and projections.
@@ -402,7 +420,32 @@ func (a App) refreshUsageCmd() tea.Cmd {
 				IsActive:            b.IsActive,
 			}
 		}
-		return usageLoadedMsg{Agg: agg, Codex: codex, Antigravity: antigravity, CcusageBlock: blk, Err: claudeErr}
+		return usageLoadedMsg{Agg: agg, Codex: codex, Antigravity: antigravity, Others: others, CcusageBlock: blk, OpenRouter: a.openRouterSpend(), Err: claudeErr}
+	}
+}
+
+// openRouterSpend fetches the configured OpenRouter account spend for
+// the dashboard's usage panel. Returns a disabled (zero) value with no
+// network call when [openrouter] isn't enabled — the common case. A
+// configured-but-failing fetch returns Enabled=true with ErrMsg so the
+// panel shows why the figure is missing rather than a silent blank.
+func (a App) openRouterSpend() daemon.OpenRouterSpend {
+	or := a.cfg.OpenRouter
+	if !or.Enabled || strings.TrimSpace(or.APIKey) == "" {
+		return daemon.OpenRouterSpend{Enabled: false}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	sp, err := openrouterusage.New(or.APIKey, or.BaseURL).Spend(ctx)
+	if err != nil {
+		return daemon.OpenRouterSpend{Enabled: true, ErrMsg: err.Error()}
+	}
+	return daemon.OpenRouterSpend{
+		Enabled:    true,
+		Usage:      sp.Usage,
+		Limit:      sp.Limit,
+		Remaining:  sp.Remaining,
+		IsFreeTier: sp.IsFreeTier,
 	}
 }
 
@@ -671,7 +714,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// hint" rendering.
 		a.dashboard.SetCodexUsage(msg.Codex)
 		a.dashboard.SetAntigravityUsage(msg.Antigravity)
+		a.dashboard.SetOtherUsage(msg.Others)
 		a.dashboard.SetCcusageBlock(msg.CcusageBlock)
+		a.dashboard.SetOpenRouterSpend(msg.OpenRouter)
 		return a, nil
 
 	case sessionsLoadedMsg:
@@ -970,6 +1015,23 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.attach.spinFrame++
 		return a, attachSpinTickCmd()
 
+	case previewLoadedMsg, previewTickMsg:
+		// Session-preview pane plumbing. These are NOT key messages, so
+		// they must be handled as their own top-level cases (every
+		// other custom msg in this switch is). Routing them to
+		// sessionsM here — rather than relying on the screen-forward
+		// tail below — keeps the once-a-second tick chain alive even
+		// when the user has navigated away from the Sessions screen
+		// (the preview stays warm so re-entering shows live content,
+		// not a stale frame). sessionsM.Update self-terminates the
+		// chain when the user toggles the pane off, so this is not a
+		// leak. Returning the cmd directly (instead of letting the
+		// screen-forward switch overwrite it) is what previously
+		// dropped the next tick when another screen was active.
+		var cmd tea.Cmd
+		a.sessionsM, cmd = a.sessionsM.Update(msg)
+		return a, cmd
+
 	case tea.MouseMsg:
 		if a.confirm.open() {
 			return a.updateConfirmationMouse(msg)
@@ -1019,7 +1081,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// M (shift-M) opens the Matrix overlay from any navigation surface,
 		// mirroring T which reopens the tour. Suppressed when a text-input
 		// modal has focus so a session named "My-project" doesn't hijack.
-		if msg.String() == "M" && !a.modalCapturingText() {
+		//
+		// Excluded on the Agents screen: there `M` opens the ccmux-model
+		// picker (pin a model for ccmux-launched sessions). The real
+		// feature wins over the easter egg on the one screen that binds
+		// the same key — otherwise the picker is silently dead, shadowed
+		// here before the keystroke ever reaches the screen.
+		if msg.String() == "M" && !a.modalCapturingText() && a.screen != ScreenAgents {
 			a.matrix.Open()
 			a.matrix.SetSize(a.width, a.height)
 			return a, matrixTick()
@@ -1178,8 +1246,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// `T` re-opens the first-run tour at step 0. Capital so it doesn't
 		// collide with vim-style `t` someone might add to a per-screen
-		// nav binding later.
-		if msg.String() == "T" {
+		// nav binding later. Same modal-text guard as `i`/`u` so typing a
+		// capital T into a filter / rename / new-project / notes-search
+		// field doesn't yank the user into the tour mid-input.
+		if msg.String() == "T" && !a.modalCapturingText() {
 			a.tour.Open()
 			return a, nil
 		}
@@ -1386,6 +1456,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				a.network.OpenDetail()
 			}
 			return a, nil
+		case msg.String() == "T" && a.screen == ScreenNetwork && !a.modalCapturingText():
+			// `T` mints a Telegram pairing code (shown as a toast) so the
+			// user can enroll a chat without leaving the TUI.
+			return a, pairTelegramCmd(a.cfg.Telegram.Enabled)
 		}
 	}
 
@@ -1632,10 +1706,23 @@ func (a App) homeView(width, height int) string {
 	leftW := (width - gutter) / 2
 	rightW := width - leftW - gutter
 	left := a.sessionsM.renderList(leftW, rowH)
-	right := lipgloss.JoinVertical(lipgloss.Left,
-		a.sessionsM.renderDetail(rightW, false),
-		a.dashboard.StatsView(rightW),
-	)
+	// Preview mode (`p`): the right column becomes a live, read-only
+	// view of the selected session's pane instead of the detail + stat
+	// tiles. When you're watching an agent work, the tiles are noise —
+	// the preview earns the whole column. The render path MUST live
+	// here (not in sessionsModel.View) because the wide Home screen
+	// composes its own layout and never calls sessionsModel.View — the
+	// original bug was putting the split in View, which this screen
+	// bypasses entirely.
+	var right string
+	if a.sessionsM.showPreview {
+		right = a.sessionsM.renderPreview(rightW, rowH)
+	} else {
+		right = lipgloss.JoinVertical(lipgloss.Left,
+			a.sessionsM.renderDetail(rightW, false),
+			a.dashboard.StatsView(rightW),
+		)
+	}
 	row := lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
 	return lipgloss.JoinVertical(lipgloss.Left, hero, row)
 }
@@ -2463,8 +2550,18 @@ func (a App) attachOrCreateLocal(p project.Project) tea.Cmd {
 
 		if len(sessions) == 0 && len(convs) == 0 {
 			// Nothing to choose between — create and attach directly.
+			//
+			// Fresh context for the create: conversationsForProject above
+			// walks the whole transcript tree (~/.claude, ~/.codex, …)
+			// synchronously and ignores ctx, so on a heavy tree it can
+			// burn the original 3s budget before we get here. Reusing
+			// that already-elapsed ctx made tmux.New fail with "context
+			// deadline exceeded" — which bit brand-new projects in
+			// particular, since they always reach this branch.
+			nctx, ncancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer ncancel()
 			session := p.SessionName()
-			if err := tmux.New(ctx, session, path, launch); err != nil {
+			if err := tmux.New(nctx, session, path, launch); err != nil {
 				return toastMsg{Text: "start session: " + err.Error(), Kind: toastError, Until: time.Now().Add(5 * time.Second)}
 			}
 			return projectSessionReadyMsg{Session: session, Project: label}

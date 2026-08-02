@@ -78,6 +78,7 @@ func TestSaveLoad_RoundTrip(t *testing.T) {
 	in.Notes.AutoLogSessions = false
 	in.Subscription.Tier = "max20x"
 	in.Agents.Claude.Command = "/tmp/claude"
+	in.Claude.DefaultModel = "claude-opus-4-8"
 	in.Agents.Codex.Command = "/tmp/codex"
 	in.Agents.Antigravity.Command = "/tmp/agy"
 	in.Agents.Cursor.Command = "/tmp/cursor-agent"

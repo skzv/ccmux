@@ -20,6 +20,7 @@ Components:
 
 - **`cmd/ccmux`** — the user-facing binary. Default behavior launches the TUI. Subcommands provide scripting hooks (`new`, `attach`, `list`, `kill`, `setup`, `doctor`, `host add/remove/list`).
 - **`cmd/ccmuxd`** — background daemon. Polls tmux pane content, detects when Claude is waiting for input, rings the terminal bell so the iOS terminal client raises a push notification. Manages `caffeinate` lock for sleep prevention. Persists session metrics to SQLite. Exposes both a local Unix socket _and_ (optionally) a tailnet-bound HTTP API for remote ccmux clients.
+- **`cmd/ccmux-mcp`** — MCP server (JSON-RPC 2.0 over stdio) that exposes ccmux to coding agents. Proxies tool calls to the local ccmuxd (or a tailnet peer via `CCMUX_HOST`) through the same `internal/daemon.Client` the TUI uses. Read-only by default; `--allow-mutate` exposes spawn / send-keys / kill. See [`docs/01_Specs/04_MCP_Server.md`](docs/01_Specs/04_MCP_Server.md).
 - **`internal/tui`** — Bubble Tea models and screens. Top-level app routes between Dashboard, Sessions, Projects, Notes, Setup, and Settings screens. Lipgloss handles styling, Bubbles provides the list/table/textinput/viewport widgets.
 - **`internal/tmux`** — wrapper around `tmux` CLI. All session operations (`new`, `attach`, `kill`, `list`, `capture-pane`) go through here. No direct shell-outs from the TUI layer.
 - **`internal/claude`** — Claude session detection. Reads `~/.claude/projects/<encoded-path>/` for transcripts, derives "needs input" state from pane content patterns.
@@ -92,7 +93,8 @@ make lint          # gofmt + go vet + staticcheck if installed
 - `docs/02_Architecture/02_iOS_Mobile_Setup.md` — Moshi + moshi-hook (primary); Blink/Termius (fallback)
 - `docs/02_Architecture/03_Tailscale_Networking.md` — how Tailscale sits underneath the whole stack; what ccmux uses it for and what it leaves alone
 - `docs/02_Architecture/04_TUI_Design_System.md` — tokens, components, modal exception rule, indent hierarchy; the contract every screen must follow
-- `docs/04_Guides/` — user-facing setup guides published to the README
+- `docs/02_Architecture/06_Telegram_Bridge.md` — the optional Telegram control bridge: long-poll/no-inbound model, one-bot tailnet control plane, per-host agent-command catalog
+- `docs/04_Guides/` — user-facing setup guides published to the README (incl. `Telegram_Setup.md`)
 
 # Owner
 

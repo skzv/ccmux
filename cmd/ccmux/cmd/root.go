@@ -139,6 +139,8 @@ func init() {
 		newDoctorCmd(),
 		newDaemonCmd(),
 		newHostCmd(),
+		newMCPCmd(),
+		newTelegramCmd(),
 		newMoshiSetupCmd(),
 		newUninstallCmd(),
 		newRenameCmd(),
@@ -147,5 +149,6 @@ func init() {
 		newResumeCmd(),
 		newDeleteConversationCmd(),
 		newNotesCmd(),
+		newAgentsCmd(),
 	)
 }

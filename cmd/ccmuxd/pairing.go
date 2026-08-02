@@ -42,7 +42,7 @@ func (s *server) handlePairToken(w http.ResponseWriter, r *http.Request) {
 	}
 	// Build the ccmux:// deep-link URL.
 	host, _ := os.Hostname()
-	tailIP, _ := tailscaleAddr(s.cfg.Daemon.TailnetPort)
+	tailIP, _ := tailscaleAddr(r.Context(), s.cfg.Daemon.TailnetPort)
 	// Use MagicDNS hostname if available, otherwise tailscale IP.
 	pairHost := host
 	if tailIP != "" {

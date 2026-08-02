@@ -26,6 +26,16 @@ type SessionState struct {
 	// whose project we couldn't resolve (which the client should treat
 	// as claude for back-compat).
 	Agent string `json:"agent,omitempty"`
+	// Seen reports whether the user has looked at this session since
+	// the last state change. False means "the agent did something the
+	// user hasn't yet reviewed" — e.g. it transitioned to needs_input
+	// or active→idle while nobody was attached. Attaching to the
+	// session marks it seen. Drives the dashboard's attention-priority
+	// rollup (needs_input > unseen-idle > working > seen-idle > unknown)
+	// and the bell/push suppression for the currently-attached session.
+	// Defaults to true (a session you've never had output from is by
+	// definition reviewed-empty, not unreviewed).
+	Seen bool `json:"seen"`
 }
 
 // HealthInfo is returned by GET /v1/health. Used by clients to ping
@@ -212,7 +222,7 @@ type PreviewResponse struct {
 }
 
 // UsageSummary is per-agent token + cost activity over a rolling
-// window, returned by GET /v1/usage. Drives the iOS app's dashboard
+// window, returned by GET /v1/usage. Drives a mobile client's dashboard
 // usage card and any future "what am I spending" surface.
 type UsageSummary struct {
 	HasData       bool    `json:"has_data"` // false → no transcripts found
@@ -223,13 +233,46 @@ type UsageSummary struct {
 	EstimatedCost float64 `json:"estimated_cost"` // USD at published API rates
 }
 
-// AgentUsage groups all three supported agents into one response so a
-// client can render a unified "today's activity" card in a single
-// round trip.
+// AgentUsage groups the per-agent token summaries plus the OpenRouter
+// account spend into one response so a client can render a unified
+// "today's activity" card in a single round trip.
 type AgentUsage struct {
-	Claude      UsageSummary `json:"claude"`
-	Codex       UsageSummary `json:"codex"`
-	Antigravity UsageSummary `json:"antigravity"`
+	Claude      UsageSummary    `json:"claude"`
+	Codex       UsageSummary    `json:"codex"`
+	Antigravity UsageSummary    `json:"antigravity"`
+	OpenRouter  OpenRouterSpend `json:"openrouter"`
+	// Others carries per-agent summaries for the second-wave agents
+	// (OpenCode, Kimi, …) read via the generic JSONL walker. Only
+	// agents with actual usage in the window appear — the list is empty
+	// for a user who only runs Claude/Codex. Additive: existing clients
+	// that ignore this field keep working.
+	Others []OtherUsage `json:"others,omitempty"`
+}
+
+// OtherUsage is one second-wave agent's usage row.
+type OtherUsage struct {
+	Agent string       `json:"agent"`
+	Usage UsageSummary `json:"usage"`
+}
+
+// OpenRouterSpend is the OpenRouter account spend, returned in
+// AgentUsage when the daemon has an OpenRouter key configured. It's a
+// different shape from UsageSummary — OpenRouter reports dollars spent
+// against the key (not a per-window token count), so a client renders
+// it as a "spend / limit" line rather than a token row.
+type OpenRouterSpend struct {
+	// Enabled is false when no OpenRouter key is configured; clients
+	// skip the row entirely in that case. ErrMsg is non-empty when a
+	// key IS configured but the fetch failed (bad key, network) so the
+	// dashboard can show why instead of a silent blank.
+	Enabled bool   `json:"enabled"`
+	ErrMsg  string `json:"err_msg,omitempty"`
+	// Usage is total USD spent on the key; Limit is the key's credit
+	// cap (0 = uncapped). Remaining is Limit-Usage, or -1 when uncapped.
+	Usage      float64 `json:"usage"`
+	Limit      float64 `json:"limit"`
+	Remaining  float64 `json:"remaining"`
+	IsFreeTier bool    `json:"is_free_tier"`
 }
 
 // Conversation is one past agent transcript on disk. Returned by
@@ -293,4 +336,34 @@ type RenameRequest struct {
 // SendKeysRequest is the body of POST /v1/sessions/{name}/send-keys.
 type SendKeysRequest struct {
 	Keys string `json:"keys"`
+}
+
+// AgentCommand is one command the session's agent CLI understands,
+// returned by GET /v1/sessions/{name}/agent-commands. Mirrors
+// agent.AgentCommand but lives in the protocol so clients (the Telegram
+// bridge, ccmux-mcp, the CLI) don't import internal/agent. Resolved on
+// the host that runs the session, so user-authored commands/skills
+// reflect that machine.
+type AgentCommand struct {
+	Name        string `json:"name"`                  // sent verbatim, incl. leading slash
+	Description string `json:"description,omitempty"` // one-line preview
+	TakesArg    bool   `json:"takes_arg,omitempty"`   // expects an argument
+	Source      string `json:"source,omitempty"`      // "builtin" | "command" | "skill"
+}
+
+// TelegramPairCodeResponse is returned by POST /v1/telegram/pair-code
+// (unix-socket only). Code is a single-use pairing code the user sends
+// to the bot as `/start <code>`; BotUsername is the bot's @handle for a
+// tappable t.me link.
+type TelegramPairCodeResponse struct {
+	Code        string `json:"code"`
+	BotUsername string `json:"bot_username"`
+}
+
+// AgentCommandsResponse is returned by GET /v1/sessions/{name}/agent-commands:
+// the resolved agent id for the session plus its command catalog
+// (built-ins, and for Claude the host's user-defined commands/skills).
+type AgentCommandsResponse struct {
+	Agent    string         `json:"agent"`
+	Commands []AgentCommand `json:"commands"`
 }

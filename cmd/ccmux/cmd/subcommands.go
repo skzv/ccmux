@@ -27,6 +27,7 @@ import (
 	"github.com/skzv/ccmux/internal/scaffold"
 	"github.com/skzv/ccmux/internal/setupwizard"
 	"github.com/skzv/ccmux/internal/sshsetup"
+	"github.com/skzv/ccmux/internal/telegram"
 	"github.com/skzv/ccmux/internal/tmux"
 )
 
@@ -431,6 +432,16 @@ func runDoctor() error {
 	fmt.Println("Clipboard (cross-device copy/paste via OSC 52):")
 	checkClipboardForDoctor()
 
+	// Telegram bridge — only meaningful once configured. Validates the
+	// token with getMe (token never printed) and reports paired chats.
+	fmt.Println()
+	fmt.Println("Telegram bridge (control ccmux from your phone/watch):")
+	tlines, tbad := telegramDoctorReport(cfg)
+	for _, l := range tlines {
+		fmt.Println(l)
+	}
+	bad += tbad
+
 	// SSH bootstrap status for every configured remote host. The
 	// common failure modes are subtle ("key auth not set up yet",
 	// "sshd off on the remote", "Tailscale not routing") and the
@@ -505,6 +516,24 @@ func agentInstallHint(id agent.ID) string {
 		return "`curl -fsSL https://pi.dev/install.sh | sh` (or `npm i -g @earendil-works/pi-coding-agent`)"
 	case agent.IDGrok:
 		return "`curl -fsSL https://x.ai/cli/install.sh | bash` (or `npm i -g @xai-official/grok`)"
+	case agent.IDOpenCode:
+		return "`curl -fsSL https://opencode.ai/install | bash` (or `npm i -g opencode-ai`)"
+	case agent.IDKimi:
+		return "`npm i -g @moonshot/kimi-code` (or see Kimi Code docs)"
+	case agent.IDDroid:
+		return "`curl -fsSL https://app.factory.ai/cli | sh` (or see Factory docs)"
+	case agent.IDCopilot:
+		return "`npm i -g @github/copilot` (or see GitHub Copilot CLI docs)"
+	case agent.IDQoder:
+		return "`npm i -g @qoder/cli` (or see Qoder docs)"
+	case agent.IDKilo:
+		return "`npm i -g @kilocode/cli` (or see Kilo Code docs)"
+	case agent.IDHermes:
+		return "`uv tool install hermes-agent` (or see https://hermes-agent.nousresearch.com)"
+	case agent.IDAmp:
+		return "`npm i -g @sourcegraph/amp` (or see Amp docs at ampcode.com)"
+	case agent.IDKiro:
+		return "see Kiro CLI install at https://kiro.dev/docs/cli"
 	}
 	return ""
 }
@@ -531,6 +560,49 @@ func checkClipboardForDoctor() {
 	default:
 		fmt.Printf("  ⚠ tmux set-clipboard=%s — selections won't escape tmux; run `tmux set -s set-clipboard on`\n", state)
 	}
+}
+
+// telegramValidate validates a bot token against Telegram. A package
+// var so doctor tests can substitute a fake without a network call.
+var telegramValidate = func(ctx context.Context, token string) (*telegram.User, error) {
+	return telegram.NewClient(token).GetMe(ctx)
+}
+
+// telegramDoctorReport builds the Telegram bridge health lines: whether
+// it's configured, whether Telegram accepts the token (getMe), and how
+// many chats are paired. The token itself is never included. The
+// returned bad count is >0 only on a genuine misconfiguration (a
+// rejected/conflicting token), not on "not set up" or a transient
+// network failure. Returns lines (not prints) so it's unit-testable.
+func telegramDoctorReport(cfg config.Config) (lines []string, bad int) {
+	tg := cfg.Telegram
+	if !tg.Enabled || strings.TrimSpace(tg.BotToken) == "" {
+		return []string{"  · not configured — run `ccmux telegram register` to enable"}, 0
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	defer cancel()
+	me, err := telegramValidate(ctx, tg.BotToken)
+	switch {
+	case err == nil:
+		lines = append(lines, fmt.Sprintf("  ✓ token valid (@%s)", me.Username))
+		if len(tg.AllowedChatIDs) == 0 {
+			lines = append(lines, "  ⚠ no chats paired — run `ccmux telegram pair`")
+		} else {
+			lines = append(lines, fmt.Sprintf("  ✓ %d chat(s) paired", len(tg.AllowedChatIDs)))
+		}
+		if tg.AllowExec {
+			lines = append(lines, "  ⚠ exec tier (/run) is enabled — the bot can run arbitrary input")
+		}
+	case telegram.IsUnauthorized(err):
+		bad++
+		lines = append(lines, "  ✗ token rejected by Telegram — re-run `ccmux telegram register` with a fresh @BotFather token")
+	case telegram.IsConflict(err):
+		bad++
+		lines = append(lines, "  ✗ another ccmuxd is already polling this bot token (one token = one daemon)")
+	default:
+		lines = append(lines, "  · couldn't reach Telegram to validate the token (network?) — bridge may still be fine")
+	}
+	return lines, bad
 }
 
 // daemonStartDeps groups the side-effecting bits of `ccmux daemon
@@ -581,6 +653,32 @@ func runDaemonStart(out io.Writer, deps daemonStartDeps) error {
 	}
 	fmt.Fprintf(out, "ccmuxd started (pid %d)\n", pid)
 	return nil
+}
+
+// waitForDaemonHealth polls the local ccmuxd's /v1/health until it
+// answers or `timeout` elapses, returning true on the first success.
+// Used after a restart to confirm the daemon is actually serving (not
+// just that a process exists), so callers report the settled state
+// instead of a transient mid-restart gap. A health check — not a bare
+// pgrep — because during the handoff the OLD process may still be
+// alive but no longer listening; only the NEW one answers health.
+func waitForDaemonHealth(timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		cli, err := daemon.LocalClient()
+		if err == nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+			_, herr := cli.Health(ctx)
+			cancel()
+			if herr == nil {
+				return true
+			}
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 }
 
 // runningCcmuxdPID returns the pid of a live ccmuxd via `pgrep -x`,
@@ -672,6 +770,15 @@ func newDaemonCmd() *cobra.Command {
 			RunE: func(_ *cobra.Command, _ []string) error {
 				out, err := exec.Command("pkill", "-x", "ccmuxd").CombinedOutput()
 				if err != nil {
+					// pkill exits 1 when nothing matched — i.e. ccmuxd
+					// isn't running. That's a successful no-op for
+					// `stop`, not an error, so don't fail the command
+					// (a non-zero exit breaks `ccmux daemon stop && …`
+					// chains and scripted teardown).
+					if ee, ok := err.(*exec.ExitError); ok && ee.ExitCode() == 1 {
+						fmt.Println("ccmuxd is not running")
+						return nil
+					}
 					return fmt.Errorf("%w (%s)", err, strings.TrimSpace(string(out)))
 				}
 				fmt.Println("ccmuxd stopped")
@@ -698,11 +805,24 @@ so install scripts can call it unconditionally.`,
 				if err != nil {
 					return err
 				}
-				if s.Running {
+				// daemonservice.Restart() issues the bounce and returns
+				// immediately, but the new daemon needs a beat to re-bind
+				// the socket. Probing right away (as we used to) reported
+				// "not running" mid-restart even though it was coming back
+				// — the confusing message after `make install`. Poll the
+				// IPC health endpoint so we report the SETTLED state: a
+				// successful health check means it's actually serving.
+				if waitForDaemonHealth(8 * time.Second) {
 					fmt.Println("✓ ccmuxd restarted")
-				} else {
-					fmt.Println("note: ccmuxd is not running — start it with `ccmux daemon start` or `ccmux daemon install`")
+					return nil
 				}
+				if s.Running {
+					// Process is up but not answering health yet — almost
+					// certainly still warming up, not a failure.
+					fmt.Println("✓ ccmuxd restarted (still warming up)")
+					return nil
+				}
+				fmt.Println("note: ccmuxd is not running — start it with `ccmux daemon start` or `ccmux daemon install`")
 				return nil
 			},
 		},
@@ -781,7 +901,15 @@ func newHostCmd() *cobra.Command {
 			Short: "Add a remote ccmuxd host",
 			Args:  cobra.ExactArgs(2),
 			RunE: func(_ *cobra.Command, args []string) error {
-				cfg, _ := config.Load()
+				// Abort on a Load error instead of proceeding: Load
+				// returns Defaults() alongside the error on a corrupt or
+				// unreadable config.toml, and Save truncates the file —
+				// so swallowing the error would wipe every other host and
+				// all other settings on the next write.
+				cfg, err := config.Load()
+				if err != nil {
+					return fmt.Errorf("load config (not modifying it): %w", err)
+				}
 				cfg.Hosts = append(cfg.Hosts, config.Host{Name: args[0], Address: args[1], Mosh: true, Port: 7474})
 				return config.Save(cfg)
 			},
@@ -791,7 +919,12 @@ func newHostCmd() *cobra.Command {
 			Short: "Remove a remote ccmuxd host",
 			Args:  cobra.ExactArgs(1),
 			RunE: func(_ *cobra.Command, args []string) error {
-				cfg, _ := config.Load()
+				// Same guard as `host add`: never rewrite config.toml from
+				// a Defaults()-on-error config — it would erase everything.
+				cfg, err := config.Load()
+				if err != nil {
+					return fmt.Errorf("load config (not modifying it): %w", err)
+				}
 				out := cfg.Hosts[:0]
 				for _, h := range cfg.Hosts {
 					if h.Name != args[0] {

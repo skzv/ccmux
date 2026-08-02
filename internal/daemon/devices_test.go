@@ -365,3 +365,48 @@ func jsonContains(raw []byte, needle string) bool {
 	}
 	return false
 }
+
+// TestOpenDeviceStore_CorruptFilePreservedNotClobbered — regression for
+// the silent data-loss bug: a corrupt devices.json must NOT be opened
+// as an empty store that the next flush then overwrites. The corrupt
+// bytes must be moved aside (devices.json.corrupt) and a fresh, usable
+// store returned — so a later Register doesn't permanently destroy the
+// (possibly recoverable) original.
+func TestOpenDeviceStore_CorruptFilePreservedNotClobbered(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "devices.json")
+	if err := os.WriteFile(path, []byte("{ this is not valid json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := OpenDeviceStore(path)
+	if err != nil {
+		t.Fatalf("OpenDeviceStore on corrupt file should recover, got: %v", err)
+	}
+	if got := len(s.All()); got != 0 {
+		t.Errorf("recovered store should start empty, got %d", got)
+	}
+
+	// The corrupt original must be preserved, not deleted.
+	bak := path + ".corrupt"
+	got, err := os.ReadFile(bak)
+	if err != nil {
+		t.Fatalf("corrupt file not preserved at %s: %v", bak, err)
+	}
+	if string(got) != "{ this is not valid json" {
+		t.Errorf("corrupt bytes not preserved verbatim: %q", got)
+	}
+
+	// A subsequent Register must succeed and write a fresh, valid file —
+	// without resurrecting the corruption.
+	if err := s.Register(testPubKey, "TOK", "production"); err != nil {
+		t.Fatalf("Register after recovery: %v", err)
+	}
+	reopened, err := OpenDeviceStore(path)
+	if err != nil {
+		t.Fatalf("re-open after recovery: %v", err)
+	}
+	if _, ok := reopened.Lookup(testPubKey); !ok {
+		t.Error("registration after corrupt-file recovery did not persist")
+	}
+}

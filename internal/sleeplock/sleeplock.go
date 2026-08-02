@@ -169,10 +169,18 @@ func (m *Manager) engageLocked() {
 	}
 	cmd := m.startLockProc(mode)
 	if cmd == nil {
+		// Lock process unavailable (unsupported OS). If we already
+		// applied the very_dangerous system override above, revert it —
+		// otherwise we'd leave system sleep globally disabled while
+		// reporting Off, and a later SetActive would re-apply it on top.
+		m.revertOverrideLocked()
 		m.effective = ModeOff
 		return
 	}
 	if err := cmd.Start(); err != nil {
+		// Same stranded-override risk on a Start() failure right after a
+		// successful sudo override.
+		m.revertOverrideLocked()
 		m.effective = ModeOff
 		return
 	}
@@ -192,15 +200,24 @@ func (m *Manager) releaseLocked() {
 		_, _ = m.holder.Process.Wait()
 		m.holder = nil
 	}
-	if m.overrideOn {
-		_ = m.runOverride(context.Background(), false)
-		m.overrideOn = false
-	}
+	m.revertOverrideLocked()
 	if m.stopMonitor != nil {
 		close(m.stopMonitor)
 		m.stopMonitor = nil
 	}
 	m.effective = ModeOff
+}
+
+// revertOverrideLocked undoes the very_dangerous system sleep override
+// if one is active and clears the flag. Idempotent. Caller holds m.mu.
+// Centralized so the engage-failure paths and releaseLocked can't
+// drift on the "did we remember to clear overrideOn" invariant.
+func (m *Manager) revertOverrideLocked() {
+	if !m.overrideOn {
+		return
+	}
+	_ = m.runOverride(context.Background(), false)
+	m.overrideOn = false
 }
 
 // Stop tears down everything: kills the lock process, reverts the

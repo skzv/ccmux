@@ -658,3 +658,132 @@ func sprintN(n int) string {
 	}
 	return string(out)
 }
+
+// TestRoundTrip_PreservesHookMatcher — regression for the silent
+// data-loss bug where a ReadSettings→WriteSettings cycle (triggered by
+// any ccmux setting toggle) stripped a hook's `matcher` field, turning
+// a tool-scoped hook into an all-tools hook. Writes a settings.json
+// with a Bash-scoped PreToolUse hook, round-trips through the typed
+// Settings, and asserts the matcher survives on disk.
+func TestRoundTrip_PreservesHookMatcher(t *testing.T) {
+	dir := withFakeClaudeDir(t)
+	settingsPath := filepath.Join(dir, "settings.json")
+	const input = `{
+  "model": "opus",
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "Bash", "hooks": [ { "type": "command", "command": "echo hi" } ] }
+    ]
+  }
+}`
+	if err := os.WriteFile(settingsPath, []byte(input), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := ReadSettings()
+	if err != nil {
+		t.Fatalf("ReadSettings: %v", err)
+	}
+	// The matcher must be captured in the HookGroup's Extra, not dropped.
+	grp := s.Hooks["PreToolUse"][0]
+	if _, ok := grp.Extra["matcher"]; !ok {
+		t.Errorf("hook matcher not captured in Extra; got Extra=%v", grp.Extra)
+	}
+
+	// Simulate a ccmux write (e.g. SetModel).
+	if _, err := WriteSettings(s); err != nil {
+		t.Fatalf("WriteSettings: %v", err)
+	}
+	out, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(string(out), `"matcher"`) || !contains(string(out), `"Bash"`) {
+		t.Errorf("matcher dropped on round-trip; settings.json now:\n%s", out)
+	}
+}
+
+// TestRoundTrip_PreservesMCPServerHeaders — regression for the bug
+// where an MCP server's unmodeled fields (notably `headers`, which
+// commonly carry an Authorization bearer token) were stripped on any
+// ccmux settings write, silently breaking the server's auth.
+func TestRoundTrip_PreservesMCPServerHeaders(t *testing.T) {
+	dir := withFakeClaudeDir(t)
+	settingsPath := filepath.Join(dir, "settings.json")
+	const input = `{
+  "model": "opus",
+  "mcpServers": {
+    "remote": {
+      "type": "http",
+      "url": "https://mcp.example.com",
+      "headers": { "Authorization": "Bearer SECRET_TOKEN" },
+      "disabled": false
+    }
+  }
+}`
+	if err := os.WriteFile(settingsPath, []byte(input), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := ReadSettings()
+	if err != nil {
+		t.Fatalf("ReadSettings: %v", err)
+	}
+	srv := s.MCPServers["remote"]
+	if srv.Type != "http" || srv.URL != "https://mcp.example.com" {
+		t.Errorf("modelled fields wrong: %+v", srv)
+	}
+	if _, ok := srv.Extra["headers"]; !ok {
+		t.Errorf("MCP headers not captured in Extra; got Extra=%v", srv.Extra)
+	}
+
+	if _, err := WriteSettings(s); err != nil {
+		t.Fatalf("WriteSettings: %v", err)
+	}
+	out, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	if !contains(got, "Bearer SECRET_TOKEN") {
+		t.Errorf("MCP Authorization header dropped on round-trip; settings.json now:\n%s", got)
+	}
+	if !contains(got, `"disabled"`) {
+		t.Errorf("MCP `disabled` field dropped on round-trip; settings.json now:\n%s", got)
+	}
+}
+
+// TestRoundTrip_HookAndMCPStructuralIntegrity — the modelled fields
+// must still survive too (we didn't trade unknown-field preservation
+// for known-field loss). Asserts hooks[].command and an MCP server's
+// type/url are intact through a round-trip.
+func TestRoundTrip_HookAndMCPStructuralIntegrity(t *testing.T) {
+	dir := withFakeClaudeDir(t)
+	settingsPath := filepath.Join(dir, "settings.json")
+	const input = `{
+  "hooks": { "Stop": [ { "hooks": [ { "type": "command", "command": "notify" } ] } ] },
+  "mcpServers": { "local": { "type": "stdio", "command": "my-server", "args": ["--flag"] } }
+}`
+	if err := os.WriteFile(settingsPath, []byte(input), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := ReadSettings()
+	if err != nil {
+		t.Fatalf("ReadSettings: %v", err)
+	}
+	if got := s.Hooks["Stop"][0].Hooks[0].Command; got != "notify" {
+		t.Errorf("hook command lost: %q", got)
+	}
+	if got := s.MCPServers["local"]; got.Command != "my-server" || len(got.Args) != 1 {
+		t.Errorf("MCP modelled fields lost: %+v", got)
+	}
+	if _, err := WriteSettings(s); err != nil {
+		t.Fatalf("WriteSettings: %v", err)
+	}
+	out, _ := os.ReadFile(settingsPath)
+	for _, want := range []string{`"command": "notify"`, `"my-server"`, `"--flag"`} {
+		if !contains(string(out), want) {
+			t.Errorf("expected %s in round-tripped settings:\n%s", want, out)
+		}
+	}
+}

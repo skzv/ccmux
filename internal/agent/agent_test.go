@@ -12,17 +12,74 @@ import (
 // TestAll_CanonicalOrder pins the canonical agent ordering. Order is
 // load-bearing: pickers default to the first installed entry, so a
 // reshuffle that put Codex first would silently change every new
-// user's default agent.
+// user's default agent. The first six (the original wave) MUST stay in
+// their exact positions so the Claude-first default never drifts; the
+// second wave follows in registration order.
 func TestAll_CanonicalOrder(t *testing.T) {
 	got := All()
-	if len(got) != 6 {
-		t.Fatalf("All() len = %d, want 6", len(got))
+	wantIDs := []ID{
+		IDClaude, IDCodex, IDAntigravity, IDCursor, IDPi, IDGrok,
+		IDOpenCode, IDKimi, IDDroid, IDCopilot, IDQoder, IDKilo, IDHermes, IDAmp, IDKiro,
 	}
-	wantIDs := []ID{IDClaude, IDCodex, IDAntigravity, IDCursor, IDPi, IDGrok}
+	if len(got) != len(wantIDs) {
+		t.Fatalf("All() len = %d, want %d", len(got), len(wantIDs))
+	}
 	for i, a := range got {
 		if a.ID() != wantIDs[i] {
 			t.Errorf("All()[%d].ID() = %q, want %q", i, a.ID(), wantIDs[i])
 		}
+	}
+	// The first six positions are the load-bearing ones: Claude must be
+	// first (the default), and the original order must be preserved.
+	if got[0].ID() != IDClaude {
+		t.Errorf("All()[0] = %q, want claude (the default must stay first)", got[0].ID())
+	}
+}
+
+// TestAll_EveryAgentIsComplete — every registered agent must answer the
+// full Agent interface with non-empty identity + paths, satisfy
+// TitleAwareAgent (so the daemon's title-aware classifier reaches it),
+// and round-trip through ByID/ParseID. This is the guard that adding an
+// agent to the const block but forgetting ByID/ParseID (or vice-versa)
+// fails loudly instead of panicking at runtime.
+func TestAll_EveryAgentIsComplete(t *testing.T) {
+	home := "/home/tester"
+	for _, a := range All() {
+		id := a.ID()
+		t.Run(string(id), func(t *testing.T) {
+			if a.DisplayName() == "" {
+				t.Error("empty DisplayName")
+			}
+			if a.Binary() == "" {
+				t.Error("empty Binary")
+			}
+			if a.LaunchCmd(false) == "" || a.LaunchCmd(true) == "" {
+				t.Error("empty LaunchCmd")
+			}
+			if !strings.HasPrefix(a.ConfigRoot(home), home) {
+				t.Errorf("ConfigRoot %q not under home", a.ConfigRoot(home))
+			}
+			if !strings.HasPrefix(a.TranscriptsRoot(home), home) {
+				t.Errorf("TranscriptsRoot %q not under home", a.TranscriptsRoot(home))
+			}
+			if a.InitialPrompt("proj", "desc") == "" {
+				t.Error("empty InitialPrompt")
+			}
+			// Title-aware: the poll loop routes through ClassifyState,
+			// which only passes the OSC title to agents implementing
+			// TitleAwareAgent. An agent that forgets ClassifyWithTitle
+			// silently loses the title signal.
+			if _, ok := a.(TitleAwareAgent); !ok {
+				t.Error("does not implement TitleAwareAgent — title signal is lost for this agent")
+			}
+			// Registration round-trips.
+			if ByID(id).ID() != id {
+				t.Errorf("ByID(%q) round-trip failed", id)
+			}
+			if got, ok := ParseID(string(id)); !ok || got != id {
+				t.Errorf("ParseID(%q) = (%q, %v), want (%q, true)", id, got, ok, id)
+			}
+		})
 	}
 }
 
@@ -185,6 +242,67 @@ func TestAgent_LaunchCmd_NewVsContinue(t *testing.T) {
 				t.Errorf("continue LaunchCmd = %q, missing `|| sh` POSIX fallback", cont)
 			}
 		})
+	}
+}
+
+// TestLaunchCmd_ClaudeModelPrependsExport — when Commands.ClaudeModel
+// is set, `agent.LaunchCmd(IDClaude, …)` must prepend an `export
+// ANTHROPIC_MODEL=<id>;` so the pin survives the `claude || claude ||
+// zsh || sh` fallback chain. A per-command `FOO=bar` prefix would
+// only apply to the first invocation — see the comment in
+// launchCmdWithBinary for the reason.
+func TestLaunchCmd_ClaudeModelPrependsExport(t *testing.T) {
+	got := LaunchCmd(IDClaude, true, Commands{ClaudeModel: "claude-opus-4-8"})
+	want := "export ANTHROPIC_MODEL=claude-opus-4-8; claude --continue || claude || zsh || bash || sh"
+	if got != want {
+		t.Errorf("LaunchCmd with ClaudeModel:\n got=%q\nwant=%q", got, want)
+	}
+
+	// The fresh (no-continue) path gets the prefix too.
+	got = LaunchCmd(IDClaude, false, Commands{ClaudeModel: "opus"})
+	want = "export ANTHROPIC_MODEL=opus; claude"
+	if got != want {
+		t.Errorf("LaunchCmd fresh with ClaudeModel:\n got=%q\nwant=%q", got, want)
+	}
+
+	// Trimming: whitespace around the configured value must not leak
+	// into the shell command. A stray space would set the env to a
+	// trailing-space string, which Claude Code wouldn't match.
+	got = LaunchCmd(IDClaude, false, Commands{ClaudeModel: "  haiku  "})
+	want = "export ANTHROPIC_MODEL=haiku; claude"
+	if got != want {
+		t.Errorf("LaunchCmd should trim ClaudeModel:\n got=%q\nwant=%q", got, want)
+	}
+}
+
+// TestLaunchCmd_NoModelMatchesPriorBehavior — the empty-string default
+// must produce exactly the command we shipped before this feature
+// existed. Pinned to a literal string so a refactor that accidentally
+// adds an `export ANTHROPIC_MODEL=;` (visible bug for users with no
+// preference set) is caught here.
+func TestLaunchCmd_NoModelMatchesPriorBehavior(t *testing.T) {
+	got := LaunchCmd(IDClaude, true, Commands{})
+	want := "claude --continue || claude || zsh || bash || sh"
+	if got != want {
+		t.Errorf("LaunchCmd no-model regression:\n got=%q\nwant=%q", got, want)
+	}
+}
+
+// TestLaunchCmd_ClaudeModelDoesNotApplyToOtherAgents — Commands.ClaudeModel
+// is Claude-specific. Setting it must NOT prepend ANTHROPIC_MODEL to a
+// Codex/Antigravity/Cursor/Pi/Grok launch — those agents read model
+// selection from their own config files, and a stray ANTHROPIC_MODEL
+// in their env could confuse downstream tooling.
+func TestLaunchCmd_ClaudeModelDoesNotApplyToOtherAgents(t *testing.T) {
+	commands := Commands{ClaudeModel: "claude-opus-4-8"}
+	for _, a := range All() {
+		if a.ID() == IDClaude {
+			continue
+		}
+		got := LaunchCmd(a.ID(), false, commands)
+		if strings.Contains(got, "ANTHROPIC_MODEL") {
+			t.Errorf("%s LaunchCmd should not carry ANTHROPIC_MODEL: %q", a.ID(), got)
+		}
 	}
 }
 
@@ -466,6 +584,37 @@ func TestResumeArgs_ConfiguredCommands(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestResumeArgs_ClaudeModelWrapsInShell — when Commands.ClaudeModel
+// is set, Claude's resume argv has to thread the pin through. Since
+// the argv form doesn't carry env, the implementation wraps in
+// `sh -c 'export ANTHROPIC_MODEL=…; claude --resume …'`. Other agents
+// pass through unchanged.
+func TestResumeArgs_ClaudeModelWrapsInShell(t *testing.T) {
+	cmds := Commands{ClaudeModel: "claude-opus-4-8"}
+	got := ResumeArgs(IDClaude, "abc-123", cmds)
+	if len(got) != 3 || got[0] != "sh" || got[1] != "-c" {
+		t.Fatalf("want sh -c wrapper, got %v", got)
+	}
+	want := "export ANTHROPIC_MODEL=claude-opus-4-8; claude --resume abc-123"
+	if got[2] != want {
+		t.Errorf("shell line:\n got=%q\nwant=%q", got[2], want)
+	}
+
+	// Sanity: empty ClaudeModel produces the bare argv (no shell wrap).
+	bare := ResumeArgs(IDClaude, "abc-123", Commands{})
+	if len(bare) != 3 || bare[0] != "claude" {
+		t.Errorf("no-model resume should be bare argv, got %v", bare)
+	}
+
+	// Non-Claude agents must not pick up ANTHROPIC_MODEL on resume.
+	codex := ResumeArgs(IDCodex, "abc-123", cmds)
+	for _, a := range codex {
+		if strings.Contains(a, "ANTHROPIC_MODEL") {
+			t.Errorf("codex resume should not carry ANTHROPIC_MODEL: %v", codex)
+		}
 	}
 }
 

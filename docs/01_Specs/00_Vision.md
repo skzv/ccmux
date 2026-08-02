@@ -27,7 +27,7 @@ On your phone, the experience is the same TUI rendered into a Mosh-backed Blink 
 
 When you start a new project, ccmux creates the directory and starts the agent session — and stops there. It does not scaffold: no CLAUDE.md, no docs/ tree, no git init. Bootstrapping is the agent's job, run inside the session (`/init`, `openspec`); ccmux just opens the door.
 
-It's the workflow you have today, made *legible*. And then it grows: cost tracking, session snapshots, multi-machine view, a native iOS client.
+It's the workflow you have today, made *legible*. And then it grows: cost tracking, session snapshots, multi-machine view, and a mobile path built on the ccmuxd HTTP API (the [Moshi](https://getmoshi.app/) app today).
 
 ## The User Story (end to end)
 
@@ -70,4 +70,4 @@ This means you don't have to pick a "headquarters." The desk-bound Mini handles 
 
 ## The Long-Term Bet
 
-The most-used path is *phone → tailnet → ccmux on the Mini → Claude session*. The bottleneck on that path is the terminal client on the phone. Blink Shell is great; it's not yours. The natural endgame is a native iOS app that speaks directly to ccmuxd over Tailscale: native push notifications, a touch-optimized session list, a Claude conversation UI built for one-handed thumb input. That's a v2 conversation, but the architecture (daemon + IPC) is designed to make it possible.
+The most-used path is *phone → tailnet → ccmux on the Mini → Claude session*. The bottleneck on that path is the terminal client on the phone. The natural endgame isn't a first-party app — it's an open integration surface: ccmuxd exposes an HTTP API over Tailscale ([`docs/02_Architecture/05_HTTP_API.md`](../02_Architecture/05_HTTP_API.md)) that any mobile client can build on — native push notifications, a touch-optimized session list, a Claude conversation UI built for one-handed thumb input. The [Moshi](https://getmoshi.app/) app is the mobile path today. That richer client experience is a future conversation, but the architecture (daemon + IPC + HTTP API) is designed to make it possible without ccmux shipping its own app.

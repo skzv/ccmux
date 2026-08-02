@@ -28,6 +28,46 @@ type Snapshot struct {
 	Captured time.Time // when we ran capture-pane
 }
 
+// ClassifyWithTitle is Classify augmented with the pane's OSC-set
+// title (#{pane_title}). Agent CLIs broadcast their state in the
+// title far more reliably than in the body — a braille spinner while
+// working, explicit strings like "Action Required" when blocked — so
+// title evidence is consulted FIRST and overrides body heuristics
+// when conclusive. An empty title falls through to legacy body-only
+// classification, identical to before this signal existed.
+//
+// The title is treated as a conclusive override only for unambiguous
+// patterns we control (the working-spinner shape). Body-derived
+// signals still win when the title is empty or generic.
+func ClassifyWithTitle(pane, title string, lastChange time.Time, idleNeedsInput time.Duration) State {
+	if state, ok := classifyTitle(title); ok {
+		return state
+	}
+	return Classify(pane, lastChange, idleNeedsInput)
+}
+
+// classifyTitle inspects the OSC title and returns a confident state
+// when the title carries an unambiguous signal. The boolean reports
+// whether the title was conclusive — false means "no opinion, fall
+// through to body classification."
+func classifyTitle(title string) (State, bool) {
+	t := strings.TrimSpace(title)
+	if t == "" {
+		return StateUnknown, false
+	}
+	// Braille spinner glyph at the start of the title is the
+	// canonical "I am working" broadcast. The unicode block
+	// U+2800..U+28FF covers every braille pattern; any of them in
+	// the leading position is a working-spinner frame, full stop.
+	for _, r := range t {
+		if r >= 0x2800 && r <= 0x28FF {
+			return StateActive, true
+		}
+		break // only inspect the first rune
+	}
+	return StateUnknown, false
+}
+
 // Classify decides what State a session is in based on its pane content.
 // `lastChange` is when this session's pane content last changed (the caller
 // tracks this — typically the daemon's poll loop).

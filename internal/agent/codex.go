@@ -2,7 +2,6 @@ package agent
 
 import (
 	"path/filepath"
-	"strings"
 	"time"
 )
 
@@ -65,11 +64,14 @@ func (Codex) InitialPrompt(name, description string) string {
 // the prompt frame. Tracked in docs/01_Specs/02_Multi_Agent.md
 // Phase 4.
 func (Codex) Classify(pane string, lastChange time.Time, idleThreshold time.Duration) State {
-	if strings.TrimSpace(pane) == "" {
-		return StateUnknown
-	}
-	if time.Since(lastChange) >= idleThreshold {
-		return StateNeedsInput
-	}
-	return StateActive
+	return engineClassify(IDCodex, pane, "", lastChange, idleThreshold)
+}
+
+// ClassifyWithTitle routes through the data-driven engine
+// (internal/agentdetect). Codex's rule file matches the title
+// spinner, "Action Required", and the body "press enter to confirm"
+// patterns. Falls back to the legacy time-based heuristic when no
+// rule matches.
+func (Codex) ClassifyWithTitle(pane, title string, lastChange time.Time, idleThreshold time.Duration) State {
+	return engineClassify(IDCodex, pane, title, lastChange, idleThreshold)
 }

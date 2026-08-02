@@ -25,6 +25,39 @@ import (
 // Short timeout is deliberate — a live daemon's accept loop replies
 // immediately. A long timeout would hang startup behind a wedged
 // peer. 300ms is safe headroom over any local Unix-socket dial.
+//
+// waitForSocketHandoff polls for the socket to become free, up to
+// `timeout`, returning true once no daemon answers (safe to bind) or
+// false if one is still serving when the timeout elapses.
+//
+// This is what makes a restart fast. `launchctl kickstart -k` (and
+// `systemctl restart`) start the new daemon while the previous one is
+// still draining its graceful shutdown — for a brief window the old
+// listener still answers, so a single isAnotherDaemonAlive probe sees
+// "another daemon" and the new instance yields. Under KeepAlive=
+// SuccessfulExit:false that left the daemon DOWN until launchd's
+// ~10s respawn throttle fired again — the 10–20s restart gap. By
+// waiting the sub-second it takes the old listener to close, the new
+// instance binds on its first spawn and the gap disappears.
+//
+// A genuinely persistent peer (not a restart handoff) is still
+// detected: after `timeout` with the socket still answered, we return
+// false and the caller yields cleanly — no respawn loop, exactly as
+// before. On a normal cold start the first probe fails fast and we
+// return true immediately, adding no latency.
+func waitForSocketHandoff(sockPath string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		if !isAnotherDaemonAlive(sockPath, 200*time.Millisecond) {
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+}
+
 func isAnotherDaemonAlive(sockPath string, dialTimeout time.Duration) bool {
 	fi, err := os.Lstat(sockPath)
 	if err != nil {

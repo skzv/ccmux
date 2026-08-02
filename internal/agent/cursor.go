@@ -2,7 +2,6 @@ package agent
 
 import (
 	"path/filepath"
-	"strings"
 	"time"
 )
 
@@ -44,11 +43,10 @@ func (Cursor) InitialPrompt(name, description string) string {
 // Classify uses the same conservative quiet-pane heuristic as the other
 // non-Claude agents until we have real Cursor pane fixtures.
 func (Cursor) Classify(pane string, lastChange time.Time, idleThreshold time.Duration) State {
-	if strings.TrimSpace(pane) == "" {
-		return StateUnknown
-	}
-	if time.Since(lastChange) >= idleThreshold {
-		return StateNeedsInput
-	}
-	return StateActive
+	return engineClassify(IDCursor, pane, "", lastChange, idleThreshold)
+}
+
+// ClassifyWithTitle routes through the data-driven engine.
+func (Cursor) ClassifyWithTitle(pane, title string, lastChange time.Time, idleThreshold time.Duration) State {
+	return engineClassify(IDCursor, pane, title, lastChange, idleThreshold)
 }

@@ -94,7 +94,11 @@ func Has(ctx context.Context, name string) (bool, error) {
 
 // listFormat is the tmux -F format used by List. Exported as a constant
 // so tests can verify the parser stays aligned with the format string.
-const listFormat = "#{session_name}\t#{session_created}\t#{session_activity}\t#{session_path}\t#{session_attached}\t#{session_windows}"
+// session_path is LAST so a tab inside a directory path can't shift the
+// later columns. parseList uses SplitN with the field count, letting the
+// final field absorb any embedded tabs. The other fields are
+// tmux-generated numbers + the session name, which can't contain tabs.
+const listFormat = "#{session_name}\t#{session_created}\t#{session_activity}\t#{session_attached}\t#{session_windows}\t#{session_path}"
 
 // List returns every session on the default tmux server.
 // Returns an empty slice if the tmux server is not running.
@@ -124,16 +128,19 @@ func parseList(out []byte) []Session {
 		if line == "" {
 			continue
 		}
-		parts := strings.Split(line, "\t")
+		// SplitN with the exact field count so the final field
+		// (session_path) captures any tab a directory path might
+		// contain instead of spilling into a phantom 7th column.
+		parts := strings.SplitN(line, "\t", 6)
 		if len(parts) < 6 {
 			continue
 		}
 		s := Session{
 			Name:     parts[0],
 			Created:  unixSecs(parts[1]),
-			Path:     parts[3],
-			Attached: parts[4] != "0",
-			Windows:  atoi(parts[5]),
+			Path:     parts[5],
+			Attached: parts[3] != "0",
+			Windows:  atoi(parts[4]),
 		}
 		s.LastAttach = unixSecs(parts[2])
 		sessions = append(sessions, s)
@@ -190,6 +197,40 @@ func CapturePane(ctx context.Context, name string, lines int) (string, error) {
 		return "", fmt.Errorf("tmux capture-pane: %w", err)
 	}
 	return string(out), nil
+}
+
+// PaneTitle returns the current value of `#{pane_title}` for the named
+// session's active pane. This is the title the *inner* program (the
+// agent CLI) set via the OSC 2 escape sequence — distinct from the
+// outer tmux/terminal title controlled by `set-titles-string`.
+//
+// Agent CLIs broadcast their state here far more reliably than they
+// do in the pane body: braille spinner chars while working, strings
+// like "Action Required" when blocked. Reading it is a small `tmux
+// display-message -p` shell-out — orders of magnitude smaller than
+// capture-pane — and feeds straight into the classifier as a high-
+// priority signal alongside the body.
+//
+// Returns "" with no error on a missing session (consistent with
+// "title not available") so callers can pass the result straight
+// through without special-casing absent sessions.
+func PaneTitle(ctx context.Context, name string) (string, error) {
+	args := []string{"display-message", "-p", "-t", exactPane(name), "#{pane_title}"}
+	cmd := command(ctx, "tmux", args...)
+	out, err := cmd.Output()
+	if err != nil {
+		// `display-message` errors if the session is gone or the pane
+		// id is malformed. Treat both as "no title" — the classifier
+		// will fall back to body-only detection, identical behavior
+		// to before this signal existed.
+		return "", nil
+	}
+	// display-message terminates with a newline; trim once.
+	s := string(out)
+	if n := len(s); n > 0 && s[n-1] == '\n' {
+		s = s[:n-1]
+	}
+	return s, nil
 }
 
 // SendKeys sends a literal key sequence to the named session.

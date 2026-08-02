@@ -19,6 +19,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"os/user"
 	"strings"
@@ -28,11 +29,38 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/remoteattach"
 	"github.com/skzv/ccmux/internal/sshsetup"
 	"github.com/skzv/ccmux/internal/tui/components"
 	"github.com/skzv/ccmux/internal/tui/styles"
 )
+
+// pairTelegramCmd mints a one-time Telegram pairing code via the local
+// daemon and surfaces it as a toast. When the bridge is off, it points
+// the user at the CLI registration instead.
+func pairTelegramCmd(enabled bool) tea.Cmd {
+	return func() tea.Msg {
+		if !enabled {
+			return toastMsg{Text: "Telegram bridge is off — run `ccmux telegram register`", Kind: toastError, Until: time.Now().Add(6 * time.Second)}
+		}
+		cli, err := daemon.LocalClient()
+		if err != nil {
+			return toastMsg{Text: "telegram: " + err.Error(), Kind: toastError, Until: time.Now().Add(6 * time.Second)}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		resp, err := cli.TelegramPairCode(ctx)
+		if err != nil {
+			return toastMsg{Text: "telegram pair failed (is the daemon running with the bridge enabled?)", Kind: toastError, Until: time.Now().Add(8 * time.Second)}
+		}
+		text := "Send  /start " + resp.Code + "  to your bot"
+		if resp.BotUsername != "" {
+			text += " (@" + resp.BotUsername + ")"
+		}
+		return toastMsg{Text: text, Kind: toastInfo, Until: time.Now().Add(30 * time.Second)}
+	}
+}
 
 type networkModel struct {
 	st     styles.Styles
@@ -58,6 +86,12 @@ type networkModel struct {
 	// or `esc`. The overlay reads from Selected() so the App
 	// doesn't need to thread a separate "which host" argument.
 	detailOpen bool
+
+	// Telegram bridge status, pushed in by App from config. The status
+	// line surfaces whether the bridge is on and how many chats are
+	// paired; `T` mints a pairing code (shown as a toast).
+	tgEnabled bool
+	tgPaired  int
 }
 
 func newNetwork(st styles.Styles, km Keymap) networkModel {
@@ -84,6 +118,33 @@ func (m *networkModel) SetHosts(hs []hostStatus) {
 // chip. Empty disables the chip globally.
 func (m *networkModel) SetVersion(v string) { m.version = v }
 
+// SetTelegram records the Telegram bridge status (from config) for the
+// status line. paired is the count of enrolled chats.
+func (m *networkModel) SetTelegram(enabled bool, paired int) {
+	m.tgEnabled = enabled
+	m.tgPaired = paired
+}
+
+// telegramStatusLine renders the one-line Telegram bridge summary shown
+// under the Network header.
+func (m networkModel) telegramStatusLine() string {
+	st := m.st
+	if !m.tgEnabled {
+		return st.Muted.Render("Telegram: off — ") + st.Key.Render("ccmux telegram register") +
+			st.Muted.Render(" to control ccmux from your phone")
+	}
+	var chat string
+	switch {
+	case m.tgPaired == 0:
+		chat = "no chats paired"
+	case m.tgPaired == 1:
+		chat = "1 chat paired"
+	default:
+		chat = fmt.Sprintf("%d chats paired", m.tgPaired)
+	}
+	return st.Muted.Render("Telegram: on · "+chat+" · ") + st.Key.Render("T") + st.Muted.Render(" pair")
+}
+
 // StartRefresh flags the screen as "refresh in flight" so the chip
 // column renders the spinner until SetHosts settles new state, and
 // returns the tea.Cmd that starts the spinner ticking. Caller is
@@ -104,6 +165,7 @@ func (m networkModel) HelpBarProps(width int) components.HelpBarProps {
 			{Key: "enter", Label: "ssh", Priority: 8},
 			{Key: "s", Label: "setup ssh", Priority: 7},
 			{Key: "i", Label: "details", Priority: 5},
+			{Key: "T", Label: "telegram", Priority: 4},
 			{Key: "r", Label: "refresh", Priority: 4},
 			{Key: "1-7", Label: "screens", Priority: 2},
 		},
@@ -294,7 +356,7 @@ func (m networkModel) View(width, height int) string {
 		st.Muted.Render(fmt.Sprintf("(%d)", len(m.hosts)))
 
 	if len(m.hosts) == 0 {
-		parts := []string{header, "", st.Muted.Render("No devices discovered yet.")}
+		parts := []string{header, m.telegramStatusLine(), "", st.Muted.Render("No devices discovered yet.")}
 		// One-sentence hint about the tailnet dependency — kept on
 		// wide because the empty state is rare and the user benefits
 		// from the pointer. The legend / glossary block is gone:
@@ -309,7 +371,7 @@ func (m networkModel) View(width, height int) string {
 		return st.Pane.Width(width - 2).Height(height - 2).MaxWidth(width).Render(strings.Join(parts, "\n"))
 	}
 
-	rows := []string{header, ""}
+	rows := []string{header, m.telegramStatusLine(), ""}
 
 	// Source-grouped layout. Sections render in a pinned order;
 	// empty sections are skipped so the screen doesn't carry blank

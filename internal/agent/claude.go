@@ -59,3 +59,12 @@ func (Claude) InitialPrompt(name, description string) string {
 func (Claude) Classify(pane string, lastChange time.Time, idleThreshold time.Duration) State {
 	return State(claude.Classify(pane, lastChange, idleThreshold))
 }
+
+// ClassifyWithTitle routes claude through the data-driven engine,
+// which combines the OSC title (braille spinner = working) with the
+// existing claude.go body heuristics for the rounded-corner prompt
+// frame. Falls back to the legacy body-only classifier when no rule
+// matches, preserving the pre-engine behavior on every test fixture.
+func (Claude) ClassifyWithTitle(pane, title string, lastChange time.Time, idleThreshold time.Duration) State {
+	return engineClassify(IDClaude, pane, title, lastChange, idleThreshold)
+}

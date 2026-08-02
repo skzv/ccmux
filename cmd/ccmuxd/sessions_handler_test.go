@@ -75,6 +75,11 @@ func TestHandleSessionsItem_RoutingEdgeCases(t *testing.T) {
 		{"/v1/sessions//kill", http.StatusBadRequest},   // empty name
 		{"/v1/sessions/foo", http.StatusBadRequest},     // no subaction
 		{"/v1/sessions/foo/bogus", http.StatusNotFound}, // unknown subaction
+		// A `:` in the name is a tmux target qualifier (window/pane);
+		// the dispatcher must reject it before any subaction passes it
+		// to tmux -t, the same as create/rename already do.
+		{"/v1/sessions/foo:1/kill", http.StatusBadRequest},
+		{`/v1/sessions/foo\bar/send-keys`, http.StatusBadRequest},
 	}
 
 	for _, tc := range cases {

@@ -1,0 +1,19 @@
+id = "grok"
+
+[[rules]]
+id = "title_spinner_working"
+state = "working"
+priority = 1100
+region = "osc_title"
+regex = ['^[\x{2800}-\x{28FF}]']
+
+# Grok confirm-prompt body footer.
+[[rules]]
+id = "body_confirm_prompt"
+state = "blocked"
+priority = 900
+region = "bottom_non_empty_lines(3)"
+any = [
+  { contains = ["press enter to confirm"] },
+  { contains = ["[y/n]"] },
+]

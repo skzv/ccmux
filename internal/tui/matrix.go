@@ -137,10 +137,15 @@ func (m matrixModel) Update(msg tea.Msg) (matrixModel, tea.Cmd) {
 			return m, nil
 		}
 		// Any other key during the Neo phase skips to rain — keeps
-		// the joke from feeling stuck on a slow terminal.
+		// the joke from feeling stuck on a slow terminal. Do NOT start
+		// a fresh tick here: a tick is always in flight during Neo (the
+		// open path and every Neo frame re-arm one), and it picks up
+		// phaseRain on its next fire. Returning matrixTick() instead
+		// would add a second concurrent tick lineage — doubling the
+		// rain frame rate and CPU for the life of the overlay.
 		if m.phase == phaseNeo {
 			m.phase = phaseRain
-			return m, matrixTick()
+			return m, nil
 		}
 		return m, nil
 	case matrixTickMsg:

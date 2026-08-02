@@ -1,9 +1,10 @@
-// Package agent abstracts over Claude Code, Codex (OpenAI),
-// Antigravity CLI (Google), Cursor, and pi (Earendil Works) — the
-// interactive AI coding agents ccmux can supervise inside a tmux
-// session. Adding another agent later is a matter of dropping a new
-// `Agent` implementation alongside the existing ones and registering
-// it in All().
+// Package agent abstracts over the interactive AI coding agents ccmux
+// can supervise inside a tmux session — Claude Code, Codex, Antigravity,
+// Cursor, pi, Grok, and a growing second wave (OpenCode, Kimi, Droid,
+// Copilot, Qoder, Kilo, Hermes, Amp, Kiro). Adding another agent later
+// is a matter of dropping a new `Agent` implementation alongside the
+// existing ones and registering it in All() / ByID() / ParseID() (the
+// agent test suite enforces that those three stay in sync).
 //
 // Why this exists: ccmux's first cut was Claude-only. Every layer
 // (session command, state classifier, usage panel, config tab,
@@ -37,6 +38,18 @@ const (
 	IDCursor      ID = "cursor"
 	IDPi          ID = "pi"
 	IDGrok        ID = "grok"
+	// Second wave of terminal coding agents. Same strategy-interface
+	// shape as the originals; each reads AGENTS.md for project context
+	// (the cross-agent convention) and resolves by binary name on PATH.
+	IDOpenCode ID = "opencode"
+	IDKimi     ID = "kimi"
+	IDDroid    ID = "droid"
+	IDCopilot  ID = "copilot"
+	IDQoder    ID = "qoder"
+	IDKilo     ID = "kilo"
+	IDHermes   ID = "hermes"
+	IDAmp      ID = "amp"
+	IDKiro     ID = "kiro"
 )
 
 // State enumerates the high-level lifecycle of an agent session, mirrored
@@ -89,8 +102,44 @@ type Agent interface {
 	Classify(pane string, lastChange time.Time, idleThreshold time.Duration) State
 }
 
+// TitleAwareAgent is the optional interface an Agent can implement to
+// receive the pane's OSC-set title (#{pane_title}) as a second
+// detection signal. Agent CLIs set the title to a braille spinner
+// while working and to strings like "Action Required" when blocked —
+// far more reliable than scraping the pane body. Implementations
+// should treat title-based evidence as higher-priority than body
+// scraping when present, falling through to body-only logic when the
+// title is empty.
+//
+// Optional rather than required so adding the second signal doesn't
+// force every Agent's tests to be updated at once; the poll loop
+// uses the title-aware path automatically when the implementation
+// satisfies this interface, otherwise it calls the legacy Classify.
+type TitleAwareAgent interface {
+	Agent
+	ClassifyWithTitle(pane, title string, lastChange time.Time, idleThreshold time.Duration) State
+}
+
+// ClassifyState dispatches to ClassifyWithTitle when available,
+// falling back to the legacy Classify. Centralized so the poll loop
+// stays one line and a future migration to title-aware-everywhere
+// touches one place.
+func ClassifyState(a Agent, pane, title string, lastChange time.Time, idleThreshold time.Duration) State {
+	if ta, ok := a.(TitleAwareAgent); ok {
+		return ta.ClassifyWithTitle(pane, title, lastChange, idleThreshold)
+	}
+	return a.Classify(pane, lastChange, idleThreshold)
+}
+
 // Commands holds user-configured executable paths for agents. Empty
 // fields preserve the default binary-on-PATH behavior for that agent.
+//
+// ClaudeModel is the optional default model ccmux pins for new
+// Claude sessions it launches. Non-empty values are exported as
+// `ANTHROPIC_MODEL` in front of the shell-command chain so the value
+// survives the `claude --continue || claude || zsh` fallback (a
+// flag-based `--model X` would only apply to the first invocation).
+// Empty inherits Claude Code's own settings.json / built-in default.
 type Commands struct {
 	Claude      string
 	Codex       string
@@ -98,14 +147,53 @@ type Commands struct {
 	Cursor      string
 	Pi          string
 	Grok        string
+	ClaudeModel string
+
+	// OpenRouter routing. OpenRouterAgents is the set of agent IDs the
+	// user opted into routing through OpenRouter (config [openrouter]
+	// route_agents); OpenRouterBaseURL overrides the default API root.
+	// When an agent is in the set, LaunchCmd injects OPENAI_BASE_URL +
+	// OPENAI_API_KEY (the latter via the shell's OPENROUTER_API_KEY, so
+	// no literal secret lands in the command).
+	OpenRouterAgents  map[ID]bool
+	OpenRouterBaseURL string
 }
 
-// All returns every supported agent in canonical order
-// (claude → codex → antigravity → cursor). Order matters: pickers default to
-// the first installed entry, and that lets us bias new users toward
-// Claude without making it special-case in UI code.
+// RoutesThroughOpenRouter reports whether the given agent was opted
+// into OpenRouter routing.
+func (c Commands) RoutesThroughOpenRouter(id ID) bool {
+	return c.OpenRouterAgents[id]
+}
+
+// All returns every supported agent in canonical order. Order matters:
+// pickers default to the first installed entry, and that lets us bias
+// new users toward Claude without making it special-case in UI code.
+// The first six are the original wave; the rest are additional terminal
+// coding agents ccmux can supervise (still PATH-resolved, still
+// AGENTS.md-centric for project context).
 func All() []Agent {
-	return []Agent{Claude{}, Codex{}, Antigravity{}, Cursor{}, Pi{}, Grok{}}
+	return []Agent{
+		Claude{}, Codex{}, Antigravity{}, Cursor{}, Pi{}, Grok{},
+		OpenCode{}, Kimi{}, Droid{}, Copilot{}, Qoder{}, Kilo{}, Hermes{}, Amp{}, Kiro{},
+	}
+}
+
+// agentsMdInitialPrompt is the shared bootstrap message ccmux types
+// into a fresh session for every AGENTS.md-centric agent (Codex,
+// Cursor, pi, Grok, and the whole second wave). Claude has its own
+// /init-style prompt; the rest converge on this one because they all
+// read AGENTS.md for persistent project context, so the ritual is
+// identical. Kept in one place so a wording change lands everywhere at
+// once instead of being copy-pasted per agent file.
+func agentsMdInitialPrompt(name, description string) string {
+	if description == "" {
+		description = "(no description yet — please ask me what I'm building)"
+	}
+	return `I'm starting a new project called "` + name + `". ` + description + ` ` +
+		`Please: (1) Ask me 2-3 targeted questions about the concept, stack, and immediate goals. ` +
+		`(2) From my answers, write AGENTS.md at the project root so you have persistent context next time. ` +
+		`(3) The project already has docs/01_Specs/ (specs/PRDs), docs/02_Architecture/ (ADRs), and docs/03_Agent_Logs/ (daily scratchpad). Use them. ` +
+		`(4) Pick the right source-code layout for the language/stack we choose and create those directories.`
 }
 
 // ByID returns the Agent for a known ID. Falls back to Default() for
@@ -130,6 +218,24 @@ func ByID(id ID) Agent {
 		return Pi{}
 	case IDGrok:
 		return Grok{}
+	case IDOpenCode:
+		return OpenCode{}
+	case IDKimi:
+		return Kimi{}
+	case IDDroid:
+		return Droid{}
+	case IDCopilot:
+		return Copilot{}
+	case IDQoder:
+		return Qoder{}
+	case IDKilo:
+		return Kilo{}
+	case IDHermes:
+		return Hermes{}
+	case IDAmp:
+		return Amp{}
+	case IDKiro:
+		return Kiro{}
 	}
 	panic("agent: unknown ID " + string(id))
 }
@@ -154,6 +260,24 @@ func ParseID(s string) (ID, bool) {
 		return IDPi, true
 	case IDGrok:
 		return IDGrok, true
+	case IDOpenCode:
+		return IDOpenCode, true
+	case IDKimi:
+		return IDKimi, true
+	case IDDroid:
+		return IDDroid, true
+	case IDCopilot:
+		return IDCopilot, true
+	case IDQoder:
+		return IDQoder, true
+	case IDKilo:
+		return IDKilo, true
+	case IDHermes:
+		return IDHermes, true
+	case IDAmp:
+		return IDAmp, true
+	case IDKiro:
+		return IDKiro, true
 	}
 	return "", false
 }
@@ -162,6 +286,42 @@ func ParseID(s string) (ID, bool) {
 // Locked at claude for back-compat: every project that existed before
 // the sidecar is implicitly Claude.
 func Default() Agent { return Claude{} }
+
+// AttentionPriority ranks (state, seen) pairs by how badly the user
+// should notice them — higher is more urgent. The dashboard /
+// Sessions list / project rollups use this to bubble the most
+// important row to the top so a single glance tells the user where to
+// look next.
+//
+// Ranking, highest first:
+//
+//   - 4: NeedsInput. The agent is waiting on the user; always loudest.
+//   - 3: Done-unreviewed (Idle && !seen). Finished after the user
+//     stopped watching — they should look before issuing the next
+//     prompt. This is the key UX move: a finished-but-unseen agent
+//     outranks a still-working one, because the first is asking for
+//     the user's input (review) while the second is fine on its own.
+//   - 2: Working (Active). Agent is doing useful work; informational.
+//   - 1: Reviewed-idle (Idle && seen). Done and acknowledged.
+//   - 0: Unknown. Nothing to say.
+//
+// Error rolls up at the same level as NeedsInput so the dashboard
+// still flags a crashed session as urgent — the user almost
+// certainly wants to inspect or restart it.
+func AttentionPriority(state State, seen bool) int {
+	switch state {
+	case StateNeedsInput, StateError:
+		return 4
+	case StateIdle:
+		if !seen {
+			return 3
+		}
+		return 1
+	case StateActive:
+		return 2
+	}
+	return 0
+}
 
 // AllInstalled returns the subset of All() whose Binary() resolves on
 // $PATH. Used by:
@@ -266,18 +426,38 @@ func Candidates(a Agent) []string {
 // agent-specific shape from the built-in implementations.
 func LaunchCmd(id ID, continueFlag bool, commands Commands) string {
 	a := ByID(id)
-	return launchCmdWithBinary(a, configuredBinary(a.ID(), a.Binary(), commands), continueFlag)
+	return launchCmdWithBinary(a, configuredBinary(a.ID(), a.Binary(), commands), continueFlag, commands)
 }
 
 // ResumeArgs resolves the argv vector for resuming one specific
 // conversation with optional configured command substitution.
+//
+// For Claude specifically, when commands.ClaudeModel is non-empty
+// the argv is wrapped in `sh -c 'export ANTHROPIC_MODEL=…; claude
+// --resume …'` so the pinned model applies on resume too — the bare
+// argv form can't carry an env var. Other agents pass through
+// unchanged; their model selection lives in their own config files.
 func ResumeArgs(id ID, conversationID string, commands Commands) []string {
 	if conversationID == "" {
 		return nil
 	}
 	switch id {
 	case IDClaude:
-		return []string{configuredBinary(IDClaude, "claude", commands), "--resume", conversationID}
+		argv := []string{configuredBinary(IDClaude, "claude", commands), "--resume", conversationID}
+		if model := strings.TrimSpace(commands.ClaudeModel); model != "" {
+			// Build a shell-quoted equivalent of the argv, prefixed
+			// with the export. shellQuote handles the unlikely case
+			// of weird characters in the binary path or conversation
+			// ID (the latter is typically a UUID but UUIDs aren't
+			// always what callers send).
+			quoted := make([]string, len(argv))
+			for i, a := range argv {
+				quoted[i] = shellQuote(a)
+			}
+			line := "export ANTHROPIC_MODEL=" + shellQuote(model) + "; " + strings.Join(quoted, " ")
+			return []string{"sh", "-c", line}
+		}
+		return argv
 	case IDCodex:
 		return []string{configuredBinary(IDCodex, "codex", commands), "resume", conversationID}
 	case IDAntigravity:
@@ -333,17 +513,47 @@ func commandOverride(id ID, commands Commands) string {
 	return ""
 }
 
-func launchCmdWithBinary(a Agent, binary string, continueFlag bool) string {
+func launchCmdWithBinary(a Agent, binary string, continueFlag bool, commands Commands) string {
 	cmd := shellQuote(binary)
+	// Pin ANTHROPIC_MODEL for Claude only; other agents read their
+	// model selection from their own config files. Use `export` (not
+	// a per-command FOO=bar prefix) so the value persists across the
+	// `claude || claude || zsh` fallback chain — a per-command prefix
+	// would only apply to the first invocation, leaving the user's
+	// retry shell or the bare shell fallback running un-pinned.
+	prefix := ""
+	if a.ID() == IDClaude {
+		if model := strings.TrimSpace(commands.ClaudeModel); model != "" {
+			prefix = "export ANTHROPIC_MODEL=" + shellQuote(model) + "; "
+		}
+	}
+	// OpenRouter routing: for agents the user opted into (config
+	// [openrouter] route_agents), point the agent's OpenAI-compatible
+	// client at OpenRouter. Only makes sense for agents that honor
+	// OPENAI_BASE_URL / OPENAI_API_KEY (codex, opencode, kilo, …);
+	// the config is the opt-in, so ccmux doesn't guess.
+	//
+	// The key is read from the shell's OPENROUTER_API_KEY at launch
+	// rather than embedded literally — a literal key in the command
+	// string would surface in `ps` and in ccmux's own pane captures.
+	// The user sets OPENROUTER_API_KEY once in their shell profile.
+	if commands.RoutesThroughOpenRouter(a.ID()) {
+		base := strings.TrimSpace(commands.OpenRouterBaseURL)
+		if base == "" {
+			base = "https://openrouter.ai/api/v1"
+		}
+		prefix += "export OPENAI_BASE_URL=" + shellQuote(base) + "; " +
+			`export OPENAI_API_KEY="${OPENROUTER_API_KEY:-$OPENAI_API_KEY}"; `
+	}
 	if !continueFlag {
-		return cmd
+		return prefix + cmd
 	}
 	switch a.ID() {
 	case IDCursor:
-		return cmd + " resume || " + cmd + " || zsh || bash || sh"
+		return prefix + cmd + " resume || " + cmd + " || zsh || bash || sh"
 	}
 	// claude / codex / antigravity / pi all take `--continue`.
-	return cmd + " --continue || " + cmd + " || zsh || bash || sh"
+	return prefix + cmd + " --continue || " + cmd + " || zsh || bash || sh"
 }
 
 // ShellQuote quotes one shell token using POSIX single-quote rules.

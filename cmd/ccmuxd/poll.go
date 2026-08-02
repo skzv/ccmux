@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/skzv/ccmux/internal/agent"
@@ -79,6 +81,9 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 				state:       agent.StateUnknown,
 				agentID:     agentID,
 				projectPath: ts.Path,
+				// Newly-discovered session has produced no output the
+				// user could have missed yet — start at reviewed.
+				seen: true,
 			}
 			s.seen[ts.Name] = t
 			createdEvents = append(createdEvents, daemon.SessionEvent{
@@ -120,11 +125,22 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 			log.Printf("ccmuxd: capture-pane %s: %v", sn.ts.Name, err)
 			continue
 		}
+		// Read the OSC-set pane title alongside the body. tmux.PaneTitle
+		// swallows session-gone errors as "" so it never aborts a poll
+		// tick — body classification still runs the same.
+		title := ""
+		if s.paneTitle != nil {
+			title, _ = s.paneTitle(ctx, sn.ts.Name)
+		}
 		lastCh := sn.lastCh
 		if pane != sn.prevLast {
 			lastCh = time.Now()
 		}
-		newSt := agent.ByID(sn.agentID).Classify(pane, lastCh, idleNeeds)
+		// ClassifyState routes through ClassifyWithTitle when the agent
+		// implements TitleAwareAgent, otherwise falls back to the
+		// legacy body-only Classify. So agents that don't implement
+		// the new path keep their exact pre-Phase-1 behavior.
+		newSt := agent.ClassifyState(agent.ByID(sn.agentID), pane, title, lastCh, idleNeeds)
 		results = append(results, result{name: sn.ts.Name, pane: pane, newState: newSt})
 	}
 
@@ -136,7 +152,13 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 			name       string
 			prev, next agent.State
 		}
-		anyActive bool
+		// tgAlerts/tgResolved drive the Telegram bridge: alert when a
+		// session starts waiting unattended, resolve when it stops
+		// waiting (state moved on, or the user attached). Captured here
+		// under the lock so Phase 4 can dispatch without holding it.
+		tgAlerts   []tgAlert
+		tgResolved []string
+		anyActive  bool
 	)
 	s.mu.Lock()
 	for _, r := range results {
@@ -148,30 +170,49 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 			t.last = r.pane
 			t.lastChange = time.Now()
 		}
-		if r.newState == agent.StateNeedsInput && t.state != agent.StateNeedsInput {
-			bellNames = append(bellNames, r.name)
+		ts, _ := lookupTmuxSession(snaps, r.name)
+		decision := decideAttention(t.state, r.newState, t.seen, ts.Attached)
+		t.seen = decision.NewSeen
+		if decision.IncPromptCount {
 			t.promptCount++
+		}
+		if decision.RingBell {
+			bellNames = append(bellNames, r.name)
 		}
 		prev := t.state
 		t.state = r.newState
-		if r.newState != prev {
-			kind := "state_change"
-			if r.newState == agent.StateNeedsInput {
-				kind = "needs_input"
-			}
-			ts, _ := lookupTmuxSession(snaps, r.name)
+		if decision.EmitStateEvent {
 			stateEvents = append(stateEvents, daemon.SessionEvent{
 				At:   time.Now(),
-				Kind: kind,
+				Kind: decision.StateEventKind,
 				Session: daemon.SessionState{
 					Name: r.name, Host: "local", State: string(r.newState),
 					Path: ts.Path,
+					Seen: t.seen,
 				},
 			})
+		}
+		if decision.SendPush {
 			pushes = append(pushes, struct {
 				name       string
 				prev, next agent.State
 			}{r.name, prev, r.newState})
+		}
+		// Telegram bridge signals. Alert on an unattended needs_input
+		// transition (same condition as the bell); resolve when a
+		// previously-waiting session stops waiting or gets attended.
+		if s.tgBridge != nil {
+			alert, resolve := telegramSignals(prev, r.newState, ts.Attached)
+			if alert {
+				tgAlerts = append(tgAlerts, tgAlert{
+					name:     r.name,
+					pane:     r.pane,
+					changeID: fmt.Sprintf("%s#%d", r.name, t.promptCount),
+				})
+			}
+			if resolve {
+				tgResolved = append(tgResolved, r.name)
+			}
 		}
 		if r.newState == agent.StateActive {
 			anyActive = true
@@ -196,7 +237,114 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 	for _, p := range pushes {
 		s.maybePushForStateTransition(p.name, p.prev, p.next)
 	}
+	s.dispatchTelegram(ctx, tgAlerts, tgResolved)
 	s.sleeper.SetActive(anyActive)
+}
+
+// tgAlert is one queued Telegram needs-input notification.
+type tgAlert struct {
+	name     string
+	pane     string
+	changeID string
+}
+
+// telegramSignals decides, for one session's state transition, whether
+// to send a Telegram alert and/or resolve an outstanding one. Pure so
+// the poll-loop hook condition is unit-testable without a bridge:
+//
+//   - alert: the session just entered needs_input while unattended
+//     (the same "ring the bell" condition — an attended session doesn't
+//     need a phone alert).
+//   - resolve: a previously-waiting session is no longer waiting
+//     unattended (state moved on, or someone attached), so any
+//     outstanding alert should be marked handled.
+func telegramSignals(prev, next agent.State, attached bool) (alert, resolve bool) {
+	alert = next == agent.StateNeedsInput && prev != agent.StateNeedsInput && !attached
+	resolve = prev == agent.StateNeedsInput && (next != agent.StateNeedsInput || attached)
+	return alert, resolve
+}
+
+// dispatchTelegram fires queued Telegram alerts/resolutions off the poll
+// loop's critical path. Each call is its own goroutine so a slow Bot API
+// round trip can't stall polling; the bridge's alert store is
+// concurrency-safe. No-op when the bridge is disabled.
+func (s *server) dispatchTelegram(ctx context.Context, alerts []tgAlert, resolved []string) {
+	if s.tgBridge == nil {
+		return
+	}
+	cap := s.cfg.Telegram.EffectivePaneTailLines()
+	for _, a := range alerts {
+		tail := lastLines(a.pane, cap)
+		go s.tgBridge.Notify(ctx, "local", a.name, tail, a.changeID)
+	}
+	for _, name := range resolved {
+		go s.tgBridge.MarkSeen(ctx, "local", name)
+	}
+}
+
+// lastLines returns the final n lines of s (the pane tail shipped to
+// Telegram), trimming trailing blank lines first.
+func lastLines(s string, n int) string {
+	if n <= 0 {
+		return s
+	}
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	if len(lines) <= n {
+		return strings.Join(lines, "\n")
+	}
+	return strings.Join(lines[len(lines)-n:], "\n")
+}
+
+// attentionDecision is the per-session outcome of one poll tick: the
+// new seen bit, whether to ring the bell / send a push / emit the
+// state-change event, and the event kind to use. Pulled out as a
+// pure function so the lifecycle is unit-testable end-to-end without
+// standing up a tmux server (the surrounding pollOnce is integration-
+// tagged).
+type attentionDecision struct {
+	NewSeen        bool
+	RingBell       bool
+	SendPush       bool
+	IncPromptCount bool
+	EmitStateEvent bool
+	StateEventKind string // "state_change" or "needs_input"
+}
+
+// decideAttention computes the per-session decision for one poll
+// tick. Encodes the Phase 2 rules:
+//
+//   - Seen bit: an attached user is by definition watching → seen=true.
+//     A state change while NOT attached produces output the user
+//     should review → seen=false. Otherwise the previous seen value
+//     is preserved.
+//   - Bell/push suppression: the bell rings and a push is dispatched
+//     ONLY when the state transitions to needs_input AND the user
+//     isn't already attached. The dashboard event is still emitted
+//     so the TUI updates instantly.
+//   - PromptCount: incremented on every fresh needs_input transition
+//     (attached or not — it's a lifetime count, not a "did we notify"
+//     count). Drives the usage/quota panel.
+func decideAttention(prev, next agent.State, prevSeen, attached bool) attentionDecision {
+	d := attentionDecision{NewSeen: prevSeen}
+	if attached {
+		d.NewSeen = true
+	}
+	if next == agent.StateNeedsInput && prev != agent.StateNeedsInput {
+		d.IncPromptCount = true
+		d.RingBell = !attached
+	}
+	if next != prev {
+		d.EmitStateEvent = true
+		d.StateEventKind = "state_change"
+		if next == agent.StateNeedsInput {
+			d.StateEventKind = "needs_input"
+		}
+		if !attached {
+			d.NewSeen = false
+			d.SendPush = true
+		}
+	}
+	return d
 }
 
 func (s *server) projectAgent(projectPath string) agent.ID {

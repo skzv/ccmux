@@ -132,6 +132,6 @@ When `moshi-hook` is absent (Blink Shell or any other terminal), ccmuxd falls ba
 
 Moshi Pro includes an Apple Watch companion that surfaces the active session count and the most recent notification. ccmux doesn't drive the watch directly — it goes through `moshi-hook`. If you have Moshi Pro, no extra setup beyond pairing the watch in the iOS app.
 
-## Long-term: native ccmux iOS app
+## Mobile clients & the HTTP API
 
-Even with Moshi, the long-tail goal in the roadmap is a native ccmux iOS app that talks directly to `ccmuxd` over Tailscale — a touch-optimized session list, an attach view built for thumb input, an Apple Watch glance. Moshi covers 90% of that need today, so this is genuinely a v2+ conversation rather than a near-term priority.
+ccmux does not ship its own mobile app. The integration surface for mobile is the **ccmuxd HTTP API** — documented in [`05_HTTP_API.md`](05_HTTP_API.md) — which any client can build on to list, attach to, and act on sessions over Tailscale. The [Moshi](https://getmoshi.app/) app is the mobile path today and covers the common workflow (attach, notify, work). A richer touch-first client — swipe-to-attach session list, thumb-input conversation view, watch glance — would be a third-party effort on top of that same API, not a first-party ccmux build.

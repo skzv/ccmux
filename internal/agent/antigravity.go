@@ -2,7 +2,6 @@ package agent
 
 import (
 	"path/filepath"
-	"strings"
 	"time"
 )
 
@@ -65,11 +64,10 @@ func (Antigravity) InitialPrompt(name, description string) string {
 // TODO(multi-agent): capture real Antigravity pane fixtures into
 // internal/agent/testdata/antigravity_*.txt and tighten this. Phase 4.
 func (Antigravity) Classify(pane string, lastChange time.Time, idleThreshold time.Duration) State {
-	if strings.TrimSpace(pane) == "" {
-		return StateUnknown
-	}
-	if time.Since(lastChange) >= idleThreshold {
-		return StateNeedsInput
-	}
-	return StateActive
+	return engineClassify(IDAntigravity, pane, "", lastChange, idleThreshold)
+}
+
+// ClassifyWithTitle routes through the data-driven engine.
+func (Antigravity) ClassifyWithTitle(pane, title string, lastChange time.Time, idleThreshold time.Duration) State {
+	return engineClassify(IDAntigravity, pane, title, lastChange, idleThreshold)
 }

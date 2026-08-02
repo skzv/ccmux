@@ -27,7 +27,9 @@ import (
 	"time"
 
 	"github.com/skzv/ccmux/internal/agent"
+	"github.com/skzv/ccmux/internal/agentcatalog"
 	"github.com/skzv/ccmux/internal/apns"
+	"github.com/skzv/ccmux/internal/claudemodels"
 	"github.com/skzv/ccmux/internal/clipboard"
 	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/conversations"
@@ -35,10 +37,12 @@ import (
 	"github.com/skzv/ccmux/internal/fcm"
 	"github.com/skzv/ccmux/internal/moshi"
 	"github.com/skzv/ccmux/internal/notes"
+	"github.com/skzv/ccmux/internal/openrouterusage"
 	"github.com/skzv/ccmux/internal/project"
 	"github.com/skzv/ccmux/internal/scaffold"
 	"github.com/skzv/ccmux/internal/sleeplock"
 	"github.com/skzv/ccmux/internal/tailnet"
+	"github.com/skzv/ccmux/internal/telegram"
 	"github.com/skzv/ccmux/internal/tmux"
 	"github.com/skzv/ccmux/internal/tmuxchrome"
 	"github.com/skzv/ccmux/internal/usage"
@@ -109,6 +113,14 @@ func run() error {
 
 	// Poll loop.
 	go srv.pollLoop(ctx)
+	// Background model-catalog refresh. Separate goroutine so it
+	// can't stall the high-frequency poll loop on a slow API call.
+	go srv.modelRefreshLoop(ctx)
+	// Optional Telegram bridge (+ its web viewer). Both self-disable when
+	// unconfigured. The viewer starts first so its URL can be handed to
+	// the bridge.
+	srv.viewerBase = srv.startWebViewer(ctx)
+	srv.startTelegram(ctx)
 
 	// Unix socket listener.
 	sockPath, err := daemon.SocketPath()
@@ -132,7 +144,13 @@ func run() error {
 	// with a short timeout. If dial succeeds, another ccmuxd is alive
 	// and we refuse to start. If dial fails (no socket file, or stale
 	// socket from a crash), it's safe to clean up and bind.
-	if isAnotherDaemonAlive(sockPath, 300*time.Millisecond) {
+	// Wait briefly for any existing daemon to release the socket. During
+	// a restart the previous instance is mid-graceful-shutdown when we
+	// start, so a single probe would spuriously yield and leave the
+	// daemon down until launchd's respawn throttle. A genuinely
+	// persistent peer is still detected (waitForSocketHandoff returns
+	// false after the window) and we exit cleanly.
+	if !waitForSocketHandoff(sockPath, 3*time.Second) {
 		// Wrap the sentinel so main() can errors.Is() to it and exit 0.
 		// See errPeerAlreadyServing for why this isn't a regular error.
 		return fmt.Errorf(
@@ -166,7 +184,7 @@ func run() error {
 	// excludes localOnlyRoutes — a tailnet peer must not be able to mint
 	// pair tokens for itself.
 	if cfg.Daemon.ListenTailnet {
-		if addr, err := tailscaleAddr(cfg.Daemon.TailnetPort); err == nil {
+		if addr, err := tailscaleAddr(ctx, cfg.Daemon.TailnetPort); err == nil {
 			tailnetMux := http.NewServeMux()
 			srv.routes(tailnetMux)
 			tailnetSrv := newHTTPServer(tailnetMux)
@@ -212,6 +230,13 @@ type tracked struct {
 	// projectPath is the working directory of the tmux session, used
 	// to resolve the agent sidecar.
 	projectPath string
+	// seen is the reviewed/unreviewed flag exposed via daemon.SessionState.
+	// Set false when the agent transitions to a state the user should
+	// look at (needs_input, or active→idle while not attached); set
+	// true once a tmux client is attached. Default true so sessions
+	// the daemon just discovered don't immediately scream for
+	// attention until they actually do something.
+	seen bool
 }
 
 type server struct {
@@ -249,13 +274,35 @@ type server struct {
 	moshiCheckAt time.Time
 	moshiMu      sync.Mutex
 
+	// models is the Claude model catalog service. Reads from disk
+	// cache; refreshes from the Anthropic Models API in the background
+	// every 24h when an API key is set. Always non-nil — falls back
+	// to a curated in-binary list when no key is present so the
+	// picker still has something useful to show. See internal/claudemodels.
+	models *claudemodels.Service
+
 	// Poll-loop seams. Defaulted by newServer to the real tmux-backed
 	// implementations; tests override them to drive pollOnce
 	// deterministically without a real pane. capture reads a session's
 	// pane content; bell signals a needs-input transition.
-	capture   func(ctx context.Context, name string, lines int) (string, error)
+	capture func(ctx context.Context, name string, lines int) (string, error)
+	// paneTitle reads the agent CLI's OSC-set title (#{pane_title}) —
+	// a second, higher-quality detection signal alongside capture-pane.
+	// Same shape as capture so tests can inject deterministic titles.
+	paneTitle func(ctx context.Context, name string) (string, error)
 	bell      func(ctx context.Context, name string) error
 	readAgent func(projectPath string) agent.ID
+
+	// tgBridge is the optional Telegram bridge; nil when disabled. The
+	// poll loop checks it before dispatching alerts. tgAllow is the live
+	// chat allowlist the bridge's auth closures read, kept in sync with
+	// config on pairing.
+	tgBridge *telegram.Bridge
+	tgAllow  tgAllowlist
+	// viewerBase is the tailnet URL of the optional markdown web viewer
+	// ("" when disabled), handed to the Telegram bridge for its "open in
+	// browser" button.
+	viewerBase string
 }
 
 // newServer builds a server with its default (real, tmux-backed)
@@ -307,11 +354,23 @@ func newServer(cfg config.Config) *server {
 		fcmSender, _ = fcm.New(fcm.Config{})
 	}
 
+	// Model catalog. CachePath errors only when $HOME is unresolvable —
+	// log and degrade to an in-memory-only Service (writes silently
+	// fail, but the in-binary fallback list is still served). Picking
+	// up ANTHROPIC_API_KEY at startup is the simplest sane model;
+	// users who set it later restart the daemon.
+	modelCache, err := claudemodels.CachePath()
+	if err != nil {
+		log.Printf("ccmuxd: model cache path unresolved (%v) — serving fallback list only", err)
+	}
+	models := claudemodels.New(modelCache, os.Getenv("ANTHROPIC_API_KEY"))
+
 	return &server{
 		cfg:        cfg,
 		seen:       map[string]*tracked{},
 		startedAt:  time.Now(),
 		capture:    tmux.CapturePane,
+		paneTitle:  tmux.PaneTitle,
 		bell:       notificationBell(cfg.Notifications),
 		readAgent:  project.ReadAgent,
 		tokens:     daemon.NewTokenStore(),
@@ -322,7 +381,21 @@ func newServer(cfg config.Config) *server {
 		fcmSender:  fcmSender,
 		apnsSlots:  make(chan struct{}, 16),
 		fcmSlots:   make(chan struct{}, 16),
+		models:     models,
 	}
+}
+
+// freshCommands re-reads ~/.config/ccmux/config.toml so a launch picks
+// up any setting the user changed since the daemon started — most
+// notably `[claude] default_model`. The whole config read is cheap
+// (one tiny TOML file) and only happens at session-create time, not
+// in the poll loop. Falls back to the startup-cached cfg on read
+// errors so a temporarily-corrupt config file can't break new-session.
+func (s *server) freshCommands() agent.Commands {
+	if cfg, err := config.Load(); err == nil {
+		return cfg.AgentCommands()
+	}
+	return s.cfg.AgentCommands()
 }
 
 // routes registers every tailnet-safe endpoint. Anything that an
@@ -348,6 +421,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/v1/usage", s.handleUsage)
 	mux.HandleFunc("/v1/notes/search", s.handleNotesSearch)
 	mux.HandleFunc("/v1/notes", s.handleNotes)
+	mux.HandleFunc("/v1/models", s.handleModels)
 }
 
 // localOnlyRoutes registers endpoints that must never be reachable from
@@ -358,6 +432,9 @@ func (s *server) routes(mux *http.ServeMux) {
 // structurally unable to register these.
 func (s *server) localOnlyRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/v1/pair-token", s.handlePairToken)
+	// Telegram pairing code is a secret too — only the local user (via
+	// `ccmux telegram pair`) may mint one, never a tailnet peer.
+	mux.HandleFunc("/v1/telegram/pair-code", s.handleTelegramPairCode)
 }
 
 func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -397,7 +474,11 @@ func (s *server) listSessions(w http.ResponseWriter, r *http.Request) {
 	for _, ts := range tss {
 		t, ok := s.seen[ts.Name]
 		if !ok {
-			t = &tracked{created: ts.Created, state: agent.StateUnknown}
+			// A session the poll loop hasn't tickled yet: treat as
+			// seen=true (nothing for the user to review yet) rather
+			// than implicitly unseen, otherwise restarting ccmuxd
+			// would resurface every old session as "needs attention".
+			t = &tracked{created: ts.Created, state: agent.StateUnknown, seen: true}
 		}
 		// For sessions we've seen via the poll loop this is already
 		// populated. For pre-existing sessions (e.g. the daemon just
@@ -413,6 +494,7 @@ func (s *server) listSessions(w http.ResponseWriter, r *http.Request) {
 			Created: ts.Created, LastChange: t.lastChange,
 			State: string(t.state), PromptCount: t.promptCount,
 			Agent: string(agentID),
+			Seen:  t.seen,
 		})
 	}
 	writeJSON(w, out)
@@ -445,7 +527,7 @@ func (s *server) createSession(w http.ResponseWriter, r *http.Request) {
 	// keep names safe for `tmux new-session -s`.
 	var session string
 	if name := strings.TrimSpace(req.Name); name != "" {
-		if strings.ContainsAny(name, "/\\:") {
+		if badSessionName(name) {
 			http.Error(w, "name must not contain /, \\, or :", http.StatusBadRequest)
 			return
 		}
@@ -478,7 +560,7 @@ func (s *server) createSession(w http.ResponseWriter, r *http.Request) {
 		// "claude --continue || claude || zsh" regardless, which
 		// meant Codex / Antigravity projects launched claude from
 		// remote starts.
-		launch := projectLaunchCmd(path, req.Continue, s.cfg.AgentCommands())
+		launch := projectLaunchCmd(path, req.Continue, s.freshCommands())
 		if err := tmux.New(ctx, session, path, launch); err != nil {
 			http.Error(w, "tmux new-session: "+err.Error(), http.StatusInternalServerError)
 			return
@@ -533,7 +615,7 @@ func (s *server) createBareSession(w http.ResponseWriter, r *http.Request) {
 	}
 	// Reject obviously-bad names — the same rule createProject uses,
 	// for the same reason (we'll pass it to tmux as -s).
-	if strings.ContainsAny(name, "/\\:") {
+	if badSessionName(name) {
 		http.Error(w, "name must not contain /, \\, or :", http.StatusBadRequest)
 		return
 	}
@@ -550,7 +632,7 @@ func (s *server) createBareSession(w http.ResponseWriter, r *http.Request) {
 		// Order: explicit request agent → daemon's
 		// sessions.default_agent → $SHELL. Bare sessions don't carry
 		// --continue because they're not tied to a project transcript.
-		launch := bareSessionLaunchCmd(req.Agent, s.cfg.Agents.Default, s.cfg.AgentCommands())
+		launch := bareSessionLaunchCmd(req.Agent, s.cfg.Agents.Default, s.freshCommands())
 		if err := tmux.New(ctx, name, path, launch); err != nil {
 			http.Error(w, "tmux new-session: "+err.Error(), http.StatusInternalServerError)
 			return
@@ -588,6 +670,15 @@ func (s *server) applyChrome(ctx context.Context, session, projectLabel string) 
 	_ = tmuxchrome.Apply(ctx, session, projectLabel, moshiReachable, false)
 }
 
+// badSessionName reports whether a session name contains a character
+// that tmux would interpret as a target qualifier — `:` selects a
+// window/pane, `/` and `\` are path separators. Centralizes the rule
+// the create/rename/bare handlers share so every name that reaches a
+// tmux `-t` argument is validated the same way.
+func badSessionName(name string) bool {
+	return strings.ContainsAny(name, "/\\:")
+}
+
 func (s *server) handleSessionsItem(w http.ResponseWriter, r *http.Request) {
 	// /v1/sessions/<name>[/<subaction>]
 	tail := strings.TrimPrefix(r.URL.Path, "/v1/sessions/")
@@ -595,6 +686,16 @@ func (s *server) handleSessionsItem(w http.ResponseWriter, r *http.Request) {
 	name := parts[0]
 	if name == "" {
 		http.Error(w, "session name required", http.StatusBadRequest)
+		return
+	}
+	// Validate the path-derived name BEFORE routing to any subaction.
+	// kill/send-keys/preview/attach all pass this straight to tmux as a
+	// `-t` target; without this guard a `:` in the URL name could
+	// mis-target an unrelated window/pane of another session (the
+	// create/rename handlers already reject these, but the item
+	// handlers didn't).
+	if badSessionName(name) {
+		http.Error(w, "name must not contain /, \\, or :", http.StatusBadRequest)
 		return
 	}
 	if len(parts) == 1 {
@@ -610,6 +711,8 @@ func (s *server) handleSessionsItem(w http.ResponseWriter, r *http.Request) {
 		s.handleSendKeys(w, r, name)
 	case "preview":
 		s.handlePreview(w, r, name)
+	case "agent-commands":
+		s.handleAgentCommands(w, r, name)
 	case "attach":
 		s.handleAttach(w, r, name)
 	default:
@@ -648,7 +751,7 @@ func (s *server) handleRename(w http.ResponseWriter, r *http.Request, name strin
 	// Same rule createSession/createBareSession enforce: tmux interprets
 	// `name:window.pane` as a target spec, so a rename to "victim:0"
 	// would let later send-keys land in an unrelated tmux session.
-	if strings.ContainsAny(req.Name, "/\\:") {
+	if badSessionName(req.Name) {
 		http.Error(w, "name must not contain /, \\, or :", http.StatusBadRequest)
 		return
 	}
@@ -850,6 +953,54 @@ func (s *server) handlePreview(w http.ResponseWriter, r *http.Request, name stri
 	writeJSON(w, daemon.PreviewResponse{Lines: lines, Content: out})
 }
 
+// handleAgentCommands serves GET /v1/sessions/{name}/agent-commands: the
+// command catalog for the session's agent, resolved on THIS host so a
+// Claude session surfaces this machine's own ~/.claude commands/skills.
+// Powers the Telegram bridge's agent-command autocomplete.
+func (s *server) handleAgentCommands(w http.ResponseWriter, r *http.Request, name string) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+
+	agentID := s.sessionAgent(ctx, name)
+	resp := daemon.AgentCommandsResponse{Agent: string(agentID)}
+	for _, c := range agentcatalog.ResolveByID(agentID) {
+		resp.Commands = append(resp.Commands, daemon.AgentCommand{
+			Name:        c.Name,
+			Description: c.Description,
+			TakesArg:    c.TakesArg,
+			Source:      c.Source,
+		})
+	}
+	writeJSON(w, resp)
+}
+
+// sessionAgent resolves which agent a session is running: the poll
+// loop's cached value when present, else the project sidecar read off
+// the session's working directory. Empty/unknown falls back to the
+// default agent (Claude), matching listSessions.
+func (s *server) sessionAgent(ctx context.Context, name string) agent.ID {
+	s.mu.Lock()
+	var cached agent.ID
+	if t, ok := s.seen[name]; ok {
+		cached = t.agentID
+	}
+	s.mu.Unlock()
+	if cached != "" {
+		return cached
+	}
+	tss, _ := tmux.List(ctx)
+	for _, ts := range tss {
+		if ts.Name == name {
+			return s.projectAgent(ts.Path)
+		}
+	}
+	return agent.Default().ID()
+}
+
 // handlePeers returns every tailnet peer plus an indication of which
 // ones already run ccmuxd. Used by clients (iOS Settings → Add host)
 // to populate a "your other Macs on the tailnet" picker without each
@@ -918,21 +1069,65 @@ func (s *server) handleUsage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// Each walker is cheap and IO-bound; run them concurrently so a
-	// slow disk doesn't serialize three reads of ~the same fs subtree.
+	// slow disk doesn't serialize the reads. OpenRouter is a network
+	// call, so it especially benefits from running alongside the rest.
 	var (
 		wg                 sync.WaitGroup
 		claude, codex, ant usage.AgentSummary
+		others             []usage.NamedSummary
+		orSpend            daemon.OpenRouterSpend
 	)
-	wg.Add(3)
+	wg.Add(5)
 	go func() { defer wg.Done(); claude, _ = usage.WalkClaude(window) }()
 	go func() { defer wg.Done(); codex, _ = usage.WalkCodex(window) }()
 	go func() { defer wg.Done(); ant, _ = usage.WalkAntigravity(window) }()
+	go func() { defer wg.Done(); others = usage.WalkOthers(window) }()
+	go func() { defer wg.Done(); orSpend = s.openRouterSpend(r.Context()) }()
 	wg.Wait()
 	writeJSON(w, daemon.AgentUsage{
 		Claude:      toUsageSummary(claude),
 		Codex:       toUsageSummary(codex),
 		Antigravity: toUsageSummary(ant),
+		OpenRouter:  orSpend,
+		Others:      toOtherUsage(others),
 	})
+}
+
+// toOtherUsage maps the generic per-agent summaries to the wire shape.
+func toOtherUsage(in []usage.NamedSummary) []daemon.OtherUsage {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]daemon.OtherUsage, 0, len(in))
+	for _, n := range in {
+		out = append(out, daemon.OtherUsage{Agent: n.Agent, Usage: toUsageSummary(n.Summary)})
+	}
+	return out
+}
+
+// openRouterSpend fetches the configured OpenRouter account's spend.
+// Returns a disabled (zero) value with no network call when no key is
+// configured — the common case. A configured-but-failing fetch returns
+// Enabled=true with ErrMsg set so the dashboard shows why the figure is
+// missing rather than a silent blank.
+func (s *server) openRouterSpend(ctx context.Context) daemon.OpenRouterSpend {
+	cfg := s.cfg.OpenRouter
+	if !cfg.Enabled || strings.TrimSpace(cfg.APIKey) == "" {
+		return daemon.OpenRouterSpend{Enabled: false}
+	}
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	sp, err := openrouterusage.New(cfg.APIKey, cfg.BaseURL).Spend(ctx)
+	if err != nil {
+		return daemon.OpenRouterSpend{Enabled: true, ErrMsg: err.Error()}
+	}
+	return daemon.OpenRouterSpend{
+		Enabled:    true,
+		Usage:      sp.Usage,
+		Limit:      sp.Limit,
+		Remaining:  sp.Remaining,
+		IsFreeTier: sp.IsFreeTier,
+	}
 }
 
 func toUsageSummary(s usage.AgentSummary) daemon.UsageSummary {
@@ -1108,7 +1303,7 @@ func (s *server) createProject(w http.ResponseWriter, r *http.Request) {
 		Name:     name,
 		Dir:      dir,
 		Agent:    chosenAgent,
-		Commands: s.cfg.AgentCommands(),
+		Commands: s.freshCommands(),
 	})
 	if err != nil {
 		http.Error(w, "start: "+err.Error(), http.StatusInternalServerError)
@@ -1129,8 +1324,14 @@ func (s *server) createProject(w http.ResponseWriter, r *http.Request) {
 }
 
 // tailscaleAddr returns "<tailscale_ip>:<port>" if Tailscale is running, else error.
-func tailscaleAddr(port int) (string, error) {
-	out, err := exec.Command("tailscale", "ip", "-4").Output()
+func tailscaleAddr(ctx context.Context, port int) (string, error) {
+	// Bound the shell-out: CLAUDE.md requires every exec.Command to take
+	// a context, and this is called from a request handler (handlePairToken)
+	// with no other timeout. A 5s ceiling keeps a wedged `tailscale` CLI
+	// from blocking the pairing request indefinitely.
+	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(cctx, "tailscale", "ip", "-4").Output()
 	if err != nil {
 		return "", err
 	}

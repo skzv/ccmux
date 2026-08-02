@@ -71,7 +71,7 @@ func TestHTTPParity_LoopbackMatchesUnixSocket(t *testing.T) {
 		},
 	}
 
-	for _, path := range []string{"/v1/health", "/v1/sessions", "/v1/projects"} {
+	for _, path := range []string{"/v1/health", "/v1/sessions", "/v1/projects", "/v1/models"} {
 		httpBody := getBody(t, httpSrv.Client(), httpSrv.URL+path)
 		unixBody := getBody(t, unixClient, "http://unix"+path)
 		if string(httpBody) != string(unixBody) {

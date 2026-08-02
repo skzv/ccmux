@@ -176,7 +176,7 @@ Installs [moshi-hook](https://getmoshi.app/) on the Mac, runs **Easy Pair** (a Q
 
 Plain BEL fallback works in any iOS terminal client (Blink Shell, Termius) — you lose the categories, that's it. For headless / scripted setups: `ccmux moshi-setup --token <token>` bypasses the QR flow.
 
-**Native apps:** dedicated iOS and Android apps that talk to `ccmuxd` directly over your tailnet are in active development.
+> Building your own mobile client? `ccmuxd` exposes an HTTP API (list / attach over a WebSocket PTY / send-keys / events / notes / usage, plus a pairing + push flow) — see the [HTTP API reference](docs/02_Architecture/05_HTTP_API.md).
 
 ---
 
@@ -278,6 +278,25 @@ bell = true                          # ring local terminal BEL on needs_input
 - Daemon state-detection (active / idle / needs_input) dispatches per agent for correct heuristics
 - `ccmux doctor` enumerates installed agents; setup wizard points at the right install command for each
 - Moshi push integration is currently Claude-only — Codex / Antigravity sessions get the audible terminal bell (still triggers a generic iOS push). Phase-2 work tracked in [`docs/01_Specs/02_Multi_Agent.md`](docs/01_Specs/02_Multi_Agent.md)
+
+### 🔌 MCP server
+
+- `ccmux-mcp` ships in the same brew install — a Model Context Protocol server agents can plug into to see and act on every session
+- Wire it up in `~/.claude/settings.json` (or any MCP-aware client): `{"mcpServers": {"ccmux": {"command": "ccmux-mcp"}}}`
+- Read-only by default: `list_sessions`, `read_pane`, `list_projects`, `list_conversations`, `get_usage`, `list_machines`, notes ones, daemon health
+- `--allow-mutate` exposes `spawn_session`, `send_keys`, `kill_session` — opt-in, hidden from `tools/list` until the flag is on
+- `CCMUX_HOST=mini.tail-xxxxx.ts.net:7474 ccmux-mcp` points it at a tailnet peer's daemon — an agent on the laptop can drive sessions on the Mac mini
+- Full spec: [`docs/01_Specs/04_MCP_Server.md`](docs/01_Specs/04_MCP_Server.md)
+
+### ✈️ Telegram control
+
+- An agent gets blocked, your phone buzzes, you tap **Approve** — or just reply `y`. No attach, no Mosh, no leaving the chat. From the watch too: reply `approve` / `deny` and it lands.
+- The bot reaches *out* to Telegram (long polling) — no open port, no public URL, works behind NAT. Nothing inbound.
+- **Drive the agent itself, not just the session.** Send its own slash-commands — `/model`, `/compact`, `/clear` — and free-form prompts, with autocomplete of the commands that agent actually has: Claude's built-ins *plus your own `~/.claude` commands and skills*, sourced from whichever machine runs the session.
+- **One bot, the whole tailnet.** Hosted on your always-on machine, it lists / previews / spawns / kills sessions on every peer, addressed as `host:session` — same local+remote model as the dashboard.
+- Read your project notes right in Telegram (it renders `.md` inline); flip on a tailnet-only web viewer for whole-vault browsing.
+- Setup: `ccmux telegram register --token <@BotFather token>`, then `ccmux telegram pair` and send the code to your bot. Only chats you pair can drive it. Read commands are always on; spawn/kill/send need the allowlist; raw shell (`/run`) is opt-in and **off by default**.
+- Guide: [`docs/04_Guides/Telegram_Setup.md`](docs/04_Guides/Telegram_Setup.md)
 
 ### 🤖 Claude Code config management
 
@@ -446,6 +465,7 @@ To also remove `moshi-hook`: `brew services stop moshi-hook && brew uninstall mo
 ```
 
 Full design: [`docs/02_Architecture/00_System_Design.md`](docs/02_Architecture/00_System_Design.md).
+HTTP API (for integrators / mobile clients): [`docs/02_Architecture/05_HTTP_API.md`](docs/02_Architecture/05_HTTP_API.md).
 TUI design system: [`docs/02_Architecture/04_TUI_Design_System.md`](docs/02_Architecture/04_TUI_Design_System.md).
 
 ---
@@ -457,7 +477,7 @@ Phasing in [`ROADMAP.md`](ROADMAP.md). Headline:
 - **v0.1** — TUI, sessions, notes, setup wizard, daemon, local + server + mixed modes, terminal-bell notifications, Homebrew tap
 - **v0.2** — Snapshots, themes, command palette, tailnet web viewer for notes, cost tracking from Claude transcripts
 - **v0.3** — Multi-select session ops, activity heatmap, daily-journal rollups, mDNS host discovery
-- **Long term** — Native SwiftUI iOS app talking directly to ccmuxd over Tailscale
+- **Long term** — richer mobile clients on top of the [ccmuxd HTTP API](docs/02_Architecture/05_HTTP_API.md) — the surface the [Moshi](https://getmoshi.app/) app and other clients build on
 
 Infrastructure follow-ups tracked in [`docs/01_Specs/03_Testing_And_CI.md`](docs/01_Specs/03_Testing_And_CI.md):
 

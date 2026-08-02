@@ -404,8 +404,14 @@ func TestSessionsCursorPreservesName(t *testing.T) {
 	m.SetSessions(initial)
 	m.cursor = 0 // user is on c-ccmux
 
-	// Simulate a refresh where the list comes back in reversed order
-	// (e.g. c-ccmux-website was most recently attached).
+	// Simulate a refresh where the daemon hands the list back in a
+	// different order than before (e.g. c-ccmux-website was most
+	// recently attached). The contract is "cursor follows the session
+	// the user is on, by name." With the Phase-2 attention-priority
+	// sort SetSessions re-orders rows by (priority, name) — both rows
+	// here share the unknown-state priority, so the deterministic
+	// secondary key resolves to c-ccmux first; the assertion focuses
+	// on the name (the UX promise) rather than on the index.
 	refreshed := []daemon.SessionState{
 		{Name: "c-ccmux-website", Host: "local"},
 		{Name: "c-ccmux", Host: "local"},
@@ -419,9 +425,6 @@ func TestSessionsCursorPreservesName(t *testing.T) {
 	if sel.Name != "c-ccmux" {
 		t.Errorf("cursor drifted: got %q, want %q — session order changed but cursor should have followed by name",
 			sel.Name, "c-ccmux")
-	}
-	if m.cursor != 1 {
-		t.Errorf("cursor index = %d, want 1 (c-ccmux moved to index 1 in refreshed list)", m.cursor)
 	}
 }
 

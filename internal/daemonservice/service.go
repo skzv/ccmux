@@ -105,6 +105,26 @@ func Restart() (Status, error) {
 	return Probe(), fmt.Errorf("restart not supported on %s", runtime.GOOS)
 }
 
+// isRunningHook / restartHook are seams so RestartIfRunning can be
+// tested without shelling out to pgrep/launchctl/systemctl.
+var (
+	isRunningHook = func() bool { return Probe().Running }
+	restartHook   = func() (Status, error) { return Restart() }
+)
+
+// RestartIfRunning bounces the daemon only when one is already running,
+// so a live config change — a freshly registered Telegram token, say —
+// takes effect without the user remembering to restart. It's a no-op
+// ((false, nil)) when nothing is up: the next `daemon start` reads the
+// new config anyway. Returns whether a restart was issued.
+func RestartIfRunning() (restarted bool, err error) {
+	if !isRunningHook() {
+		return false, nil
+	}
+	_, err = restartHook()
+	return true, err
+}
+
 // ServicePathOrEmpty exposes the resolved path (plist or unit) so the
 // main `ccmux uninstall` flow can preview/remove it without
 // duplicating path resolution. Returns "" on unsupported platforms.

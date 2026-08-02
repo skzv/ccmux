@@ -11,8 +11,11 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
+
+	"github.com/skzv/ccmux/internal/claudemodels"
 )
 
 // Tunables for the cached transports built by LocalClient / RemoteClient.
@@ -31,7 +34,27 @@ const (
 	idleConnTimeout     = 30 * time.Second
 	maxIdleConns        = 4
 	maxIdleConnsPerHost = 2
-	requestTimeout      = 5 * time.Second
+	// backstopTimeout is a defensive ceiling applied ONLY to requests
+	// whose context carries no deadline of its own. The per-call
+	// context is the real budget — every caller passes a WithTimeout
+	// context sized to the operation (a few seconds for a poll, up to
+	// 90s for a remote project create). We deliberately do NOT set
+	// http.Client.Timeout, because that is a whole-request ceiling the
+	// caller's longer context cannot extend: it silently truncated
+	// slow remote creates at 5s, surfacing a client-side error while
+	// the daemon ran to completion and left an orphan session. The
+	// backstop only catches a future caller that forgets a deadline,
+	// so it's generous.
+	backstopTimeout = 120 * time.Second
+	// maxResponseBytes caps how much JSON the client will read from a
+	// daemon response. The daemon already caps INBOUND bodies at 64KiB
+	// so a peer can't OOM it; this is the symmetric protection on the
+	// client side, since RemoteClient decodes responses from a separate
+	// trust boundary (a ccmuxd on another tailnet host that could be
+	// compromised, buggy, or version-mismatched). Generous vs. the
+	// daemon's inbound cap because legitimate list responses (many
+	// sessions / conversations) are bigger than any single request.
+	maxResponseBytes = 16 << 20 // 16 MiB
 )
 
 // Client speaks the ccmuxd JSON protocol. One Client = one ccmuxd, whether
@@ -100,7 +123,9 @@ func LocalClient() (*Client, error) {
 				MaxIdleConns:        maxIdleConns,
 				MaxIdleConnsPerHost: maxIdleConnsPerHost,
 			},
-			Timeout: requestTimeout,
+			// No whole-request Timeout — per-call context is the budget
+			// (see backstopTimeout). A global Timeout here truncated
+			// long-running creates at 5s and orphaned remote sessions.
 		}
 		localClientVal = &Client{hc: hc, base: "http://unix", scheme: "unix", addr: path}
 	})
@@ -122,7 +147,9 @@ func RemoteClient(addr string) *Client {
 				MaxIdleConns:        maxIdleConns,
 				MaxIdleConnsPerHost: maxIdleConnsPerHost,
 			},
-			Timeout: requestTimeout,
+			// No whole-request Timeout — per-call context is the budget
+			// (see backstopTimeout). A global Timeout here truncated
+			// long-running creates at 5s and orphaned remote sessions.
 		},
 		base:   "http://" + addr,
 		scheme: "http",
@@ -174,6 +201,23 @@ func (c *Client) Sessions(ctx context.Context) ([]SessionState, error) {
 func (c *Client) Health(ctx context.Context) (HealthInfo, error) {
 	var out HealthInfo
 	if err := c.getJSON(ctx, "/v1/health", &out); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
+// Models returns the daemon's Claude model catalog — discovered via
+// the Anthropic Models API when an API key is set on the daemon's
+// environment, merged with a curated in-binary fallback list. Used
+// by the TUI's model picker and by `ccmux agents models`. Pass
+// refresh=true to force a synchronous re-fetch on the daemon side.
+func (c *Client) Models(ctx context.Context, refresh bool) (claudemodels.Catalog, error) {
+	path := "/v1/models"
+	if refresh {
+		path += "?refresh=true"
+	}
+	var out claudemodels.Catalog
+	if err := c.getJSON(ctx, path, &out); err != nil {
 		return out, err
 	}
 	return out, nil
@@ -270,10 +314,125 @@ func (c *Client) SearchNotes(ctx context.Context, project, query string) ([]Sear
 	return out, nil
 }
 
+// Preview returns the last `lines` lines of the named session's active
+// pane. Empty lines arg defaults daemon-side. Used by mobile clients to
+// render a session card without a full attach, and by ccmux-mcp for the
+// `read_pane` tool.
+func (c *Client) Preview(ctx context.Context, name string, lines int) (PreviewResponse, error) {
+	q := url.Values{}
+	if lines > 0 {
+		q.Set("lines", strconv.Itoa(lines))
+	}
+	path := "/v1/sessions/" + url.PathEscape(name) + "/preview"
+	if enc := q.Encode(); enc != "" {
+		path += "?" + enc
+	}
+	var out PreviewResponse
+	if err := c.getJSON(ctx, path, &out); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
+// Conversations returns past agent transcripts (Claude / Codex /
+// Antigravity / Cursor / Pi / Grok) sorted by most-recent. Powers the
+// Conversations screen and the `list_conversations` MCP tool.
+func (c *Client) Conversations(ctx context.Context) ([]Conversation, error) {
+	var out []Conversation
+	if err := c.getJSON(ctx, "/v1/conversations", &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// Usage returns per-agent token + cost activity over a rolling window.
+// Powers the dashboard's usage panel and the `get_usage` MCP tool.
+func (c *Client) Usage(ctx context.Context) (AgentUsage, error) {
+	var out AgentUsage
+	if err := c.getJSON(ctx, "/v1/usage", &out); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
+// Peers returns every tailnet peer plus whether each runs ccmuxd.
+// Powers the Network screen and the `list_machines` MCP tool.
+func (c *Client) Peers(ctx context.Context) ([]PeerInfo, error) {
+	var out []PeerInfo
+	if err := c.getJSON(ctx, "/v1/peers", &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// SendKeys types the literal string `keys` into the named session's
+// active pane. tmux interprets common tokens (Enter, C-c, …) — see
+// internal/tmux/tmux.go for the exact escapes. Used by the MCP server's
+// mutating `send_keys` tool when --allow-mutate is on.
+func (c *Client) SendKeys(ctx context.Context, name, keys string) error {
+	path := "/v1/sessions/" + url.PathEscape(name) + "/send-keys"
+	return c.post(ctx, path, SendKeysRequest{Keys: keys}, nil)
+}
+
+// Kill terminates the named tmux session. Used by the MCP server's
+// mutating `kill_session` tool when --allow-mutate is on.
+func (c *Client) Kill(ctx context.Context, name string) error {
+	path := "/v1/sessions/" + url.PathEscape(name) + "/kill"
+	return c.post(ctx, path, nil, nil)
+}
+
+// TelegramPairCode asks the local daemon's Telegram bridge to mint a
+// one-time pairing code. Unix-socket only (the daemon refuses it on the
+// tailnet listener). Errors when the bridge isn't enabled.
+func (c *Client) TelegramPairCode(ctx context.Context) (TelegramPairCodeResponse, error) {
+	var out TelegramPairCodeResponse
+	if err := c.post(ctx, "/v1/telegram/pair-code", nil, &out); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
+// AgentCommands returns the command catalog for the named session's
+// agent, resolved on this client's daemon (local or remote). For a
+// Claude session that includes the host user's own commands/skills.
+// Powers the Telegram bridge's agent-command autocomplete and
+// `ccmux agent commands`. Older daemons without the endpoint return a
+// 404, surfaced as an error so callers can degrade to prompt-only.
+func (c *Client) AgentCommands(ctx context.Context, name string) (AgentCommandsResponse, error) {
+	path := "/v1/sessions/" + url.PathEscape(name) + "/agent-commands"
+	var out AgentCommandsResponse
+	if err := c.getJSON(ctx, path, &out); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
 // Addr returns a human description of this client's target.
 func (c *Client) Addr() string { return c.scheme + "://" + c.addr }
 
+// ensureDeadline returns a context guaranteed to carry a deadline. If
+// the caller already set one (the normal case — every client call
+// wraps WithTimeout), it's used as-is. Only a deadline-less context
+// gets the defensive backstop, so we never truncate a real per-call
+// budget but also never hang forever on a forgotten deadline.
+func ensureDeadline(ctx context.Context) (context.Context, context.CancelFunc) {
+	if _, ok := ctx.Deadline(); ok {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, backstopTimeout)
+}
+
+// decodeCapped decodes a JSON response body behind an io.LimitReader so
+// an oversized or never-terminating response from a remote daemon can't
+// drive the client to OOM. The whole-request context still bounds wall
+// time; this bounds bytes.
+func decodeCapped(body io.Reader, out any) error {
+	return json.NewDecoder(io.LimitReader(body, maxResponseBytes)).Decode(out)
+}
+
 func (c *Client) getJSON(ctx context.Context, path string, out any) error {
+	ctx, cancel := ensureDeadline(ctx)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+path, nil)
 	if err != nil {
 		return err
@@ -286,10 +445,12 @@ func (c *Client) getJSON(ctx context.Context, path string, out any) error {
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("ccmuxd %s GET %s: status %d", c.addr, path, resp.StatusCode)
 	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	return decodeCapped(resp.Body, out)
 }
 
 func (c *Client) post(ctx context.Context, path string, body, out any) error {
+	ctx, cancel := ensureDeadline(ctx)
+	defer cancel()
 	// Important: pass an untyped nil io.Reader when there's no body —
 	// a typed-nil *bytesReader satisfies the interface and trips
 	// net/http's "non-nil body" path, which then nil-dereferences in
@@ -318,7 +479,7 @@ func (c *Client) post(ctx context.Context, path string, body, out any) error {
 		return fmt.Errorf("ccmuxd %s POST %s: status %d", c.addr, path, resp.StatusCode)
 	}
 	if out != nil {
-		return json.NewDecoder(resp.Body).Decode(out)
+		return decodeCapped(resp.Body, out)
 	}
 	return nil
 }

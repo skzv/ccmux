@@ -4,6 +4,7 @@ bin/
 dist/
 /ccmux
 /ccmuxd
+/ccmux-mcp
 *.test
 *.out
 

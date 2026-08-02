@@ -19,10 +19,11 @@ func init() {
 func newPairCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "pair",
-		Short: "Show a QR code to pair the ccmux iOS app with this host",
+		Short: "Show a QR code to pair a mobile client with this host",
 		Long: `Asks the running ccmuxd to generate a one-time pairing token and
-prints a QR code. Scan it with the ccmux iOS app Camera — the app
-will pair automatically: no typing, no manual authorized_keys edit.
+prints a QR code. Scan it with a mobile client — it pairs
+automatically: no typing, no manual authorized_keys edit. (Redeems via
+POST /v1/pair — see docs/02_Architecture/05_HTTP_API.md.)
 
 The token expires in 5 minutes. ccmuxd must be running with
 listen_tailnet = true.`,
@@ -37,7 +38,7 @@ listen_tailnet = true.`,
 			if err != nil {
 				return fmt.Errorf("pair token: %w", err)
 			}
-			fmt.Println("Scan with the ccmux iOS app (expires in 5 minutes):")
+			fmt.Println("Scan with a mobile client (expires in 5 minutes):")
 			fmt.Println()
 			qrterminal.GenerateHalfBlock(resp.URL, qrterminal.L, os.Stdout)
 			fmt.Println()

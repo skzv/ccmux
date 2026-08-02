@@ -370,11 +370,19 @@ type usageTickMsg struct{ At time.Time }
 // block from `npx ccusage blocks --json`; nil when ccusage isn't
 // installed or the command failed.
 type usageLoadedMsg struct {
-	Agg          *claudeusage.Aggregate
-	Codex        usage.AgentSummary
-	Antigravity  usage.AgentSummary
+	Agg         *claudeusage.Aggregate
+	Codex       usage.AgentSummary
+	Antigravity usage.AgentSummary
+	// Others carries the second-wave agents (OpenCode, Kimi, …) read via
+	// the generic JSONL walker — only the agents with actual usage in
+	// the window, so the dashboard sizes its rows to what you use.
+	Others       []usage.NamedSummary
 	CcusageBlock *ccusageBlock
-	Err          error
+	// OpenRouter is the account spend pulled from OpenRouter's /key
+	// endpoint when [openrouter] is enabled in config. Enabled=false
+	// (the default) renders no row.
+	OpenRouter daemon.OpenRouterSpend
+	Err        error
 }
 
 // ccusageBlock is the billing-block data returned by ccusage. Kept as

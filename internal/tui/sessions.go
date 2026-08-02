@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -17,6 +18,21 @@ import (
 	"github.com/skzv/ccmux/internal/tui/components"
 	"github.com/skzv/ccmux/internal/tui/styles"
 )
+
+// sortByAttention re-orders the sessions slice in-place by descending
+// attention priority (most-urgent first), breaking ties by Name. The
+// priority comes from agent.AttentionPriority — see its docstring for
+// the ranking. Stable so an unchanged list stays put across renders.
+func sortByAttention(ss []daemon.SessionState) {
+	sort.SliceStable(ss, func(i, j int) bool {
+		pi := agent.AttentionPriority(agent.State(ss[i].State), ss[i].Seen)
+		pj := agent.AttentionPriority(agent.State(ss[j].State), ss[j].Seen)
+		if pi != pj {
+			return pi > pj
+		}
+		return ss[i].Name < ss[j].Name
+	})
+}
 
 // sessionsModel is the full session list with a details pane.
 // Under narrow terminals (< 120 cols), a condensed detail is shown.
@@ -50,7 +66,39 @@ type sessionsModel struct {
 	// agentCommands are setup-pinned executable paths for agents that
 	// may not be on this process's PATH, such as npm CLIs under nvm.
 	agentCommands agent.Commands
+
+	// showPreview gates the side-by-side preview pane. Toggled with
+	// `p`. When on, the View splits the screen horizontally — list on
+	// the left, the selected session's recent pane content on the
+	// right — and a tick refreshes the capture every second. Off by
+	// default; ccmux's principle is "tmux is the multiplexer", so the
+	// preview is opt-in read-only chrome, not a step toward a built-in
+	// split.
+	showPreview bool
+	// previewSession is the name of the session whose capture is
+	// cached in `preview`. Lets us detect a cursor move and trigger an
+	// immediate re-capture without waiting for the tick.
+	previewSession string
+	preview        string
+	previewLoading bool
+	previewErr     string
 }
+
+// previewLoadedMsg carries the result of one tmux capture-pane call
+// for the preview pane. Routed by App into sessionsModel via the same
+// path as other session-screen messages.
+type previewLoadedMsg struct {
+	Session string
+	Content string
+	Err     error
+}
+
+// previewTickMsg fires once a second when the preview pane is on. The
+// handler issues a capture command and schedules the next tick. When
+// `p` toggles the preview off, in-flight ticks are dropped (the
+// handler checks showPreview before scheduling the next one) so we
+// don't keep ticking forever.
+type previewTickMsg struct{}
 
 func newSessions(st styles.Styles, km Keymap) sessionsModel {
 	return sessionsModel{st: st, km: km}
@@ -66,6 +114,12 @@ func (m *sessionsModel) SetSessions(ss []daemon.SessionState) {
 	if m.cursor >= 0 && m.cursor < len(m.sessions) {
 		selectedName = m.sessions[m.cursor].Name
 	}
+	// Re-sort by attention priority so a session waiting on the user
+	// (needs_input / done-but-unreviewed / error) surfaces above
+	// still-working rows. Stable secondary key on Name keeps the order
+	// deterministic when several rows share a priority, so repeated
+	// renders don't flicker the same set of names.
+	sortByAttention(ss)
 	m.sessions = ss
 	if selectedName != "" {
 		for i, s := range ss {
@@ -151,6 +205,42 @@ func (m sessionsModel) Update(msg tea.Msg) (sessionsModel, tea.Cmd) {
 		return m, cmd
 	}
 
+	// Preview pane messages flow into the model regardless of the key
+	// path below — they're scheduled by `p`'s toggle and replenished by
+	// each tick, so they arrive asynchronously.
+	switch msg := msg.(type) {
+	case previewLoadedMsg:
+		// Stale loads from a previous selection lose to the current one:
+		// if the user moved the cursor while the capture was in flight,
+		// drop the old result silently rather than flashing wrong content.
+		sel := m.Selected()
+		if sel == nil || msg.Session != sel.Name {
+			m.previewLoading = false
+			return m, nil
+		}
+		m.previewLoading = false
+		if msg.Err != nil {
+			m.previewErr = msg.Err.Error()
+			m.preview = ""
+		} else {
+			m.previewErr = ""
+			m.preview = msg.Content
+		}
+		m.previewSession = msg.Session
+		return m, nil
+	case previewTickMsg:
+		// Tick fired — if the user toggled preview off in the meantime,
+		// drop it (no capture, no next tick). Otherwise refresh and
+		// schedule the next tick.
+		if !m.showPreview {
+			return m, nil
+		}
+		if sel := m.Selected(); sel != nil {
+			return m, tea.Batch(capturePreviewCmd(*sel), previewTickCmd())
+		}
+		return m, previewTickCmd()
+	}
+
 	if km, ok := msg.(tea.KeyMsg); ok {
 		switch {
 		case keyMatches(km, m.km.NewItem):
@@ -164,17 +254,110 @@ func (m sessionsModel) Update(msg tea.Msg) (sessionsModel, tea.Cmd) {
 				m.renameForm = &f
 				return m, textinput.Blink
 			}
+		case keyMatches(km, m.km.Preview):
+			m.showPreview = !m.showPreview
+			if m.showPreview {
+				// Turning preview on: capture immediately AND start the
+				// tick. Batching produces one Cmd; Bubble Tea fans it
+				// out internally. The first capture fills the pane
+				// without waiting a full second; the tick keeps it warm.
+				if sel := m.Selected(); sel != nil {
+					m.previewLoading = true
+					return m, tea.Batch(capturePreviewCmd(*sel), previewTickCmd())
+				}
+				return m, previewTickCmd()
+			}
+			// Turning preview off: clear cached content so a future
+			// re-toggle doesn't flash stale text from the previous
+			// selection. The in-flight tick will see !showPreview and
+			// stop scheduling itself.
+			m.preview = ""
+			m.previewErr = ""
+			m.previewLoading = false
+			m.previewSession = ""
+			return m, nil
 		case keyMatches(km, m.km.Up):
 			if m.cursor > 0 {
 				m.cursor--
+				return m, m.maybeRefreshPreview()
 			}
 		case keyMatches(km, m.km.Down):
 			if m.cursor < len(m.sessions)-1 {
 				m.cursor++
+				return m, m.maybeRefreshPreview()
 			}
 		}
 	}
 	return m, nil
+}
+
+// maybeRefreshPreview returns a capture command when the preview is on
+// and the cursor just moved to a different session — so the right pane
+// updates instantly instead of waiting for the next tick. Returns nil
+// when preview is off (most cases) so the dispatch loop does no work.
+func (m *sessionsModel) maybeRefreshPreview() tea.Cmd {
+	if !m.showPreview {
+		return nil
+	}
+	sel := m.Selected()
+	if sel == nil {
+		return nil
+	}
+	m.previewLoading = true
+	return capturePreviewCmd(*sel)
+}
+
+// capturePreviewCmd reads the last N lines of the named session's
+// active pane. It's a package var pointing at realCapturePreviewCmd so
+// tests can stub the capture without a live tmux; production always uses
+// the real one.
+var capturePreviewCmd = realCapturePreviewCmd
+
+// realCapturePreviewCmd is the production pane capture. Local sessions
+// go through tmux directly; remote sessions are not yet wired (see the
+// sentinel below).
+func realCapturePreviewCmd(s daemon.SessionState) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		const lines = 30
+		// Local host: capture directly via tmux. The "local" / "" check
+		// matches daemon.SessionState.Host's convention (empty = local).
+		if s.Host == "" || s.Host == "local" {
+			out, err := tmux.CapturePane(ctx, s.Name, lines)
+			return previewLoadedMsg{Session: s.Name, Content: out, Err: err}
+		}
+		// Remote: the daemon at the peer's address has a Preview method
+		// (same path the mobile clients and ccmux-mcp use). The host
+		// label here is the friendly name; the address resolution lives
+		// in the App's host registry, which the sessions model doesn't
+		// have. Until we plumb it in, mark the remote preview as
+		// unsupported — most users want the preview for "the agent on
+		// my mini," which IS local from the mini's TUI, so this is
+		// a small gap. Tracked in docs/01_Specs/01_Feature_Catalog.md.
+		return previewLoadedMsg{Session: s.Name, Err: errRemotePreviewNotWired}
+	}
+}
+
+// previewTickCmd schedules the next preview refresh. One second is the
+// sweet spot — fast enough that "watch the agent think" feels live, slow
+// enough that we're not hammering tmux at 60Hz.
+var previewTickCmd = func() tea.Cmd {
+	return tea.Tick(1*time.Second, func(_ time.Time) tea.Msg {
+		return previewTickMsg{}
+	})
+}
+
+// errRemotePreviewNotWired is the sentinel for "you toggled preview on
+// a remote session but we haven't wired the cross-host capture yet."
+// Surfaces as the message body in the preview pane so the user sees
+// why it's empty rather than a generic "no content."
+var errRemotePreviewNotWired = remotePreviewErr{}
+
+type remotePreviewErr struct{}
+
+func (remotePreviewErr) Error() string {
+	return "preview for remote sessions not yet supported — attach with Enter to view live content"
 }
 
 // View renders the sessions list with a detail pane for the selected
@@ -193,6 +376,14 @@ func (m sessionsModel) View(width, height int, narrow bool) string {
 		formW := minInt(80, width-4)
 		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, m.form.View(formW))
 	}
+	// NOTE: the wide Home screen renders the preview pane itself (see
+	// App.homeView) because it owns the hero + list + right-column
+	// composition and never routes through this View. This View is used
+	// only for the narrow (phone) Home path and the modal overlays
+	// above — neither of which shows a side preview — so there is no
+	// preview branch here on purpose. Earlier this method carried the
+	// split and the wide screen silently bypassed it; that was the bug.
+
 	// List on top, detail for the selected row below. The detail keeps
 	// the full key cheatsheet when the terminal is wide and collapses
 	// to a condensed form on a phone.
@@ -205,6 +396,74 @@ func (m sessionsModel) View(width, height int, narrow bool) string {
 		m.renderList(width, listH),
 		detail,
 	)
+}
+
+// renderPreview draws the side preview pane: the selected session's
+// recent pane content, refreshed once a second. A one-line status row
+// (session name) sits on top of the captured text. The body is tailed
+// and width-clamped so it always fits the box — when you're watching an
+// agent, the newest lines are the ones that matter, exactly like
+// `tail -f`.
+func (m sessionsModel) renderPreview(width, height int) string {
+	// Pane chrome: 2 cells border (L/R and T/B), plus the header line
+	// and a blank spacer below it. contentLines is what's left for the
+	// captured text.
+	header := ""
+	if sel := m.Selected(); sel != nil {
+		header = m.st.Emphasis.Render(sel.Name)
+	} else {
+		header = m.st.Muted.Render("No session selected.")
+	}
+	innerW := width - 4    // 2 border + 2 padding
+	contentH := height - 4 // 2 border + header + blank spacer
+	if contentH < 1 {
+		contentH = 1
+	}
+
+	render := func(bodyLines string) string {
+		return m.st.Pane.Width(width - 2).Height(height - 2).Render(
+			lipgloss.JoinVertical(lipgloss.Left, header, "", bodyLines),
+		)
+	}
+
+	if m.Selected() == nil {
+		return render("")
+	}
+	switch {
+	case m.previewErr != "":
+		// Show the err verbatim — the remote-not-supported sentinel and
+		// any real tmux error both fit on a couple of lines.
+		body := m.st.StateNeedsInput.Render("preview unavailable") +
+			"\n\n" + m.st.Muted.Render(m.previewErr)
+		return render(body)
+	case m.previewLoading && m.preview == "":
+		return render(m.st.Muted.Render("capturing…"))
+	case strings.TrimSpace(m.preview) == "":
+		return render(m.st.Muted.Render("(empty pane)"))
+	}
+	// Tail to the last contentH non-padding lines and clamp each to the
+	// inner width so a long agent line can't blow out the box.
+	body := tailLines(strings.TrimRight(m.preview, "\n"), contentH, innerW)
+	return render(body)
+}
+
+// tailLines returns the last `n` lines of `s`, each hard-truncated to
+// `width` display cells. Used by the preview pane so the captured
+// content always fits its box and shows the most-recent output.
+func tailLines(s string, n, width int) string {
+	if n <= 0 {
+		return ""
+	}
+	lines := strings.Split(s, "\n")
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	if width > 0 {
+		for i, ln := range lines {
+			lines[i] = truncateDisplay(ln, width)
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m sessionsModel) renderList(width, height int) string {
@@ -221,7 +480,7 @@ func (m sessionsModel) renderList(width, height int) string {
 			"",
 			m.st.Muted.Render("No sessions yet."),
 			"",
-			"Press "+m.st.Key.Render("3")+" to open Projects and create one.",
+			"Press "+m.st.Key.Render(screenKey(ScreenProjects))+" to open Projects and create one.",
 		)
 		return m.st.Pane.Width(width - 2).Height(height - 2).Render(body)
 	}

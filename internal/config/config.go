@@ -25,6 +25,7 @@ type Config struct {
 	Sessions      SessionsConfig      `toml:"sessions"`
 	Conversations ConversationsConfig `toml:"conversations"`
 	Agents        AgentsConfig        `toml:"agents"`
+	Claude        ClaudeConfig        `toml:"claude"`
 	Update        UpdateConfig        `toml:"update"`
 	Subscription  SubscriptionConfig  `toml:"subscription"`
 	Tour          TourConfig          `toml:"tour"`
@@ -32,13 +33,43 @@ type Config struct {
 	Hosts         []Host              `toml:"host"`
 	APNs          APNsConfig          `toml:"apns"`
 	FCM           FCMConfig           `toml:"fcm"`
+	OpenRouter    OpenRouterConfig    `toml:"openrouter"`
+	Telegram      TelegramConfig      `toml:"telegram"`
+}
+
+// OpenRouterConfig wires ccmux to an OpenRouter account for two things:
+// surfacing spend in the usage panel, and (with BaseURL injected into an
+// agent's launch) routing OpenAI-compatible agents through OpenRouter's
+// model catalog. Off by default — set Enabled + APIKey to turn on the
+// spend panel; the key is the same inference key the agents use.
+//
+// The key lives in config rather than only an env var so the daemon
+// (which has no inherited shell env on launchd/systemd) can read it for
+// the usage refresh. Treat config.toml as secret-bearing when this is
+// set — same as the APNs/FCM credentials above.
+type OpenRouterConfig struct {
+	Enabled bool   `toml:"enabled"`
+	APIKey  string `toml:"api_key"`
+	// BaseURL overrides the API root (default https://openrouter.ai/api/v1)
+	// for a self-hosted gateway or a proxy. Also used as the value
+	// injected into an OpenAI-compatible agent's OPENAI_BASE_URL when
+	// the agent is launched with OpenRouter routing.
+	BaseURL string `toml:"base_url,omitempty"`
+	// RouteAgents lists the agent IDs (e.g. "codex", "opencode", "kilo")
+	// ccmux should launch routed through OpenRouter — it injects
+	// OPENAI_BASE_URL + OPENAI_API_KEY (the key via the shell's
+	// OPENROUTER_API_KEY) into those agents' launch commands. Only
+	// agents that honor the OpenAI-compatible env vars make sense here;
+	// ccmux doesn't guess, so this is an explicit opt-in. Empty = no
+	// routing (the default).
+	RouteAgents []string `toml:"route_agents,omitempty"`
 }
 
 // APNsConfig configures Apple Push Notifications so the daemon can
 // notify paired iPhones when sessions finish or need input. Off by
 // default — flip Enabled=true and fill in KeyPath/KeyID/TeamID once
 // the Apple Developer account has Push Notifications enabled for the
-// iOS app's bundle id.
+// mobile app's bundle id.
 type APNsConfig struct {
 	Enabled     bool   `toml:"enabled"`
 	KeyPath     string `toml:"key_path"`    // path to AuthKey_XXXXXXXXXX.p8
@@ -57,6 +88,77 @@ type FCMConfig struct {
 	Enabled         bool   `toml:"enabled"`
 	CredentialsPath string `toml:"credentials_path"` // path to firebase service-account JSON
 	ProjectID       string `toml:"project_id"`       // Firebase project id, e.g. "ccmux-mobile"
+}
+
+// DefaultPaneTailLines caps how many pane lines a Telegram alert ships
+// by default (and thus how much pane content traverses Telegram's
+// servers). Matches the daemon preview default.
+const DefaultPaneTailLines = 24
+
+// TelegramConfig wires ccmux to a Telegram bot so the daemon can alert
+// you when an agent needs input AND let you act on it — approve/deny,
+// drive the agent CLI, browse notes — from your phone or watch. The
+// bot reaches out to Telegram via long polling, so it needs no inbound
+// port and works behind NAT. Off by default; flip Enabled=true and set
+// BotToken (from @BotFather). The bot honors only chats in
+// AllowedChatIDs, which `ccmux telegram pair` enrolls.
+//
+// Treat config.toml as secret-bearing when this is set — BotToken is a
+// credential, same as the APNs/FCM keys above.
+type TelegramConfig struct {
+	Enabled  bool   `toml:"enabled"`
+	BotToken string `toml:"bot_token"`
+	// AllowedChatIDs is the allowlist: only these Telegram chat IDs can
+	// drive the bot. Populated by `ccmux telegram pair` / the TUI.
+	AllowedChatIDs []int64 `toml:"allowed_chat_ids"`
+	// AllowExec opens the arbitrary-execution tier (`/run` raw keys /
+	// shell). Off by default — the curated read/control/agent surface
+	// covers normal use without it.
+	AllowExec bool `toml:"allow_exec"`
+	// WebViewer enables the optional tailnet-only (`tailscale serve`)
+	// HTTPS markdown browser for whole-vault note navigation. Off by
+	// default; `/notes` sends rendered documents either way.
+	WebViewer bool `toml:"web_viewer"`
+	// MuteAlerts silences proactive needs-input alerts without tearing
+	// down the connection — the command surface keeps working.
+	MuteAlerts bool `toml:"mute_alerts"`
+	// PaneTailLines caps how many pane lines an alert ships to Telegram.
+	// 0 falls back to DefaultPaneTailLines.
+	PaneTailLines int `toml:"pane_tail_lines"`
+}
+
+// Allows reports whether a chat id is on the allowlist. An empty
+// allowlist allows no one — the bridge is enabled but locked until a
+// chat is paired.
+func (t TelegramConfig) Allows(chatID int64) bool {
+	for _, id := range t.AllowedChatIDs {
+		if id == chatID {
+			return true
+		}
+	}
+	return false
+}
+
+// AllowedChatIDSet returns the allowlist as a set for repeated
+// membership checks in the bridge's authorization gate.
+func (t TelegramConfig) AllowedChatIDSet() map[int64]bool {
+	if len(t.AllowedChatIDs) == 0 {
+		return nil
+	}
+	m := make(map[int64]bool, len(t.AllowedChatIDs))
+	for _, id := range t.AllowedChatIDs {
+		m[id] = true
+	}
+	return m
+}
+
+// EffectivePaneTailLines returns the configured cap, or the default
+// when unset.
+func (t TelegramConfig) EffectivePaneTailLines() int {
+	if t.PaneTailLines <= 0 {
+		return DefaultPaneTailLines
+	}
+	return t.PaneTailLines
 }
 
 // SessionsConfig holds preferences for the Sessions screen's "new
@@ -158,18 +260,60 @@ type AgentCommandConfig struct {
 	Command string `toml:"command,omitempty"`
 }
 
+// ClaudeConfig holds Claude-specific runtime preferences distinct from
+// Claude Code's own ~/.claude/settings.json. Today this is just the
+// default model ccmux passes to claude sessions it launches — pin a
+// concrete model (e.g. "claude-opus-4-8") or an alias ("opus") here
+// without editing Claude Code's settings.
+//
+// Why a separate file: ccmux is a per-machine TUI; Claude Code's
+// settings.json is global to the user (shared across machines on an
+// NFS home dir, sshfs mount, etc). The ccmux default is per-machine
+// and only applies to sessions ccmux itself launches — running
+// `claude` directly outside ccmux keeps whatever settings.json says.
+type ClaudeConfig struct {
+	// DefaultModel is passed to `claude --model <value>` when ccmux
+	// launches a new Claude session. Accepts a concrete vendor model
+	// ID ("claude-opus-4-8"), a short alias ("opus" / "sonnet" /
+	// "haiku" / "opusplan"), or "" to inherit Claude Code's own
+	// default. Discoverable via the model picker (TUI) or
+	// `ccmux agents models` (CLI). An explicit ANTHROPIC_MODEL env
+	// var takes precedence — see internal/agent.
+	DefaultModel string `toml:"default_model,omitempty"`
+}
+
 // AgentCommands converts config's persisted shape into the runtime
 // command override shape used by internal/agent. Keeping the conversion
 // here prevents launch sites from knowing the TOML layout.
 func (c Config) AgentCommands() agent.Commands {
 	return agent.Commands{
-		Claude:      strings.TrimSpace(c.Agents.Claude.Command),
-		Codex:       strings.TrimSpace(c.Agents.Codex.Command),
-		Antigravity: strings.TrimSpace(c.Agents.Antigravity.Command),
-		Cursor:      strings.TrimSpace(c.Agents.Cursor.Command),
-		Pi:          strings.TrimSpace(c.Agents.Pi.Command),
-		Grok:        strings.TrimSpace(c.Agents.Grok.Command),
+		Claude:            strings.TrimSpace(c.Agents.Claude.Command),
+		Codex:             strings.TrimSpace(c.Agents.Codex.Command),
+		Antigravity:       strings.TrimSpace(c.Agents.Antigravity.Command),
+		Cursor:            strings.TrimSpace(c.Agents.Cursor.Command),
+		Pi:                strings.TrimSpace(c.Agents.Pi.Command),
+		Grok:              strings.TrimSpace(c.Agents.Grok.Command),
+		ClaudeModel:       strings.TrimSpace(c.Claude.DefaultModel),
+		OpenRouterAgents:  c.OpenRouter.routeAgentSet(),
+		OpenRouterBaseURL: strings.TrimSpace(c.OpenRouter.BaseURL),
 	}
+}
+
+// routeAgentSet parses RouteAgents into the ID set agent.Commands
+// expects. Unknown / malformed IDs are dropped (ParseID rejects them)
+// so a typo in config silently no-ops that entry rather than routing
+// the wrong agent. Returns nil when nothing is configured.
+func (o OpenRouterConfig) routeAgentSet() map[agent.ID]bool {
+	if len(o.RouteAgents) == 0 {
+		return nil
+	}
+	set := make(map[agent.ID]bool, len(o.RouteAgents))
+	for _, s := range o.RouteAgents {
+		if id, ok := agent.ParseID(s); ok {
+			set[id] = true
+		}
+	}
+	return set
 }
 
 // UpdateConfig holds the auto-update preference. ccmux installs from a
@@ -434,6 +578,12 @@ func Defaults() Config {
 			AutoCheck: true,
 		},
 		Subscription: SubscriptionConfig{Tier: "api"},
+		Telegram: TelegramConfig{
+			// Off until a token + a paired chat exist. The pane-tail cap
+			// is set so an enabled bridge ships a bounded amount of pane
+			// content even if the user never tunes it.
+			PaneTailLines: DefaultPaneTailLines,
+		},
 	}
 }
 

@@ -1,0 +1,32 @@
+id = "hermes"
+
+# OSC-title braille spinner → working.
+[[rules]]
+id = "title_spinner_working"
+state = "working"
+priority = 1100
+region = "osc_title"
+regex = ['^[\x{2800}-\x{28FF}]']
+
+# Dangerous-command gate: Hermes prompts "allow once" / "deny" before
+# running something risky.
+[[rules]]
+id = "body_dangerous_gate"
+state = "blocked"
+priority = 900
+region = "bottom_non_empty_lines(4)"
+any = [
+  { all = [{ contains = ["allow once"] }, { contains = ["deny"] }] },
+  { contains = ["dangerous command"] },
+]
+
+# Working footer: the interrupt/cancel hint shows while a turn runs.
+[[rules]]
+id = "body_working_footer"
+state = "working"
+priority = 800
+region = "bottom_non_empty_lines(3)"
+any = [
+  { contains = ["ctrl+c cancel"] },
+  { contains = ["msg=interrupt"] },
+]

@@ -37,7 +37,7 @@ func defaultTourSteps() []tourStep {
 			KeyHint: "→ / space / enter: next  ·  esc: skip",
 		},
 		{
-			Title: "Sessions (1) — Sessions + Stats",
+			Title: "Sessions (" + screenKey(ScreenSessions) + ") — Sessions + Stats",
 			Body: []string{
 				"Sessions is your command centre. Left pane: live sessions. Right pane: usage stats.",
 			},
@@ -47,19 +47,19 @@ func defaultTourSteps() []tourStep {
 				"Right pane: 5h quota, ccusage billing block, burn rate, token totals",
 				"Daemon + remote-host health also lives on the right",
 			},
-			KeyHint: "Press 1 / F1 anywhere to come back here",
+			KeyHint: "Press " + screenKey(ScreenSessions) + " / F1 anywhere to come back here",
 		},
 		{
-			Title: "Projects, Conversations, Notes, Agents (2-5)",
+			Title: "Projects, Conversations, Notes, Agents (" + screenKey(ScreenProjects) + "-" + screenKey(ScreenSettings) + ")",
 			Body: []string{
 				"The remaining screens cover the full workflow loop:",
 			},
 			Bullets: []string{
-				"2 — Projects: every dir under ~/Projects with a CLAUDE.md or .git",
-				"3 — Conversations: every past agent dialogue (Claude/Codex/Antigravity) — resume any",
-				"4 — Notes: per-project docs/ vault — Specs, ADRs, Agent Logs",
-				"5 — Agents: edit ~/.claude / ~/.codex / ~/.gemini/antigravity-cli config",
-				"6 — Settings: ccmux's own config (paths, daemon, theme)",
+				screenKey(ScreenProjects) + " — Projects: every dir under ~/Projects with a CLAUDE.md or .git",
+				screenKey(ScreenConversations) + " — Conversations: every past agent dialogue (Claude/Codex/Antigravity) — resume any",
+				screenKey(ScreenNotes) + " — Notes: per-project docs/ vault — Specs, ADRs, Agent Logs",
+				screenKey(ScreenAgents) + " — Agents: edit ~/.claude / ~/.codex / ~/.gemini/antigravity-cli config",
+				screenKey(ScreenSettings) + " — Settings: ccmux's own config (paths, daemon, theme)",
 			},
 			KeyHint: "Number keys jump between screens · `?` opens contextual help · q quits",
 		},

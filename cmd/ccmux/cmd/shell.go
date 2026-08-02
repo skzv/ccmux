@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -94,17 +95,19 @@ func runShellLocal(ctx context.Context, name, path, agentFlag string) error {
 // auto-discovery flow.
 func runShellRemote(ctx context.Context, name, path, host, agentFlag string) error {
 	cfg, _ := config.Load()
-	var addr, dial string
+	var hostCfg config.Host
+	found := false
 	for _, h := range cfg.Hosts {
 		if h.Name == host {
-			addr = fmt.Sprintf("%s:%d", h.Address, defaultPort(h.Port))
-			dial = h.Address
+			hostCfg = h
+			found = true
 			break
 		}
 	}
-	if addr == "" {
+	if !found {
 		return fmt.Errorf("no host named %q in ~/.config/ccmux/config.toml; configure it with `ccmux host add` or attach via the TUI's auto-discovered list", host)
 	}
+	addr := fmt.Sprintf("%s:%d", hostCfg.Address, defaultPort(hostCfg.Port))
 	cli := daemon.RemoteClient(addr)
 	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -121,7 +124,7 @@ func runShellRemote(ctx context.Context, name, path, host, agentFlag string) err
 	// rather than reaching into internal/tui — that package is
 	// gigantic and the CLI shouldn't drag it in.
 	tmuxAttach := remoteShellTmuxAttach(res.Session)
-	c := exec.Command("ssh", "-t", dial, tmuxAttach)
+	c := exec.Command("ssh", shellSSHArgs(hostCfg, tmuxAttach)...)
 	c.Stdin = os.Stdin
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
@@ -162,6 +165,28 @@ func defaultPort(p int) int {
 		return 7474
 	}
 	return p
+}
+
+// shellSSHArgs builds the `ssh` argv (minus the leading "ssh") for
+// `ccmux shell --host`, honoring the host's configured SSH user and
+// port. Pulled out of runShellRemote so the user/port handling is
+// unit-testable without a live ssh. The bug it fixes: the old inline
+// form used the bare address with no user@ qualifier and no -p, so a
+// host with a non-local username or a non-22 sshd port failed auth /
+// connected to the wrong port — while the TUI attach for the same
+// host worked.
+func shellSSHArgs(h config.Host, remoteCmd string) []string {
+	dial := h.Address
+	if h.User != "" {
+		dial = h.User + "@" + h.Address
+	}
+	args := []string{"-t"}
+	if p := h.EffectiveSSHPort(); p != 0 && p != 22 {
+		// Non-default sshd port (the ISP-blocked-22 case ccmux
+		// supports); 0/22 stay on the bare form.
+		args = append(args, "-p", strconv.Itoa(p))
+	}
+	return append(args, dial, remoteCmd)
 }
 
 // shellQuote wraps `s` in single quotes, escaping any embedded
