@@ -297,6 +297,94 @@ func TestScanFile_CountsAssistantUsageAndUserPrompts(t *testing.T) {
 	}
 }
 
+// TestScanFile_DedupesRepeatedUsageLines — regression for the ~2-2.6x
+// over-count: Claude Code writes one JSONL line per content block of the
+// same API response, each repeating the identical `usage` object. Lines
+// sharing a (message.id, requestId) pair must be counted once per file;
+// lines missing either id must still be counted (fail open).
+func TestScanFile_DedupesRepeatedUsageLines(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "trans.jsonl")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now()
+	ts := now.Add(-1 * time.Hour).Format(time.RFC3339)
+	usage := map[string]any{
+		"input_tokens":                100,
+		"output_tokens":               50,
+		"cache_creation_input_tokens": 10,
+		"cache_read_input_tokens":     5,
+	}
+	// Three content-block lines from ONE API response: same message.id,
+	// same requestId, identical usage → count once.
+	for i := 0; i < 3; i++ {
+		writeJSONL(t, f, map[string]any{
+			"type": "assistant", "timestamp": ts, "requestId": "req_1",
+			"message": map[string]any{
+				"id": "msg_1", "role": "assistant", "model": "claude-opus-4-7", "usage": usage,
+			},
+		})
+	}
+	// A second, distinct response (different pair) → counted.
+	writeJSONL(t, f, map[string]any{
+		"type": "assistant", "timestamp": ts, "requestId": "req_2",
+		"message": map[string]any{
+			"id": "msg_2", "role": "assistant", "model": "claude-opus-4-7", "usage": usage,
+		},
+	})
+	// Same message.id but a different requestId (retry) → its own pair, counted.
+	writeJSONL(t, f, map[string]any{
+		"type": "assistant", "timestamp": ts, "requestId": "req_3",
+		"message": map[string]any{
+			"id": "msg_2", "role": "assistant", "model": "claude-opus-4-7", "usage": usage,
+		},
+	})
+	// No ids at all → never deduped, both counted.
+	for i := 0; i < 2; i++ {
+		writeJSONL(t, f, map[string]any{
+			"type": "assistant", "timestamp": ts,
+			"message": map[string]any{
+				"role": "assistant", "model": "claude-opus-4-7", "usage": usage,
+			},
+		})
+	}
+	f.Close()
+
+	r := scanFile(path, now.Add(-12*time.Hour))
+	if r.assistantCount != 5 {
+		t.Errorf("assistantCount = %d, want 5 (3 duplicate lines collapse to 1)", r.assistantCount)
+	}
+	wantTotal := 5 * (100 + 50 + 10 + 5)
+	if r.total.Total() != wantTotal {
+		t.Errorf("total = %d, want %d", r.total.Total(), wantTotal)
+	}
+	if got := r.byModel["claude-opus-4-7"]; got == nil || got.Input != 500 {
+		t.Errorf("byModel input = %+v, want Input 500", got)
+	}
+}
+
+func TestAlreadyCounted(t *testing.T) {
+	seen := map[string]struct{}{}
+	if alreadyCounted(seen, "m1", "r1") {
+		t.Error("first sighting of a pair must count")
+	}
+	if !alreadyCounted(seen, "m1", "r1") {
+		t.Error("second sighting of the same pair must dedup")
+	}
+	if alreadyCounted(seen, "m1", "r2") {
+		t.Error("same message id under a new requestId is a new pair")
+	}
+	if alreadyCounted(seen, "", "r1") || alreadyCounted(seen, "", "r1") {
+		t.Error("missing message id must never dedup")
+	}
+	if alreadyCounted(seen, "m1", "") || alreadyCounted(seen, "m1", "") {
+		t.Error("missing requestId must never dedup")
+	}
+}
+
 func TestScanFile_SkipsMalformedAndNonRelevantLines(t *testing.T) {
 	tmp := t.TempDir()
 	path := filepath.Join(tmp, "trans.jsonl")

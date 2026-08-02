@@ -27,8 +27,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -193,13 +195,24 @@ func (m *Manager) engageLocked() {
 	}
 }
 
+// killHolderLocked terminates the lock holder — the whole process
+// group when it was started with Setpgid (linux systemd-inhibit, so
+// its `sleep infinity` child dies too), just the process otherwise —
+// and reaps it. No-op when no holder is running. Caller holds m.mu.
+func (m *Manager) killHolderLocked() {
+	if m.holder == nil {
+		return
+	}
+	if !killProcessGroup(m.holder) {
+		_ = m.holder.Process.Kill()
+	}
+	_, _ = m.holder.Process.Wait()
+	m.holder = nil
+}
+
 // releaseLocked is the off-transition path. Caller holds m.mu.
 func (m *Manager) releaseLocked() {
-	if m.holder != nil {
-		_ = m.holder.Process.Kill()
-		_, _ = m.holder.Process.Wait()
-		m.holder = nil
-	}
+	m.killHolderLocked()
 	m.revertOverrideLocked()
 	if m.stopMonitor != nil {
 		close(m.stopMonitor)
@@ -244,11 +257,7 @@ func (m *Manager) downgradeFromDangerous(reason string) {
 	// override (if any) is reverted because letting the system pmset
 	// override survive a downgrade defeats the whole "fail safe"
 	// promise.
-	if m.holder != nil {
-		_ = m.holder.Process.Kill()
-		_, _ = m.holder.Process.Wait()
-		m.holder = nil
-	}
+	m.killHolderLocked()
 	if m.overrideOn {
 		_ = m.runOverride(context.Background(), false)
 		m.overrideOn = false
@@ -311,19 +320,40 @@ func (m *Manager) checkBatteryOnce() {
 // startLockProc returns the *exec.Cmd that will hold the lock for the
 // given mode. Returns nil on an unsupported OS or for ModeOff.
 func startLockProc(mode Mode) *exec.Cmd {
-	switch runtime.GOOS {
+	return startLockProcFor(runtime.GOOS, mode)
+}
+
+// startLockProcFor is the OS-parameterized command builder — split from
+// startLockProc so tests can pin the darwin and linux shapes from any
+// host without spawning a real caffeinate/systemd-inhibit.
+//
+// Leak-proofing (regression: sleep blockers outliving the daemon):
+//
+//   - darwin: `caffeinate -w <daemon pid>` ties the assertion to this
+//     process's lifetime. Without it, an ungraceful daemon death
+//     (`launchctl kickstart -k` during `ccmux daemon restart`/`update`
+//     sends SIGKILL — no defer runs) orphaned caffeinate holding the
+//     sleep assertion forever.
+//   - linux: the holder starts in its own process group so release can
+//     kill the whole group — otherwise killing the systemd-inhibit
+//     parent orphaned one `sleep infinity` child per engage/release
+//     cycle.
+func startLockProcFor(goos string, mode Mode) *exec.Cmd {
+	switch goos {
 	case "darwin":
+		pid := strconv.Itoa(os.Getpid())
 		switch mode {
 		case ModeSafe:
-			return exec.Command("caffeinate", "-s")
+			return exec.Command("caffeinate", "-w", pid, "-s")
 		case ModeDangerous, ModeVeryDangerous:
 			// -d display, -i idle, -m disk, -s system. Works on battery.
-			return exec.Command("caffeinate", "-d", "-i", "-m", "-s")
+			return exec.Command("caffeinate", "-w", pid, "-d", "-i", "-m", "-s")
 		}
 	case "linux":
+		var cmd *exec.Cmd
 		switch mode {
 		case ModeSafe:
-			return exec.Command("systemd-inhibit",
+			cmd = exec.Command("systemd-inhibit",
 				"--what=sleep:idle",
 				"--who=ccmuxd", "--why=Claude session active",
 				"sleep", "infinity")
@@ -331,11 +361,15 @@ func startLockProc(mode Mode) *exec.Cmd {
 			// Also block handle-lid-switch so a lid-close on battery
 			// doesn't catch us; on most laptops this works without
 			// sudo via systemd-inhibit.
-			return exec.Command("systemd-inhibit",
+			cmd = exec.Command("systemd-inhibit",
 				"--what=sleep:idle:handle-lid-switch",
 				"--who=ccmuxd", "--why=Claude session active (dangerous mode)",
 				"sleep", "infinity")
 		}
+		if cmd != nil {
+			setNewProcessGroup(cmd)
+		}
+		return cmd
 	}
 	return nil
 }

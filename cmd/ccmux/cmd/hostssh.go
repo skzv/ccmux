@@ -68,7 +68,15 @@ Examples:
 // runHostSetupSSH is the meat. Split out so we can unit-test the
 // arg-parsing / branching without spawning a real cobra root.
 func runHostSetupSSH(arg string, skipEnumerate bool) error {
-	cfg, _ := config.Load()
+	// Abort on a Load error instead of proceeding: Load returns
+	// Defaults() alongside the error on a corrupt or unreadable
+	// config.toml, and this flow Saves later — swallowing the error
+	// would rewrite config.toml from defaults, wiping every host and
+	// all other settings. Same guard as `host add` / `host remove`.
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("load config (not modifying it): %w", err)
+	}
 	target, configuredName, err := resolveTarget(arg, cfg)
 	if err != nil {
 		return err
@@ -155,17 +163,35 @@ func runHostSetupSSH(arg string, skipEnumerate bool) error {
 			continue
 		}
 		name := fmt.Sprintf("%s@%s", u, defaultHostName(target.Host))
-		cfg.Hosts = append(cfg.Hosts, config.Host{
+		if err := appendHostToFreshConfig(config.Host{
 			Name:    name,
 			Address: target.Host,
 			User:    u,
 			Port:    target.Port,
 			Mosh:    true,
-		})
-		if err := config.Save(cfg); err != nil {
+		}); err != nil {
 			return fmt.Errorf("save host: %w", err)
 		}
 		fmt.Printf("  ✓ added %s\n", name)
+	}
+	return nil
+}
+
+// appendHostToFreshConfig re-loads config.toml immediately before the
+// Save and appends onto that fresh state — never onto a snapshot taken
+// earlier in the flow. Saving the stale pre-write-back snapshot used to
+// revert whatever writeBackUserIfMissing had just persisted (the SSH
+// user on the configured host). The Load error is fatal for the same
+// reason as in runHostSetupSSH: Save-after-failed-Load rewrites the
+// file from Defaults(), erasing everything.
+func appendHostToFreshConfig(h config.Host) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("load config (not modifying it): %w", err)
+	}
+	cfg.Hosts = append(cfg.Hosts, h)
+	if err := config.Save(cfg); err != nil {
+		return fmt.Errorf("save config: %w", err)
 	}
 	return nil
 }
@@ -182,25 +208,37 @@ func resolveTarget(arg string, cfg config.Config) (sshsetup.Target, string, erro
 	// Configured host?
 	for _, h := range cfg.Hosts {
 		if h.Name == arg {
-			user := h.User
-			if user == "" {
-				user = currentUser()
-			}
-			// Prefer the explicit SSHPort field (added so a host can
-			// store BOTH the ccmuxd HTTP port and the SSH port). For
-			// older configs that only set Port to a non-7474 value
-			// (the legacy "port is the SSH port" interpretation),
-			// honor that too — backwards-compat for any hand-edited
-			// hosts.toml predating this change.
-			port := h.EffectiveSSHPort()
-			if h.SSHPort == 0 && h.Port != 0 && h.Port != 7474 {
-				port = h.Port
-			}
-			return sshsetup.Target{User: user, Host: h.Address, Port: port}, h.Name, nil
+			return sshTargetForHost(h), h.Name, nil
 		}
 	}
 	// Ad-hoc parse.
 	return parseAdHocTarget(arg)
+}
+
+// sshTargetForHost builds the SSH probe/attach target for a configured
+// host. Single source of the port precedence, shared by setup-ssh and
+// `ccmux doctor` (which used to hardcode port 22, misreporting hosts
+// with a custom ssh_port):
+//
+//   - Prefer the explicit SSHPort field (added so a host can store
+//     BOTH the ccmuxd HTTP port and the SSH port).
+//   - For older configs that only set Port to a non-7474 value (the
+//     legacy "port is the SSH port" interpretation), honor that too —
+//     backwards-compat for any hand-edited hosts.toml predating the
+//     SSHPort split.
+//   - Otherwise the openssh default 22 (via EffectiveSSHPort).
+//
+// An empty User falls back to the local username.
+func sshTargetForHost(h config.Host) sshsetup.Target {
+	user := h.User
+	if user == "" {
+		user = currentUser()
+	}
+	port := h.EffectiveSSHPort()
+	if h.SSHPort == 0 && h.Port != 0 && h.Port != 7474 {
+		port = h.Port
+	}
+	return sshsetup.Target{User: user, Host: h.Address, Port: port}
 }
 
 // parseAdHocTarget reads "[user@]host[:port]" and constructs a

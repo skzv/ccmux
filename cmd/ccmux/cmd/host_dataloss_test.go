@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/skzv/ccmux/internal/config"
 )
 
 // TestHostAdd_CorruptConfigDoesNotWipe — regression for the data-loss
@@ -45,5 +47,113 @@ func TestHostAdd_CorruptConfigDoesNotWipe(t *testing.T) {
 	}
 	if string(got) != corrupt {
 		t.Errorf("corrupt config was modified despite the abort:\n%s", got)
+	}
+}
+
+// TestHostSetupSSH_CorruptConfigRefusesEarly — same data-loss class as
+// `host add`: runHostSetupSSH did `cfg, _ := config.Load()`, and its
+// later Saves would rewrite config.toml from Defaults(), erasing every
+// host. On a corrupt config it must refuse before probing anything.
+func TestHostSetupSSH_CorruptConfigRefusesEarly(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cfgPath := filepath.Join(home, ".config", "ccmux", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	corrupt := "theme = \"dracula\"\n[[host]\nname = \"mini\"\n=== not toml ==="
+	if err := os.WriteFile(cfgPath, []byte(corrupt), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := runHostSetupSSH("mini", true)
+	if err == nil {
+		t.Fatal("setup-ssh on a corrupt config should error, not proceed toward a Save")
+	}
+	if !strings.Contains(err.Error(), "load config") {
+		t.Errorf("error should mention the load failure, got: %v", err)
+	}
+
+	got, rerr := os.ReadFile(cfgPath)
+	if rerr != nil {
+		t.Fatalf("config file disappeared: %v", rerr)
+	}
+	if string(got) != corrupt {
+		t.Errorf("corrupt config was modified despite the abort:\n%s", got)
+	}
+}
+
+// TestAppendHostToFreshConfig_DoesNotRevertWriteBack — regression for
+// the stale-snapshot revert: the enumerate loop used to Save the cfg
+// snapshot taken at the top of runHostSetupSSH, silently undoing the
+// SSH user that writeBackUserIfMissing had just persisted. The helper
+// must load fresh state right before each Save.
+func TestAppendHostToFreshConfig_DoesNotRevertWriteBack(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	// Seed a config with one user-less host, exactly the state after a
+	// fresh `host add mini sputnik`.
+	seed := config.Defaults()
+	seed.Hosts = []config.Host{{Name: "mini", Address: "sputnik", Mosh: true, Port: 7474}}
+	if err := config.Save(seed); err != nil {
+		t.Fatal(err)
+	}
+
+	// The flow: a snapshot is loaded up-front…
+	if _, err := config.Load(); err != nil {
+		t.Fatal(err)
+	}
+	// …then the wizard persists the authenticated user…
+	if err := writeBackUserIfMissing("mini", "alice"); err != nil {
+		t.Fatal(err)
+	}
+	// …then the enumerate loop appends a discovered host and saves.
+	if err := appendHostToFreshConfig(config.Host{Name: "bob@sputnik", Address: "sputnik", User: "bob", Mosh: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	final, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var miniUser string
+	var haveBob bool
+	for _, h := range final.Hosts {
+		if h.Name == "mini" {
+			miniUser = h.User
+		}
+		if h.Name == "bob@sputnik" {
+			haveBob = true
+		}
+	}
+	if miniUser != "alice" {
+		t.Errorf("write-back reverted: mini.User = %q, want alice", miniUser)
+	}
+	if !haveBob {
+		t.Errorf("appended host missing from final config: %+v", final.Hosts)
+	}
+}
+
+// TestAppendHostToFreshConfig_CorruptConfigRefuses — the helper itself
+// must carry the same guard: never Save a Defaults()-on-error config.
+func TestAppendHostToFreshConfig_CorruptConfigRefuses(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cfgPath := filepath.Join(home, ".config", "ccmux", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	corrupt := "=== not toml ==="
+	if err := os.WriteFile(cfgPath, []byte(corrupt), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := appendHostToFreshConfig(config.Host{Name: "x", Address: "y"})
+	if err == nil {
+		t.Fatal("appendHostToFreshConfig on a corrupt config should error")
+	}
+	got, _ := os.ReadFile(cfgPath)
+	if string(got) != corrupt {
+		t.Errorf("corrupt config was rewritten:\n%s", got)
 	}
 }
