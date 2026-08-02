@@ -165,6 +165,33 @@ func TestProjects_FilterEscClears(t *testing.T) {
 	}
 }
 
+// TestProjects_CommittedFilterEscClears is the regression test for the
+// dead "Press esc to clear the filter" hint: after committing a filter
+// with Enter (textinput blurred, filter text kept), esc did nothing
+// because the non-filter key switch had no esc case. A committed
+// no-match filter left the user staring at an empty list with a hint
+// that lied.
+func TestProjects_CommittedFilterEscClears(t *testing.T) {
+	a := newFilterApp(t, sampleProjects())
+	a = typeKeys(t, a, "/")
+	a = typeKeys(t, a, "zzz-no-match")
+	a = pressKey(t, a, tea.KeyEnter) // commits the filter, blurs the input
+	if a.projectsM.FilterActive() {
+		t.Fatal("precondition: filter should be committed (not active) after Enter")
+	}
+	if got := len(a.projectsM.visibleProjects()); got != 0 {
+		t.Fatalf("precondition: no-match filter should hide everything, visible = %d", got)
+	}
+
+	a = pressKey(t, a, tea.KeyEsc)
+	if v := a.projectsM.filter.Value(); v != "" {
+		t.Errorf("filter value = %q after esc on a committed filter, want empty", v)
+	}
+	if got := len(a.projectsM.visibleProjects()); got != len(sampleProjects()) {
+		t.Errorf("visible after esc = %d, want full list (%d)", got, len(sampleProjects()))
+	}
+}
+
 // TestProjects_FilterBackspaceShrinksQuery — backspace should remove
 // the most-recently-typed character and re-widen the visible list.
 func TestProjects_FilterBackspaceShrinksQuery(t *testing.T) {

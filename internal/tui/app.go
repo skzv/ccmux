@@ -201,7 +201,8 @@ type App struct {
 // must NOT capture them. Reported case: typing a session name like
 // "matrix-experiment" in the new-session form fired the overlay.
 // Listed states: the new-project / new-session form modals, the
-// notes search bar, the tour, the help overlay.
+// notes search bar, the tour, the help overlay, the settings inline
+// editor, and the Agents modal picker.
 func (a App) modalCapturingText() bool {
 	if a.confirm.open() {
 		return true
@@ -219,6 +220,12 @@ func (a App) modalCapturingText() bool {
 		return true
 	}
 	if a.projectsM.FilterActive() {
+		return true
+	}
+	if a.settings.IsEditing() {
+		return true
+	}
+	if a.agentsM.ModalOpen() {
 		return true
 	}
 	if a.notes.searching {
@@ -633,18 +640,25 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, a.settings.SpinnerTick()
 
 	case spinner.TickMsg:
-		// Route every spinner tick globally, fanning it out to the
-		// three models that own an always-ticking spinner: Settings
-		// (Moshi probe), Projects (initial discovery), and Network
-		// (per-row probe). Each spinner's loop is keyed by ID, so a
-		// model ignores ticks that aren't its own — fanning out is
-		// safe and keeps every spinner animating even when the user
-		// navigates to another screen mid-probe.
-		var scmd, pcmd, ncmd tea.Cmd
+		// Route every spinner tick globally, fanning it out to every
+		// model that owns a spinner: Settings (Moshi probe), Projects
+		// (initial discovery), Network (per-row probe), Conversations
+		// (loading walk), Notes (vault load), and Agents (the Cursor
+		// sub-tab's SQLite read). Each spinner's loop is keyed by ID,
+		// so a model ignores ticks that aren't its own — fanning out
+		// is safe and keeps every spinner animating even when the
+		// user navigates to another screen mid-probe. This case
+		// returns early, so any model left out of the fan-out has its
+		// spinner frozen on frame 0 (the Conversations/Notes/Cursor
+		// bug) — add new spinner owners here.
+		var scmd, pcmd, ncmd, ccmd, nocmd, acmd tea.Cmd
 		a.settings, scmd = a.settings.Update(msg)
 		a.projectsM, pcmd = a.projectsM.Update(msg)
 		a.network, ncmd = a.network.Update(msg)
-		return a, tea.Batch(scmd, pcmd, ncmd)
+		a.conversationsM, ccmd = a.conversationsM.Update(msg)
+		a.notes, nocmd = a.notes.Update(msg)
+		a.agentsM, acmd = a.agentsM.Update(msg)
+		return a, tea.Batch(scmd, pcmd, ncmd, ccmd, nocmd, acmd)
 
 	case conversationDeletedMsg:
 		if msg.Err != nil {
@@ -1322,6 +1336,33 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			var cmd tea.Cmd
 			a.notes, cmd = a.notes.Update(msg)
+			return a, cmd
+		}
+
+		// Settings inline editor: the textinput owns every keystroke so
+		// characters typed into a value (e.g. a projects.root path with
+		// an "r", a digit, or a "q" in it) aren't hijacked by the global
+		// refresh / screen-switch / quit handlers. ctrl+c still quits so
+		// the user is never trapped.
+		if a.screen == ScreenSettings && a.settings.IsEditing() {
+			if msg.String() == "ctrl+c" {
+				return a, tea.Quit
+			}
+			var cmd tea.Cmd
+			a.settings, cmd = a.settings.Update(msg)
+			return a, cmd
+		}
+
+		// Agents modal picker (Claude model / effort): the picker owns
+		// every keystroke — up/down/enter/esc drive the selection — so
+		// digit screen-switch and the global "q" quit-confirm can't fire
+		// over the modal. ctrl+c still quits.
+		if a.screen == ScreenAgents && a.agentsM.ModalOpen() {
+			if msg.String() == "ctrl+c" {
+				return a, tea.Quit
+			}
+			var cmd tea.Cmd
+			a.agentsM, cmd = a.agentsM.Update(msg)
 			return a, cmd
 		}
 

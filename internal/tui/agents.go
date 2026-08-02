@@ -72,7 +72,12 @@ func (m agentsModel) Update(msg tea.Msg) (agentsModel, tea.Cmd) {
 	// model owns `←`/`→` to swap pane focus between list and
 	// preview, and `j/k/up/down/enter` for list nav + viewport
 	// scroll — so tab and the arrow keys never collide.
-	if km, ok := msg.(tea.KeyMsg); ok {
+	//
+	// Suppressed while a sub-model's modal picker owns the viewport
+	// (Claude's model/effort picker): the picker swallows every key
+	// until esc/enter closes it, so tab/h/l must reach it rather
+	// than yank the sub-tab out from under the open modal.
+	if km, ok := msg.(tea.KeyMsg); ok && !m.ModalOpen() {
 		switch km.String() {
 		case "tab", "l":
 			m.active = nextAgentSubtab(m.active, +1)
@@ -119,6 +124,16 @@ func (m agentsModel) Update(msg tea.Msg) (agentsModel, tea.Cmd) {
 	return m, nil
 }
 
+// ModalOpen reports whether a sub-model's modal picker owns the Agents
+// viewport — today only the Claude sub-tab's model/effort picker. App
+// includes this in modalCapturingText and routes keystrokes straight to
+// this model while true, so global single-key handlers (digit
+// screen-switch, "q" quit-confirm, the M/T overlays) can't fire over
+// the open modal.
+func (m agentsModel) ModalOpen() bool {
+	return m.active == agent.IDClaude && m.claude.PickerOpen()
+}
+
 // onSubtabSwitch refreshes per-sub-tab background data when the user
 // flips to a new sub-tab. Today only the Cursor sub-tab needs this —
 // its SQLite-backed data has a 30s TTL.
@@ -133,14 +148,16 @@ func (m agentsModel) onSubtabSwitch() (agentsModel, tea.Cmd) {
 
 // HelpBarProps returns the screen-specific key hints for the Agents
 // screen. The hint line is per-sub-tab: keys that only apply to the
-// Claude sub-tab (model picker, effort picker, c/j edit shortcuts)
+// Claude sub-tab (model picker, effort picker, the c edit shortcut)
 // only appear when Claude is active, so the hints match the keys
 // that actually do something at the cursor.
 //
 // Common hints (?, q, tab, h/l, 1-7) are present on every sub-tab.
 // Sub-tab specifics:
 //
-//   - Claude: m model, e effort, a always, y yolo, c CLAUDE.md, j settings.json.
+//   - Claude: m model, e effort, a always, y yolo, c CLAUDE.md
+//     (settings.json opens via Enter on its row — no letter shortcut
+//     since the PR #164 rework made j pure down-navigation).
 //   - Codex / Antigravity: r effort, y yolo, e edit.
 //   - Cursor: (read-only) — no per-sub-tab keys.
 func (m agentsModel) HelpBarProps(width int) components.HelpBarProps {

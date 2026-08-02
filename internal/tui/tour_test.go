@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -103,6 +104,26 @@ func TestDefaultTourSteps_ContainsRequiredAnchors(t *testing.T) {
 		if !strings.Contains(all, must) {
 			t.Errorf("tour script missing reference to %q screen", must)
 		}
+	}
+}
+
+// TestTour_WelcomeCopyMatchesStepCount is the regression test for the
+// welcome slide advertising a step count that drifted from reality
+// ("This 5-step tour" while the tour had 4 slides). The count is now
+// stamped in from len(steps), so this pins that the copy and the slice
+// can never disagree again.
+func TestTour_WelcomeCopyMatchesStepCount(t *testing.T) {
+	steps := defaultTourSteps()
+	if len(steps) == 0 {
+		t.Fatal("tour has no steps")
+	}
+	welcome := strings.Join(steps[0].Body, "\n")
+	want := fmt.Sprintf("This %d-step tour", len(steps))
+	if !strings.Contains(welcome, want) {
+		t.Errorf("welcome copy does not advertise the real step count: want substring %q in:\n%s", want, welcome)
+	}
+	if strings.Contains(welcome, "%d") {
+		t.Errorf("count placeholder was not stamped in:\n%s", welcome)
 	}
 }
 
