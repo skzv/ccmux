@@ -173,7 +173,7 @@ func (a App) renderAttachingOverlay(width, height int) string {
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(a.styles.P.Mauve).
-		Padding(1, 3).
+		Padding(a.styles.Spacing.SM, a.styles.Spacing.LG).
 		Render(lipgloss.JoinVertical(lipgloss.Center, rows...))
 
 	return lipgloss.Place(width, height,

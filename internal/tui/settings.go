@@ -387,6 +387,12 @@ func (m settingsModel) SpinnerTick() tea.Cmd {
 // characters the user is typing into a value.
 func (m settingsModel) IsEditing() bool { return m.editing }
 
+// capturesInput reports whether this screen has a modal/text-entry
+// state that must swallow global single-key handlers. OR'd into
+// App.modalCapturingText — extend this when adding a new modal to
+// the Settings screen.
+func (m settingsModel) capturesInput() bool { return m.IsEditing() }
+
 func (m settingsModel) Update(msg tea.Msg) (settingsModel, tea.Cmd) {
 	// Editor mode owns the keyboard: enter to commit, esc to cancel.
 	if m.editing {

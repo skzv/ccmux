@@ -297,24 +297,19 @@ func iconForHost(h hostStatus, st styles.Styles) string {
 }
 
 // truncatePeerName cuts a name to fit `n` visible columns, replacing
-// the dropped tail with an ellipsis. Operates on runes so multi-byte
-// characters (CJK, emoji) survive cleanly when they fit.
+// the dropped tail with an ellipsis. Thin wrapper over the canonical
+// ANSI-aware truncate (sessions.go); the historical n <= 1 contract —
+// a hard rune cut with no ellipsis — is preserved because callers use
+// it for degenerate column budgets where "…" alone would be noise.
 func truncatePeerName(s string, n int) string {
-	if lipgloss.Width(s) <= n {
-		return s
-	}
 	if n <= 1 {
 		runes := []rune(s)
 		if len(runes) <= n {
 			return s
 		}
-		return string(runes[:n])
+		return string(runes[:max0(n)])
 	}
-	runes := []rune(s)
-	if len(runes) <= n-1 {
-		return s
-	}
-	return string(runes[:n-1]) + "…"
+	return truncate(s, n)
 }
 
 // versionsDiffer normalizes the LDFLAGS-baked version strings (e.g.

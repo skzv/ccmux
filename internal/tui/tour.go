@@ -202,7 +202,7 @@ func (m tourModel) View(w, h int) string {
 
 	body := strings.Join(lines, "\n")
 	card := lipgloss.NewStyle().
-		Padding(1, 3).
+		Padding(m.st.Spacing.SM, m.st.Spacing.LG).
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(m.st.P.Mauve).
 		Width(cardW).

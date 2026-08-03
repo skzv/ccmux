@@ -197,12 +197,19 @@ type App struct {
 }
 
 // modalCapturingText returns true when the App is in a state where
-// keystrokes are going into a text field, so the matrix easter egg
-// must NOT capture them. Reported case: typing a session name like
-// "matrix-experiment" in the new-session form fired the overlay.
-// Listed states: the new-project / new-session form modals, the
-// notes search bar, the tour, the help overlay, the settings inline
-// editor, and the Agents modal picker.
+// keystrokes are going into a text field or a modal owns the
+// viewport, so global single-key handlers (the matrix easter egg,
+// screen-switch digits, overlay toggles) must NOT capture them.
+// Reported case: typing a session name like "matrix-experiment" in
+// the new-session form fired the overlay.
+//
+// The App owns only its own overlay states here; every screen model
+// reports its modal/text-capture states through its own
+// capturesInput() method, OR'd below. This replaces the old
+// hand-maintained cross-model list, which missed newly-added modals
+// twice — a screen adding a modal now extends its own
+// capturesInput(), right next to the state it adds, instead of
+// remembering to edit App.
 func (a App) modalCapturingText() bool {
 	if a.confirm.open() {
 		return true
@@ -210,34 +217,17 @@ func (a App) modalCapturingText() bool {
 	if a.sshWizard != nil && a.sshWizard.Active() {
 		return true
 	}
-	if a.tour.Active() || a.helpOpen || a.usageOpen || a.convPreview.IsOpen() || a.projectInfoOpen || a.settingsInfoOpen || a.network.DetailOpen() {
+	// App-owned overlays.
+	if a.tour.Active() || a.helpOpen || a.usageOpen || a.convPreview.IsOpen() || a.projectInfoOpen || a.settingsInfoOpen {
 		return true
 	}
-	if a.projectsM.form != nil || a.projectsM.menu != nil {
-		return true
-	}
-	if a.sessionsM.form != nil || a.sessionsM.renameForm != nil {
-		return true
-	}
-	if a.projectsM.FilterActive() {
-		return true
-	}
-	if a.settings.IsEditing() {
-		return true
-	}
-	if a.agentsM.ModalOpen() {
-		return true
-	}
-	if a.notes.searching {
-		return true
-	}
-	if a.notes.newNoteForm != nil {
-		return true
-	}
-	if a.notes.noteInfo.open {
-		return true
-	}
-	return false
+	// Per-screen seams.
+	return a.sessionsM.capturesInput() ||
+		a.projectsM.capturesInput() ||
+		a.notes.capturesInput() ||
+		a.agentsM.capturesInput() ||
+		a.settings.capturesInput() ||
+		a.network.capturesInput()
 }
 
 // New constructs the root model.
@@ -493,6 +483,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.width, a.height = msg.Width, msg.Height
 		a.matrix.SetSize(msg.Width, msg.Height)
 		a.notes.SetSize(msg.Width, msg.Height)
+		// The Agents screen's embedded browsers hold persistent
+		// viewports; push the body rectangle they'll be rendered
+		// into so scrolling clamps against the real pane size.
+		a.agentsM.SetSize(msg.Width, a.screenBodyHeight())
 		return a, nil
 
 	case matrixTickMsg:
@@ -1526,6 +1520,23 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // View renders the whole UI.
+// screenBodyHeight mirrors App.View's body budget for the active
+// screen: terminal height minus the rendered chrome rows (header,
+// status bar, help line). The transient toast row is deliberately
+// ignored — it shifts the budget by ~3 lines for a few seconds, which
+// is fine for the Update-side size consumers (the Agents browsers'
+// persistent viewports) that only need the steady-state rectangle.
+func (a App) screenBodyHeight() int {
+	chromeH := lipgloss.Height(a.renderHeader()) +
+		lipgloss.Height(a.renderStatusBar()) +
+		lipgloss.Height(a.renderHelpLine())
+	h := a.height - chromeH
+	if h < 5 {
+		h = 5
+	}
+	return h
+}
+
 func (a App) View() string {
 	if a.width == 0 {
 		return "loading…"
@@ -2644,12 +2655,15 @@ func (a App) attachOrCreateRemote(p project.Project, host string) tea.Cmd {
 			return toastMsg{Text: "no reachable daemon for host: " + host, Kind: toastError, Until: time.Now().Add(5 * time.Second)}
 		}
 	}
-	// Snapshot the dial/address before crossing the goroutine boundary.
+	// Snapshot the dial/address (and the SSH addressing fields the
+	// post-create attach needs — login user, sshd port, mosh
+	// preference) before crossing the goroutine boundary.
 	hostAddr := hs.Address
 	dial := hs.DialHost
 	if dial == "" {
 		dial = dialAddrFor(*hs)
 	}
+	sshUser, sshPort, useMosh := hs.User, hs.SSHPort, hs.Mosh
 	projectName := p.Name
 	return tea.Sequence(
 		func() tea.Msg {
@@ -2663,7 +2677,13 @@ func (a App) attachOrCreateRemote(p project.Project, host string) tea.Cmd {
 			if err != nil {
 				return toastMsg{Text: "remote start: " + err.Error(), Kind: toastError, Until: time.Now().Add(6 * time.Second)}
 			}
-			return remoteSessionStartedMsg{SessionName: ss.Name, DialHost: dial}
+			return remoteSessionStartedMsg{
+				SessionName: ss.Name,
+				DialHost:    dial,
+				User:        sshUser,
+				SSHPort:     sshPort,
+				Mosh:        useMosh,
+			}
 		},
 	)
 }

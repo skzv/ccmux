@@ -7,7 +7,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
+
+	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/config"
+	"github.com/skzv/ccmux/internal/conversations"
 	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/moshi"
 	"github.com/skzv/ccmux/internal/project"
@@ -17,6 +21,54 @@ import (
 func mustStyles(t *testing.T) styles.Styles {
 	t.Helper()
 	return styles.Default()
+}
+
+// TestModalCapturingText_PerModelSeams pins every state that must
+// suppress global single-key handlers, exercising the per-model
+// capturesInput() seams App.modalCapturingText ORs together. The
+// hand-maintained cross-model list this replaced missed newly-added
+// modals twice; this table is the contract each seam now upholds.
+func TestModalCapturingText_PerModelSeams(t *testing.T) {
+	cases := []struct {
+		name string
+		mut  func(a *App)
+	}{
+		{"sessions new-session form", func(a *App) { f := newNewSessionForm(a.styles, nil, "", ""); a.sessionsM.form = &f }},
+		{"sessions rename form", func(a *App) { f := newRenameForm(a.styles, "c-x"); a.sessionsM.renameForm = &f }},
+		{"projects new-project form", func(a *App) { f := newNewProjectForm(a.styles, nil, ""); a.projectsM.form = &f }},
+		{"projects menu", func(a *App) { a.projectsM.menu = &projectMenuModel{} }},
+		{"projects filter", func(a *App) { a.projectsM.filterActive = true }},
+		{"notes search", func(a *App) { a.notes.searching = true }},
+		{"notes new-note form", func(a *App) { a.notes.newNoteForm = &newNoteFormModel{} }},
+		{"notes info overlay", func(a *App) { a.notes.noteInfo.open = true }},
+		{"settings inline editor", func(a *App) { a.settings.editing = true }},
+		{"network detail overlay", func(a *App) { a.network.detailOpen = true }},
+		{"agents claude picker", func(a *App) {
+			a.agentsM.active = agent.IDClaude
+			a.agentsM.claude.picker = pickerModel
+		}},
+		{"quit confirmation", func(a *App) { a.confirm = newQuitConfirmation() }},
+		{"tour", func(a *App) { a.tour.Open() }},
+		{"help overlay", func(a *App) { a.helpOpen = true }},
+		{"usage overlay", func(a *App) { a.usageOpen = true }},
+		{"conversation preview overlay", func(a *App) {
+			a.convPreview.Open(conversations.Conversation{ID: "x"})
+		}},
+		{"project info overlay", func(a *App) { a.projectInfoOpen = true }},
+		{"settings info overlay", func(a *App) { a.settingsInfoOpen = true }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := newAppForTest(t)
+			if a.modalCapturingText() {
+				t.Fatal("baseline App already capturing text — table is meaningless")
+			}
+			tc.mut(&a)
+			if !a.modalCapturingText() {
+				t.Errorf("%s open but modalCapturingText() = false — global keys would fire over the modal", tc.name)
+			}
+		})
+	}
 }
 
 func TestProjectHost(t *testing.T) {
@@ -374,6 +426,35 @@ func TestTruncatePeerName(t *testing.T) {
 	for _, tc := range cases {
 		if got := truncatePeerName(tc.in, tc.n); got != tc.want {
 			t.Errorf("truncatePeerName(%q, %d) = %q, want %q", tc.in, tc.n, got, tc.want)
+		}
+	}
+}
+
+// TestTruncationConsolidation_WidthSafety — the truncation helpers
+// were consolidated onto the ANSI-aware truncate (sessions.go), with
+// truncateDisplay / truncatePeerName kept as thin wrappers. This pins
+// the property the consolidation buys: no wrapper ever emits more
+// visible columns than its budget, including wide (CJK) runes that
+// the old rune-count-based cuts overflowed on.
+func TestTruncationConsolidation_WidthSafety(t *testing.T) {
+	inputs := []string{
+		"plain-ascii-name-that-is-quite-long",
+		"世界世界世界世界",
+		"mixed 世界 name with width",
+	}
+	helpers := map[string]func(string, int) string{
+		"truncate":         truncate,
+		"truncateDisplay":  truncateDisplay,
+		"truncatePeerName": truncatePeerName,
+	}
+	for _, s := range inputs {
+		for _, n := range []int{2, 4, 6, 10, 40} {
+			for name, fn := range helpers {
+				if got := fn(s, n); lipgloss.Width(got) > n {
+					t.Errorf("%s(%q, %d) = %q (width %d) — exceeds the column budget",
+						name, s, n, got, lipgloss.Width(got))
+				}
+			}
 		}
 	}
 }

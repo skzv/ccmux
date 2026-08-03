@@ -102,8 +102,23 @@ func (o conversationPreviewOverlay) View(st styles.Styles, width, height int) st
 		previewMessageLimit, emptyOr(o.conversation.Project, "(unknown project)")))
 
 	body := o.renderBody(st, overlayW)
-
 	footer := st.Muted.Render("press p or esc to close")
+
+	// Clamp the body to the height budget by tailing its rendered
+	// lines — up to 30 Glamour-formatted messages can easily exceed a
+	// terminal, and an unclamped modal pushed the newest turns AND the
+	// close-hint footer off-screen (while the overlay swallowed every
+	// key except p/esc). Tailing keeps the newest content visible,
+	// mirroring the session preview's tailLines approach. Chrome
+	// around the body: heading + sub + two blank spacers + footer,
+	// plus the PaneFocused border/padding frame.
+	chromeH := lipgloss.Height(heading) + lipgloss.Height(sub) +
+		lipgloss.Height(footer) + 2 + st.PaneFocused.GetVerticalFrameSize()
+	bodyBudget := height - chromeH
+	if bodyBudget < 3 {
+		bodyBudget = 3
+	}
+	body = tailLines(body, bodyBudget, 0)
 
 	parts := []string{heading, sub, "", body, "", footer}
 	modal := st.PaneFocused.Width(overlayW).Render(strings.Join(parts, "\n"))

@@ -158,6 +158,90 @@ func TestNewSessionForm_SubmitCarriesDialHostUserMosh(t *testing.T) {
 	}
 }
 
+// TestHostChoicesFrom_CarriesSSHPort verifies hostChoicesFrom copies
+// the configured ssh_port onto the picker row. Regression: hostChoice
+// had no SSHPort field, so the Sessions-tab `n` submit always left
+// newBareSessionSubmitMsg.SSHPort = 0 and the follow-up attach dialed
+// port 22 on hosts with a non-default sshd.
+func TestHostChoicesFrom_CarriesSSHPort(t *testing.T) {
+	h := remoteHost("mac-mini", "mac-mini.local", "sasha", true)
+	h.SSHPort = 2222
+	choices := hostChoicesFrom([]hostStatus{{Name: "local", Local: true, OK: true}, h})
+	if len(choices) != 2 {
+		t.Fatalf("len(choices) = %d, want 2", len(choices))
+	}
+	if choices[1].SSHPort != 2222 {
+		t.Errorf("SSHPort = %d, want 2222", choices[1].SSHPort)
+	}
+}
+
+// TestNewSessionForm_SubmitCarriesSSHPort drives the full form flow
+// (tab to the device row, pick the remote, Enter) for a host with
+// ssh_port 2222 + user + mosh configured and asserts the submit
+// message carries all three addressing fields.
+func TestNewSessionForm_SubmitCarriesSSHPort(t *testing.T) {
+	st := styles.Default()
+	h := remoteHost("mac-mini", "mac-mini.local", "sasha", true)
+	h.SSHPort = 2222
+	hosts := []hostStatus{{Name: "local", Local: true, OK: true}, h}
+	form := newNewSessionForm(st, hosts, "", "")
+
+	form, _ = form.Update(keyMsg("tab"))
+	form, _ = form.Update(keyMsg("tab"))
+	form, _ = form.Update(keyMsg("right"))
+	_, cmd := form.Update(keyMsg("enter"))
+	if cmd == nil {
+		t.Fatal("enter produced no cmd")
+	}
+	submit, ok := cmd().(newBareSessionSubmitMsg)
+	if !ok {
+		t.Fatalf("cmd() = %T, want newBareSessionSubmitMsg", cmd())
+	}
+	if submit.SSHPort != 2222 {
+		t.Errorf("SSHPort = %d, want 2222", submit.SSHPort)
+	}
+	if submit.User != "sasha" {
+		t.Errorf("User = %q, want sasha", submit.User)
+	}
+	if !submit.Mosh {
+		t.Error("Mosh = false, want true")
+	}
+}
+
+// TestRemoteStartedFromBareSubmit_CarriesSSHFields pins the submit →
+// attach-trigger mapping used by spawnBareSessionCmd's remote branch:
+// every SSH addressing field must survive into remoteSessionStartedMsg,
+// and an empty DialHost falls back to the display name.
+func TestRemoteStartedFromBareSubmit_CarriesSSHFields(t *testing.T) {
+	cases := []struct {
+		name   string
+		submit newBareSessionSubmitMsg
+		want   remoteSessionStartedMsg
+	}{
+		{
+			name: "full addressing",
+			submit: newBareSessionSubmitMsg{
+				Host: "mac-mini", DialHost: "mac-mini.local",
+				User: "sasha", SSHPort: 2222, Mosh: true,
+			},
+			want: remoteSessionStartedMsg{
+				SessionName: "c-x", DialHost: "mac-mini.local",
+				User: "sasha", SSHPort: 2222, Mosh: true,
+			},
+		},
+		{
+			name:   "dialhost falls back to display name",
+			submit: newBareSessionSubmitMsg{Host: "mac-mini"},
+			want:   remoteSessionStartedMsg{SessionName: "c-x", DialHost: "mac-mini"},
+		},
+	}
+	for _, tc := range cases {
+		if got := remoteStartedFromBareSubmit(tc.submit, "c-x"); got != tc.want {
+			t.Errorf("%s: remoteStartedFromBareSubmit = %+v, want %+v", tc.name, got, tc.want)
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Bug 3: Mosh not used in remoteSessionStartedMsg handler
 // ---------------------------------------------------------------------------

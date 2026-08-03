@@ -138,6 +138,15 @@ func (m codexConfigModel) View(width, height int) string {
 // outer Pane border. agentsModel.View owns the bordered chrome so
 // the sub-tab row + body share one continuous block.
 func (m codexConfigModel) ViewBody(width, height int) string {
+	headerStr := m.viewBodyHeader(width)
+	browserView := m.browser.View(width, m.browserHeight(width, height))
+	return lipgloss.JoinVertical(lipgloss.Left, headerStr, browserView)
+}
+
+// viewBodyHeader builds the settings header stacked above the browser.
+// Extracted from ViewBody so setSize can measure the exact same header
+// when deriving the browser's height budget.
+func (m codexConfigModel) viewBodyHeader(width int) string {
 	st := m.st
 	narrow := isNarrow(width)
 	header := []string{st.Emphasis.Render("Codex configuration")}
@@ -166,15 +175,22 @@ func (m codexConfigModel) ViewBody(width, height int) string {
 		header = append(header, "", st.StatusGood.Render("saved ✓  "+m.saveMsg))
 	}
 	header = append(header, "")
-	headerStr := strings.Join(header, "\n")
-	headerH := lipgloss.Height(headerStr)
+	return strings.Join(header, "\n")
+}
 
-	browserH := height - headerH
+// browserHeight is the browser's slice of the sub-tab body.
+func (m codexConfigModel) browserHeight(width, height int) int {
+	browserH := height - lipgloss.Height(m.viewBodyHeader(width))
 	if browserH < 8 {
 		browserH = 8
 	}
-	browserView := m.browser.View(width, browserH)
-	return lipgloss.JoinVertical(lipgloss.Left, headerStr, browserView)
+	return browserH
+}
+
+// setSize persists the embedded browser's viewport geometry for the
+// given sub-tab body rectangle (see claudeModel.setSize).
+func (m *codexConfigModel) setSize(width, height int) {
+	m.browser.SetSize(width, m.browserHeight(width, height))
 }
 
 // emphOrPlaceholder renders `v` with Emphasis if non-empty, otherwise

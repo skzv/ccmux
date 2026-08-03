@@ -296,6 +296,91 @@ func TestNewProjectForm_SubmitCarriesAgent(t *testing.T) {
 	}
 }
 
+// TestNewProjectForm_SubmitCarriesSSHFields drives the full form flow
+// for a remote host with ssh_port 2222 + user + mosh configured and
+// asserts the submit message carries all three. Regression: the
+// Projects-tab `n` flow dropped User and Mosh entirely (and SSHPort
+// had no field to ride in), so the post-create attach dialed port 22
+// as the local user over plain ssh.
+func TestNewProjectForm_SubmitCarriesSSHFields(t *testing.T) {
+	st := styles.Default()
+	hosts := []hostStatus{
+		{Name: "sputnik", Local: true, OK: true},
+		{
+			Name: "mac-mini", OK: true,
+			Address:  "100.75.64.20:7474",
+			DialHost: "mac-mini",
+			User:     "sasha",
+			SSHPort:  2222,
+			Mosh:     true,
+		},
+	}
+	f := newNewProjectForm(st, hosts, "")
+
+	// Type a name, tab to the device row, → onto the remote, submit.
+	f, _ = runMsgs(t, f, keyMsg("p"), keyMsg("r"), keyMsg("o"), keyMsg("j"))
+	f, _ = runMsgs(t, f, keyMsg("tab"), keyMsg("right"))
+	_, msg := runMsgs(t, f, keyMsg("enter"))
+	sub, ok := msg.(newProjectSubmitMsg)
+	if !ok {
+		t.Fatalf("expected newProjectSubmitMsg, got %T", msg)
+	}
+	if sub.User != "sasha" {
+		t.Errorf("User = %q, want sasha", sub.User)
+	}
+	if sub.SSHPort != 2222 {
+		t.Errorf("SSHPort = %d, want 2222", sub.SSHPort)
+	}
+	if !sub.Mosh {
+		t.Error("Mosh = false, want true")
+	}
+
+	// The local pick must stay clean of remote addressing.
+	f2 := newNewProjectForm(st, hosts, "")
+	f2, _ = runMsgs(t, f2, keyMsg("x"))
+	_, msg2 := runMsgs(t, f2, keyMsg("enter"))
+	sub2, ok := msg2.(newProjectSubmitMsg)
+	if !ok {
+		t.Fatalf("expected newProjectSubmitMsg, got %T", msg2)
+	}
+	if sub2.User != "" || sub2.SSHPort != 0 || sub2.Mosh {
+		t.Errorf("local submit carries remote SSH fields: %+v", sub2)
+	}
+}
+
+// TestRemoteStartedFromProjectSubmit_CarriesSSHFields pins the submit →
+// attach-trigger mapping used by createProjectCmd's remote branch. The
+// old inline construction populated only SessionName and DialHost.
+func TestRemoteStartedFromProjectSubmit_CarriesSSHFields(t *testing.T) {
+	cases := []struct {
+		name   string
+		submit newProjectSubmitMsg
+		want   remoteSessionStartedMsg
+	}{
+		{
+			name: "full addressing",
+			submit: newProjectSubmitMsg{
+				Host: "mac-mini", DialHost: "mac-mini.local",
+				User: "sasha", SSHPort: 2222, Mosh: true,
+			},
+			want: remoteSessionStartedMsg{
+				SessionName: "c-proj", DialHost: "mac-mini.local",
+				User: "sasha", SSHPort: 2222, Mosh: true,
+			},
+		},
+		{
+			name:   "dialhost falls back to display name",
+			submit: newProjectSubmitMsg{Host: "mac-mini"},
+			want:   remoteSessionStartedMsg{SessionName: "c-proj", DialHost: "mac-mini"},
+		},
+	}
+	for _, tc := range cases {
+		if got := remoteStartedFromProjectSubmit(tc.submit, "c-proj"); got != tc.want {
+			t.Errorf("%s: remoteStartedFromProjectSubmit = %+v, want %+v", tc.name, got, tc.want)
+		}
+	}
+}
+
 // TestNewProjectForm_PickerRowsDontConsumeTypedChars — typing into the
 // agent / host rows must not corrupt the picker state or trigger
 // textinput events. Without this guard a stray keystroke could silently

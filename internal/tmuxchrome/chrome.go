@@ -22,6 +22,8 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"sync"
+	"time"
 )
 
 // Theme colors. Matches the TUI's Catppuccin Mocha palette so the
@@ -330,12 +332,61 @@ func nestedReturnHint(prefix string, binding NestedReturnBinding) string {
 	return fmt.Sprintf("press %s then %s to return to ccmux", prefix, binding.Display)
 }
 
+// prefixCacheTTL bounds how often DetectedPrefix actually shells out.
+// Callers include the Sessions detail pane's render path, which runs
+// on every keystroke plus the 2s refresh tick — without a cache that
+// was one `tmux show-options` subprocess per frame. The prefix key
+// effectively never changes mid-session, so a few seconds of staleness
+// is invisible while the exec cost drops to ~once per TTL.
+const prefixCacheTTL = 5 * time.Second
+
+// prefixCache is the memoized DetectedPrefix result. Guarded by its
+// own mutex (the TUI render path and tmuxchrome.Apply can race).
+var prefixCache struct {
+	mu      sync.Mutex
+	value   string
+	fetched time.Time
+}
+
+// Seams for tests: the exec that reads the prefix option, and the
+// clock the cache expires against.
+var (
+	showPrefixOption = func(ctx context.Context) ([]byte, error) {
+		return exec.CommandContext(ctx, "tmux", "show-options", "-g", "prefix").Output()
+	}
+	prefixNow = time.Now
+)
+
+// resetPrefixCache clears the memoized prefix. Test helper — the
+// production cache only ever expires via TTL.
+func resetPrefixCache() {
+	prefixCache.mu.Lock()
+	defer prefixCache.mu.Unlock()
+	prefixCache.value = ""
+	prefixCache.fetched = time.Time{}
+}
+
 // DetectedPrefix returns the human-readable form of the user's current
 // tmux prefix-key binding (default Ctrl-b). Used by Apply and by the
 // Sessions detail pane so the hint matches the user's actual keymap
 // instead of assuming defaults. Returns "Ctrl-b" on any error.
+//
+// Results (including the error fallback) are cached for prefixCacheTTL
+// so hot render paths don't spawn a subprocess per frame.
 func DetectedPrefix(ctx context.Context) string {
-	out, err := exec.CommandContext(ctx, "tmux", "show-options", "-g", "prefix").Output()
+	prefixCache.mu.Lock()
+	defer prefixCache.mu.Unlock()
+	if prefixCache.value != "" && prefixNow().Sub(prefixCache.fetched) < prefixCacheTTL {
+		return prefixCache.value
+	}
+	prefixCache.value = detectPrefixUncached(ctx)
+	prefixCache.fetched = prefixNow()
+	return prefixCache.value
+}
+
+// detectPrefixUncached is the single real read of the prefix option.
+func detectPrefixUncached(ctx context.Context) string {
+	out, err := showPrefixOption(ctx)
 	if err != nil {
 		return "Ctrl-b"
 	}

@@ -438,6 +438,19 @@ func (m claudeModel) View(width, height int) string {
 // sub-model.
 func (m claudeModel) ViewBody(width, height int) string {
 	m.narrow = isNarrow(width)
+	headerStr := m.viewBodyHeader()
+	browserView := m.browser.View(width, m.browserHeight(height))
+	body := lipgloss.JoinVertical(lipgloss.Left, headerStr, browserView)
+	if !m.narrow && m.lastBackup != "" {
+		body = lipgloss.JoinVertical(lipgloss.Left, body, m.st.Muted.Render("last write backed up to "+summarizePath(m.lastBackup)))
+	}
+	return body
+}
+
+// viewBodyHeader builds the settings-rows header stacked above the
+// browser. Extracted from ViewBody so setSize can measure the exact
+// same header when deriving the browser's height budget.
+func (m claudeModel) viewBodyHeader() string {
 	st := m.st
 	// When the top zone has focus, highlight the selected settings row;
 	// otherwise the browser owns the visible selection so no top row is
@@ -458,19 +471,25 @@ func (m claudeModel) ViewBody(width, height int) string {
 	)
 	header = append(header, m.renderConfigFilesRows(selected)...)
 	header = append(header, "")
-	headerStr := strings.Join(header, "\n")
-	headerH := lipgloss.Height(headerStr)
+	return strings.Join(header, "\n")
+}
 
-	browserH := height - headerH
+// browserHeight is the browser's slice of the sub-tab body: whatever
+// the header doesn't use, floored so the two panes stay usable.
+func (m claudeModel) browserHeight(height int) int {
+	browserH := height - lipgloss.Height(m.viewBodyHeader())
 	if browserH < 8 {
 		browserH = 8
 	}
-	browserView := m.browser.View(width, browserH)
-	body := lipgloss.JoinVertical(lipgloss.Left, headerStr, browserView)
-	if !m.narrow && m.lastBackup != "" {
-		body = lipgloss.JoinVertical(lipgloss.Left, body, st.Muted.Render("last write backed up to "+summarizePath(m.lastBackup)))
-	}
-	return body
+	return browserH
+}
+
+// setSize persists the embedded browser's viewport geometry for the
+// given sub-tab body rectangle. Called by agentsModel.SetSize on
+// every terminal resize — the View chain is value-receiver all the
+// way down, so this is the only place the size can stick.
+func (m *claudeModel) setSize(width, height int) {
+	m.browser.SetSize(width, m.browserHeight(height))
 }
 
 // renderDefaultsRows produces the indented label/value/source rows

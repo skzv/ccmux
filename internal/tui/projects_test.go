@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/skzv/ccmux/internal/agent"
@@ -609,6 +611,36 @@ func TestLocalProjectDir_EmptyRootDefaultsToHomeProjects(t *testing.T) {
 	want := filepath.Join(home, "Projects", "myproj")
 	if got != want {
 		t.Errorf("localProjectDir(empty root) = %q, want %q", got, want)
+	}
+}
+
+// TestProjects_NewItemPrimesCursorBlink — pressing `n` on the
+// Projects screen must open the new-project form AND prime the
+// textinput blink chain (a cursor.BlinkMsg-producing Cmd). Regression:
+// textInputBlink() was a stub returning nil, so the form opened with
+// a frozen, non-blinking cursor — unlike the Sessions-screen form,
+// which wires textinput.Blink.
+func TestProjects_NewItemPrimesCursorBlink(t *testing.T) {
+	m := newProjects(styles.Default(), DefaultKeymap())
+	m2, cmd := m.Update(keyMsg("n"))
+	if m2.form == nil {
+		t.Fatal("`n` did not open the new-project form")
+	}
+	if cmd == nil {
+		t.Fatal("`n` returned a nil Cmd — the cursor blink chain is never primed")
+	}
+	// The blink kickoff message's concrete type is unexported in
+	// bubbles/cursor, so match by type identity against what
+	// textinput.Blink itself produces.
+	wantType := reflect.TypeOf(textinput.Blink())
+	sawBlink := false
+	for _, msg := range drainCmd(cmd) {
+		if reflect.TypeOf(msg) == wantType {
+			sawBlink = true
+		}
+	}
+	if !sawBlink {
+		t.Error("`n` scheduled no textinput blink message — the form's name field won't blink")
 	}
 }
 

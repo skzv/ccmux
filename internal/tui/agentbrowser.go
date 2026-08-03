@@ -303,13 +303,26 @@ func (b *agentBrowser) updatePreview() {
 	b.preview.GotoTop()
 }
 
-// View renders the browser inline at (width, height). The layout is
-// a 40/60 split between two bordered panes; the focused pane wears
-// the accent (PaneFocused) border, the unfocused pane wears the
-// muted (Pane) border, so the user can see at a glance which side
-// j/k drive.
-func (b agentBrowser) View(width, height int) string {
-	st := b.st
+// agentBrowserGeo carries the pane frame/content dimensions derived
+// from the rectangle the host hands the browser. Split out as a pure
+// function so the Update-side SetSize and the render-side View share
+// exactly one set of layout math — the two must agree or scrolling
+// clamps against a viewport size the render never uses.
+type agentBrowserGeo struct {
+	listFrameW, listContentW       int
+	previewFrameW, previewContentW int
+	paneFrameH                     int // outer frame height for both panes
+	previewViewH                   int // preview viewport height inside the frame
+}
+
+// agentBrowserGeometry computes the two-pane layout for an inline
+// browser rendered at (width, height). The layout is a 40/60 split;
+// st.Pane carries Border() (1 cell each side) + Padding(0, 1) (1 cell
+// horizontal each side), so the outer pane width is content + 2
+// padding + 2 border = content + 4. When we hand the pane a .Width(N)
+// the call sets inner-frame width (content + padding), so the actual
+// content area is N - 2.
+func agentBrowserGeometry(width, height int) agentBrowserGeo {
 	if width < 60 {
 		width = 60
 	}
@@ -329,42 +342,72 @@ func (b agentBrowser) View(width, height int) string {
 	}
 	previewW := width - listW
 
-	// Frame each pane. st.Pane carries Border() (1 cell each side) +
-	// Padding(0, 1) (1 cell horizontal each side); so the outer pane
-	// width is content + 2 padding + 2 border = content + 4. When we
-	// hand the pane a .Width(N) the call sets inner-frame width
-	// (content + padding), so the actual content area is N - 2.
-	const paneChromeH = 4                            // border + padding horizontally
-	const paneInnerPad = 2                           // padding horizontally (subtracted from .Width)
-	listFrameW := listW - paneChromeH + paneInnerPad // content + padding to pass to .Width
-	if listFrameW < 6 {
-		listFrameW = 6
+	const paneChromeH = 4  // border + padding horizontally
+	const paneInnerPad = 2 // padding horizontally (subtracted from .Width)
+	g := agentBrowserGeo{}
+	g.listFrameW = listW - paneChromeH + paneInnerPad // content + padding to pass to .Width
+	if g.listFrameW < 6 {
+		g.listFrameW = 6
 	}
-	listContentW := listFrameW - paneInnerPad
-	if listContentW < 4 {
-		listContentW = 4
+	g.listContentW = g.listFrameW - paneInnerPad
+	if g.listContentW < 4 {
+		g.listContentW = 4
 	}
-	listFrameH := bodyH - 2
-	if listFrameH < 3 {
-		listFrameH = 3
+	g.paneFrameH = bodyH - 2
+	if g.paneFrameH < 3 {
+		g.paneFrameH = 3
 	}
-	previewFrameW := previewW - paneChromeH + paneInnerPad
-	if previewFrameW < 6 {
-		previewFrameW = 6
+	g.previewFrameW = previewW - paneChromeH + paneInnerPad
+	if g.previewFrameW < 6 {
+		g.previewFrameW = 6
 	}
-	previewContentW := previewFrameW - paneInnerPad
-	if previewContentW < 4 {
-		previewContentW = 4
+	g.previewContentW = g.previewFrameW - paneInnerPad
+	if g.previewContentW < 4 {
+		g.previewContentW = 4
 	}
-	previewFrameH := bodyH - 2
-	if previewFrameH < 3 {
-		previewFrameH = 3
-	}
+	g.previewViewH = g.paneFrameH - 2
+	return g
+}
 
-	b.preview.Width = previewContentW
-	b.preview.Height = previewFrameH - 2
+// SetSize persists the preview viewport's real geometry on the model.
+// Must be called from an Update-side path (the host's setSize chain,
+// rooted at App's tea.WindowSizeMsg handler) — View has a value
+// receiver, so the sizes it computes each frame die with the frame
+// copy. Without this the viewport kept its constructed 80×20 size
+// forever: scrolling clamped against Height=20 (short panes could
+// never reach the last lines, tall panes overscrolled into blank
+// space) and Glamour wrapped markdown at the stale width.
+func (b *agentBrowser) SetSize(width, height int) {
+	g := agentBrowserGeometry(width, height)
+	if b.preview.Width == g.previewContentW && b.preview.Height == g.previewViewH {
+		return
+	}
+	widthChanged := b.preview.Width != g.previewContentW
+	b.preview.Width = g.previewContentW
+	b.preview.Height = g.previewViewH
+	if widthChanged {
+		// Re-render the selection so Glamour re-wraps at the real
+		// width (updatePreview reads b.preview.Width).
+		b.updatePreview()
+	}
+}
 
-	listContent := b.renderList(listContentW, listFrameH-2)
+// View renders the browser inline at (width, height). The layout is
+// a 40/60 split between two bordered panes; the focused pane wears
+// the accent (PaneFocused) border, the unfocused pane wears the
+// muted (Pane) border, so the user can see at a glance which side
+// j/k drive.
+func (b agentBrowser) View(width, height int) string {
+	st := b.st
+	g := agentBrowserGeometry(width, height)
+
+	// Local (value-copy) sizing keeps the render correct for callers
+	// that never wired SetSize; the persistent size for Update-side
+	// scrolling comes from SetSize.
+	b.preview.Width = g.previewContentW
+	b.preview.Height = g.previewViewH
+
+	listContent := b.renderList(g.listContentW, g.paneFrameH-2)
 	previewContent := b.preview.View()
 
 	listStyle, previewStyle := st.Pane, st.Pane
@@ -373,8 +416,8 @@ func (b agentBrowser) View(width, height int) string {
 	} else {
 		previewStyle = st.PaneFocused
 	}
-	listPane := listStyle.Width(listFrameW).Height(listFrameH).Render(listContent)
-	previewPane := previewStyle.Width(previewFrameW).Height(previewFrameH).Render(previewContent)
+	listPane := listStyle.Width(g.listFrameW).Height(g.paneFrameH).Render(listContent)
+	previewPane := previewStyle.Width(g.previewFrameW).Height(g.paneFrameH).Render(previewContent)
 
 	body := lipgloss.JoinHorizontal(lipgloss.Top, listPane, previewPane)
 

@@ -992,17 +992,15 @@ func wrapDetailText(s string, width int) string {
 	return ansi.Wrap(s, width, "/._")
 }
 
+// truncateDisplay is a thin wrapper over the canonical ANSI-aware
+// truncate (sessions.go). The one contract difference: width <= 0
+// yields "" here (callers budget columns and expect nothing when the
+// budget underflows), whereas truncate treats n <= 0 as a no-op.
 func truncateDisplay(s string, width int) string {
 	if width <= 0 {
 		return ""
 	}
-	if lipgloss.Width(s) <= width {
-		return s
-	}
-	if width == 1 {
-		return "…"
-	}
-	return ansi.Truncate(s, width, "…")
+	return truncate(s, width)
 }
 
 func indentBlock(s, indent string) string {

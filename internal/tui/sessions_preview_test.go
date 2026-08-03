@@ -265,8 +265,9 @@ func TestE2E_PreviewTickSurvivesScreenSwitch(t *testing.T) {
 	// Navigate to Projects.
 	a.screen = ScreenProjects
 
-	// A tick arrives while on Projects. It must still reschedule.
-	_, cmd := updateApp(t, a, previewTickMsg{})
+	// A tick from the live chain arrives while on Projects. It must
+	// still reschedule.
+	_, cmd := updateApp(t, a, previewTickMsg{gen: a.sessionsM.previewGen})
 	msgs := drainCmd(cmd)
 	sawNextTick := false
 	for _, m := range msgs {
@@ -285,13 +286,57 @@ func TestE2E_PreviewTickSurvivesScreenSwitch(t *testing.T) {
 func TestE2E_PreviewTickStopsWhenToggledOff(t *testing.T) {
 	a := buildPreviewApp(t, "x", nil)
 	a, _ = updateApp(t, a, keyMsg("p")) // on
+	liveGen := a.sessionsM.previewGen
 	a, _ = updateApp(t, a, keyMsg("p")) // off
-	_, cmd := updateApp(t, a, previewTickMsg{})
+	_, cmd := updateApp(t, a, previewTickMsg{gen: liveGen})
 	msgs := drainCmd(cmd)
 	for _, m := range msgs {
 		if _, ok := m.(previewTickMsg); ok {
 			t.Error("tick rescheduled itself after preview was toggled off — infinite chain")
 		}
+	}
+}
+
+// TestE2E_PreviewRapidToggleDropsStaleTick — the accumulating-chains
+// regression. Toggling preview off then back ON within the 1s tick
+// interval used to leave the first chain's in-flight tick valid (it
+// saw showPreview==true again and rescheduled), so every rapid
+// re-toggle added one more concurrent chain and captures ran at 2Hz+
+// forever. The generation counter kills the old chain: its tick must
+// produce NO capture and NO reschedule, while the new generation's
+// tick keeps working.
+func TestE2E_PreviewRapidToggleDropsStaleTick(t *testing.T) {
+	a := buildPreviewApp(t, "x", nil)
+	a, _ = updateApp(t, a, keyMsg("p")) // on → chain gen 1
+	staleGen := a.sessionsM.previewGen
+	a, _ = updateApp(t, a, keyMsg("p")) // off (within the 1s interval)
+	a, _ = updateApp(t, a, keyMsg("p")) // on again → chain gen 2
+	if a.sessionsM.previewGen == staleGen {
+		t.Fatal("toggle-on did not bump the tick-chain generation")
+	}
+
+	// The old chain's tick lands now. It must die: no capture, no
+	// reschedule — otherwise two chains run concurrently forever.
+	_, cmd := updateApp(t, a, previewTickMsg{gen: staleGen})
+	for _, m := range drainCmd(cmd) {
+		switch m.(type) {
+		case previewTickMsg:
+			t.Error("stale-generation tick rescheduled itself — chains multiply on rapid toggles")
+		case previewLoadedMsg:
+			t.Error("stale-generation tick still fired a capture")
+		}
+	}
+
+	// The live chain keeps ticking normally.
+	_, cmd = updateApp(t, a, previewTickMsg{gen: a.sessionsM.previewGen})
+	sawNext := false
+	for _, m := range drainCmd(cmd) {
+		if _, ok := m.(previewTickMsg); ok {
+			sawNext = true
+		}
+	}
+	if !sawNext {
+		t.Error("live-generation tick failed to reschedule — preview refresh died")
 	}
 }
 

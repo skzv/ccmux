@@ -1,11 +1,13 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/conversations"
@@ -374,6 +376,43 @@ func TestApp_PreviewLoadedMsg_PopulatesOverlay(t *testing.T) {
 	view := a2.convPreview.View(styles.Default(), 120, 40)
 	if !strings.Contains(view, "hello") || !strings.Contains(view, "hi") {
 		t.Fatalf("overlay view should render the loaded messages:\n%s", view)
+	}
+}
+
+// TestPreviewOverlay_TallTranscriptClampedToHeight — the `p` overlay
+// renders up to 30 Glamour-formatted messages; on a short terminal
+// the unclamped modal used to exceed the screen, cutting off the
+// newest turns and the close-hint footer while the overlay swallowed
+// every key except p/esc. The body must be tail-clamped so the whole
+// modal fits the height budget with the newest message and the footer
+// visible.
+func TestPreviewOverlay_TallTranscriptClampedToHeight(t *testing.T) {
+	st := styles.Default()
+	var overlay conversationPreviewOverlay
+	overlay.Open(conversations.Conversation{ID: "claude-1", Agent: agent.IDClaude, Project: "/p"})
+
+	// A tall fake transcript: 30 turns, several lines each.
+	msgs := make([]conversations.Message, 0, 30)
+	for i := 0; i < 30; i++ {
+		msgs = append(msgs, conversations.Message{
+			Role:    "assistant",
+			Content: fmt.Sprintf("turn %d line one\n\nturn %d line two\n\nturn %d line three", i, i, i),
+		})
+	}
+	msgs[len(msgs)-1].Content = "NEWEST-TURN-MARKER final answer"
+	overlay.SetMessages("claude-1", msgs)
+
+	const width, height = 100, 24 // short terminal
+	view := overlay.View(st, width, height)
+
+	if got := lipgloss.Height(view); got > height {
+		t.Errorf("overlay renders %d lines, must fit the %d-line terminal", got, height)
+	}
+	if !strings.Contains(view, "press p or esc to close") {
+		t.Error("close-hint footer cut off — users can't discover how to dismiss the overlay")
+	}
+	if !strings.Contains(view, "NEWEST-TURN-MARKER") {
+		t.Error("tail clamp lost the newest turn — the freshest content must stay visible")
 	}
 }
 
