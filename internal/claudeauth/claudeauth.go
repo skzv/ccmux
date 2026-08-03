@@ -54,34 +54,65 @@ func (s Status) Tier() string {
 }
 
 var (
-	cacheMu   sync.Mutex
-	cached    *Status
-	cachedAt  time.Time
-	cacheTTL  = 5 * time.Minute
-	cachedErr error
+	cacheMu  sync.Mutex
+	cached   *Status   // last successfully-fetched status (never an error result)
+	cachedAt time.Time // when `cached` was fetched
+	cacheTTL = 5 * time.Minute
+	// cachedErr + lastAttempt implement a short negative cache: a fetch
+	// failure (cold `claude` boot blowing the 3s timeout, CLI briefly
+	// missing mid-upgrade) is transient, so it must not poison the full
+	// 5-minute TTL — it only suppresses retries for negativeTTL.
+	cachedErr   error
+	lastAttempt time.Time
+	negativeTTL = 10 * time.Second
+	// fetchFn is a seam so tests can fake the `claude auth status`
+	// subprocess.
+	fetchFn = fetch
 )
 
-// Get returns the current Claude auth status, caching the result for 5
-// minutes. Safe to call from any goroutine. Returns an error only when
-// `claude` is not on PATH or its JSON output is malformed — the caller
-// can treat a missing tier as "api" via Status.Tier().
+// Get returns the current Claude auth status, caching a successful
+// result for 5 minutes. Safe to call from any goroutine.
+//
+// Failure handling: a fetch error never clobbers a previously good
+// Status — the stale value keeps being served (with a nil error) so
+// the dashboard's quota bar doesn't collapse to "api" over one slow
+// CLI boot. The failure is negatively cached for only negativeTTL, so
+// the next Get after that retries. An error is returned only when
+// there has never been a good result to serve.
 func Get(ctx context.Context) (Status, error) {
 	cacheMu.Lock()
 	if cached != nil && time.Since(cachedAt) < cacheTTL {
 		s := *cached
+		cacheMu.Unlock()
+		return s, nil
+	}
+	if cachedErr != nil && time.Since(lastAttempt) < negativeTTL {
+		// Recent failure — don't hammer the CLI. Serve stale if we can.
+		if cached != nil {
+			s := *cached
+			cacheMu.Unlock()
+			return s, nil
+		}
 		err := cachedErr
 		cacheMu.Unlock()
-		return s, err
+		return Status{}, err
 	}
 	cacheMu.Unlock()
 
-	s, err := fetch(ctx)
+	s, err := fetchFn(ctx)
 	cacheMu.Lock()
-	cached = &s
-	cachedAt = time.Now()
+	defer cacheMu.Unlock()
+	lastAttempt = time.Now()
 	cachedErr = err
-	cacheMu.Unlock()
-	return s, err
+	if err == nil {
+		cached = &s
+		cachedAt = lastAttempt
+		return s, nil
+	}
+	if cached != nil {
+		return *cached, nil // serve-stale
+	}
+	return Status{}, err
 }
 
 // fetch shells out to `claude auth status` and parses its JSON output.

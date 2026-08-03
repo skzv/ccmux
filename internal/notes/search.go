@@ -159,12 +159,15 @@ func (v Vault) searchFallback(ctx context.Context, query string, limit int) ([]S
 }
 
 // hitFor builds a SearchHit from raw rg/fallback fields, normalizing
-// the absolute + relative paths and trimming the snippet.
+// the absolute + relative paths and trimming the snippet. Rel is
+// slash-separated (filepath.ToSlash) so hits match Entry.Rel's
+// convention on Windows too.
 func hitFor(root, absPath string, line int, snippet string) SearchHit {
 	rel, err := filepath.Rel(root, absPath)
 	if err != nil {
 		rel = absPath
 	}
+	rel = filepath.ToSlash(rel)
 	return SearchHit{
 		Path:    absPath,
 		Rel:     rel,

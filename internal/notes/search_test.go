@@ -159,3 +159,22 @@ func TestSearch_PrefersRipgrepWhenAvailable(t *testing.T) {
 		t.Error("expected hits regardless of which backend ran")
 	}
 }
+
+// TestHitFor_RelUsesSlashes — SearchHit.Rel must follow Entry.Rel's
+// slash-separated convention on every OS (List already normalizes via
+// filepath.ToSlash; hitFor must too or fallback hits diverge on
+// Windows).
+func TestHitFor_RelUsesSlashes(t *testing.T) {
+	root := filepath.Join("a", "b")
+	abs := filepath.Join(root, "docs", "note.md")
+	h := hitFor(root, abs, 3, "  snippet text\n")
+	if h.Rel != "docs/note.md" {
+		t.Errorf("Rel = %q, want %q", h.Rel, "docs/note.md")
+	}
+	if h.Path != abs || h.LineNum != 3 {
+		t.Errorf("hit fields wrong: %+v", h)
+	}
+	if h.Snippet != "snippet text" {
+		t.Errorf("Snippet = %q, want trimmed", h.Snippet)
+	}
+}
