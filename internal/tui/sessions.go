@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/daemon"
@@ -628,14 +629,20 @@ func relTime(t time.Time) string {
 	return humanDuration(time.Since(t)) + " ago"
 }
 
+// truncate shortens s to at most n display columns, replacing the tail
+// with "…" when it doesn't fit. Rune- and ANSI-aware via ansi.Truncate:
+// the old byte-slice implementation cut multibyte runes in half and
+// rendered mojibake on non-ASCII paths (e.g. Cyrillic project dirs).
+// n <= 0 is a no-op, matching the old contract callers rely on when a
+// pane width underflows.
 func truncate(s string, n int) string {
-	if n <= 0 || len(s) <= n {
+	if n <= 0 || lipgloss.Width(s) <= n {
 		return s
 	}
 	if n <= 1 {
 		return "…"
 	}
-	return s[:n-1] + "…"
+	return ansi.Truncate(s, n, "…")
 }
 
 func max0(x int) int {

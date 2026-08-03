@@ -263,6 +263,15 @@ func (m projectsModel) Update(msg tea.Msg) (projectsModel, tea.Cmd) {
 		case km.String() == "/":
 			m.enterFilter()
 			return m, textinput.Blink
+		case km.String() == "esc":
+			// A committed filter (typed, then Enter) keeps narrowing the
+			// list after the textinput blurs. The empty-state hint
+			// promises "Press esc to clear the filter" — honor it here,
+			// not just while the filter input has focus.
+			if m.filter.Value() != "" {
+				m.exitFilter()
+				return m, nil
+			}
 		case km.String() == "c":
 			// Drill-down: open the Conversations screen with this
 			// project's path pre-applied as a filter. Lets the user

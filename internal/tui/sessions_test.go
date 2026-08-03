@@ -4,8 +4,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/tui/styles"
@@ -17,6 +19,53 @@ func selName(s *daemon.SessionState) string {
 		return "<nil>"
 	}
 	return s.Name
+}
+
+// TestTruncate_MultibyteRuneSafe is the regression test for truncate()
+// slicing by bytes: a multibyte path (Cyrillic, CJK) cut mid-rune
+// rendered as mojibake in the sessions detail pane. The result must be
+// valid UTF-8 and fit the display-width budget.
+func TestTruncate_MultibyteRuneSafe(t *testing.T) {
+	cases := []struct {
+		name  string
+		in    string
+		n     int
+		wantW int // max display width of the result
+	}{
+		{"cyrillic", "проект-модель-сессия", 8, 8},
+		{"cjk-wide", "日本語のパス名です", 6, 6},
+		{"mixed", "~/Projects/日本-проект/src", 12, 12},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := truncate(tc.in, tc.n)
+			if !utf8.ValidString(got) {
+				t.Fatalf("truncate(%q, %d) = %q — invalid UTF-8 (rune cut in half)", tc.in, tc.n, got)
+			}
+			if w := lipgloss.Width(got); w > tc.wantW {
+				t.Errorf("truncate(%q, %d) display width = %d, want <= %d", tc.in, tc.n, w, tc.wantW)
+			}
+			if !strings.HasSuffix(got, "…") {
+				t.Errorf("truncate(%q, %d) = %q, want ellipsis suffix", tc.in, tc.n, got)
+			}
+		})
+	}
+}
+
+// TestTruncate_EdgeContract pins the pre-existing edge semantics the
+// callers rely on: n <= 0 is a no-op (pane-width underflow), short
+// strings pass through untouched, and n == 1 collapses to a bare
+// ellipsis.
+func TestTruncate_EdgeContract(t *testing.T) {
+	if got := truncate("anything", 0); got != "anything" {
+		t.Errorf("truncate(_, 0) = %q, want input unchanged", got)
+	}
+	if got := truncate("short", 10); got != "short" {
+		t.Errorf("truncate(short, 10) = %q, want unchanged", got)
+	}
+	if got := truncate("héllo wörld", 1); got != "…" {
+		t.Errorf("truncate(_, 1) = %q, want %q", got, "…")
+	}
 }
 
 // TestApp_SessionsFormInterceptsEnter is the regression test for the

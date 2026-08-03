@@ -147,3 +147,60 @@ func TestE2E_MatrixStillOpensOffAgentsScreen(t *testing.T) {
 		t.Error("Matrix easter egg no longer opens on non-Agents screens — the gating over-reached")
 	}
 }
+
+// TestE2E_AgentsPickerTabDoesNotSwitchSubtab is the regression test for
+// the sub-tab switcher firing under the open Claude picker: tab /
+// shift+tab / h / l used to flip the active sub-tab while the modal
+// stayed open, leaving the picker orphaned over the Codex tab. While a
+// picker is open it owns every keystroke.
+func TestE2E_AgentsPickerTabDoesNotSwitchSubtab(t *testing.T) {
+	a := buildAgentsApp(t)
+	a, _ = updateApp(t, a, keyMsg("m"))
+	if !a.agentsM.claude.PickerOpen() {
+		t.Fatal("precondition: `m` did not open the model picker")
+	}
+
+	for _, k := range []string{"tab", "shift+tab", "h", "l"} {
+		a, _ = updateApp(t, a, keyMsg(k))
+		if a.agentsM.active != agent.IDClaude {
+			t.Fatalf("%q switched the sub-tab to %v while the picker was open", k, a.agentsM.active)
+		}
+		if !a.agentsM.claude.PickerOpen() {
+			t.Fatalf("%q closed the picker", k)
+		}
+	}
+}
+
+// TestE2E_AgentsPickerBlocksGlobalKeys — with the Claude picker open,
+// digit screen-switch must not fire (the modal owns the keyboard) and
+// `q` must not open the quit confirmation. Esc still closes the picker.
+func TestE2E_AgentsPickerBlocksGlobalKeys(t *testing.T) {
+	a := buildAgentsApp(t)
+	a, _ = updateApp(t, a, keyMsg("m"))
+	if !a.agentsM.claude.PickerOpen() {
+		t.Fatal("precondition: `m` did not open the model picker")
+	}
+
+	a, _ = updateApp(t, a, keyMsg("2"))
+	if a.screen != ScreenAgents {
+		t.Errorf("digit '2' switched screens over the open picker: got %v", a.screen)
+	}
+	if !a.agentsM.claude.PickerOpen() {
+		t.Error("digit '2' closed the picker")
+	}
+
+	a, _ = updateApp(t, a, keyMsg("q"))
+	if a.confirm.open() {
+		t.Error("'q' opened the quit confirmation over the open picker")
+	}
+
+	a, _ = updateApp(t, a, keyMsg("esc"))
+	if a.agentsM.claude.PickerOpen() {
+		t.Error("esc did not close the picker")
+	}
+	// With the picker closed, tab switches sub-tabs again.
+	a, _ = updateApp(t, a, keyMsg("tab"))
+	if a.agentsM.active == agent.IDClaude {
+		t.Error("tab no longer switches sub-tabs after the picker closed")
+	}
+}
