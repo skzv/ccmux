@@ -3,6 +3,7 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/skzv/ccmux/internal/agent"
+	"github.com/skzv/ccmux/internal/configfile"
 )
 
 // Config is the root user-configurable state.
@@ -540,22 +542,30 @@ func Load() (Config, error) {
 }
 
 // Save writes the config file, creating parent directories as needed.
+//
+// The write is atomic (encode to memory, temp file + rename via
+// configfile.WriteAtomic) so a crash mid-encode can never leave a
+// truncated config.toml — the previous os.Create approach truncated in
+// place before encoding a single byte. Mode is 0600, not 0644: the file
+// carries secrets (API keys such as the OpenRouter key), so it must not
+// be world-readable. The rename also replaces any pre-existing
+// world-readable file, tightening old installs down to 0600 on the
+// first Save.
 func Save(cfg Config) error {
 	p, err := Path()
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-		return err
-	}
-	f, err := os.Create(p)
-	if err != nil {
-		return fmt.Errorf("create config %q: %w", p, err)
-	}
-	defer f.Close()
-	enc := toml.NewEncoder(f)
+	var buf bytes.Buffer
+	enc := toml.NewEncoder(&buf)
 	enc.Indent = "  "
-	return enc.Encode(cfg)
+	if err := enc.Encode(cfg); err != nil {
+		return fmt.Errorf("encode config: %w", err)
+	}
+	if err := configfile.WriteAtomic(p, buf.Bytes(), 0o600); err != nil {
+		return fmt.Errorf("write config %q: %w", p, err)
+	}
+	return nil
 }
 
 func firstNonEmpty(vs ...string) string {

@@ -116,13 +116,12 @@ func (h *HookGroup) UnmarshalJSON(data []byte) error {
 
 // MarshalJSON re-emits the modelled `hooks` array alongside every
 // preserved Extra key. The known field is written last so it always
-// wins over a stray same-named Extra entry.
+// wins over a stray same-named Extra entry. Extra values stay as
+// json.RawMessage so large integers aren't mangled through float64.
 func (h HookGroup) MarshalJSON() ([]byte, error) {
 	out := make(map[string]any, len(h.Extra)+1)
 	for k, v := range h.Extra {
-		var a any
-		_ = json.Unmarshal(v, &a)
-		out[k] = a
+		out[k] = v
 	}
 	// `hooks` has no omitempty in the original tag, so always emit it
 	// (preserving the prior struct-marshal behavior, incl. null for nil).
@@ -130,12 +129,70 @@ func (h HookGroup) MarshalJSON() ([]byte, error) {
 	return json.Marshal(out)
 }
 
-// Hook is one runnable hook record.
+// Hook is one runnable hook record. Unknown per-hook keys are preserved
+// through Extra — same pattern as HookGroup/MCPServer — so a settings
+// write can't strip fields Claude Code added after this struct was
+// modelled.
 type Hook struct {
 	Type    string `json:"type"` // "command"
 	Command string `json:"command"`
 	Timeout int    `json:"timeout,omitempty"`
 	Async   bool   `json:"async,omitempty"`
+
+	Extra map[string]json.RawMessage `json:"-"`
+}
+
+// UnmarshalJSON routes the modelled fields and stashes the rest in
+// Extra. Pointer receiver works for `[]Hook` elements because they are
+// addressable.
+func (h *Hook) UnmarshalJSON(data []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*h = Hook{Extra: map[string]json.RawMessage{}}
+	for k, v := range raw {
+		switch k {
+		case "type":
+			if err := json.Unmarshal(v, &h.Type); err != nil {
+				return err
+			}
+		case "command":
+			if err := json.Unmarshal(v, &h.Command); err != nil {
+				return err
+			}
+		case "timeout":
+			if err := json.Unmarshal(v, &h.Timeout); err != nil {
+				return err
+			}
+		case "async":
+			if err := json.Unmarshal(v, &h.Async); err != nil {
+				return err
+			}
+		default:
+			h.Extra[k] = v
+		}
+	}
+	return nil
+}
+
+// MarshalJSON re-emits the modelled fields (honoring the original
+// tags: type/command always, timeout/async omitempty) plus every
+// preserved Extra key, verbatim.
+func (h Hook) MarshalJSON() ([]byte, error) {
+	out := make(map[string]any, len(h.Extra)+4)
+	for k, v := range h.Extra {
+		out[k] = v
+	}
+	out["type"] = h.Type
+	out["command"] = h.Command
+	if h.Timeout != 0 {
+		out["timeout"] = h.Timeout
+	}
+	if h.Async {
+		out["async"] = h.Async
+	}
+	return json.Marshal(out)
 }
 
 // MCPServer is one MCP server entry. Schema is whatever Claude Code
@@ -193,13 +250,12 @@ func (m *MCPServer) UnmarshalJSON(data []byte) error {
 }
 
 // MarshalJSON re-emits the modelled fields (honoring the original
-// omitempty semantics) plus every preserved Extra key.
+// omitempty semantics) plus every preserved Extra key. Extra values
+// stay as json.RawMessage so numbers round-trip verbatim.
 func (m MCPServer) MarshalJSON() ([]byte, error) {
 	out := make(map[string]any, len(m.Extra)+5)
 	for k, v := range m.Extra {
-		var a any
-		_ = json.Unmarshal(v, &a)
-		out[k] = a
+		out[k] = v
 	}
 	if m.Type != "" {
 		out["type"] = m.Type
@@ -228,6 +284,67 @@ type Permissions struct {
 	Allow       []string `json:"allow,omitempty"`
 	Deny        []string `json:"deny,omitempty"`
 	DefaultMode string   `json:"defaultMode,omitempty"`
+	// Extra preserves the permissions keys we don't model (`ask`,
+	// `additionalDirectories`, `disableBypassPermissionsMode`, and
+	// whatever Claude Code adds next) so a settings write can't
+	// silently drop them. Same pattern as HookGroup/MCPServer.
+	Extra map[string]json.RawMessage `json:"-"`
+}
+
+// UnmarshalJSON routes the modelled allow/deny/defaultMode fields and
+// stashes every other key in Extra so it survives a write.
+func (p *Permissions) UnmarshalJSON(data []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*p = Permissions{Extra: map[string]json.RawMessage{}}
+	for k, v := range raw {
+		switch k {
+		case "allow":
+			if err := json.Unmarshal(v, &p.Allow); err != nil {
+				return err
+			}
+		case "deny":
+			if err := json.Unmarshal(v, &p.Deny); err != nil {
+				return err
+			}
+		case "defaultMode":
+			if err := json.Unmarshal(v, &p.DefaultMode); err != nil {
+				return err
+			}
+		default:
+			p.Extra[k] = v
+		}
+	}
+	return nil
+}
+
+// MarshalJSON re-emits the modelled fields (honoring the original
+// omitempty semantics) plus every preserved Extra key. Extra values are
+// kept as json.RawMessage so numbers round-trip verbatim.
+func (p Permissions) MarshalJSON() ([]byte, error) {
+	out := make(map[string]any, len(p.Extra)+3)
+	for k, v := range p.Extra {
+		out[k] = v
+	}
+	if len(p.Allow) > 0 {
+		out["allow"] = p.Allow
+	}
+	if len(p.Deny) > 0 {
+		out["deny"] = p.Deny
+	}
+	if p.DefaultMode != "" {
+		out["defaultMode"] = p.DefaultMode
+	}
+	return json.Marshal(out)
+}
+
+// isZero reports whether writing this Permissions would produce an
+// empty object — used by WriteSettings to decide whether to emit the
+// `permissions` key at all.
+func (p Permissions) isZero() bool {
+	return len(p.Allow) == 0 && len(p.Deny) == 0 && p.DefaultMode == "" && len(p.Extra) == 0
 }
 
 // YoloModeValue is what we write into Permissions.DefaultMode to enable
@@ -297,12 +414,13 @@ func WriteSettings(s *Settings) (backup string, err error) {
 	}
 	// Re-marshal: merge typed fields + Extra map into one ordered JSON
 	// object (best-effort; encoding/json doesn't preserve order, but
-	// the user's editor will re-stable-sort on save anyway).
+	// the user's editor will re-stable-sort on save anyway). Extra
+	// values are kept as json.RawMessage — re-emitted verbatim — so a
+	// large integer like 1698765432109876543 doesn't round-trip through
+	// float64 and come back mangled.
 	out := map[string]any{}
 	for k, v := range s.Extra {
-		var any any
-		_ = json.Unmarshal(v, &any)
-		out[k] = any
+		out[k] = v
 	}
 	if s.Model != "" {
 		out["model"] = s.Model
@@ -322,7 +440,9 @@ func WriteSettings(s *Settings) (backup string, err error) {
 	if len(s.MCPServers) > 0 {
 		out["mcpServers"] = s.MCPServers
 	}
-	if len(s.Permissions.Allow) > 0 || len(s.Permissions.Deny) > 0 || s.Permissions.DefaultMode != "" {
+	// isZero (not just the modelled fields) so a permissions object
+	// holding ONLY unmodelled keys still survives the write.
+	if !s.Permissions.isZero() {
 		out["permissions"] = s.Permissions
 	}
 	data, err := json.MarshalIndent(out, "", "  ")

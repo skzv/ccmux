@@ -20,6 +20,11 @@ var versionString string
 // Execute is the entrypoint called from cmd/ccmux/main.go.
 func Execute(version string) error {
 	versionString = version
+	// Version must be set here, not in init(): init() runs before
+	// main() hands us the version string, so assigning there left
+	// rootCmd.Version empty and cobra never registered the --version
+	// flag ("unknown flag: --version").
+	rootCmd.Version = version
 	return rootCmd.Execute()
 }
 
@@ -122,7 +127,6 @@ func promptYesNoDefaultYes(question string) bool {
 }
 
 func init() {
-	rootCmd.Version = versionString
 	rootCmd.PersistentFlags().StringVar(&projectsRootFlag, "projects", "",
 		"override the projects directory for this run (defaults to ~/Projects or config.toml)")
 	rootCmd.Flags().BoolVar(&expandNotesFlag, "expand-notes", false,
