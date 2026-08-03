@@ -857,6 +857,15 @@ func newHostCmd() *cobra.Command {
 				if err != nil {
 					return fmt.Errorf("load config (not modifying it): %w", err)
 				}
+				// Reject duplicate names instead of silently appending:
+				// `host remove <name>` deletes every entry with that
+				// name, so a duplicate add would make the eventual
+				// remove wipe both — including the original.
+				for _, h := range cfg.Hosts {
+					if h.Name == args[0] {
+						return fmt.Errorf("host %q already exists (address %s); run `ccmux host remove %s` first, or pick a different name", args[0], h.Address, args[0])
+					}
+				}
 				cfg.Hosts = append(cfg.Hosts, config.Host{Name: args[0], Address: args[1], Mosh: true, Port: 7474})
 				return config.Save(cfg)
 			},

@@ -13,17 +13,34 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/skzv/ccmux/internal/daemonservice"
 )
+
+// Subprocess timeout tiers for the git helpers below. Local git
+// plumbing answers in milliseconds — 10s is a generous ceiling for a
+// cold FS cache. `git remote show origin` does a network round-trip,
+// so it gets more headroom. Both exist so `ccmux update` can never
+// hang forever on a wedged remote or filesystem (the repo-wide
+// "every exec.Command takes a ctx" rule).
+const (
+	localGitTimeout   = 10 * time.Second
+	networkGitTimeout = 20 * time.Second
+)
+
+// restartDaemon is a test seam; production always points at
+// daemonservice.Restart.
+var restartDaemon = daemonservice.Restart
 
 // newUpdateCmd: `ccmux update [--repo PATH] [--no-restart] [--dry-run]`.
 func newUpdateCmd() *cobra.Command {
@@ -57,17 +74,21 @@ NOT run setup.
 
 Pass --repo PATH to force the git path even on a Homebrew install.
 Use --dry-run to preview the commands without executing them.`,
-		RunE: func(_ *cobra.Command, _ []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			ctx := cmd.Context()
+			if ctx == nil {
+				ctx = context.Background()
+			}
 			// Homebrew path: if the running binary lives under a brew
 			// prefix and the user didn't force --repo, hand off to brew.
 			// `--skip-pull` doesn't map cleanly onto brew's flow (brew
 			// update is the closest analogue) so we just let it run.
 			exe, _ := os.Executable()
-			if repoFlag == "" && exe != "" && isHomebrewInstall(exe) {
-				if err := runBrewUpdate(exe, dryRun, noRestart); err != nil {
+			if repoFlag == "" && exe != "" && isHomebrewInstall(ctx, exe) {
+				if err := runBrewUpdate(ctx, exe, dryRun, noRestart); err != nil {
 					return err
 				}
-				return offerSetupRerun(runSetup, noSetupPrompt)
+				return offerSetupRerun(ctx, runSetup, noSetupPrompt)
 			}
 
 			// Source path: git pull + make install.
@@ -78,17 +99,17 @@ Use --dry-run to preview the commands without executing them.`,
 			fmt.Printf("ccmux update: using checkout %s\n", tildify(repo))
 
 			if !skipPull {
-				if err := ensureOnBranch(repo, dryRun); err != nil {
+				if err := ensureOnBranch(ctx, repo, dryRun); err != nil {
 					return err
 				}
-				if err := ensureGoodUpstream(repo, dryRun); err != nil {
+				if err := ensureGoodUpstream(ctx, repo, dryRun); err != nil {
 					return err
 				}
-				if err := runStep(repo, dryRun, "git", "pull", "--ff-only"); err != nil {
+				if err := runStep(ctx, repo, dryRun, "git", "pull", "--ff-only"); err != nil {
 					return err
 				}
 			}
-			if err := runStep(repo, dryRun, "make", "install"); err != nil {
+			if err := runStep(ctx, repo, dryRun, "make", "install"); err != nil {
 				return err
 			}
 			if noRestart {
@@ -99,15 +120,12 @@ Use --dry-run to preview the commands without executing them.`,
 				fmt.Println("[dry-run] would restart ccmuxd via daemonservice.Restart()")
 				return nil
 			}
-			if _, err := daemonservice.Restart(); err != nil {
-				fmt.Printf("warning: daemon restart failed: %v\n", err)
-				fmt.Println("you can restart manually with `ccmux daemon install` (or launchctl/systemctl).")
-				return nil
+			if err := restartDaemonPostUpdate(); err != nil {
+				return err
 			}
-			fmt.Println("✓ ccmuxd restarted")
 			fmt.Println("✓ ccmux updated. Restart any open TUIs to pick up the new binary.")
 
-			return offerSetupRerun(runSetup, noSetupPrompt)
+			return offerSetupRerun(ctx, runSetup, noSetupPrompt)
 		},
 	}
 	c.Flags().StringVar(&repoFlag, "repo", "", "path to the ccmux git checkout (default: auto-detect)")
@@ -213,17 +231,27 @@ func findGitRoot(start string) string {
 //     branch (origin/HEAD → main / master / …) via `git checkout`.
 //  3. If we can't determine a default branch, print a clear instruction
 //     instead of letting git produce its confusing multi-line message.
-func ensureOnBranch(repo string, dryRun bool) error {
-	out, err := exec.Command("git", "-C", repo, "symbolic-ref", "-q", "HEAD").Output()
+func ensureOnBranch(ctx context.Context, repo string, dryRun bool) error {
+	out, err := gitOutput(ctx, localGitTimeout, repo, "symbolic-ref", "-q", "HEAD")
 	if err == nil && strings.TrimSpace(string(out)) != "" {
 		return nil // already on a branch
 	}
-	defaultBranch := resolveDefaultBranch(repo)
+	defaultBranch := resolveDefaultBranch(ctx, repo)
 	if defaultBranch == "" {
 		return fmt.Errorf("repo %s is on a detached HEAD and no remote default branch could be detected; run `git checkout main` (or your default branch) and retry", repo)
 	}
 	fmt.Printf("note: %s is on a detached HEAD; switching to %s before pulling\n", repo, defaultBranch)
-	return runStep(repo, dryRun, "git", "checkout", defaultBranch)
+	return runStep(ctx, repo, dryRun, "git", "checkout", defaultBranch)
+}
+
+// gitOutput runs one git command against `repo` with a hard timeout,
+// returning its stdout. Every read-only git helper in this file goes
+// through here so none of them can hang `ccmux update` indefinitely —
+// and so each exec.Command carries a ctx per the repo convention.
+func gitOutput(ctx context.Context, timeout time.Duration, repo string, args ...string) ([]byte, error) {
+	tctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return exec.CommandContext(tctx, "git", append([]string{"-C", repo}, args...)...).Output()
 }
 
 // resolveDefaultBranch asks the origin remote what its HEAD is.
@@ -231,8 +259,8 @@ func ensureOnBranch(repo string, dryRun bool) error {
 //
 // Tries `git symbolic-ref refs/remotes/origin/HEAD` first (fast, local),
 // then `git remote show origin` (network round-trip but always works).
-func resolveDefaultBranch(repo string) string {
-	if out, err := exec.Command("git", "-C", repo, "symbolic-ref", "-q", "refs/remotes/origin/HEAD").Output(); err == nil {
+func resolveDefaultBranch(ctx context.Context, repo string) string {
+	if out, err := gitOutput(ctx, localGitTimeout, repo, "symbolic-ref", "-q", "refs/remotes/origin/HEAD"); err == nil {
 		ref := strings.TrimSpace(string(out)) // e.g. "refs/remotes/origin/main"
 		if idx := strings.LastIndex(ref, "/"); idx >= 0 {
 			if name := ref[idx+1:]; name != "" {
@@ -242,7 +270,9 @@ func resolveDefaultBranch(repo string) string {
 	}
 	// Fallback: pull from `git remote show origin`. Slower (it hits the
 	// remote) but reliable. The line we're after is "HEAD branch: main".
-	if out, err := exec.Command("git", "-C", repo, "remote", "show", "origin").Output(); err == nil {
+	// The network timeout keeps a wedged remote from hanging `ccmux
+	// update` indefinitely.
+	if out, err := gitOutput(ctx, networkGitTimeout, repo, "remote", "show", "origin"); err == nil {
 		for _, line := range strings.Split(string(out), "\n") {
 			line = strings.TrimSpace(line)
 			if strings.HasPrefix(line, "HEAD branch:") {
@@ -277,19 +307,19 @@ func resolveDefaultBranch(repo string) string {
 // error. If the same-named remote branch isn't there either, we
 // surface a clear error instead of letting `git pull --ff-only`
 // emit its cryptic "no such ref was fetched" message.
-func ensureGoodUpstream(repo string, dryRun bool) error {
-	branch, err := currentBranchName(repo)
+func ensureGoodUpstream(ctx context.Context, repo string, dryRun bool) error {
+	branch, err := currentBranchName(ctx, repo)
 	if err != nil || branch == "" {
 		return nil
 	}
-	remote, mergeRef, hasUpstream := configuredUpstream(repo, branch)
+	remote, mergeRef, hasUpstream := configuredUpstream(ctx, repo, branch)
 	if !hasUpstream {
 		// No upstream set at all — `git pull --ff-only` would error
 		// with "There is no tracking information for the current
 		// branch." Set it to origin/<branch> if that ref exists.
-		if remoteRefExists(repo, "origin/"+branch) {
+		if remoteRefExists(ctx, repo, "origin/"+branch) {
 			fmt.Printf("note: %s has no upstream; setting --set-upstream-to=origin/%s\n", branch, branch)
-			return runStep(repo, dryRun, "git", "branch", "--set-upstream-to=origin/"+branch, branch)
+			return runStep(ctx, repo, dryRun, "git", "branch", "--set-upstream-to=origin/"+branch, branch)
 		}
 		// No same-named remote either. Let pull fail with git's
 		// stock "no tracking information" message — clearer than
@@ -305,13 +335,13 @@ func ensureGoodUpstream(repo string, dryRun bool) error {
 	// remote-tracking ref is missing, which is precisely the case
 	// we need to detect here.
 	remoteRef := remote + "/" + strings.TrimPrefix(mergeRef, "refs/heads/")
-	if remoteRefExists(repo, remoteRef) {
+	if remoteRefExists(ctx, repo, remoteRef) {
 		return nil // upstream points at a real ref — pull will work
 	}
 	fmt.Printf("note: %s tracks %s which doesn't exist locally (deleted on remote or never fetched)\n", branch, remoteRef)
-	if remoteRefExists(repo, "origin/"+branch) {
+	if remoteRefExists(ctx, repo, "origin/"+branch) {
 		fmt.Printf("       retargeting upstream to origin/%s\n", branch)
-		return runStep(repo, dryRun, "git", "branch", "--set-upstream-to=origin/"+branch, branch)
+		return runStep(ctx, repo, dryRun, "git", "branch", "--set-upstream-to=origin/"+branch, branch)
 	}
 	return fmt.Errorf("branch %s tracks %s which no remote branch matches; either push it (`git push -u origin %s`), retarget (`git branch --set-upstream-to=origin/<branch> %s`), or rerun with --skip-pull to just rebuild local code", branch, remoteRef, branch, branch)
 }
@@ -319,10 +349,10 @@ func ensureGoodUpstream(repo string, dryRun bool) error {
 // currentBranchName returns the short name of HEAD's symbolic ref
 // (e.g. "main"). Empty string on detached HEAD; ensureOnBranch ran
 // first so this shouldn't normally happen.
-func currentBranchName(repo string) (string, error) {
-	out, err := exec.Command("git", "-C", repo, "symbolic-ref", "--short", "-q", "HEAD").Output()
+func currentBranchName(ctx context.Context, repo string) (string, error) {
+	out, err := gitOutput(ctx, localGitTimeout, repo, "symbolic-ref", "--short", "-q", "HEAD")
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("git symbolic-ref: %w", err)
 	}
 	return strings.TrimSpace(string(out)), nil
 }
@@ -333,8 +363,8 @@ func currentBranchName(repo string) (string, error) {
 // doesn't exist locally. Callers that need to distinguish those
 // two states should use configuredUpstream instead — this helper
 // is kept for tests that only care about the happy path.
-func remoteTrackingFor(repo, branch string) string {
-	out, err := exec.Command("git", "-C", repo, "rev-parse", "--symbolic-full-name", "--abbrev-ref=loose", branch+"@{upstream}").Output()
+func remoteTrackingFor(ctx context.Context, repo, branch string) string {
+	out, err := gitOutput(ctx, localGitTimeout, repo, "rev-parse", "--symbolic-full-name", "--abbrev-ref=loose", branch+"@{upstream}")
 	if err != nil {
 		return ""
 	}
@@ -351,12 +381,12 @@ func remoteTrackingFor(repo, branch string) string {
 // remote-tracking ref to exist locally — so it correctly
 // distinguishes "no upstream configured" from "upstream
 // configured but pointing at a missing/deleted remote branch."
-func configuredUpstream(repo, branch string) (remote, mergeRef string, ok bool) {
-	remoteOut, err := exec.Command("git", "-C", repo, "config", "--get", "branch."+branch+".remote").Output()
+func configuredUpstream(ctx context.Context, repo, branch string) (remote, mergeRef string, ok bool) {
+	remoteOut, err := gitOutput(ctx, localGitTimeout, repo, "config", "--get", "branch."+branch+".remote")
 	if err != nil {
 		return "", "", false
 	}
-	mergeOut, err := exec.Command("git", "-C", repo, "config", "--get", "branch."+branch+".merge").Output()
+	mergeOut, err := gitOutput(ctx, localGitTimeout, repo, "config", "--get", "branch."+branch+".merge")
 	if err != nil {
 		return "", "", false
 	}
@@ -371,8 +401,10 @@ func configuredUpstream(repo, branch string) (remote, mergeRef string, ok bool) 
 // remoteRefExists returns true if `ref` (e.g. "origin/main") is a
 // resolvable ref in `repo`. Uses rev-parse --verify for the fast
 // path; suppresses output and just looks at the exit code.
-func remoteRefExists(repo, ref string) bool {
-	cmd := exec.Command("git", "-C", repo, "rev-parse", "--verify", "--quiet", "refs/remotes/"+ref)
+func remoteRefExists(ctx context.Context, repo, ref string) bool {
+	tctx, cancel := context.WithTimeout(ctx, localGitTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(tctx, "git", "-C", repo, "rev-parse", "--verify", "--quiet", "refs/remotes/"+ref)
 	return cmd.Run() == nil
 }
 
@@ -380,15 +412,15 @@ func remoteRefExists(repo, ref string) bool {
 // the tap formulae), brew upgrade ccmux (install the new version),
 // daemon restart. Mirrors the success/failure messaging of the git
 // path so the user sees the same shape regardless of how they installed.
-func runBrewUpdate(exe string, dryRun, noRestart bool) error {
+func runBrewUpdate(ctx context.Context, exe string, dryRun, noRestart bool) error {
 	fmt.Printf("ccmux update: Homebrew install detected at %s\n", exe)
 	// brew update can transiently fail (rate limit, no network) and
 	// brew upgrade often succeeds anyway against the locally-cached
 	// formula. Log + continue rather than failing hard.
-	if err := runStep("", dryRun, "brew", "update"); err != nil {
+	if err := runStep(ctx, "", dryRun, "brew", "update"); err != nil {
 		fmt.Printf("note: brew update failed (%v); continuing with brew upgrade\n", err)
 	}
-	if err := runStep("", dryRun, "brew", "upgrade", "ccmux"); err != nil {
+	if err := runStep(ctx, "", dryRun, "brew", "upgrade", "ccmux"); err != nil {
 		return err
 	}
 	if noRestart {
@@ -399,20 +431,31 @@ func runBrewUpdate(exe string, dryRun, noRestart bool) error {
 		fmt.Println("[dry-run] would restart ccmuxd via daemonservice.Restart()")
 		return nil
 	}
-	if _, err := daemonservice.Restart(); err != nil {
-		fmt.Printf("warning: daemon restart failed: %v\n", err)
-		fmt.Println("you can restart manually with `ccmux daemon install` (or launchctl/systemctl).")
-		return nil
+	if err := restartDaemonPostUpdate(); err != nil {
+		return err
+	}
+	fmt.Println("✓ ccmux upgraded. Restart any open TUIs to pick up the new binary.")
+	return nil
+}
+
+// restartDaemonPostUpdate bounces ccmuxd after the binaries were
+// replaced. A failure is NOT swallowed: the update itself succeeded,
+// but scripted callers (`ccmux update && …`) must see a non-zero exit
+// when the daemon they expect to be fresh is still the old binary.
+// The message makes the split state explicit.
+func restartDaemonPostUpdate() error {
+	if _, err := restartDaemon(); err != nil {
+		fmt.Println("restart manually with `ccmux daemon install` (or launchctl/systemctl).")
+		return fmt.Errorf("binaries updated, but the daemon restart failed: %w", err)
 	}
 	fmt.Println("✓ ccmuxd restarted")
-	fmt.Println("✓ ccmux upgraded. Restart any open TUIs to pick up the new binary.")
 	return nil
 }
 
 // offerSetupRerun is the shared "re-run setup?" prompt called by both
 // the brew and git paths. Pulled out so a new install path doesn't have
 // to remember to add the prompt itself.
-func offerSetupRerun(runSetup, noSetupPrompt bool) error {
+func offerSetupRerun(ctx context.Context, runSetup, noSetupPrompt bool) error {
 	if !runSetup && (noSetupPrompt || !promptYesNo("Re-run `ccmux setup` to review any new options?")) {
 		return nil
 	}
@@ -421,7 +464,9 @@ func offerSetupRerun(runSetup, noSetupPrompt bool) error {
 	if err != nil {
 		ccmuxBin = "ccmux"
 	}
-	setup := exec.Command(ccmuxBin, "setup")
+	// No timeout — setup is interactive — but the ctx keeps the child
+	// cancellable per the repo's exec-with-context rule.
+	setup := exec.CommandContext(ctx, ccmuxBin, "setup")
 	setup.Stdin = os.Stdin
 	setup.Stdout = os.Stdout
 	setup.Stderr = os.Stderr
@@ -434,12 +479,12 @@ func offerSetupRerun(runSetup, noSetupPrompt bool) error {
 // isHomebrewInstall reports whether `exe` lives under any standard
 // Homebrew installation prefix. Resolves symlinks first because brew
 // links $(prefix)/bin/ccmux → $(prefix)/Cellar/ccmux/X.Y.Z/bin/ccmux.
-func isHomebrewInstall(exe string) bool {
+func isHomebrewInstall(ctx context.Context, exe string) bool {
 	real, err := filepath.EvalSymlinks(exe)
 	if err != nil {
 		real = exe // fall back to the original path
 	}
-	return isUnderHomebrewPrefix(real, homebrewPrefixes())
+	return isUnderHomebrewPrefix(real, homebrewPrefixes(ctx))
 }
 
 // isUnderHomebrewPrefix is the testable core of isHomebrewInstall —
@@ -461,13 +506,15 @@ func isUnderHomebrewPrefix(exe string, prefixes []string) bool {
 // macOS (Apple Silicon /opt/homebrew, Intel /usr/local) and Linuxbrew
 // paths; `brew --prefix` adds whatever brew actually thinks its prefix
 // is (covers unusual installs at the cost of a fast subprocess).
-func homebrewPrefixes() []string {
+func homebrewPrefixes(ctx context.Context) []string {
 	prefixes := []string{
 		"/opt/homebrew",
 		"/usr/local",
 		"/home/linuxbrew/.linuxbrew",
 	}
-	if out, err := exec.Command("brew", "--prefix").Output(); err == nil {
+	tctx, cancel := context.WithTimeout(ctx, localGitTimeout)
+	defer cancel()
+	if out, err := exec.CommandContext(tctx, "brew", "--prefix").Output(); err == nil {
 		if p := strings.TrimSpace(string(out)); p != "" {
 			seen := false
 			for _, existing := range prefixes {
@@ -484,7 +531,7 @@ func homebrewPrefixes() []string {
 	return prefixes
 }
 
-func runStep(cwd string, dryRun bool, name string, args ...string) error {
+func runStep(ctx context.Context, cwd string, dryRun bool, name string, args ...string) error {
 	display := name
 	for _, a := range args {
 		display += " " + a
@@ -494,7 +541,9 @@ func runStep(cwd string, dryRun bool, name string, args ...string) error {
 		return nil
 	}
 	fmt.Printf("→ (in %s) %s\n", tildify(cwd), display)
-	cmd := exec.Command(name, args...)
+	// No timeout: pull / make install / brew upgrade are legitimately
+	// long-running and stream progress. The ctx makes them cancellable.
+	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = cwd
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

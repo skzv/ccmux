@@ -380,6 +380,111 @@ func TestResourcesAndPromptsListReturnEmpty(t *testing.T) {
 	}
 }
 
+// TestParseErrorHasNullID — JSON-RPC 2.0 requires the response `id`
+// member to be present and literal null when the request id couldn't
+// be determined (parse error). ID is a RawMessage with omitempty, so
+// the old code dropped the member entirely; strict clients discard
+// id-less responses and hang waiting for a reply that never matches.
+func TestParseErrorHasNullID(t *testing.T) {
+	srv := newTestServer(false, nil)
+	in := bytes.NewBufferString("{malformed\n")
+	var out bytes.Buffer
+	if err := srv.Run(context.Background(), in, &out); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	raw := out.String()
+	if !strings.Contains(raw, `"id":null`) {
+		t.Errorf(`parse-error response must carry "id":null; got %s`, raw)
+	}
+}
+
+// TestOversizedLineKeepsServerAlive — bufio.Scanner's ErrTooLong used
+// to make Run return, killing the whole process: one big request took
+// down every in-flight and future call. The loop must instead answer
+// the oversized frame with a -32700 (id null, since the id can't be
+// read without parsing the oversized payload) and keep serving.
+func TestOversizedLineKeepsServerAlive(t *testing.T) {
+	srv := newTestServer(false, nil)
+	var in bytes.Buffer
+	in.WriteString(`{"jsonrpc":"2.0","id":1,"method":"ping","params":{"pad":"`)
+	in.Write(bytes.Repeat([]byte("a"), 5<<20)) // > the 4 MiB cap
+	in.WriteString("\"}}\n")
+	in.WriteString(`{"jsonrpc":"2.0","id":2,"method":"ping"}` + "\n")
+
+	var out bytes.Buffer
+	if err := srv.Run(context.Background(), &in, &out); err != nil {
+		t.Fatalf("Run must survive an oversized line, got: %v", err)
+	}
+	dec := json.NewDecoder(&out)
+	var first rpcResponse
+	if err := dec.Decode(&first); err != nil {
+		t.Fatalf("no response to the oversized frame: %v", err)
+	}
+	if first.Error == nil || first.Error.Code != errParseError {
+		t.Errorf("oversized frame should get -32700, got %+v", first)
+	}
+	if string(first.ID) != "null" {
+		t.Errorf("oversized-frame response id = %q, want null", string(first.ID))
+	}
+	var second rpcResponse
+	if err := dec.Decode(&second); err != nil {
+		t.Fatalf("server did not keep serving after the oversized line: %v", err)
+	}
+	if second.Error != nil {
+		t.Errorf("follow-up ping failed: %+v", second.Error)
+	}
+	if string(second.ID) != "2" {
+		t.Errorf("follow-up response id = %q, want 2", string(second.ID))
+	}
+}
+
+// TestInitializeEchoesSupportedRequestedVersion — per spec the server
+// must echo the client's requested protocol version when it supports
+// it. The old code pinned "2025-06-18" unconditionally, so a client
+// asking for an older-but-supported revision saw a version it never
+// requested.
+func TestInitializeEchoesSupportedRequestedVersion(t *testing.T) {
+	srv := newTestServer(false, nil)
+	resp := runOnce(t, srv, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "initialize",
+		"params":  map[string]any{"protocolVersion": "2025-03-26"},
+	})
+	if resp.Error != nil {
+		t.Fatalf("initialize errored: %+v", resp.Error)
+	}
+	body, _ := json.Marshal(resp.Result)
+	var got initializeResult
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
+	if got.ProtocolVersion != "2025-03-26" {
+		t.Errorf("protocolVersion = %q, want the requested 2025-03-26 echoed back", got.ProtocolVersion)
+	}
+}
+
+// TestInitializeUnsupportedVersionFallsBackToLatest — when the client
+// requests a version we don't know, we answer with our latest and the
+// client decides whether to proceed.
+func TestInitializeUnsupportedVersionFallsBackToLatest(t *testing.T) {
+	srv := newTestServer(false, nil)
+	resp := runOnce(t, srv, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "initialize",
+		"params":  map[string]any{"protocolVersion": "1999-12-31"},
+	})
+	body, _ := json.Marshal(resp.Result)
+	var got initializeResult
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
+	if got.ProtocolVersion != protocolVersion {
+		t.Errorf("protocolVersion = %q, want server default %q", got.ProtocolVersion, protocolVersion)
+	}
+}
+
 func contains(haystack []string, needle string) bool {
 	for _, x := range haystack {
 		if x == needle {
