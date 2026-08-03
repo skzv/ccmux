@@ -50,6 +50,48 @@ func TestHostAdd_CorruptConfigDoesNotWipe(t *testing.T) {
 	}
 }
 
+// TestHostAdd_RejectsDuplicateName — `host add` used to silently
+// append a second entry with the same name. `host remove <name>`
+// deletes every match, so the eventual cleanup would wipe the
+// original host too. A duplicate add must error and leave the config
+// with exactly one entry.
+func TestHostAdd_RejectsDuplicateName(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	add := func(addr string) error {
+		c := newHostCmd()
+		c.SetArgs([]string{"add", "mini", addr})
+		c.SilenceUsage = true
+		c.SilenceErrors = true
+		return c.Execute()
+	}
+	if err := add("100.64.0.9"); err != nil {
+		t.Fatalf("first add: %v", err)
+	}
+	err := add("100.64.0.10")
+	if err == nil {
+		t.Fatal("duplicate host add should error, not append")
+	}
+	if !strings.Contains(err.Error(), "already exists") || !strings.Contains(err.Error(), "host remove") {
+		t.Errorf("error should explain the duplicate and suggest `host remove`: %v", err)
+	}
+
+	cfg, lerr := config.Load()
+	if lerr != nil {
+		t.Fatal(lerr)
+	}
+	count := 0
+	for _, h := range cfg.Hosts {
+		if h.Name == "mini" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("config has %d hosts named mini, want exactly 1 (hosts: %+v)", count, cfg.Hosts)
+	}
+}
+
 // TestHostSetupSSH_CorruptConfigRefusesEarly — same data-loss class as
 // `host add`: runHostSetupSSH did `cfg, _ := config.Load()`, and its
 // later Saves would rewrite config.toml from Defaults(), erasing every

@@ -1,11 +1,16 @@
 package cmd
 
 import (
+	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/skzv/ccmux/internal/daemonservice"
 )
 
 // fakeRepo lays out a directory that resolveRepo will accept: a .git
@@ -165,18 +170,18 @@ func TestRunStep_DryRunDoesNothing(t *testing.T) {
 	// `false` would normally exit 1; under --dry-run we should not call
 	// it. If the implementation regresses, this test fails because
 	// `false` returns an error.
-	if err := runStep(t.TempDir(), true, "false"); err != nil {
+	if err := runStep(context.Background(), t.TempDir(), true, "false"); err != nil {
 		t.Fatalf("dry-run still executed the command: %v", err)
 	}
 }
 
 func TestRunStep_RunsAndReportsExit(t *testing.T) {
 	// `true` exits 0.
-	if err := runStep(t.TempDir(), false, "true"); err != nil {
+	if err := runStep(context.Background(), t.TempDir(), false, "true"); err != nil {
 		t.Fatalf("runStep(true): unexpected error %v", err)
 	}
 	// `false` exits 1 — runStep should surface that.
-	if err := runStep(t.TempDir(), false, "false"); err == nil {
+	if err := runStep(context.Background(), t.TempDir(), false, "false"); err == nil {
 		t.Fatal("runStep(false): expected error, got nil")
 	}
 }
@@ -213,7 +218,7 @@ func mustGit(t *testing.T, repo string, args ...string) string {
 // `main` and ensureOnBranch should be a no-op (no error, no checkout).
 func TestEnsureOnBranch_AlreadyOnBranch(t *testing.T) {
 	repo := realGitRepo(t)
-	if err := ensureOnBranch(repo, false); err != nil {
+	if err := ensureOnBranch(context.Background(), repo, false); err != nil {
 		t.Fatalf("on-branch repo errored: %v", err)
 	}
 	// Branch should still be main after the call.
@@ -248,7 +253,7 @@ func TestEnsureOnBranch_DetachedHEAD(t *testing.T) {
 		t.Fatalf("expected detached HEAD, but got branch %q", strings.TrimSpace(string(out)))
 	}
 
-	if err := ensureOnBranch(repo, false); err != nil {
+	if err := ensureOnBranch(context.Background(), repo, false); err != nil {
 		t.Fatalf("ensureOnBranch on detached HEAD: %v", err)
 	}
 	// After the fix, HEAD should be back on main.
@@ -269,7 +274,7 @@ func TestEnsureOnBranch_DetachedNoOriginHEAD(t *testing.T) {
 
 	// No origin/HEAD ref. No origin remote at all, in fact — so
 	// `git remote show origin` will also fail. Both fallbacks miss.
-	err := ensureOnBranch(repo, false)
+	err := ensureOnBranch(context.Background(), repo, false)
 	if err == nil {
 		t.Fatal("expected error when no default branch resolvable, got nil")
 	}
@@ -291,7 +296,7 @@ func TestEnsureOnBranch_DryRun(t *testing.T) {
 	sha := strings.TrimSpace(mustGit(t, repo, "rev-parse", "HEAD"))
 	mustGit(t, repo, "checkout", sha)
 
-	if err := ensureOnBranch(repo, true); err != nil {
+	if err := ensureOnBranch(context.Background(), repo, true); err != nil {
 		t.Fatalf("dry-run errored: %v", err)
 	}
 	// Should still be detached — dry-run must not execute the checkout.
@@ -311,7 +316,7 @@ func TestResolveDefaultBranch_ReadsOriginHEAD(t *testing.T) {
 	// HEAD symref needs git symbolic-ref.
 	mustGit(t, repo, "update-ref", "refs/remotes/origin/main", "HEAD")
 	mustGit(t, repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
-	if got := resolveDefaultBranch(repo); got != "main" {
+	if got := resolveDefaultBranch(context.Background(), repo); got != "main" {
 		t.Errorf("resolveDefaultBranch = %q, want main", got)
 	}
 }
@@ -320,7 +325,7 @@ func TestResolveDefaultBranch_ReadsOriginHEAD(t *testing.T) {
 // reachable origin remote, returns "".
 func TestResolveDefaultBranch_EmptyOnFailure(t *testing.T) {
 	repo := realGitRepo(t)
-	if got := resolveDefaultBranch(repo); got != "" {
+	if got := resolveDefaultBranch(context.Background(), repo); got != "" {
 		t.Errorf("resolveDefaultBranch on bare repo = %q, want empty", got)
 	}
 }
@@ -355,11 +360,11 @@ func realGitRepoWithRemote(t *testing.T) string {
 // must not perturb anything.
 func TestEnsureGoodUpstream_HealthyRepoIsNoOp(t *testing.T) {
 	repo := realGitRepoWithRemote(t)
-	beforeUpstream := remoteTrackingFor(repo, "main")
-	if err := ensureGoodUpstream(repo, false); err != nil {
+	beforeUpstream := remoteTrackingFor(context.Background(), repo, "main")
+	if err := ensureGoodUpstream(context.Background(), repo, false); err != nil {
 		t.Fatalf("healthy repo errored: %v", err)
 	}
-	afterUpstream := remoteTrackingFor(repo, "main")
+	afterUpstream := remoteTrackingFor(context.Background(), repo, "main")
 	if beforeUpstream != afterUpstream {
 		t.Errorf("upstream changed when it shouldn't have:\n  before=%q\n   after=%q",
 			beforeUpstream, afterUpstream)
@@ -385,10 +390,10 @@ func TestEnsureGoodUpstream_RetargetsDeletedUpstream(t *testing.T) {
 	// the upstream is fine.
 	mustGit(t, repo, "remote", "prune", "origin")
 
-	if err := ensureGoodUpstream(repo, false); err != nil {
+	if err := ensureGoodUpstream(context.Background(), repo, false); err != nil {
 		t.Fatalf("retarget errored: %v", err)
 	}
-	if got := remoteTrackingFor(repo, "main"); !strings.HasSuffix(got, "/origin/main") {
+	if got := remoteTrackingFor(context.Background(), repo, "main"); !strings.HasSuffix(got, "/origin/main") {
 		t.Errorf("upstream not retargeted to origin/main: got %q", got)
 	}
 }
@@ -411,7 +416,7 @@ func TestEnsureGoodUpstream_UnfixableErrorsClearly(t *testing.T) {
 
 	before := mustGit(t, repo, "config", "--get-regexp", "branch\\.absent-on-remote\\.")
 
-	err := ensureGoodUpstream(repo, false)
+	err := ensureGoodUpstream(context.Background(), repo, false)
 	if err == nil {
 		t.Fatal("unfixable upstream should error with an actionable message, got nil")
 	}
@@ -496,14 +501,14 @@ func TestEnsureGoodUpstream_UnpushedBranchErrorsClearly(t *testing.T) {
 
 	// Sanity: configuredUpstream sees the config, remoteTrackingFor
 	// returns "" because @{upstream} can't resolve.
-	if _, _, ok := configuredUpstream(repo, "fix/never-pushed"); !ok {
+	if _, _, ok := configuredUpstream(context.Background(), repo, "fix/never-pushed"); !ok {
 		t.Fatal("configuredUpstream should see the branch.X.remote/merge config")
 	}
-	if got := remoteTrackingFor(repo, "fix/never-pushed"); got != "" {
+	if got := remoteTrackingFor(context.Background(), repo, "fix/never-pushed"); got != "" {
 		t.Fatalf("remoteTrackingFor should return empty for missing remote ref, got %q", got)
 	}
 
-	err := ensureGoodUpstream(repo, false)
+	err := ensureGoodUpstream(context.Background(), repo, false)
 	if err == nil {
 		t.Fatal("unpushed branch with configured-but-missing upstream should error, got nil")
 	}
@@ -523,14 +528,14 @@ func TestEnsureGoodUpstream_NoUpstreamSetsOriginSameName(t *testing.T) {
 	// At this point origin/experiment exists but local experiment
 	// has no upstream tracking. Verify the setup before running
 	// the function.
-	if got := remoteTrackingFor(repo, "experiment"); got != "" {
+	if got := remoteTrackingFor(context.Background(), repo, "experiment"); got != "" {
 		t.Fatalf("test setup wrong: experiment already has upstream %q", got)
 	}
 
-	if err := ensureGoodUpstream(repo, false); err != nil {
+	if err := ensureGoodUpstream(context.Background(), repo, false); err != nil {
 		t.Fatalf("function errored: %v", err)
 	}
-	if got := remoteTrackingFor(repo, "experiment"); !strings.HasSuffix(got, "/origin/experiment") {
+	if got := remoteTrackingFor(context.Background(), repo, "experiment"); !strings.HasSuffix(got, "/origin/experiment") {
 		t.Errorf("upstream not set to origin/experiment: got %q", got)
 	}
 }
@@ -583,5 +588,84 @@ func TestTildify_PrefixIsNotComponentMatch(t *testing.T) {
 	t.Setenv("HOME", "/tmp/foo")
 	if got := tildify("/tmp/foobar/x"); got != "/tmp/foobar/x" {
 		t.Errorf("tildify must not match partial path components: got %q", got)
+	}
+}
+
+// hangingFakeGit puts a `git` on PATH that sleeps far longer than any
+// deadline the tests use. `exec` in the script makes sleep replace the
+// shell, so CommandContext's kill lands on the process that actually
+// holds the stdout pipe.
+func hangingFakeGit(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	script := filepath.Join(dir, "git")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nexec sleep 30\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// TestResolveDefaultBranch_HonorsContextDeadline — the `git remote
+// show origin` fallback is a network round-trip; a wedged remote used
+// to hang `ccmux update` forever because the helper ran exec.Command
+// with no ctx. With ctx threading, the caller's deadline must bound
+// the call. Simulated with a hanging fake git on PATH.
+func TestResolveDefaultBranch_HonorsContextDeadline(t *testing.T) {
+	hangingFakeGit(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	got := resolveDefaultBranch(ctx, t.TempDir())
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("resolveDefaultBranch ignored the context deadline (took %v)", elapsed)
+	}
+	if got != "" {
+		t.Errorf("hanging git produced a branch name %q, want empty", got)
+	}
+}
+
+// TestRunStep_HonorsContextCancellation — runStep drives the long
+// steps (git pull, make install); it must inherit the caller's ctx so
+// a cancelled update can kill a hung subprocess.
+func TestRunStep_HonorsContextCancellation(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	err := runStep(ctx, t.TempDir(), false, "sleep", "30")
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("runStep ignored the context deadline (took %v)", elapsed)
+	}
+	if err == nil {
+		t.Fatal("expected an error from the killed command, got nil")
+	}
+}
+
+// TestRestartDaemonPostUpdate_FailureReturnsError — a daemon-restart
+// failure after a successful update used to print a warning and
+// return nil, so scripted `ccmux update && …` chains believed the
+// daemon had restarted. The helper must surface a non-nil error that
+// still makes clear the update itself succeeded.
+func TestRestartDaemonPostUpdate_FailureReturnsError(t *testing.T) {
+	orig := restartDaemon
+	t.Cleanup(func() { restartDaemon = orig })
+
+	restartDaemon = func() (daemonservice.Status, error) {
+		return daemonservice.Status{}, errors.New("launchctl exploded")
+	}
+	err := restartDaemonPostUpdate()
+	if err == nil {
+		t.Fatal("restart failure must return a non-nil error, got nil")
+	}
+	if !strings.Contains(err.Error(), "binaries updated") || !strings.Contains(err.Error(), "restart failed") {
+		t.Errorf("error must say the binaries updated but the restart failed: %v", err)
+	}
+	if !strings.Contains(err.Error(), "launchctl exploded") {
+		t.Errorf("error must wrap the underlying cause: %v", err)
+	}
+
+	restartDaemon = func() (daemonservice.Status, error) { return daemonservice.Status{}, nil }
+	if err := restartDaemonPostUpdate(); err != nil {
+		t.Fatalf("successful restart must return nil, got %v", err)
 	}
 }
