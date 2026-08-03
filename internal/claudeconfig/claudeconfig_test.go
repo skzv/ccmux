@@ -787,3 +787,156 @@ func TestRoundTrip_HookAndMCPStructuralIntegrity(t *testing.T) {
 		}
 	}
 }
+
+// TestRoundTrip_PreservesPermissionsUnknownKeys — regression for the
+// silent data-loss bug where a ReadSettings→WriteSettings cycle dropped
+// every permissions key we don't model (`ask`, `additionalDirectories`,
+// `disableBypassPermissionsMode`, …), because Permissions had no Extra.
+func TestRoundTrip_PreservesPermissionsUnknownKeys(t *testing.T) {
+	dir := withFakeClaudeDir(t)
+	settingsPath := filepath.Join(dir, "settings.json")
+	const input = `{
+  "model": "opus",
+  "permissions": {
+    "allow": ["Bash(ls:*)"],
+    "deny": ["Read(.env)"],
+    "defaultMode": "acceptEdits",
+    "ask": ["Bash(git push:*)"],
+    "additionalDirectories": ["/Users/me/other"],
+    "disableBypassPermissionsMode": "disable"
+  }
+}`
+	if err := os.WriteFile(settingsPath, []byte(input), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := ReadSettings()
+	if err != nil {
+		t.Fatalf("ReadSettings: %v", err)
+	}
+	// Modelled fields still routed.
+	if len(s.Permissions.Allow) != 1 || len(s.Permissions.Deny) != 1 || s.Permissions.DefaultMode != "acceptEdits" {
+		t.Errorf("modelled permissions fields wrong: %+v", s.Permissions)
+	}
+	for _, k := range []string{"ask", "additionalDirectories", "disableBypassPermissionsMode"} {
+		if _, ok := s.Permissions.Extra[k]; !ok {
+			t.Errorf("permissions.%s not captured in Extra; got Extra=%v", k, s.Permissions.Extra)
+		}
+	}
+
+	// Simulate any ccmux settings write.
+	if _, err := WriteSettings(s); err != nil {
+		t.Fatalf("WriteSettings: %v", err)
+	}
+	out, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	for _, want := range []string{`"ask"`, `"Bash(git push:*)"`, `"additionalDirectories"`, `"/Users/me/other"`, `"disableBypassPermissionsMode"`, `"acceptEdits"`, `"Bash(ls:*)"`, `"Read(.env)"`} {
+		if !contains(got, want) {
+			t.Errorf("permissions content %s dropped on round-trip; settings.json now:\n%s", want, got)
+		}
+	}
+}
+
+// TestRoundTrip_PermissionsOnlyUnknownKeysSurvives — if permissions
+// holds ONLY keys we don't model, the whole object used to be dropped
+// (the write gate checked just allow/deny/defaultMode).
+func TestRoundTrip_PermissionsOnlyUnknownKeysSurvives(t *testing.T) {
+	dir := withFakeClaudeDir(t)
+	settingsPath := filepath.Join(dir, "settings.json")
+	const input = `{
+  "permissions": { "additionalDirectories": ["/srv/data"] }
+}`
+	if err := os.WriteFile(settingsPath, []byte(input), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := ReadSettings()
+	if err != nil {
+		t.Fatalf("ReadSettings: %v", err)
+	}
+	if _, err := WriteSettings(s); err != nil {
+		t.Fatalf("WriteSettings: %v", err)
+	}
+	out, _ := os.ReadFile(settingsPath)
+	if !contains(string(out), `"permissions"`) || !contains(string(out), `"/srv/data"`) {
+		t.Errorf("permissions object with only unmodelled keys was dropped; settings.json now:\n%s", out)
+	}
+}
+
+// TestRoundTrip_PreservesPerHookUnknownFields — the per-hook records
+// inside hooks.<lifecycle>[].hooks[] had the same flaw as Permissions:
+// unknown keys on a Hook were silently stripped on write.
+func TestRoundTrip_PreservesPerHookUnknownFields(t *testing.T) {
+	dir := withFakeClaudeDir(t)
+	settingsPath := filepath.Join(dir, "settings.json")
+	const input = `{
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "Bash",
+        "hooks": [ { "type": "command", "command": "echo hi", "timeout": 5, "statusMessage": "checking…" } ] }
+    ]
+  }
+}`
+	if err := os.WriteFile(settingsPath, []byte(input), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := ReadSettings()
+	if err != nil {
+		t.Fatalf("ReadSettings: %v", err)
+	}
+	hk := s.Hooks["PreToolUse"][0].Hooks[0]
+	if hk.Command != "echo hi" || hk.Timeout != 5 {
+		t.Errorf("modelled hook fields wrong: %+v", hk)
+	}
+	if _, ok := hk.Extra["statusMessage"]; !ok {
+		t.Errorf("per-hook unknown field not captured in Extra; got Extra=%v", hk.Extra)
+	}
+	if _, err := WriteSettings(s); err != nil {
+		t.Fatalf("WriteSettings: %v", err)
+	}
+	out, _ := os.ReadFile(settingsPath)
+	for _, want := range []string{`"statusMessage"`, `"checking…"`, `"echo hi"`, `"timeout": 5`} {
+		if !contains(string(out), want) {
+			t.Errorf("expected %s in round-tripped settings:\n%s", want, out)
+		}
+	}
+}
+
+// TestRoundTrip_ExtraLargeIntNotMangled — regression for Extra fields
+// round-tripping through float64: 1698765432109876543 came back as
+// …500 and values ≥1e21 flipped to scientific notation. Raw messages
+// must be re-emitted verbatim.
+func TestRoundTrip_ExtraLargeIntNotMangled(t *testing.T) {
+	dir := withFakeClaudeDir(t)
+	settingsPath := filepath.Join(dir, "settings.json")
+	const bigInt = "1698765432109876543"
+	const hugeNum = "1000000000000000000000" // ≥1e21 → would become 1e+21
+	input := `{
+  "model": "opus",
+  "someTimestampNs": ` + bigInt + `,
+  "someHugeCounter": ` + hugeNum + `,
+  "nested": { "alsoBig": ` + bigInt + ` }
+}`
+	if err := os.WriteFile(settingsPath, []byte(input), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := ReadSettings()
+	if err != nil {
+		t.Fatalf("ReadSettings: %v", err)
+	}
+	if _, err := WriteSettings(s); err != nil {
+		t.Fatalf("WriteSettings: %v", err)
+	}
+	out, _ := os.ReadFile(settingsPath)
+	got := string(out)
+	for _, want := range []string{bigInt, hugeNum} {
+		if !contains(got, want) {
+			t.Errorf("large number %s mangled on round-trip; settings.json now:\n%s", want, got)
+		}
+	}
+	if contains(got, "e+21") || contains(got, "E+21") {
+		t.Errorf("scientific notation leaked into settings.json:\n%s", got)
+	}
+}

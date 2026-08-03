@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"bytes"
+	"strings"
 	"testing"
 
 	"github.com/skzv/ccmux/internal/config"
@@ -44,5 +46,35 @@ func TestSetupCmd_HasYesFlag(t *testing.T) {
 	}
 	if c.Flags().ShorthandLookup("y") == nil {
 		t.Error("`ccmux setup --yes` should have a -y shorthand")
+	}
+}
+
+// TestExecute_VersionFlag — regression for `ccmux --version` failing
+// with "unknown flag: --version". rootCmd.Version was assigned in
+// init(), which runs before Execute(version) sets versionString, so
+// cobra saw an empty Version and never registered the flag. Execute
+// must set Version before running the command.
+func TestExecute_VersionFlag(t *testing.T) {
+	// Reset the state init()+Execute mutate, and restore afterwards so
+	// other tests in this package see the defaults.
+	origVersion := rootCmd.Version
+	defer func() {
+		rootCmd.Version = origVersion
+		rootCmd.SetArgs(nil)
+		rootCmd.SetOut(nil)
+		rootCmd.SetErr(nil)
+	}()
+	rootCmd.Version = ""
+
+	var out bytes.Buffer
+	rootCmd.SetOut(&out)
+	rootCmd.SetErr(&out)
+	rootCmd.SetArgs([]string{"--version"})
+
+	if err := Execute("1.2.3-test"); err != nil {
+		t.Fatalf("Execute(--version) errored: %v\noutput:\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "1.2.3-test") {
+		t.Errorf("--version output missing version string; got:\n%s", out.String())
 	}
 }

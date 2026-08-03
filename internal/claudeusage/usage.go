@@ -268,6 +268,14 @@ type scanResult struct {
 //
 // Built to tolerate large lines (cached system prompts can push JSONL
 // lines well above the default 64KB Scanner buffer).
+//
+// Dedup: Claude Code writes one JSONL line per content block of the same
+// API response, and every one of those lines repeats the identical
+// `usage` object. Counting each line multiplied token totals ~2-2.6x.
+// Each (message.id, requestId) pair is therefore counted once per file —
+// retries stay within one transcript, so a per-file set is sufficient.
+// Lines missing either id are counted unconditionally (fail open — we'd
+// rather slightly over-count than silently drop usage).
 func scanFile(path string, cutoff time.Time) scanResult {
 	r := scanResult{byModel: map[string]*Tokens{}}
 	f, err := os.Open(path)
@@ -275,6 +283,7 @@ func scanFile(path string, cutoff time.Time) scanResult {
 		return r
 	}
 	defer f.Close()
+	seenUsage := map[string]struct{}{}
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 1<<17), 1<<25) // up to 32 MB / line
 	for sc.Scan() {
@@ -291,7 +300,9 @@ func scanFile(path string, cutoff time.Time) scanResult {
 		var m struct {
 			Type      string `json:"type"`
 			Timestamp string `json:"timestamp"`
+			RequestID string `json:"requestId"`
 			Message   struct {
+				ID      string          `json:"id"`
 				Role    string          `json:"role"`
 				Model   string          `json:"model"`
 				Content json.RawMessage `json:"content"`
@@ -311,8 +322,9 @@ func scanFile(path string, cutoff time.Time) scanResult {
 			continue
 		}
 
-		// Assistant API response with usage.
-		if m.Message.Usage != nil {
+		// Assistant API response with usage — counted once per
+		// (message.id, requestId) pair; see the function comment.
+		if m.Message.Usage != nil && !alreadyCounted(seenUsage, m.Message.ID, m.RequestID) {
 			t := Tokens{
 				Input:         m.Message.Usage.Input,
 				Output:        m.Message.Usage.Output,
@@ -337,6 +349,22 @@ func scanFile(path string, cutoff time.Time) scanResult {
 		}
 	}
 	return r
+}
+
+// alreadyCounted reports whether this (message.id, requestId) pair has
+// already contributed usage in this file, recording it if not. When
+// either id is missing there is nothing safe to key on, so the line is
+// treated as new (never deduped) — fail open.
+func alreadyCounted(seen map[string]struct{}, msgID, requestID string) bool {
+	if msgID == "" || requestID == "" {
+		return false
+	}
+	key := msgID + "\x00" + requestID
+	if _, dup := seen[key]; dup {
+		return true
+	}
+	seen[key] = struct{}{}
+	return false
 }
 
 // isFreshUserPrompt returns true when a JSONL "user" record's content

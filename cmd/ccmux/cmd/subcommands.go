@@ -440,18 +440,19 @@ func runDoctor() error {
 	if len(cfg.Hosts) > 0 {
 		fmt.Println()
 		fmt.Println("Configured SSH hosts:")
-		probeCtx, probeCancel := context.WithTimeout(context.Background(), 12*time.Second)
-		defer probeCancel()
 		for _, h := range cfg.Hosts {
 			label := h.Name
 			if h.Name == "" {
 				label = h.Address
 			}
-			target := sshsetup.Target{User: h.User, Host: h.Address, Port: 22}
-			if target.User == "" {
-				target.User = currentUser()
-			}
+			// Same target construction as `host setup-ssh` — honors
+			// ssh_port instead of hardcoding 22.
+			target := sshTargetForHost(h)
+			// Per-host budget: with one shared deadline, every host
+			// after a slow/unreachable one misreported as timeout.
+			probeCtx, probeCancel := context.WithTimeout(context.Background(), 12*time.Second)
 			res := sshsetup.Probe(probeCtx, target)
+			probeCancel()
 			switch res {
 			case sshsetup.ProbeOK:
 				fmt.Printf("  ✓ %s (%s) — key auth ready\n", label, target.String())

@@ -171,10 +171,10 @@ func runUninstall(plan *uninstallPlan) error {
 
 	// Disable the autostart service first so it doesn't relaunch the
 	// daemon we're about to kill. Idempotent — quiet no-op when not
-	// installed.
-	if _, err := daemonservice.Uninstall(); err == nil {
-		report("disabled autostart service (if any)", nil)
-	}
+	// installed. A failure here must be reported and fail the command:
+	// swallowing it used to print "Uninstall complete." and exit 0
+	// while launchd's KeepAlive kept respawning a deleted binary.
+	uninstallServiceStep(daemonservice.Uninstall, report)
 
 	// Stop the daemon (in case it was started manually).
 	if err := exec.Command("pkill", "-TERM", "-x", "ccmuxd").Run(); err == nil {
@@ -220,6 +220,19 @@ func runUninstall(plan *uninstallPlan) error {
 	fmt.Println("  • zsh aliases:  remove `cc()`, `mkproj()`, `upgrade-proj()` shims from ~/.zshrc")
 	fmt.Println("  • repo clone:   rm -rf " + repoCloneHint())
 	return firstErr
+}
+
+// uninstallServiceStep runs the autostart-service removal and routes
+// the outcome through report — success and failure alike. Split from
+// runUninstall so a test can drive it with a failing uninstall without
+// touching launchd/systemd (regression: the error branch used to be
+// silently dropped).
+func uninstallServiceStep(uninstall func() (daemonservice.Status, error), report func(msg string, err error)) {
+	if _, err := uninstall(); err != nil {
+		report("disable autostart service", err)
+		return
+	}
+	report("disabled autostart service (if any)", nil)
 }
 
 // repoCloneHint guesses where the user probably cloned the repo so the
