@@ -37,7 +37,6 @@ it launches.`,
 	}
 	c.AddCommand(newAgentsModelsCmd())
 	c.AddCommand(newAgentsSetDefaultModelCmd())
-	c.AddCommand(newAgentsCommandsCmd())
 	return c
 }
 
