@@ -10,8 +10,10 @@ import (
 // Each row is one poll tick: previous state, new state, previous seen
 // bit, and whether the user is currently attached. The expected
 // decision captures whether seen flips, whether the bell/push fire
-// (the suppression rule for the attached session), and whether the
-// state-change event is emitted.
+// (push is suppressed for the attached session; the bell rings on
+// every fresh needs_input transition because tmux only delivers BEL
+// to attached clients anyway), and whether the state-change event is
+// emitted.
 func TestDecideAttention(t *testing.T) {
 	type want struct {
 		newSeen        bool
@@ -46,13 +48,16 @@ func TestDecideAttention(t *testing.T) {
 				emit: true, eventKind: "state_change", incPromptCount: false,
 			},
 		},
-		// === ATTACHED USER: bell and push suppressed even on big transitions. ===
+		// === ATTACHED USER: push suppressed; the bell still rings (tmux
+		//     delivers BEL only to attached clients, so ringing here is
+		//     exactly how the attached terminal gets its cue — gating on
+		//     !attached made the bell unreachable, the PR #156 regression). ===
 		{
-			name: "needs_input while attached → seen=true, no bell, no push, still emit",
+			name: "needs_input while attached → bell rings, no push, still emit, seen=true",
 			prev: agent.StateActive, next: agent.StateNeedsInput,
 			prevSeen: true, attached: true,
 			want: want{
-				newSeen: true, bell: false, push: false,
+				newSeen: true, bell: true, push: false,
 				emit: true, eventKind: "needs_input", incPromptCount: true,
 			},
 		},
@@ -118,11 +123,16 @@ func TestDecideAttention(t *testing.T) {
 	}
 }
 
-// TestDecideAttention_AttachedSuppressesBellAcrossEntireSequence —
-// integration-style: an attached user transitioning active → working
-// → needs_input → idle → needs_input must never trigger a bell. The
-// audit-flagged UX promise.
-func TestDecideAttention_AttachedSuppressesBellAcrossEntireSequence(t *testing.T) {
+// TestDecideAttention_AttachedSuppressesPushNotBell — integration-
+// style: an attached user transitioning active → working → needs_input
+// → idle → needs_input must never receive a push (their phone doesn't
+// need to buzz while they're watching), but the bell must ring on each
+// of the two fresh needs_input transitions — BEL is delivered by tmux
+// to attached clients only, so the attached terminal is precisely who
+// the ring is for. (The pre-fix expectation of zero bells while
+// attached, combined with delivery-to-attached-only, made the bell
+// path dead code — the PR #156 regression.)
+func TestDecideAttention_AttachedSuppressesPushNotBell(t *testing.T) {
 	state := agent.StateUnknown
 	seen := true
 	bells := 0
@@ -145,10 +155,24 @@ func TestDecideAttention_AttachedSuppressesBellAcrossEntireSequence(t *testing.T
 		seen = d.NewSeen
 		state = next
 	}
-	if bells != 0 {
-		t.Errorf("attached session rang the bell %d times across the sequence; expected 0", bells)
+	if bells != 2 {
+		t.Errorf("attached session rang the bell %d times across the sequence; expected 2 (one per fresh needs_input)", bells)
 	}
 	if pushes != 0 {
 		t.Errorf("attached session sent %d pushes across the sequence; expected 0", pushes)
+	}
+}
+
+// TestDecideAttention_BellFiresRegardlessOfAttachState pins the fix for
+// the dead-bell regression: RingBell must be true on a fresh
+// needs_input transition whether or not a client is attached. Delivery
+// (BEL to attached clients only, i.e. a no-op for unattached sessions)
+// is tmux.RingBell's concern, not the decision's.
+func TestDecideAttention_BellFiresRegardlessOfAttachState(t *testing.T) {
+	for _, attached := range []bool{true, false} {
+		d := decideAttention(agent.StateActive, agent.StateNeedsInput, true, attached)
+		if !d.RingBell {
+			t.Errorf("attached=%v: RingBell = false on a fresh needs_input transition, want true", attached)
+		}
 	}
 }
