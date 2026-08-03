@@ -1,6 +1,5 @@
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ Network  (0)                                                                                                         │
-│ Telegram: off — ccmux telegram register to control ccmux from your phone                                             │
 │                                                                                                                      │
 │ No devices discovered yet.                                                                                           │
 │                                                                                                                      │
@@ -36,5 +35,6 @@
 │                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │
+│                                                                                                                      │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-? help · q quit · enter ssh · s setup ssh · i details · T telegram · r refresh · 1-7 screens                            
+? help · q quit · enter ssh · s setup ssh · i details · r refresh · 1-7 screens                                         
