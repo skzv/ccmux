@@ -82,13 +82,28 @@ func Backup(src, backupDir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer out.Close()
 	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		return dst, err
+	}
+	// fsync + checked close: this backup is the caller's rollback of
+	// last resort — it must actually be on disk before the caller
+	// overwrites src, or a crash could leave BOTH copies truncated.
+	if err := syncBackup(out); err != nil {
+		_ = out.Close()
+		return dst, err
+	}
+	if err := out.Close(); err != nil {
 		return dst, err
 	}
 	pruneBackups(backupDir, base, MaxBackupsPerFile)
 	return dst, nil
 }
+
+// syncBackup fsyncs a freshly-written backup file. A package-level
+// seam (there is no natural error injection point on *os.File) so
+// tests can prove sync failures propagate out of Backup.
+var syncBackup = func(f *os.File) error { return f.Sync() }
 
 func pruneBackups(dir, base string, keep int) {
 	if keep <= 0 {

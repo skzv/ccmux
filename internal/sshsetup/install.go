@@ -470,8 +470,15 @@ func tofuHostKeyCallback() (ssh.HostKeyCallback, error) {
 func appendKnownHost(path, hostname string, key ssh.PublicKey) error {
 	line := knownhosts.Line([]string{hostname}, key)
 	if existing, err := os.ReadFile(path); err == nil {
-		if bytes.Contains(existing, []byte(line)) {
-			return nil
+		// Whole-line comparison, NOT bytes.Contains: with a substring
+		// check, a hostname that is a suffix of an already-recorded
+		// name with the same key ("mini" vs an existing "foo.mini"
+		// line) matched and was never appended — so the short name
+		// stayed permanently unpinned and TOFU never engaged for it.
+		for _, l := range strings.Split(string(existing), "\n") {
+			if strings.TrimRight(l, "\r") == line {
+				return nil
+			}
 		}
 	}
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o644)

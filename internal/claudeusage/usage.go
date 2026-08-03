@@ -9,6 +9,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -213,7 +214,7 @@ func Walk(window time.Duration) (*Aggregate, error) {
 		go func(task fileTask) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			r := scanFile(task.path, cutoff)
+			r := scanFile(task.path, cutoff, now)
 			if r.assistantCount == 0 && r.userPrompts == 0 {
 				return
 			}
@@ -267,7 +268,14 @@ type scanResult struct {
 //     toward Anthropic's per-window quota.
 //
 // Built to tolerate large lines (cached system prompts can push JSONL
-// lines well above the default 64KB Scanner buffer).
+// lines well above the default 64KB Scanner buffer). A line beyond the
+// 32 MB per-line cap (giant base64 pastes) is skipped individually and
+// the scan continues — a bufio.Scanner would instead stop at ErrTooLong
+// and silently drop every later message in the transcript.
+//
+// Messages stamped in the future (clock skew, a machine restored from a
+// bad RTC) are excluded — beyond a small tolerance — so they can't
+// inflate the current window or skew the ResetAt forecast.
 //
 // Dedup: Claude Code writes one JSONL line per content block of the same
 // API response, and every one of those lines repeats the identical
@@ -276,7 +284,7 @@ type scanResult struct {
 // retries stay within one transcript, so a per-file set is sufficient.
 // Lines missing either id are counted unconditionally (fail open — we'd
 // rather slightly over-count than silently drop usage).
-func scanFile(path string, cutoff time.Time) scanResult {
+func scanFile(path string, cutoff, now time.Time) scanResult {
 	r := scanResult{byModel: map[string]*Tokens{}}
 	f, err := os.Open(path)
 	if err != nil {
@@ -284,17 +292,14 @@ func scanFile(path string, cutoff time.Time) scanResult {
 	}
 	defer f.Close()
 	seenUsage := map[string]struct{}{}
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 1<<17), 1<<25) // up to 32 MB / line
-	for sc.Scan() {
-		line := sc.Bytes()
-
+	maxTS := now.Add(futureSkewTolerance)
+	forEachLine(f, maxScanLineBytes, func(line []byte) {
 		// Two cheap byte-level pre-filters: only json-decode lines that
 		// might be assistant-usage or user-prompt records.
 		hasUsage := maybeContains(line, []byte(`"usage":`))
 		isUser := maybeContains(line, []byte(`"type":"user"`))
 		if !hasUsage && !isUser {
-			continue
+			return
 		}
 
 		var m struct {
@@ -315,11 +320,11 @@ func scanFile(path string, cutoff time.Time) scanResult {
 			} `json:"message"`
 		}
 		if err := json.Unmarshal(line, &m); err != nil {
-			continue
+			return
 		}
 		ts, err := time.Parse(time.RFC3339, m.Timestamp)
-		if err != nil || ts.Before(cutoff) {
-			continue
+		if err != nil || ts.Before(cutoff) || ts.After(maxTS) {
+			return
 		}
 
 		// Assistant API response with usage — counted once per
@@ -347,8 +352,69 @@ func scanFile(path string, cutoff time.Time) scanResult {
 		if m.Type == "user" && isFreshUserPrompt(m.Message.Content) {
 			r.userPrompts++
 		}
-	}
+	})
 	return r
+}
+
+// maxScanLineBytes caps how much of one JSONL line scanFile buffers —
+// the same 32 MB budget the previous bufio.Scanner had, but enforced
+// per line instead of aborting the whole file.
+const maxScanLineBytes = 1 << 25
+
+// futureSkewTolerance is how far into the future a message timestamp
+// may sit and still be counted. Covers ordinary clock skew between the
+// machine that wrote the transcript and the one aggregating it without
+// letting a badly future-dated message (broken RTC, TZ mishap) pollute
+// the current window.
+const futureSkewTolerance = 2 * time.Minute
+
+// forEachLine invokes fn for every newline-terminated line in rd, up to
+// maxLen bytes per line. A longer line is skipped in its entirety and
+// the iteration continues with the next line. This is the recovery
+// behavior bufio.Scanner cannot give us: its ErrTooLong permanently
+// stops the scan, silently dropping every later line in the file.
+// Trailing "\n" / "\r\n" are stripped, matching bufio.ScanLines.
+func forEachLine(rd io.Reader, maxLen int, fn func(line []byte)) {
+	br := bufio.NewReaderSize(rd, 1<<17)
+	var buf []byte
+	tooLong := false
+	for {
+		chunk, err := br.ReadSlice('\n')
+		if !tooLong && len(chunk) > 0 {
+			buf = append(buf, chunk...)
+			if len(buf) > maxLen {
+				buf = nil
+				tooLong = true
+			}
+		}
+		switch err {
+		case nil: // reached a newline
+			if tooLong {
+				tooLong = false // oversized line fully skipped
+			} else {
+				fn(trimLineEnding(buf))
+			}
+			buf = buf[:0]
+		case bufio.ErrBufferFull:
+			continue // same line keeps going
+		default: // io.EOF or a real read error — flush any final partial line
+			if !tooLong && len(buf) > 0 {
+				fn(trimLineEnding(buf))
+			}
+			return
+		}
+	}
+}
+
+// trimLineEnding strips one trailing "\n" or "\r\n" from a line.
+func trimLineEnding(b []byte) []byte {
+	if n := len(b); n > 0 && b[n-1] == '\n' {
+		b = b[:n-1]
+	}
+	if n := len(b); n > 0 && b[n-1] == '\r' {
+		b = b[:n-1]
+	}
+	return b
 }
 
 // alreadyCounted reports whether this (message.id, requestId) pair has
