@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -404,6 +405,25 @@ func decodeCapped(body io.Reader, out any) error {
 	return json.NewDecoder(io.LimitReader(body, maxResponseBytes)).Decode(out)
 }
 
+// maxErrorBodyBytes caps how much of an HTTP error response body is
+// folded into the returned error. The daemon's handlers write short
+// plain-text http.Error bodies ("session not found", "project
+// required", …) — 1 KiB comfortably covers every legitimate message
+// while keeping an error from a hostile or buggy peer bounded.
+const maxErrorBodyBytes = 1024
+
+// statusError builds the error for a >= 400 daemon response, appending
+// up to maxErrorBodyBytes of the body. The handlers put the actual
+// reason there; discarding it left TUI/CLI/MCP users staring at a bare
+// "status N" with the explanation dropped on the floor.
+func (c *Client) statusError(method, path string, resp *http.Response) error {
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
+	if msg := strings.TrimSpace(string(body)); msg != "" {
+		return fmt.Errorf("ccmuxd %s %s %s: status %d: %s", c.addr, method, path, resp.StatusCode, msg)
+	}
+	return fmt.Errorf("ccmuxd %s %s %s: status %d", c.addr, method, path, resp.StatusCode)
+}
+
 func (c *Client) getJSON(ctx context.Context, path string, out any) error {
 	ctx, cancel := ensureDeadline(ctx)
 	defer cancel()
@@ -417,7 +437,7 @@ func (c *Client) getJSON(ctx context.Context, path string, out any) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("ccmuxd %s GET %s: status %d", c.addr, path, resp.StatusCode)
+		return c.statusError(http.MethodGet, path, resp)
 	}
 	return decodeCapped(resp.Body, out)
 }
@@ -450,7 +470,7 @@ func (c *Client) post(ctx context.Context, path string, body, out any) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("ccmuxd %s POST %s: status %d", c.addr, path, resp.StatusCode)
+		return c.statusError(http.MethodPost, path, resp)
 	}
 	if out != nil {
 		return decodeCapped(resp.Body, out)

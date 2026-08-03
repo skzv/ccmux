@@ -84,6 +84,93 @@ func TestDecodeCapped_RejectsOversizedBody(t *testing.T) {
 	}
 }
 
+// TestClient_ErrorBodySurfacedInError — regression for the bug where
+// getJSON/post discarded the HTTP error response body, so TUI/CLI/MCP
+// users only ever saw "status N" while the daemon's actual explanation
+// ("session not found", "name must not contain …") was dropped. The
+// error must carry both the status code and the body text, on the GET
+// and the POST path.
+func TestClient_ErrorBodySurfacedInError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "session not found", http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	resetClientCacheForTest()
+	cli := RemoteClient(strings.TrimPrefix(srv.URL, "http://"))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var out map[string]any
+	gerr := cli.getJSON(ctx, "/v1/sessions/nope/preview", &out)
+	if gerr == nil {
+		t.Fatal("GET against a 404 server should error")
+	}
+	if !strings.Contains(gerr.Error(), "status 404") {
+		t.Errorf("GET error should carry the status code: %q", gerr)
+	}
+	if !strings.Contains(gerr.Error(), "session not found") {
+		t.Errorf("GET error should carry the response body: %q", gerr)
+	}
+
+	perr := cli.post(ctx, "/v1/sessions/nope/kill", nil, nil)
+	if perr == nil {
+		t.Fatal("POST against a 404 server should error")
+	}
+	if !strings.Contains(perr.Error(), "status 404") || !strings.Contains(perr.Error(), "session not found") {
+		t.Errorf("POST error should carry status and body: %q", perr)
+	}
+}
+
+// TestClient_ErrorBodyBoundedAndOptional — the body fold-in must stay
+// bounded (a hostile/buggy peer can't balloon error strings past the
+// 1 KiB cap) and an empty body must keep the short "status N" form
+// with no dangling separator.
+func TestClient_ErrorBodyBoundedAndOptional(t *testing.T) {
+	huge := strings.Repeat("x", 64*1024)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/huge":
+			http.Error(w, huge, http.StatusInternalServerError)
+		default: // empty body
+			w.WriteHeader(http.StatusBadGateway)
+		}
+	}))
+	defer srv.Close()
+
+	resetClientCacheForTest()
+	cli := RemoteClient(strings.TrimPrefix(srv.URL, "http://"))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var out map[string]any
+	err := cli.getJSON(ctx, "/huge", &out)
+	if err == nil {
+		t.Fatal("expected an error for the 500 response")
+	}
+	if len(err.Error()) > maxErrorBodyBytes+256 {
+		t.Errorf("error string not bounded: %d bytes", len(err.Error()))
+	}
+	if !strings.Contains(err.Error(), "status 500: x") {
+		t.Errorf("bounded error should still include the body prefix: %q", truncateForLog(err.Error()))
+	}
+
+	err = cli.getJSON(ctx, "/empty", &out)
+	if err == nil {
+		t.Fatal("expected an error for the 502 response")
+	}
+	if !strings.HasSuffix(err.Error(), "status 502") {
+		t.Errorf("empty body should keep the bare status form: %q", err)
+	}
+}
+
+func truncateForLog(s string) string {
+	if len(s) > 200 {
+		return s[:200] + "…"
+	}
+	return s
+}
+
 // TestEnsureDeadline_OnlyBackstopsWhenMissing — a context that already
 // carries a deadline is returned unchanged (its budget honored); a
 // deadline-less one gets the defensive backstop.
