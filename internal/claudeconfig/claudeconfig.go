@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -378,22 +379,50 @@ func readSettingsAt(path string) (*Settings, error) {
 	}
 	var s Settings
 	s.Extra = map[string]json.RawMessage{}
+	// A known key that fails to unmarshal into its typed field (Claude
+	// Code changed the schema out from under us) is preserved verbatim
+	// in Extra instead of being dropped — otherwise the whole section
+	// would silently vanish on the next write, breaking this package's
+	// preservation contract. The typed field is reset to zero so the
+	// write path emits only the raw Extra copy, never a half-parsed
+	// struct on top of it.
 	for key, val := range raw {
 		switch key {
 		case "model":
-			_ = json.Unmarshal(val, &s.Model)
+			if json.Unmarshal(val, &s.Model) != nil {
+				s.Model = ""
+				s.Extra[key] = val
+			}
 		case "effortLevel":
-			_ = json.Unmarshal(val, &s.EffortLevel)
+			if json.Unmarshal(val, &s.EffortLevel) != nil {
+				s.EffortLevel = ""
+				s.Extra[key] = val
+			}
 		case "alwaysThinkingEnabled":
-			_ = json.Unmarshal(val, &s.AlwaysThinkingEnabled)
+			if json.Unmarshal(val, &s.AlwaysThinkingEnabled) != nil {
+				s.AlwaysThinkingEnabled = false
+				s.Extra[key] = val
+			}
 		case "theme":
-			_ = json.Unmarshal(val, &s.Theme)
+			if json.Unmarshal(val, &s.Theme) != nil {
+				s.Theme = ""
+				s.Extra[key] = val
+			}
 		case "hooks":
-			_ = json.Unmarshal(val, &s.Hooks)
+			if json.Unmarshal(val, &s.Hooks) != nil {
+				s.Hooks = nil
+				s.Extra[key] = val
+			}
 		case "mcpServers":
-			_ = json.Unmarshal(val, &s.MCPServers)
+			if json.Unmarshal(val, &s.MCPServers) != nil {
+				s.MCPServers = nil
+				s.Extra[key] = val
+			}
 		case "permissions":
-			_ = json.Unmarshal(val, &s.Permissions)
+			if json.Unmarshal(val, &s.Permissions) != nil {
+				s.Permissions = Permissions{}
+				s.Extra[key] = val
+			}
 		default:
 			s.Extra[key] = val
 		}
@@ -649,20 +678,33 @@ func ListCommands() ([]Command, error) {
 	}
 	var out []Command
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
-			continue
+		if c, ok := commandFromEntry(p.CommandsDir, e); ok {
+			out = append(out, c)
 		}
-		full := filepath.Join(p.CommandsDir, e.Name())
-		info, _ := e.Info()
-		out = append(out, Command{
-			Name:        strings.TrimSuffix(e.Name(), ".md"),
-			Path:        full,
-			Description: firstDescriptionLine(full),
-			Modified:    info.ModTime(),
-		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
+}
+
+// commandFromEntry converts one commands/ directory entry into a
+// Command. ok=false for subdirectories, non-.md files, and entries
+// whose file vanished between ReadDir and Info — that race used to
+// dereference a nil FileInfo and panic.
+func commandFromEntry(dir string, e fs.DirEntry) (Command, bool) {
+	if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+		return Command{}, false
+	}
+	info, err := e.Info()
+	if err != nil || info == nil {
+		return Command{}, false
+	}
+	full := filepath.Join(dir, e.Name())
+	return Command{
+		Name:        strings.TrimSuffix(e.Name(), ".md"),
+		Path:        full,
+		Description: firstDescriptionLine(full),
+		Modified:    info.ModTime(),
+	}, true
 }
 
 // firstDescriptionLine peeks at a command markdown file and returns

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -282,7 +283,7 @@ func TestScanFile_CountsAssistantUsageAndUserPrompts(t *testing.T) {
 	f.Close()
 
 	cutoff := now.Add(-12 * time.Hour)
-	r := scanFile(path, cutoff)
+	r := scanFile(path, cutoff, now)
 	if r.assistantCount != 1 {
 		t.Errorf("assistantCount = %d, want 1", r.assistantCount)
 	}
@@ -353,7 +354,7 @@ func TestScanFile_DedupesRepeatedUsageLines(t *testing.T) {
 	}
 	f.Close()
 
-	r := scanFile(path, now.Add(-12*time.Hour))
+	r := scanFile(path, now.Add(-12*time.Hour), now)
 	if r.assistantCount != 5 {
 		t.Errorf("assistantCount = %d, want 5 (3 duplicate lines collapse to 1)", r.assistantCount)
 	}
@@ -394,9 +395,111 @@ func TestScanFile_SkipsMalformedAndNonRelevantLines(t *testing.T) {
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	r := scanFile(path, time.Now().Add(-24*time.Hour))
+	r := scanFile(path, time.Now().Add(-24*time.Hour), time.Now())
 	if r.assistantCount != 0 || r.userPrompts != 0 {
 		t.Fatalf("expected no counts from malformed file: %+v", r)
+	}
+}
+
+// TestScanFile_OversizedLineSkippedRestStillCounted — regression for
+// the silent-truncation bug: a single line beyond the 32 MB per-line
+// cap used to stop the bufio.Scanner with ErrTooLong (unchecked), so
+// every message after it vanished from the totals. The fix skips just
+// the oversized line and keeps aggregating.
+func TestScanFile_OversizedLineSkippedRestStillCounted(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "trans.jsonl")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now()
+	ts := now.Add(-1 * time.Hour).Format(time.RFC3339)
+	usageLine := func() string {
+		return fmt.Sprintf(`{"type":"assistant","timestamp":%q,"message":{"role":"assistant","model":"claude-sonnet-4-6","usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}`, ts)
+	}
+
+	// Normal usage line, then a >32MB monster (a giant base64 paste),
+	// then another normal usage line that must NOT be lost.
+	if _, err := f.WriteString(usageLine() + "\n"); err != nil {
+		t.Fatal(err)
+	}
+	huge := strings.Repeat("A", maxScanLineBytes+1024)
+	monster := fmt.Sprintf(`{"type":"user","timestamp":%q,"message":{"role":"user","content":%q}}`, ts, huge)
+	if _, err := f.WriteString(monster + "\n"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(usageLine() + "\n"); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	r := scanFile(path, now.Add(-12*time.Hour), now)
+	if r.assistantCount != 2 {
+		t.Errorf("assistantCount = %d, want 2 (line after the oversized one was dropped)", r.assistantCount)
+	}
+	if r.total.Input != 200 {
+		t.Errorf("total input = %d, want 200", r.total.Input)
+	}
+	// The oversized user-prompt line itself is skipped, not counted.
+	if r.userPrompts != 0 {
+		t.Errorf("userPrompts = %d, want 0 (the oversized line is dropped whole)", r.userPrompts)
+	}
+}
+
+// TestForEachLine_SkipsOversizedAndFlushesFinalPartial pins the line
+// iterator's contract with a small cap: oversized lines are dropped
+// whole, surrounding lines are delivered, and a final line without a
+// trailing newline still arrives.
+func TestForEachLine_SkipsOversizedAndFlushesFinalPartial(t *testing.T) {
+	in := "aaa\n" + strings.Repeat("x", 4096) + "\nbbb\r\nccc"
+	var got []string
+	forEachLine(strings.NewReader(in), 64, func(line []byte) {
+		got = append(got, string(line))
+	})
+	want := []string{"aaa", "bbb", "ccc"}
+	if len(got) != len(want) {
+		t.Fatalf("lines = %q, want %q", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("line[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+// TestScanFile_ExcludesFutureDatedMessages — clock-skew guard: a
+// message stamped well in the future (broken RTC, TZ mishap) must not
+// count toward the current window or drag ResetAt forecasts around. A
+// timestamp within the small skew tolerance still counts.
+func TestScanFile_ExcludesFutureDatedMessages(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "trans.jsonl")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now()
+	usage := map[string]any{"input_tokens": 100, "output_tokens": 0, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
+	line := func(ts time.Time) map[string]any {
+		return map[string]any{
+			"type": "assistant", "timestamp": ts.Format(time.RFC3339),
+			"message": map[string]any{"role": "assistant", "model": "claude-sonnet-4-6", "usage": usage},
+		}
+	}
+	writeJSONL(t, f, line(now.Add(-1*time.Hour)))          // normal, counted
+	writeJSONL(t, f, line(now.Add(24*time.Hour)))          // tomorrow — excluded
+	writeJSONL(t, f, line(now.Add(futureSkewTolerance/2))) // tiny skew — counted
+	f.Close()
+
+	r := scanFile(path, now.Add(-12*time.Hour), now)
+	if r.assistantCount != 2 {
+		t.Errorf("assistantCount = %d, want 2 (future-dated line must be excluded)", r.assistantCount)
+	}
+	if r.total.Input != 200 {
+		t.Errorf("total input = %d, want 200", r.total.Input)
 	}
 }
 

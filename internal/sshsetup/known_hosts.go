@@ -61,10 +61,23 @@ func RemoveKnownHostEntries(host string, port int) (removed int, err error) {
 	if removed == 0 {
 		return 0, nil
 	}
+	// Preserve the original file's permissions — many users keep
+	// known_hosts at 0600, and rewriting at a fixed 0644 would widen
+	// it. Default 0600 if the stat races with a delete.
+	mode := os.FileMode(0o600)
+	if info, statErr := os.Stat(path); statErr == nil {
+		mode = info.Mode().Perm()
+	}
 	// Write through a temp file + rename so a crash mid-write
 	// doesn't leave the user without any known_hosts at all.
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, kept.Bytes(), 0o644); err != nil {
+	if err := os.WriteFile(tmp, kept.Bytes(), mode); err != nil {
+		return 0, err
+	}
+	// WriteFile's mode is filtered through the umask; Chmod makes the
+	// preserved permissions exact.
+	if err := os.Chmod(tmp, mode); err != nil {
+		_ = os.Remove(tmp)
 		return 0, err
 	}
 	if err := os.Rename(tmp, path); err != nil {

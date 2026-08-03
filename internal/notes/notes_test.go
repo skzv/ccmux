@@ -3,6 +3,7 @@ package notes
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -112,6 +113,42 @@ func TestDisplayFor_H1Fallback(t *testing.T) {
 	}
 	if got := displayFor("with-h1.md", withH1, mod2); got != "Updated Title" {
 		t.Errorf("displayFor(updated H1) = %q, want %q", got, "Updated Title")
+	}
+}
+
+// TestList_SkipsUnreadableDir — regression: an unreadable directory
+// (mode 000, dangling mount) used to abort the ENTIRE vault listing
+// with an error, while the search path skipped it. List must skip it
+// too and still return the readable entries.
+func TestList_SkipsUnreadableDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mode-000 directories are not enforceable on windows")
+	}
+	if os.Getuid() == 0 {
+		t.Skip("root ignores permission bits")
+	}
+	project, v := makeProject(t)
+	if err := os.WriteFile(filepath.Join(project, "readable.md"), []byte("# ok"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	locked := filepath.Join(project, "locked")
+	if err := os.MkdirAll(locked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(locked, "hidden.md"), []byte("# no"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+
+	got, err := v.List()
+	if err != nil {
+		t.Fatalf("List must not abort on an unreadable subdir: %v", err)
+	}
+	if len(got) != 1 || got[0].Rel != "readable.md" {
+		t.Fatalf("List = %+v, want just readable.md", got)
 	}
 }
 

@@ -2,6 +2,7 @@ package claudeconfig
 
 import (
 	"encoding/json"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -938,5 +939,84 @@ func TestRoundTrip_ExtraLargeIntNotMangled(t *testing.T) {
 	}
 	if contains(got, "e+21") || contains(got, "E+21") {
 		t.Errorf("scientific notation leaked into settings.json:\n%s", got)
+	}
+}
+
+// vanishedEntry is a fake fs.DirEntry whose backing file was deleted
+// between ReadDir and Info — Info returns fs.ErrNotExist, the exact
+// race that used to make ListCommands call ModTime() on a nil
+// FileInfo and panic.
+type vanishedEntry struct{ name string }
+
+func (v vanishedEntry) Name() string               { return v.name }
+func (v vanishedEntry) IsDir() bool                { return false }
+func (v vanishedEntry) Type() fs.FileMode          { return 0 }
+func (v vanishedEntry) Info() (fs.FileInfo, error) { return nil, fs.ErrNotExist }
+
+// TestCommandFromEntry_VanishedFileSkipped — regression for the
+// ReadDir/Info race: an entry whose Info() fails must be skipped, not
+// panic on a nil FileInfo.
+func TestCommandFromEntry_VanishedFileSkipped(t *testing.T) {
+	if _, ok := commandFromEntry(t.TempDir(), vanishedEntry{name: "gone.md"}); ok {
+		t.Fatal("entry with failing Info() must be skipped")
+	}
+	// Non-md entries are also filtered (sanity).
+	if _, ok := commandFromEntry(t.TempDir(), vanishedEntry{name: "notes.txt"}); ok {
+		t.Fatal("non-md entry must be skipped")
+	}
+}
+
+// TestRoundTrip_SchemaDriftKeyPreserved — regression for the dropped-
+// section bug: when a KNOWN key (here `hooks` and `permissions`) has a
+// shape our typed structs can't parse (a future Claude Code schema
+// change), the raw JSON must be preserved through Extra so a
+// read-modify-write doesn't silently delete the section.
+func TestRoundTrip_SchemaDriftKeyPreserved(t *testing.T) {
+	dir := withFakeClaudeDir(t)
+	settingsPath := filepath.Join(dir, "settings.json")
+	body := `{
+  "model": "opus",
+  "hooks": "v3-string-shape-we-cannot-parse",
+  "permissions": ["allow-all", "future-list-shape"]
+}`
+	if err := os.WriteFile(settingsPath, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := ReadSettings()
+	if err != nil {
+		t.Fatalf("ReadSettings: %v", err)
+	}
+	if s.Model != "opus" {
+		t.Errorf("parseable sibling key lost: model = %q", s.Model)
+	}
+	if s.Hooks != nil {
+		t.Errorf("unparseable hooks must not half-populate the typed field: %+v", s.Hooks)
+	}
+	if got := string(s.Extra["hooks"]); got != `"v3-string-shape-we-cannot-parse"` {
+		t.Fatalf("drifted hooks value not preserved in Extra: %q", got)
+	}
+	if got := string(s.Extra["permissions"]); got != `["allow-all", "future-list-shape"]` {
+		t.Fatalf("drifted permissions value not preserved in Extra: %q", got)
+	}
+
+	if _, err := WriteSettings(s); err != nil {
+		t.Fatalf("WriteSettings: %v", err)
+	}
+	raw, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("re-written settings.json unparseable: %v", err)
+	}
+	var hooksVal string
+	if err := json.Unmarshal(out["hooks"], &hooksVal); err != nil || hooksVal != "v3-string-shape-we-cannot-parse" {
+		t.Errorf("hooks after round-trip = %s (err %v), want the original string", out["hooks"], err)
+	}
+	var permsVal []string
+	if err := json.Unmarshal(out["permissions"], &permsVal); err != nil || len(permsVal) != 2 || permsVal[0] != "allow-all" {
+		t.Errorf("permissions after round-trip = %s (err %v), want the original list", out["permissions"], err)
 	}
 }
