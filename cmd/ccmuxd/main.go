@@ -55,6 +55,29 @@ var version = "dev"
 // into a Decode call.
 const maxJSONBodyBytes = 64 * 1024
 
+// jsonBodyReadTimeout bounds how long a handler waits for a request
+// body to fully arrive. MaxBytesReader caps bytes, not time — without
+// a read deadline a tailnet peer trickling one byte a minute pins a
+// handler goroutine for as long as it cares to keep the socket open.
+const jsonBodyReadTimeout = 10 * time.Second
+
+// decodeJSONBody decodes a size-capped JSON request body with a read
+// deadline on the underlying connection. Every POST handler goes
+// through here so no Decode can stall past the deadline. Wraps
+// decodeJSONBodyWithin so tests can drive the deadline directly.
+func decodeJSONBody(w http.ResponseWriter, r *http.Request, v any) error {
+	return decodeJSONBodyWithin(w, r, v, jsonBodyReadTimeout)
+}
+
+// decodeJSONBodyWithin is decodeJSONBody with an explicit deadline.
+// SetReadDeadline is best-effort: httptest recorders and other
+// non-network ResponseWriters don't support it, and those paths have
+// no slow socket to protect against anyway.
+func decodeJSONBodyWithin(w http.ResponseWriter, r *http.Request, v any, d time.Duration) error {
+	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(d))
+	return json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)).Decode(v)
+}
+
 // errPeerAlreadyServing is the sentinel returned by run() when another
 // ccmuxd is already bound to the Unix socket. The startup-shim in main
 // treats it as a clean exit (status 0) rather than a fatal error.
@@ -143,7 +166,22 @@ func run() error {
 	// daemon down until launchd's respawn throttle. A genuinely
 	// persistent peer is still detected (waitForSocketHandoff returns
 	// false after the window) and we exit cleanly.
+	//
+	// The probe→remove→listen sequence itself is guarded by an
+	// exclusive flock on a sidecar lock file. The dial probe alone
+	// leaves a TOCTOU window: two daemons racing the handoff can both
+	// probe "free" and the loser's Remove unlinks the winner's
+	// just-bound socket — the same rogue-daemon leak, one level up.
+	// The lock is released once our listener is live (any later
+	// starter's probe then correctly sees us).
+	bindGuard, lockErr := acquireBindLock(sockPath+".lock", 10*time.Second)
+	if lockErr != nil {
+		// Another daemon is mid-bind (or wedged holding the lock) —
+		// same treatment as a live peer: yield cleanly, exit 0.
+		return fmt.Errorf("%w (bind lock: %v)", errPeerAlreadyServing, lockErr)
+	}
 	if !waitForSocketHandoff(sockPath, 3*time.Second) {
+		bindGuard.release()
 		// Wrap the sentinel so main() can errors.Is() to it and exit 0.
 		// See errPeerAlreadyServing for why this isn't a regular error.
 		return fmt.Errorf(
@@ -155,11 +193,14 @@ func run() error {
 	_ = os.Remove(sockPath)
 	unixLn, err := net.Listen("unix", sockPath)
 	if err != nil {
+		bindGuard.release()
 		return fmt.Errorf("listen unix %q: %w", sockPath, err)
 	}
 	if err := os.Chmod(sockPath, 0o600); err != nil {
+		bindGuard.release()
 		return err
 	}
+	bindGuard.release()
 
 	// Unix-socket mux: full surface (tailnet-safe routes + local-only).
 	mux := http.NewServeMux()
@@ -230,6 +271,11 @@ type tracked struct {
 	// the daemon just discovered don't immediately scream for
 	// attention until they actually do something.
 	seen bool
+	// touched is stamped by IPC handlers that move this entry while a
+	// poll tick may be in flight (rename). Phase 3's GC skips entries
+	// touched after the tick's Phase-1 live-set snapshot, so a rename
+	// racing a tick can't wipe the renamed session's tracked state.
+	touched time.Time
 }
 
 type server struct {
@@ -276,8 +322,10 @@ type server struct {
 
 	// Poll-loop seams. Defaulted by newServer to the real tmux-backed
 	// implementations; tests override them to drive pollOnce
-	// deterministically without a real pane. capture reads a session's
-	// pane content; bell signals a needs-input transition.
+	// deterministically without a real pane. list enumerates tmux
+	// sessions; capture reads a session's pane content; bell signals a
+	// needs-input transition.
+	list    func(ctx context.Context) ([]tmux.Session, error)
 	capture func(ctx context.Context, name string, lines int) (string, error)
 	// paneTitle reads the agent CLI's OSC-set title (#{pane_title}) —
 	// a second, higher-quality detection signal alongside capture-pane.
@@ -285,6 +333,17 @@ type server struct {
 	paneTitle func(ctx context.Context, name string) (string, error)
 	bell      func(ctx context.Context, name string) error
 	readAgent func(projectPath string) agent.ID
+
+	// pollBudget bounds one whole pollOnce tick (tmux.List + every
+	// capture-pane/display-message + the bell path). Without it a
+	// single wedged subprocess — a SIGSTOP'd tmux, most plausibly —
+	// blocks the poll loop forever while the daemon keeps serving
+	// frozen state. Comfortably above normal capture latency for ~20
+	// sessions; tests shrink it to drive the timeout path fast.
+	pollBudget time.Duration
+	// listErrLoggedAt rate-limits the tmux.List failure log in
+	// pollOnce (accessed only from the poll goroutine).
+	listErrLoggedAt time.Time
 }
 
 // newServer builds a server with its default (real, tmux-backed)
@@ -351,7 +410,9 @@ func newServer(cfg config.Config) *server {
 		cfg:        cfg,
 		seen:       map[string]*tracked{},
 		startedAt:  time.Now(),
+		list:       tmux.List,
 		capture:    tmux.CapturePane,
+		pollBudget: 10 * time.Second,
 		paneTitle:  tmux.PaneTitle,
 		bell:       notificationBell(cfg.Notifications),
 		readAgent:  project.ReadAgent,
@@ -445,7 +506,16 @@ func (s *server) listSessions(w http.ResponseWriter, r *http.Request) {
 	// s.mu across it would stall the poll loop, which needs the same
 	// lock. Snapshot the session list first, then take the lock only
 	// to read the per-session tracked state.
-	tss, _ := tmux.List(ctx)
+	//
+	// A List failure is surfaced as a 500, not an empty list: "no tmux
+	// server running" is already a nil,nil success inside tmux.List, so
+	// any error here is a real fault (tmux missing from PATH, wedged
+	// server) and hiding it made the dashboard silently empty.
+	tss, err := s.list(ctx)
+	if err != nil {
+		http.Error(w, "tmux list-sessions: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -485,7 +555,7 @@ func (s *server) listSessions(w http.ResponseWriter, r *http.Request) {
 // The request body is daemon.NewSessionRequest.
 func (s *server) createSession(w http.ResponseWriter, r *http.Request) {
 	var req daemon.NewSessionRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)).Decode(&req); err != nil {
+	if err := decodeJSONBody(w, r, &req); err != nil {
 		http.Error(w, "decode: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -575,7 +645,7 @@ func (s *server) createBareSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req daemon.NewBareSessionRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)).Decode(&req); err != nil {
+	if err := decodeJSONBody(w, r, &req); err != nil {
 		http.Error(w, "decode: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -721,7 +791,7 @@ func (s *server) handleRename(w http.ResponseWriter, r *http.Request, name strin
 		return
 	}
 	var req daemon.RenameRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)).Decode(&req); err != nil || req.Name == "" {
+	if err := decodeJSONBody(w, r, &req); err != nil || req.Name == "" {
 		http.Error(w, "name required", http.StatusBadRequest)
 		return
 	}
@@ -738,12 +808,7 @@ func (s *server) handleRename(w http.ResponseWriter, r *http.Request, name strin
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.mu.Lock()
-	if t, ok := s.seen[name]; ok {
-		s.seen[req.Name] = t
-		delete(s.seen, name)
-	}
-	s.mu.Unlock()
+	s.renameTracked(name, req.Name)
 	writeJSON(w, daemon.SessionState{Name: req.Name, Host: "local"})
 }
 
@@ -753,7 +818,7 @@ func (s *server) handleSendKeys(w http.ResponseWriter, r *http.Request, name str
 		return
 	}
 	var req daemon.SendKeysRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)).Decode(&req); err != nil || req.Keys == "" {
+	if err := decodeJSONBody(w, r, &req); err != nil || req.Keys == "" {
 		http.Error(w, "keys required", http.StatusBadRequest)
 		return
 	}
@@ -914,11 +979,15 @@ func (s *server) handlePreview(w http.ResponseWriter, r *http.Request, name stri
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
-	out, err := tmux.CapturePane(ctx, name, lines)
+	// Via the capture seam (default tmux.CapturePane) so the 404
+	// mapping below is unit-testable with an injected failure.
+	out, err := s.capture(ctx, name, lines)
 	if err != nil {
-		// tmux returns a non-zero exit when the session is gone; map to
-		// 404 so clients can distinguish "no session" from other
-		// errors without parsing stderr.
+		// tmux exits non-zero when the session is gone, and internal/
+		// tmux folds the stderr diagnostic into the wrapped error (a
+		// bare exec.ExitError stringifies as just "exit status 1", so
+		// matching on err.Error() alone never fired); map it to 404 so
+		// clients can distinguish "no session" from other errors.
 		if strings.Contains(err.Error(), "can't find session") ||
 			strings.Contains(err.Error(), "no current session") {
 			http.Error(w, "session not found", http.StatusNotFound)
@@ -1202,7 +1271,7 @@ func (s *server) listProjects(w http.ResponseWriter, _ *http.Request) {
 // directory; no CLAUDE.md, no docs/ tree, no git init.
 func (s *server) createProject(w http.ResponseWriter, r *http.Request) {
 	var req daemon.NewProjectRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)).Decode(&req); err != nil {
+	if err := decodeJSONBody(w, r, &req); err != nil {
 		http.Error(w, "decode: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -1303,7 +1372,10 @@ func newHTTPServer(h http.Handler) *http.Server {
 		Handler:           h,
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
-		// Bodies are read inside handlers; per-handler context timeouts
-		// (5s on most write paths) bound how long a Decode can stall.
+		// Bodies are read inside handlers. Per-handler context timeouts
+		// do NOT bound a stalled body read — a handler's Decode runs
+		// before its context.WithTimeout even exists. decodeJSONBody
+		// sets a per-request read deadline on the connection instead;
+		// every body-consuming handler goes through it.
 	}
 }

@@ -65,8 +65,11 @@ func loadCache() {
 			continue
 		}
 		id := ID(rf.ID)
-		// Pre-compile every rule's match spec so the hot path doesn't
-		// recompile on each poll tick.
+		// Pre-compile every rule's match spec — including the nested
+		// Any/All/Not tree — so the hot path never compiles a regex
+		// and never mutates shared rule state (classification runs
+		// concurrently across sessions). ruleMatches uses r.Match
+		// directly when it's compiled.
 		for i := range rf.Rules {
 			r := &rf.Rules[i]
 			spec := MatchSpec{
@@ -78,9 +81,6 @@ func loadCache() {
 				Not:       r.Not,
 			}
 			spec.compile()
-			// Stash the precompiled version back; ruleMatches
-			// reconstructs the spec each call but uses the cached
-			// compiled regexes on subsequent invocations.
 			r.Match = spec
 		}
 		cache[id] = rf.Rules

@@ -10,23 +10,35 @@ region = "osc_title"
 regex = ['^[\x{2800}-\x{28FF}]']
 
 # Rounded box-drawing prompt frame on the last non-empty line of the
-# pane. Mirrors looksLikeClaudePrompt's contract: at least one of
-# ╭╮╰╯ AND a second hit from {╭╮╰╯│─>}. Encoded as two priorities so
-# the engine respects the "rounded glyph required" rule first.
+# pane. Mirrors looksLikeClaudePrompt's contract exactly: at least one
+# rounded corner from ╭╮╰╯ AND a second DISTINCT glyph from {╭╮╰╯│─>}.
+# The top-level regex requires the rounded corner; the `any` block
+# requires the second distinct glyph — either one of the non-rounded
+# frame glyphs, or a different rounded corner (all six unordered
+# pairs enumerated). A lone `╰` — a capture racing a partial frame
+# redraw — must NOT match; the old encoding let one rounded glyph
+# satisfy both conditions and fired spurious needs_input bells.
+#
+# require_idle keeps the legacy idle-gate semantics: a prompt frame
+# only means "blocked" once the pane has also been quiet for the idle
+# threshold (engineClassify holds the frame as active until then).
 [[rules]]
 id = "claude_prompt_frame"
 state = "blocked"
 priority = 900
 region = "last_line"
+require_idle = true
 regex = ['[╭╮╰╯]']
 any = [
-  { regex = ['╭'] },
-  { regex = ['╮'] },
-  { regex = ['╰'] },
-  { regex = ['╯'] },
   { regex = ['│'] },
   { regex = ['─'] },
   { regex = ['>'] },
+  { all = [{ regex = ['╭'] }, { regex = ['╮'] }] },
+  { all = [{ regex = ['╭'] }, { regex = ['╰'] }] },
+  { all = [{ regex = ['╭'] }, { regex = ['╯'] }] },
+  { all = [{ regex = ['╮'] }, { regex = ['╰'] }] },
+  { all = [{ regex = ['╮'] }, { regex = ['╯'] }] },
+  { all = [{ regex = ['╰'] }, { regex = ['╯'] }] },
 ]
 
 # Shell prompt at the tail = claude crashed.

@@ -10,9 +10,8 @@ import (
 // lock-contention property — that pollOnce releases s.mu during the
 // capture phase so IPC handlers don't block on it — is exercised by
 // the integration tests in poll_integration_test.go via a real tmux
-// server. Without a tmux fake at this layer (tmux.List isn't a seam),
-// a unit test here would either need a running tmux server (not
-// portable) or skip the path entirely (not useful).
+// server. (Hermetic pollOnce tests via the list/capture seams live in
+// poll_unit_test.go.)
 func TestServerMutex_NoContention(t *testing.T) {
 	srv := &server{seen: map[string]*tracked{}}
 	var wg sync.WaitGroup
