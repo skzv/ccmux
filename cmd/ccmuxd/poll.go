@@ -2,9 +2,7 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
-	"strings"
 	"time"
 
 	"github.com/skzv/ccmux/internal/agent"
@@ -152,13 +150,7 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 			name       string
 			prev, next agent.State
 		}
-		// tgAlerts/tgResolved drive the Telegram bridge: alert when a
-		// session starts waiting unattended, resolve when it stops
-		// waiting (state moved on, or the user attached). Captured here
-		// under the lock so Phase 4 can dispatch without holding it.
-		tgAlerts   []tgAlert
-		tgResolved []string
-		anyActive  bool
+		anyActive bool
 	)
 	s.mu.Lock()
 	for _, r := range results {
@@ -198,22 +190,6 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 				prev, next agent.State
 			}{r.name, prev, r.newState})
 		}
-		// Telegram bridge signals. Alert on an unattended needs_input
-		// transition (same condition as the bell); resolve when a
-		// previously-waiting session stops waiting or gets attended.
-		if s.tgBridge != nil {
-			alert, resolve := telegramSignals(prev, r.newState, ts.Attached)
-			if alert {
-				tgAlerts = append(tgAlerts, tgAlert{
-					name:     r.name,
-					pane:     r.pane,
-					changeID: fmt.Sprintf("%s#%d", r.name, t.promptCount),
-				})
-			}
-			if resolve {
-				tgResolved = append(tgResolved, r.name)
-			}
-		}
 		if r.newState == agent.StateActive {
 			anyActive = true
 		}
@@ -237,62 +213,7 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 	for _, p := range pushes {
 		s.maybePushForStateTransition(p.name, p.prev, p.next)
 	}
-	s.dispatchTelegram(ctx, tgAlerts, tgResolved)
 	s.sleeper.SetActive(anyActive)
-}
-
-// tgAlert is one queued Telegram needs-input notification.
-type tgAlert struct {
-	name     string
-	pane     string
-	changeID string
-}
-
-// telegramSignals decides, for one session's state transition, whether
-// to send a Telegram alert and/or resolve an outstanding one. Pure so
-// the poll-loop hook condition is unit-testable without a bridge:
-//
-//   - alert: the session just entered needs_input while unattended
-//     (the same "ring the bell" condition — an attended session doesn't
-//     need a phone alert).
-//   - resolve: a previously-waiting session is no longer waiting
-//     unattended (state moved on, or someone attached), so any
-//     outstanding alert should be marked handled.
-func telegramSignals(prev, next agent.State, attached bool) (alert, resolve bool) {
-	alert = next == agent.StateNeedsInput && prev != agent.StateNeedsInput && !attached
-	resolve = prev == agent.StateNeedsInput && (next != agent.StateNeedsInput || attached)
-	return alert, resolve
-}
-
-// dispatchTelegram fires queued Telegram alerts/resolutions off the poll
-// loop's critical path. Each call is its own goroutine so a slow Bot API
-// round trip can't stall polling; the bridge's alert store is
-// concurrency-safe. No-op when the bridge is disabled.
-func (s *server) dispatchTelegram(ctx context.Context, alerts []tgAlert, resolved []string) {
-	if s.tgBridge == nil {
-		return
-	}
-	cap := s.cfg.Telegram.EffectivePaneTailLines()
-	for _, a := range alerts {
-		tail := lastLines(a.pane, cap)
-		go s.tgBridge.Notify(ctx, "local", a.name, tail, a.changeID)
-	}
-	for _, name := range resolved {
-		go s.tgBridge.MarkSeen(ctx, "local", name)
-	}
-}
-
-// lastLines returns the final n lines of s (the pane tail shipped to
-// Telegram), trimming trailing blank lines first.
-func lastLines(s string, n int) string {
-	if n <= 0 {
-		return s
-	}
-	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
-	if len(lines) <= n {
-		return strings.Join(lines, "\n")
-	}
-	return strings.Join(lines[len(lines)-n:], "\n")
 }
 
 // attentionDecision is the per-session outcome of one poll tick: the
