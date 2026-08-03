@@ -89,7 +89,7 @@ func helpForScreen(s Screen, km Keymap) []HelpItem {
 			{"a", "toggle alwaysThinkingEnabled on/off"},
 			{"y", "toggle yolo mode (permissions.defaultMode = bypassPermissions)"},
 			{"c", "edit global ~/.claude/CLAUDE.md in $EDITOR"},
-			{"j", "edit ~/.claude/settings.json directly"},
+			{"↑↓ / j k + enter", "activate a row (the settings.json row opens $EDITOR)"},
 		}
 	case ScreenSettings:
 		return []HelpItem{

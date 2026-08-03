@@ -380,6 +380,13 @@ func (m settingsModel) SpinnerTick() tea.Cmd {
 	return m.moshiProbe.Tick
 }
 
+// IsEditing reports whether the inline field editor (textinput) has
+// keyboard focus. App includes this in modalCapturingText and routes
+// keystrokes straight here while true, so global single-key handlers
+// ("r" refresh, digit screen-switch, "q" quit) can't swallow the
+// characters the user is typing into a value.
+func (m settingsModel) IsEditing() bool { return m.editing }
+
 func (m settingsModel) Update(msg tea.Msg) (settingsModel, tea.Cmd) {
 	// Editor mode owns the keyboard: enter to commit, esc to cancel.
 	if m.editing {
