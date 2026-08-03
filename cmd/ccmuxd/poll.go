@@ -238,10 +238,16 @@ type attentionDecision struct {
 //     A state change while NOT attached produces output the user
 //     should review → seen=false. Otherwise the previous seen value
 //     is preserved.
-//   - Bell/push suppression: the bell rings and a push is dispatched
-//     ONLY when the state transitions to needs_input AND the user
-//     isn't already attached. The dashboard event is still emitted
-//     so the TUI updates instantly.
+//   - Bell: rings on EVERY fresh needs_input transition, attached or
+//     not. Delivery self-limits: tmux.RingBell writes BEL only to the
+//     clients attached to that session, so an unattached session is a
+//     natural no-op. Gating on !attached here (as PR #156 did) made
+//     the ring condition and the delivery set mutually exclusive —
+//     the bell never reached anyone.
+//   - Push suppression: a push is dispatched ONLY when the state
+//     changes AND the user isn't already attached (an attached user is
+//     watching; their phone doesn't need to buzz). The dashboard event
+//     is still emitted so the TUI updates instantly.
 //   - PromptCount: incremented on every fresh needs_input transition
 //     (attached or not — it's a lifetime count, not a "did we notify"
 //     count). Drives the usage/quota panel.
@@ -252,7 +258,7 @@ func decideAttention(prev, next agent.State, prevSeen, attached bool) attentionD
 	}
 	if next == agent.StateNeedsInput && prev != agent.StateNeedsInput {
 		d.IncPromptCount = true
-		d.RingBell = !attached
+		d.RingBell = true
 	}
 	if next != prev {
 		d.EmitStateEvent = true
