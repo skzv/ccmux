@@ -2,11 +2,11 @@
 
 <img src="docs/screenshots/ccmux-logo.png" alt="ccmux" width="520" />
 
-_Terminal session manager for AI coding agents._
+_A cross-device tmux session manager for AI coding agents._
 
 **Run your coding agents from any device — even your phone.**
 
-ccmux is one TUI for every coding-agent session you've got running — Claude Code, Codex, Cursor, and more. Start, resume, and supervise them all from your Mac, your laptop, or your phone. No tmux session names to memorize, no `claude --resume <hash>` to type, no SSH-then-attach gymnastics. It runs over your tailnet and attaches over SSH or Mosh. Setup is one command.
+ccmux is one TUI for every coding-agent session you've got running — Claude Code, Codex, Cursor, and more. If you've used tmux, the mental model is one sentence: **ccmux is a tmux session manager built for coding agents.** tmux keeps each session alive in the background; ccmux is the single dashboard over all of them — color-coded by what each agent is doing, on every device you own. Start, resume, and supervise them all from your Mac, your laptop, or your phone. No tmux session names to memorize, no `claude --resume <hash>` to type, no SSH-then-attach gymnastics. It runs over your tailnet and attaches over SSH or Mosh. Setup is one command.
 
 [![CI](https://github.com/skzv/ccmux/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/skzv/ccmux/actions/workflows/ci.yml)
 [![Go Version](https://img.shields.io/badge/go-1.26+-00ADD8.svg)](https://go.dev/)
