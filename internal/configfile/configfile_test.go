@@ -72,6 +72,25 @@ func TestBackup_CreatesTimestampedCopy(t *testing.T) {
 	}
 }
 
+// TestBackup_SyncFailurePropagates — the backup is the rollback of
+// last resort, so a failed fsync must surface to the caller instead of
+// being silently swallowed (a crash after an unflushed copy could
+// leave BOTH the original and the "backup" truncated).
+func TestBackup_SyncFailurePropagates(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "settings.json")
+	if err := os.WriteFile(src, []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	orig := syncBackup
+	syncBackup = func(*os.File) error { return fmt.Errorf("disk full") }
+	t.Cleanup(func() { syncBackup = orig })
+
+	if _, err := Backup(src, filepath.Join(dir, "backups")); err == nil {
+		t.Fatal("Backup must propagate a failed fsync, got nil")
+	}
+}
+
 // TestBackup_NoopOnMissingSource — first write has nothing to back up.
 func TestBackup_NoopOnMissingSource(t *testing.T) {
 	dir := t.TempDir()
