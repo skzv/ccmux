@@ -5,6 +5,7 @@ package tmux
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -13,6 +14,22 @@ import (
 	"syscall"
 	"time"
 )
+
+// withStderr enriches an error from exec.Cmd.Output() with the captured
+// stderr text. Output() stores stderr in ExitError.Stderr but keeps
+// Error() as a bare "exit status N" — so callers matching on tmux's
+// diagnostic text ("can't find session", …) never saw it and every
+// failure looked the same. Wrapping with %w keeps errors.As/Is chains
+// intact while making the stderr text part of the message.
+func withStderr(err error) error {
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		if msg := strings.TrimSpace(string(ee.Stderr)); msg != "" {
+			return fmt.Errorf("%w (%s)", err, msg)
+		}
+	}
+	return err
+}
 
 // autoSeq backs AutoSessionName's collision-free suffix.
 var autoSeq atomic.Int64
@@ -113,7 +130,7 @@ func List(ctx context.Context) ([]Session, error) {
 				return nil, nil
 			}
 		}
-		return nil, fmt.Errorf("tmux list-sessions: %w", err)
+		return nil, fmt.Errorf("tmux list-sessions: %w", withStderr(err))
 	}
 	return parseList(out), nil
 }
@@ -194,7 +211,7 @@ func CapturePane(ctx context.Context, name string, lines int) (string, error) {
 	cmd := command(ctx, "tmux", args...)
 	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("tmux capture-pane: %w", err)
+		return "", fmt.Errorf("tmux capture-pane: %w", withStderr(err))
 	}
 	return string(out), nil
 }
@@ -275,16 +292,6 @@ func clientTTYs(raw []byte) []string {
 		out = append(out, tty)
 	}
 	return out
-}
-
-func writeBellToTTY(tty string) error {
-	f, err := os.OpenFile(tty, os.O_WRONLY, 0)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	_, err = f.Write([]byte{'\a'})
-	return err
 }
 
 // SendText types `text` into the named session's pane verbatim. The

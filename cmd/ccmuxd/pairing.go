@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -66,7 +65,7 @@ func (s *server) handlePair(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req daemon.PairRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)).Decode(&req); err != nil {
+	if err := decodeJSONBody(w, r, &req); err != nil {
 		http.Error(w, "decode: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -113,7 +112,7 @@ func (s *server) handleRegisterDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req daemon.RegisterDeviceRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)).Decode(&req); err != nil {
+	if err := decodeJSONBody(w, r, &req); err != nil {
 		http.Error(w, "decode: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -141,7 +140,7 @@ func (s *server) handleTestPush(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		PublicKey string `json:"public_key"`
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)).Decode(&body); err != nil || body.PublicKey == "" {
+	if err := decodeJSONBody(w, r, &body); err != nil || body.PublicKey == "" {
 		http.Error(w, "public_key required", http.StatusBadRequest)
 		return
 	}

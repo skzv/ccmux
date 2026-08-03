@@ -30,7 +30,17 @@ import (
 func engineClassify(id ID, pane, title string, lastChange time.Time, idleThreshold time.Duration) State {
 	res, _ := agentdetect.ClassifyAgent(agentdetect.ID(id), agentdetect.Input{Pane: pane, Title: title})
 	if res.MatchedRuleID != "" && !res.SkipStateUpdate {
-		return State(res.State)
+		st := State(res.State)
+		// require_idle rules re-apply the legacy idle gate: a blocked-
+		// looking body shape (e.g. Claude's prompt frame) is believed
+		// only once the pane has ALSO been quiet for the threshold.
+		// Without this, one capture racing a partial frame redraw
+		// flips needs_input instantly and fires a spurious bell/push —
+		// the false-positive class the old classifiers gated against.
+		if res.RequireIdle && st == StateNeedsInput && time.Since(lastChange) < idleThreshold {
+			return StateActive
+		}
+		return st
 	}
 	// Per-agent fallback. Claude has its own well-tuned body
 	// classifier in internal/claude — fall through to that so the

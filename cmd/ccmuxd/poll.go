@@ -54,8 +54,27 @@ func (s *server) pollLoop(ctx context.Context) {
 //   - Phase 4 (no lock): fire bell shell-out, publish events, dispatch
 //     APNs sends; update the sleep-manager.
 func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
-	tss, err := tmux.List(ctx)
+	// Bound the whole tick. Every shell-out below inherits this
+	// deadline, so one wedged subprocess (SIGSTOP'd tmux, frozen
+	// client TTY on the bell path) costs at most one budget's worth
+	// of polling instead of stalling the loop forever.
+	budget := s.pollBudget
+	if budget <= 0 {
+		budget = 10 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+
+	tss, err := s.list(ctx)
 	if err != nil {
+		// Surface the failure (rate-limited — this fires every tick
+		// while tmux is unreachable). Historically swallowed, which
+		// made "tmux missing from launchd's PATH" look like a healthy
+		// daemon with an empty dashboard and zero diagnostics.
+		if time.Since(s.listErrLoggedAt) >= 30*time.Second {
+			s.listErrLoggedAt = time.Now()
+			log.Printf("ccmuxd: tmux list-sessions failed (polling degraded): %v", err)
+		}
 		return
 	}
 	// Keep the moshi state cache warm — it drives the tmux status-bar
@@ -64,6 +83,10 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 
 	// Phase 1.
 	now := time.Now()
+	// tickStart anchors the Phase-3 GC: entries touched (renamed)
+	// after this instant post-date the live-name snapshot below and
+	// must survive this tick even though live[] doesn't know them.
+	tickStart := now
 	live := make(map[string]bool, len(tss))
 	snaps := make([]pollSnap, 0, len(tss))
 	var createdEvents []daemon.SessionEvent
@@ -194,8 +217,8 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 			anyActive = true
 		}
 	}
-	for name := range s.seen {
-		if !live[name] {
+	for name, t := range s.seen {
+		if !live[name] && !t.touched.After(tickStart) {
 			delete(s.seen, name)
 		}
 	}
@@ -272,6 +295,22 @@ func decideAttention(prev, next agent.State, prevSeen, attached bool) attentionD
 		}
 	}
 	return d
+}
+
+// renameTracked moves the tracked entry oldName→newName, stamping it
+// touched so a poll tick already in flight (whose Phase-1 live-set
+// snapshot predates the rename) doesn't GC the entry in Phase 3 —
+// which would reset promptCount, clear the seen bit, and emit a
+// spurious "created" event on the next tick. Called by handleRename
+// after the tmux rename succeeds.
+func (s *server) renameTracked(oldName, newName string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if t, ok := s.seen[oldName]; ok {
+		t.touched = time.Now()
+		s.seen[newName] = t
+		delete(s.seen, oldName)
+	}
 }
 
 func (s *server) projectAgent(projectPath string) agent.ID {
