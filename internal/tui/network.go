@@ -159,6 +159,12 @@ func (m *networkModel) CloseDetail() { m.detailOpen = false }
 // Used by App.modalCapturingText / overlay routing.
 func (m networkModel) DetailOpen() bool { return m.detailOpen }
 
+// capturesInput reports whether this screen has a modal/text-entry
+// state that must swallow global single-key handlers. OR'd into
+// App.modalCapturingText — extend this when adding a new modal to
+// the Network screen.
+func (m networkModel) capturesInput() bool { return m.DetailOpen() }
+
 // SSHCmd builds the tea.Cmd that opens an interactive shell on the
 // selected peer. Returns nil when the selection isn't ssh-able
 // (local, mobile, missing dial host). Caller is responsible for

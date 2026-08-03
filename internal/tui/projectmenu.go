@@ -151,20 +151,13 @@ func (m projectMenuModel) entryLabel(e projectMenuEntry) string {
 		if preview == "" {
 			preview = e.conv.ID
 		}
-		return "resume   " + name + "  " + m.st.Muted.Render(truncRunes(preview, 48))
+		// truncate is the canonical ANSI-aware helper (sessions.go);
+		// it replaced a rune-count-based local (truncRunes) that could
+		// overflow the column budget on wide (CJK) characters.
+		return "resume   " + name + "  " + m.st.Muted.Render(truncate(preview, 48))
 	default:
 		return "＋ Start a new session"
 	}
-}
-
-// truncRunes shortens `s` to at most `max` runes, appending an ellipsis
-// when it cut. Rune-based so a multi-byte character is never split.
-func truncRunes(s string, max int) string {
-	r := []rune(s)
-	if len(r) <= max {
-		return s
-	}
-	return string(r[:max-1]) + "…"
 }
 
 // projectMenuMsg opens the project menu modal. attachOrCreateLocal

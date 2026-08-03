@@ -217,6 +217,15 @@ func (m cursorAgentModel) View(width, height int) string {
 // outer Pane border so agentsModel.View can wrap the whole agent
 // surface in one bordered block.
 func (m cursorAgentModel) ViewBody(width, height int) string {
+	headerStr := m.viewBodyHeader()
+	browserView := m.browser.View(width, m.browserHeight(height))
+	return lipgloss.JoinVertical(lipgloss.Left, headerStr, browserView)
+}
+
+// viewBodyHeader builds the usage header stacked above the browser.
+// Extracted from ViewBody so setSize can measure the exact same header
+// when deriving the browser's height budget.
+func (m cursorAgentModel) viewBodyHeader() string {
 	st := m.st
 	header := []string{st.AgentAccent(agent.IDCursor).Render("Cursor")}
 
@@ -241,15 +250,22 @@ func (m cursorAgentModel) ViewBody(width, height int) string {
 		header = append(header, m.renderUsageSection()...)
 	}
 	header = append(header, "")
-	headerStr := strings.Join(header, "\n")
-	headerH := lipgloss.Height(headerStr)
+	return strings.Join(header, "\n")
+}
 
-	browserH := height - headerH
+// browserHeight is the browser's slice of the sub-tab body.
+func (m cursorAgentModel) browserHeight(height int) int {
+	browserH := height - lipgloss.Height(m.viewBodyHeader())
 	if browserH < 8 {
 		browserH = 8
 	}
-	browserView := m.browser.View(width, browserH)
-	return lipgloss.JoinVertical(lipgloss.Left, headerStr, browserView)
+	return browserH
+}
+
+// setSize persists the embedded browser's viewport geometry for the
+// given sub-tab body rectangle (see claudeModel.setSize).
+func (m *cursorAgentModel) setSize(width, height int) {
+	m.browser.SetSize(width, m.browserHeight(height))
 }
 
 // renderUsageSection produces the Cursor sub-tab's "Usage" block —

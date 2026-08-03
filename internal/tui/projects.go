@@ -159,6 +159,14 @@ func (m *projectsModel) clampCursor() {
 // session-switch keys 1-7 would jump screens mid-filter).
 func (m projectsModel) FilterActive() bool { return m.filterActive }
 
+// capturesInput reports whether this screen has a modal/text-entry
+// state that must swallow global single-key handlers. OR'd into
+// App.modalCapturingText — extend this when adding a new modal to
+// the Projects screen.
+func (m projectsModel) capturesInput() bool {
+	return m.form != nil || m.menu != nil || m.FilterActive()
+}
+
 // enterFilter focuses the textinput. Idempotent.
 func (m *projectsModel) enterFilter() {
 	m.filterActive = true
@@ -640,14 +648,7 @@ func createProjectCmd(submit newProjectSubmitMsg) tea.Cmd {
 					Until: time.Now().Add(8 * time.Second),
 				}
 			}
-			dial := submit.DialHost
-			if dial == "" {
-				dial = submit.Host
-			}
-			return remoteSessionStartedMsg{
-				SessionName: res.Session,
-				DialHost:    dial,
-			}
+			return remoteStartedFromProjectSubmit(submit, res.Session)
 		}
 		// Local case: pass the picker's chosen agent through so the
 		// sidecar gets written and the launch command matches.
@@ -673,6 +674,27 @@ func createProjectCmd(submit newProjectSubmitMsg) tea.Cmd {
 	}
 }
 
+// remoteStartedFromProjectSubmit maps a remote new-project submit onto
+// the attach trigger, carrying every SSH addressing field (DialHost,
+// User, SSHPort, Mosh) so the follow-up ssh/mosh dial honors the
+// host's configured login user, sshd port, and mosh preference. The
+// old inline construction dropped all three and the attach dialed
+// port 22 as the local user over plain ssh. Pure — extracted so tests
+// can pin the mapping without a live remote daemon.
+func remoteStartedFromProjectSubmit(submit newProjectSubmitMsg, session string) remoteSessionStartedMsg {
+	dial := submit.DialHost
+	if dial == "" {
+		dial = submit.Host
+	}
+	return remoteSessionStartedMsg{
+		SessionName: session,
+		DialHost:    dial,
+		User:        submit.User,
+		SSHPort:     submit.SSHPort,
+		Mosh:        submit.Mosh,
+	}
+}
+
 // localProjectDir resolves the absolute directory a locally-created
 // project lands in: under the configured projects root, identical to
 // what the daemon's createProject computes. Extracted so the path
@@ -685,12 +707,14 @@ func localProjectDir(cfg config.Config, name string) string {
 	return filepath.Join(project.ResolveRoot(cfg.Projects.Root), name)
 }
 
-// textInputBlink is a small wrapper around textinput.Blink so we don't have
-// to import textinput in app.go.
+// textInputBlink is a small wrapper around textinput.Blink so callers
+// outside this file don't need the textinput import. Previously a
+// stub returning nil, which left the new-project form's name field
+// without a blinking cursor — the blink schedule is a Cmd chain that
+// must be primed once when the input gains focus, exactly like the
+// new-session form does with textinput.Blink.
 func textInputBlink() tea.Cmd {
-	// imported indirectly; the new-project form uses textinput which already
-	// owns its blink scheduling. This is here for symmetry / future use.
-	return nil
+	return textinput.Blink
 }
 
 // isNarrow reports whether the terminal is too narrow for side-by-side

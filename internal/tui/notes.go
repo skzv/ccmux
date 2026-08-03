@@ -116,6 +116,14 @@ type notesModel struct {
 	deviceErr  string
 }
 
+// capturesInput reports whether this screen has a modal/text-entry
+// state that must swallow global single-key handlers. OR'd into
+// App.modalCapturingText — extend this when adding a new modal to
+// the Notes screen.
+func (m notesModel) capturesInput() bool {
+	return m.searching || m.newNoteForm != nil || m.noteInfo.open
+}
+
 // notesFocus tracks which pane receives navigation keys.
 type notesFocus int
 

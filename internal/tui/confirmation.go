@@ -186,7 +186,7 @@ func (a App) renderConfirmationOverlay(width, height int) string {
 	modal := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(a.styles.P.Red).
-		Padding(1, 2).
+		Padding(a.styles.Spacing.SM, a.styles.Spacing.MD).
 		Width(contentWidth).
 		Render(strings.Join(lines, "\n"))
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, modal)

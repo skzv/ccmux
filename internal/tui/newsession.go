@@ -202,6 +202,7 @@ func (m newSessionFormModel) Update(msg tea.Msg) (newSessionFormModel, tea.Cmd) 
 				submit.Address = h.Address
 				submit.DialHost = h.DialHost
 				submit.User = h.User
+				submit.SSHPort = h.SSHPort
 				submit.Mosh = h.Mosh
 			}
 			return m, func() tea.Msg { return submit }
@@ -314,19 +315,7 @@ func spawnBareSessionCmd(submit newBareSessionSubmitMsg) tea.Cmd {
 					Until: time.Now().Add(6 * time.Second),
 				}
 			}
-			dial := submit.DialHost
-			if dial == "" {
-				// Fall back to the display name — better than nothing,
-				// though the user may need to configure DialHost.
-				dial = submit.Host
-			}
-			return remoteSessionStartedMsg{
-				SessionName: res.Session,
-				DialHost:    dial,
-				User:        submit.User,
-				SSHPort:     submit.SSHPort,
-				Mosh:        submit.Mosh,
-			}
+			return remoteStartedFromBareSubmit(submit, res.Session)
 		}
 		// Local case. Resolve workdir client-side using the same
 		// rules the daemon would: explicit → $HOME (no config
@@ -372,6 +361,28 @@ func spawnBareSessionCmd(submit newBareSessionSubmitMsg) tea.Cmd {
 			}
 		}
 		return bareSessionReadyMsg{Session: name}
+	}
+}
+
+// remoteStartedFromBareSubmit maps a remote bare-session submit onto
+// the attach trigger, carrying every SSH addressing field (DialHost,
+// User, SSHPort, Mosh) so the follow-up ssh/mosh dial matches the
+// host's configuration instead of defaulting to port 22 / the local
+// username / plain ssh. Pure — extracted so tests can pin the mapping
+// without a live remote daemon.
+func remoteStartedFromBareSubmit(submit newBareSessionSubmitMsg, session string) remoteSessionStartedMsg {
+	dial := submit.DialHost
+	if dial == "" {
+		// Fall back to the display name — better than nothing,
+		// though the user may need to configure DialHost.
+		dial = submit.Host
+	}
+	return remoteSessionStartedMsg{
+		SessionName: session,
+		DialHost:    dial,
+		User:        submit.User,
+		SSHPort:     submit.SSHPort,
+		Mosh:        submit.Mosh,
 	}
 }
 

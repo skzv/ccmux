@@ -176,6 +176,18 @@ type newProjectSubmitMsg struct {
 	// known_hosts matches. Empty for local.
 	DialHost string
 
+	// User is the ssh/mosh login user for the post-create attach.
+	// Empty means the client's own username. Zero for local.
+	User string
+
+	// SSHPort is the remote sshd port for the post-create attach.
+	// 0 means default (22 at the dial site). Zero for local.
+	SSHPort int
+
+	// Mosh signals the user prefers mosh over ssh for the post-create
+	// attach to this host. False for local.
+	Mosh bool
+
 	// Agent is the AI agent the user picked in the form's agent row
 	// (claude / codex / antigravity). Empty defaults to claude downstream.
 	// Carried through daemon.NewProjectRequest so the remote honors it.

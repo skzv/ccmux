@@ -30,11 +30,6 @@ func TestNoInlineStyleLiteralsInScreens(t *testing.T) {
 	allowedFiles := map[string]string{}
 
 	colorRE := regexp.MustCompile(`lipgloss\.Color\("#`)
-	// Spacing-literal rule: the (top, right, bottom, left) and
-	// (vertical, horizontal) forms of Padding / Margin / Padding<Side>
-	// / Margin<Side> when the first argument is a numeric literal.
-	// Matches `.Padding(0`, `.PaddingLeft(2`, `.Margin(0,`, etc.
-	spacingRE := regexp.MustCompile(`\.(Padding|Margin)(Left|Right|Top|Bottom)?\(\s*[0-9]`)
 
 	walkErr := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -82,7 +77,7 @@ func TestNoInlineStyleLiteralsInScreens(t *testing.T) {
 			line := lineOf(src, loc[0])
 			t.Errorf("%s:%d: inline lipgloss.Color(\"#...\") in screen file — use styles.Styles tokens (s.Semantic.* or s.P.*) instead", path, line)
 		}
-		if loc := spacingRE.FindIndex(data); loc != nil {
+		if loc := spacingLiteralRE.FindIndex(data); loc != nil {
 			line := lineOf(src, loc[0])
 			t.Errorf("%s:%d: inline numeric literal in Padding/Margin call — use s.Spacing.* tokens instead", path, line)
 		}
@@ -90,6 +85,49 @@ func TestNoInlineStyleLiteralsInScreens(t *testing.T) {
 	})
 	if walkErr != nil {
 		t.Fatalf("walk: %v", walkErr)
+	}
+}
+
+// spacingLiteralRE is the spacing-literal rule: the (top, right,
+// bottom, left) and (vertical, horizontal) forms of Padding / Margin
+// / Padding<Side> / Margin<Side> when the first argument is a numeric
+// literal. Matches `.Padding(0`, `.PaddingLeft(2`, `.Margin(0,`, etc.
+// The `\s*` after the dot makes the rule line-break tolerant: chained
+// builder calls split across lines (`lipgloss.NewStyle().` newline
+// `Padding(1, 3)`) used to evade the old `\.Padding` form and four
+// screen files accumulated literals that way.
+var spacingLiteralRE = regexp.MustCompile(`\.\s*(Padding|Margin)(Left|Right|Top|Bottom)?\(\s*[0-9]`)
+
+// TestSpacingLintRegexCatchesLineBrokenChains pins the strengthened
+// regex against the exact literal shapes that previously slipped by:
+// a chained call with the method on its own line. Each "match" snippet
+// reproduces one of the historical offenders (tour.go, confirmation.go,
+// attach_loading.go, sshsetup_wizard.go); the "no match" snippets
+// guard against false positives on token-based calls and prose
+// comments.
+func TestSpacingLintRegexCatchesLineBrokenChains(t *testing.T) {
+	match := []string{
+		`lipgloss.NewStyle().Padding(1, 3).Border(lipgloss.RoundedBorder())`,
+		"lipgloss.NewStyle().\n\tPadding(1, 3).\n\tBorder(lipgloss.RoundedBorder())",
+		"lipgloss.NewStyle().\n\t\tBorder(lipgloss.RoundedBorder()).\n\t\tPadding(1, 2).\n\t\tWidth(w)",
+		"style.\n    MarginLeft(2)",
+		`s.PaddingTop( 1)`,
+	}
+	for _, src := range match {
+		if !spacingLiteralRE.MatchString(src) {
+			t.Errorf("spacing lint failed to flag literal:\n%s", src)
+		}
+	}
+	noMatch := []string{
+		`lipgloss.NewStyle().Padding(s.Spacing.XS, s.Spacing.SM)`,
+		"lipgloss.NewStyle().\n\tPadding(st.Spacing.SM, st.Spacing.LG)",
+		`// border + 2 cells of Padding(0,1) horizontally`,
+		`Padding(0, 1)`, // bare mention with no receiver dot (prose/comment)
+	}
+	for _, src := range noMatch {
+		if spacingLiteralRE.MatchString(src) {
+			t.Errorf("spacing lint false-positive on:\n%s", src)
+		}
 	}
 }
 

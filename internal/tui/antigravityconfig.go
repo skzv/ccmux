@@ -118,6 +118,15 @@ func (m antigravityConfigModel) View(width, height int) string {
 // an outer Pane border so agentsModel.View can wrap the whole agent
 // surface in one bordered block.
 func (m antigravityConfigModel) ViewBody(width, height int) string {
+	headerStr := m.viewBodyHeader(width)
+	browserView := m.browser.View(width, m.browserHeight(width, height))
+	return lipgloss.JoinVertical(lipgloss.Left, headerStr, browserView)
+}
+
+// viewBodyHeader builds the settings header stacked above the browser.
+// Extracted from ViewBody so setSize can measure the exact same header
+// when deriving the browser's height budget.
+func (m antigravityConfigModel) viewBodyHeader(width int) string {
 	st := m.st
 	narrow := isNarrow(width)
 	header := []string{st.Emphasis.Render("Antigravity configuration")}
@@ -144,15 +153,22 @@ func (m antigravityConfigModel) ViewBody(width, height int) string {
 		header = append(header, "", st.StatusGood.Render("saved ✓  "+m.saveMsg))
 	}
 	header = append(header, "")
-	headerStr := strings.Join(header, "\n")
-	headerH := lipgloss.Height(headerStr)
+	return strings.Join(header, "\n")
+}
 
-	browserH := height - headerH
+// browserHeight is the browser's slice of the sub-tab body.
+func (m antigravityConfigModel) browserHeight(width, height int) int {
+	browserH := height - lipgloss.Height(m.viewBodyHeader(width))
 	if browserH < 8 {
 		browserH = 8
 	}
-	browserView := m.browser.View(width, browserH)
-	return lipgloss.JoinVertical(lipgloss.Left, headerStr, browserView)
+	return browserH
+}
+
+// setSize persists the embedded browser's viewport geometry for the
+// given sub-tab body rectangle (see claudeModel.setSize).
+func (m *antigravityConfigModel) setSize(width, height int) {
+	m.browser.SetSize(width, m.browserHeight(width, height))
 }
 
 // browserSections builds the Configured browser sections for the

@@ -66,6 +66,30 @@ func (m *agentsModel) Reload() {
 	m.antigravity.reload()
 }
 
+// SetSize is called by App on every tea.WindowSizeMsg with the body
+// rectangle the Agents screen renders into. It mirrors View's chrome
+// math (sub-tab header row + the shared Pane frame) and pushes the
+// inner size into every sub-model so their embedded browsers persist
+// real viewport geometry for Update-side scrolling and Glamour
+// wrapping. All four sub-tabs get the size (not just the active one)
+// so switching tabs never lands on a stale 80×20 viewport.
+func (m *agentsModel) SetSize(width, height int) {
+	narrow := isNarrow(width)
+	header := m.renderSubtabs(narrow)
+	innerW := width - 4
+	if innerW < 4 {
+		innerW = 4
+	}
+	innerH := height - 2 - lipgloss.Height(header) - 1 // top/bottom border + blank
+	if innerH < 6 {
+		innerH = 6
+	}
+	m.claude.setSize(innerW, innerH)
+	m.codex.setSize(innerW, innerH)
+	m.antigravity.setSize(innerW, innerH)
+	m.cursor.setSize(innerW, innerH)
+}
+
 func (m agentsModel) Update(msg tea.Msg) (agentsModel, tea.Cmd) {
 	// Sub-tab navigation. `tab`/`shift+tab`/`h`/`l` cycle between
 	// the four agent sub-tabs. The embedded browser inside each sub-
@@ -133,6 +157,12 @@ func (m agentsModel) Update(msg tea.Msg) (agentsModel, tea.Cmd) {
 func (m agentsModel) ModalOpen() bool {
 	return m.active == agent.IDClaude && m.claude.PickerOpen()
 }
+
+// capturesInput reports whether this screen has a modal/text-entry
+// state that must swallow global single-key handlers. OR'd into
+// App.modalCapturingText — extend this when adding a new modal to
+// the Agents screen.
+func (m agentsModel) capturesInput() bool { return m.ModalOpen() }
 
 // onSubtabSwitch refreshes per-sub-tab background data when the user
 // flips to a new sub-tab. Today only the Cursor sub-tab needs this —

@@ -83,6 +83,15 @@ type sessionsModel struct {
 	preview        string
 	previewLoading bool
 	previewErr     string
+	// previewGen is the tick-chain generation. Incremented on every
+	// toggle-on; each scheduled tick carries the generation it was
+	// armed under and stale-generation ticks are dropped without
+	// rescheduling. Without this, toggling off→on within the 1s tick
+	// interval left the old chain alive (it saw showPreview==true
+	// again and rescheduled) — each rapid re-toggle added one more
+	// concurrent chain, permanently multiplying the capture rate.
+	// matrix.go documents the same double-tick-lineage hazard.
+	previewGen int
 }
 
 // previewLoadedMsg carries the result of one tmux capture-pane call
@@ -98,8 +107,11 @@ type previewLoadedMsg struct {
 // handler issues a capture command and schedules the next tick. When
 // `p` toggles the preview off, in-flight ticks are dropped (the
 // handler checks showPreview before scheduling the next one) so we
-// don't keep ticking forever.
-type previewTickMsg struct{}
+// don't keep ticking forever. gen identifies which toggle-on armed
+// this chain; a tick whose gen no longer matches the model's
+// previewGen is stale (the preview was toggled off and back on while
+// it was in flight) and is dropped so chains never multiply.
+type previewTickMsg struct{ gen int }
 
 func newSessions(st styles.Styles, km Keymap) sessionsModel {
 	return sessionsModel{st: st, km: km}
@@ -133,6 +145,14 @@ func (m *sessionsModel) SetSessions(ss []daemon.SessionState) {
 	if m.cursor >= len(ss) {
 		m.cursor = max0(len(ss) - 1)
 	}
+}
+
+// capturesInput reports whether this screen has a modal/text-entry
+// state that must swallow global single-key handlers. OR'd into
+// App.modalCapturingText — extend this when adding a new modal to
+// the Sessions screen.
+func (m sessionsModel) capturesInput() bool {
+	return m.form != nil || m.renameForm != nil
 }
 
 // Selected returns the currently-highlighted session, or nil.
@@ -231,15 +251,17 @@ func (m sessionsModel) Update(msg tea.Msg) (sessionsModel, tea.Cmd) {
 		return m, nil
 	case previewTickMsg:
 		// Tick fired — if the user toggled preview off in the meantime,
-		// drop it (no capture, no next tick). Otherwise refresh and
-		// schedule the next tick.
-		if !m.showPreview {
+		// or this tick belongs to a superseded chain (off→on re-toggle
+		// bumped the generation while it was in flight), drop it: no
+		// capture, no next tick. Otherwise refresh and schedule the
+		// next tick under the same generation.
+		if !m.showPreview || msg.gen != m.previewGen {
 			return m, nil
 		}
 		if sel := m.Selected(); sel != nil {
-			return m, tea.Batch(capturePreviewCmd(*sel), previewTickCmd())
+			return m, tea.Batch(capturePreviewCmd(*sel), previewTickCmd(m.previewGen))
 		}
-		return m, previewTickCmd()
+		return m, previewTickCmd(m.previewGen)
 	}
 
 	if km, ok := msg.(tea.KeyMsg); ok {
@@ -258,15 +280,19 @@ func (m sessionsModel) Update(msg tea.Msg) (sessionsModel, tea.Cmd) {
 		case keyMatches(km, m.km.Preview):
 			m.showPreview = !m.showPreview
 			if m.showPreview {
-				// Turning preview on: capture immediately AND start the
-				// tick. Batching produces one Cmd; Bubble Tea fans it
-				// out internally. The first capture fills the pane
-				// without waiting a full second; the tick keeps it warm.
+				// Turning preview on: bump the generation so any tick
+				// still in flight from a previous chain (toggled off
+				// less than a second ago) lands stale and dies, then
+				// capture immediately AND start this generation's tick.
+				// Batching produces one Cmd; Bubble Tea fans it out
+				// internally. The first capture fills the pane without
+				// waiting a full second; the tick keeps it warm.
+				m.previewGen++
 				if sel := m.Selected(); sel != nil {
 					m.previewLoading = true
-					return m, tea.Batch(capturePreviewCmd(*sel), previewTickCmd())
+					return m, tea.Batch(capturePreviewCmd(*sel), previewTickCmd(m.previewGen))
 				}
-				return m, previewTickCmd()
+				return m, previewTickCmd(m.previewGen)
 			}
 			// Turning preview off: clear cached content so a future
 			// re-toggle doesn't flash stale text from the previous
@@ -342,10 +368,11 @@ func realCapturePreviewCmd(s daemon.SessionState) tea.Cmd {
 
 // previewTickCmd schedules the next preview refresh. One second is the
 // sweet spot — fast enough that "watch the agent think" feels live, slow
-// enough that we're not hammering tmux at 60Hz.
-var previewTickCmd = func() tea.Cmd {
+// enough that we're not hammering tmux at 60Hz. gen stamps the tick with
+// the chain generation that armed it (see previewTickMsg).
+var previewTickCmd = func(gen int) tea.Cmd {
 	return tea.Tick(1*time.Second, func(_ time.Time) tea.Msg {
-		return previewTickMsg{}
+		return previewTickMsg{gen: gen}
 	})
 }
 

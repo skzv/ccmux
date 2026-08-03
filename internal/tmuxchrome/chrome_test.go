@@ -1,8 +1,11 @@
 package tmuxchrome
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPrettyKey(t *testing.T) {
@@ -327,5 +330,81 @@ func TestOptions_EmitsTitleKeysForReset(t *testing.T) {
 		if !have[want] {
 			t.Errorf("Options() must emit %q so Reset has it to unset", want)
 		}
+	}
+}
+
+// TestDetectedPrefix_CachesExecWithinTTL pins the TTL cache: the
+// Sessions detail pane calls DetectedPrefix on every render (each
+// keystroke + the 2s tick), so repeated calls inside the TTL must hit
+// the cache instead of spawning `tmux show-options` per frame. Before
+// the cache landed this test counted one exec per call.
+func TestDetectedPrefix_CachesExecWithinTTL(t *testing.T) {
+	origExec, origNow := showPrefixOption, prefixNow
+	defer func() {
+		showPrefixOption, prefixNow = origExec, origNow
+		resetPrefixCache()
+	}()
+	resetPrefixCache()
+
+	execs := 0
+	showPrefixOption = func(context.Context) ([]byte, error) {
+		execs++
+		return []byte("prefix C-a\n"), nil
+	}
+	now := time.Unix(1000, 0)
+	prefixNow = func() time.Time { return now }
+
+	ctx := context.Background()
+	for i := 0; i < 5; i++ {
+		if got := DetectedPrefix(ctx); got != "Ctrl-a" {
+			t.Fatalf("DetectedPrefix = %q, want Ctrl-a", got)
+		}
+	}
+	if execs != 1 {
+		t.Errorf("5 calls within TTL ran %d execs, want 1 (cache miss only)", execs)
+	}
+
+	// Advance past the TTL — the next call must re-probe (a user CAN
+	// remap the prefix mid-session; the cache is staleness-bounded).
+	now = now.Add(prefixCacheTTL + time.Second)
+	showPrefixOption = func(context.Context) ([]byte, error) {
+		execs++
+		return []byte("prefix C-b\n"), nil
+	}
+	if got := DetectedPrefix(ctx); got != "Ctrl-b" {
+		t.Errorf("post-TTL DetectedPrefix = %q, want re-probed Ctrl-b", got)
+	}
+	if execs != 2 {
+		t.Errorf("post-TTL call ran %d total execs, want 2", execs)
+	}
+}
+
+// TestDetectedPrefix_CachesErrorFallback ensures the "tmux missing /
+// errored" fallback is cached too — otherwise a machine without tmux
+// would exec-and-fail once per rendered frame.
+func TestDetectedPrefix_CachesErrorFallback(t *testing.T) {
+	origExec, origNow := showPrefixOption, prefixNow
+	defer func() {
+		showPrefixOption, prefixNow = origExec, origNow
+		resetPrefixCache()
+	}()
+	resetPrefixCache()
+
+	execs := 0
+	showPrefixOption = func(context.Context) ([]byte, error) {
+		execs++
+		return nil, errors.New("no tmux")
+	}
+	now := time.Unix(2000, 0)
+	prefixNow = func() time.Time { return now }
+
+	ctx := context.Background()
+	for i := 0; i < 3; i++ {
+		if got := DetectedPrefix(ctx); got != "Ctrl-b" {
+			t.Fatalf("DetectedPrefix = %q, want fallback Ctrl-b", got)
+		}
+	}
+	if execs != 1 {
+		t.Errorf("3 failing calls within TTL ran %d execs, want 1", execs)
 	}
 }
