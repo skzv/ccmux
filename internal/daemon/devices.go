@@ -53,6 +53,12 @@ type DeviceStore struct {
 	mu   sync.Mutex
 	path string
 	byID map[string]DeviceRegistration
+	// flushMu serializes snapshot→write→rename in flush. Without it two
+	// concurrent Registers can interleave so the flush holding the OLDER
+	// snapshot renames last, persisting a file that silently drops the
+	// newer registration. Separate from mu so registrations never block
+	// behind disk IO.
+	flushMu sync.Mutex
 }
 
 // DefaultDeviceStorePath returns ~/.local/state/ccmux/devices.json,
@@ -189,6 +195,11 @@ func (s *DeviceStore) Remove(publicKey string) error {
 }
 
 func (s *DeviceStore) flush() error {
+	// Hold flushMu across snapshot AND rename: a flush that snapshots
+	// after another flush's rename always persists equal-or-newer state,
+	// so the final on-disk file can never lose a registration.
+	s.flushMu.Lock()
+	defer s.flushMu.Unlock()
 	s.mu.Lock()
 	list := make([]DeviceRegistration, 0, len(s.byID))
 	for _, r := range s.byID {

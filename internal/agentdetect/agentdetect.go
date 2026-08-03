@@ -109,16 +109,26 @@ type Rule struct {
 	// viewer, help screens) so paging through history doesn't oscillate
 	// the state.
 	SkipStateUpdate bool `toml:"skip_state_update"`
+
+	// RequireIdle marks a blocked-state rule as needing pane quiet time
+	// before its state is believed. Body shapes like Claude's prompt
+	// frame also flash by mid-redraw while the agent is working; the
+	// legacy classifiers gated needs_input on the pane being unchanged
+	// for the idle threshold, and this flag carries that contract into
+	// the engine (honored by the caller, which owns the idle tracking).
+	RequireIdle bool `toml:"require_idle"`
 }
 
 // Result is what the engine returns. State is the new derived state;
 // SkipStateUpdate signals to the caller "keep the previous state."
-// MatchedRuleID is exposed for logging/debugging; an empty value means
-// "no rule matched."
+// RequireIdle asks the caller to gate a needs_input State on its idle
+// tracking (see Rule.RequireIdle). MatchedRuleID is exposed for
+// logging/debugging; an empty value means "no rule matched."
 type Result struct {
 	State           State
 	MatchedRuleID   string
 	SkipStateUpdate bool
+	RequireIdle     bool
 }
 
 // Evaluate runs the rule list against an Input and returns the
@@ -149,13 +159,22 @@ func Evaluate(rules []Rule, in Input) Result {
 		State:           parseState(bestRule.State),
 		MatchedRuleID:   bestRule.ID,
 		SkipStateUpdate: bestRule.SkipStateUpdate,
+		RequireIdle:     bestRule.RequireIdle,
 	}
 }
 
 // ruleMatches is the per-rule predicate: select the region, run the
-// flattened MatchSpec, return true on match.
+// rule's MatchSpec, return true on match. Rules from the loader carry
+// a fully-precompiled Match — use it so the hot path (every rule ×
+// session × poll tick) never recompiles a regex. Test-constructed
+// rules that set the flattened top-level fields directly fall back to
+// an ad-hoc spec; match() compiles those into locals, never mutating
+// shared rule state.
 func ruleMatches(r *Rule, in Input) bool {
 	region := extractRegion(r.Region, in)
+	if r.Match.hasCompiled {
+		return r.Match.match(region)
+	}
 	spec := MatchSpec{
 		Contains:  r.Contains,
 		Regex:     r.Regex,
@@ -231,14 +250,22 @@ func lastNonEmptyLines(s string, n int) string {
 // must hold (conjunctive). An empty MatchSpec matches any non-empty
 // region — useful for "fallback" rules that just want to fire on the
 // presence of content.
+//
+// match never mutates the spec: production specs are compiled once at
+// load time (see loadCache), and uncompiled test-constructed specs get
+// their regexes compiled into locals here. The old lazy-compile-on-
+// first-match wrote to shared slice elements during classification —
+// a latent data race when two sessions classified concurrently.
 func (m *MatchSpec) match(region string) bool {
+	compiled, compiledLn := m.compiled, m.compiledLn
 	if !m.hasCompiled {
-		m.compile()
+		compiled = compileRegexList(m.Regex)
+		compiledLn = compileRegexList(m.LineRegex)
 	}
 	// Empty region with no positive conditions to evaluate is a
 	// non-match — we don't want an "empty body matches everything"
 	// catch-all.
-	if region == "" && len(m.Contains) == 0 && len(m.compiled) == 0 && len(m.compiledLn) == 0 &&
+	if region == "" && len(m.Contains) == 0 && len(compiled) == 0 && len(compiledLn) == 0 &&
 		len(m.Any) == 0 && len(m.All) == 0 && len(m.Not) == 0 {
 		return false
 	}
@@ -248,12 +275,12 @@ func (m *MatchSpec) match(region string) bool {
 			return false
 		}
 	}
-	for _, re := range m.compiled {
+	for _, re := range compiled {
 		if !re.MatchString(region) {
 			return false
 		}
 	}
-	for _, re := range m.compiledLn {
+	for _, re := range compiledLn {
 		if !lineRegexMatch(re, region) {
 			return false
 		}
@@ -303,24 +330,39 @@ func lineRegexMatch(re *regexp.Regexp, region string) bool {
 }
 
 // compile turns the textual Regex / LineRegex fields into compiled
-// regexps. Cached on first call so a rule list scanned every poll
-// tick doesn't recompile. A malformed regex is silently dropped —
+// regexps, recursing into the nested Any/All/Not specs so the whole
+// tree is compiled up front. Called once at load time (loadCache);
+// after that, classification is read-only — nothing mutates shared
+// rule state on the hot path. A malformed regex is silently dropped —
 // the loader is the right place to surface schema errors loudly;
 // here we'd rather degrade gracefully than panic the daemon.
 func (m *MatchSpec) compile() {
-	m.compiled = m.compiled[:0]
-	for _, src := range m.Regex {
-		if re, err := regexp.Compile(src); err == nil {
-			m.compiled = append(m.compiled, re)
-		}
+	m.compiled = compileRegexList(m.Regex)
+	m.compiledLn = compileRegexList(m.LineRegex)
+	for i := range m.Any {
+		m.Any[i].compile()
 	}
-	m.compiledLn = m.compiledLn[:0]
-	for _, src := range m.LineRegex {
-		if re, err := regexp.Compile(src); err == nil {
-			m.compiledLn = append(m.compiledLn, re)
-		}
+	for i := range m.All {
+		m.All[i].compile()
+	}
+	for i := range m.Not {
+		m.Not[i].compile()
 	}
 	m.hasCompiled = true
+}
+
+// compileRegexList compiles each pattern, dropping malformed entries.
+func compileRegexList(srcs []string) []*regexp.Regexp {
+	if len(srcs) == 0 {
+		return nil
+	}
+	out := make([]*regexp.Regexp, 0, len(srcs))
+	for _, src := range srcs {
+		if re, err := regexp.Compile(src); err == nil {
+			out = append(out, re)
+		}
+	}
+	return out
 }
 
 // parseState maps the TOML state strings to State. Unknown
