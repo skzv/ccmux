@@ -784,7 +784,12 @@ func stepSSHKey(ctx context.Context, out io.Writer) error {
 	if err := os.MkdirAll(filepath.Dir(keyPath), 0o700); err != nil {
 		return err
 	}
-	cmd := exec.Command("ssh-keygen", "-t", "ed25519", "-N", "", "-f", keyPath, "-C", "ccmux-generated")
+	// ssh-keygen with -N "" is non-interactive and fast; the timeout is
+	// a backstop so a wedged binary can't hang the wizard (repo rule:
+	// every exec.Command carries a ctx).
+	kctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(kctx, "ssh-keygen", "-t", "ed25519", "-N", "", "-f", keyPath, "-C", "ccmux-generated")
 	cmd.Stdout = out
 	cmd.Stderr = out
 	if err := cmd.Run(); err != nil {
