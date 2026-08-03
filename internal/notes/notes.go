@@ -55,7 +55,10 @@ func (v Vault) List() ([]Entry, error) {
 	var out []Entry
 	err := filepath.WalkDir(v.Root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
-			return err
+			// Skip unreadable entries (mode-000 dir, dangling mount)
+			// instead of aborting the whole listing — same behavior
+			// as the search fallback walk.
+			return nil
 		}
 		if d.IsDir() {
 			if path != v.Root && skipDir(d.Name()) {

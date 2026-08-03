@@ -3,6 +3,7 @@ package sshsetup
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -157,6 +158,91 @@ func TestRemoveKnownHostEntries_EmptyHostErrors(t *testing.T) {
 	if _, err := RemoveKnownHostEntries("  ", 22); err == nil {
 		t.Fatal("blank host should error")
 	}
+}
+
+// TestRemoveKnownHostEntries_PreservesFileMode — regression: the
+// rewrite used a hard-coded 0644, silently widening a user's 0600
+// known_hosts. The original mode must survive the temp-file+rename.
+func TestRemoveKnownHostEntries_PreservesFileMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("posix file modes")
+	}
+	home := withTempHome(t)
+	seedKnownHosts(t, home, ""+
+		"sputnik ssh-ed25519 AAAA\n"+
+		"otherhost ssh-ed25519 BBBB\n")
+	path := filepath.Join(home, ".ssh", "known_hosts")
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	removed, err := RemoveKnownHostEntries("sputnik", 22)
+	if err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if removed != 1 {
+		t.Fatalf("removed = %d, want 1", removed)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Errorf("known_hosts mode after rewrite = %o, want 600", got)
+	}
+}
+
+// TestAppendKnownHost_SuffixHostnameStillAppended — regression for the
+// substring dedup: with bytes.Contains, appending an entry for "mini"
+// when "foo.mini <same key>" was already recorded matched as a
+// substring and was skipped — so "mini" never got pinned and TOFU
+// protection never engaged for that name. Dedup must compare whole
+// lines; a true duplicate is still skipped.
+func TestAppendKnownHost_SuffixHostnameStillAppended(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "known_hosts")
+	key := genHostKey(t)
+
+	if err := appendKnownHost(path, "foo.mini", key); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendKnownHost(path, "mini", key); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := nonEmptyLines(string(data))
+	if len(lines) != 2 {
+		t.Fatalf("known_hosts lines = %q, want 2 (suffix hostname must be appended)", lines)
+	}
+	if !strings.HasPrefix(lines[1], "mini ") {
+		t.Errorf("second line = %q, want an entry for %q", lines[1], "mini")
+	}
+
+	// A true duplicate is still deduped.
+	if err := appendKnownHost(path, "mini", key); err != nil {
+		t.Fatal(err)
+	}
+	data, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lines := nonEmptyLines(string(data)); len(lines) != 2 {
+		t.Errorf("after duplicate append: lines = %q, want still 2", lines)
+	}
+}
+
+// nonEmptyLines splits on newlines and drops blanks.
+func nonEmptyLines(s string) []string {
+	var out []string
+	for _, l := range strings.Split(s, "\n") {
+		if strings.TrimSpace(l) != "" {
+			out = append(out, l)
+		}
+	}
+	return out
 }
 
 func seedKnownHosts(t *testing.T, home, content string) {
