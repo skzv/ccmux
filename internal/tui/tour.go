@@ -1,9 +1,10 @@
-// Tour is the first-run interactive walkthrough. Five overlay steps,
-// skippable, persisted via config so it doesn't re-fire. Re-openable
-// any time with `T` from any screen.
+// Tour is the first-run interactive walkthrough: a short sequence of
+// overlay steps, skippable, persisted via config so it doesn't
+// re-fire. Re-openable any time with `T` from any screen.
 package tui
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -20,18 +21,22 @@ type tourStep struct {
 	KeyHint string // a one-line "press X to do Y" footer; empty allowed
 }
 
-// defaultTourSteps is the script the first-run tour runs through. Five
-// slides, each anchored to one of ccmux's core ideas. Keep each body
+// defaultTourSteps is the script the first-run tour runs through. Each
+// slide is anchored to one of ccmux's core ideas. Keep each body
 // terse — readers are in a TUI, not reading a book.
+//
+// The welcome slide's "N-step" count is stamped in from len(steps)
+// after the slice is built, so the copy can never drift from the
+// actual slide count again (it said "5-step" while the tour had 4).
 func defaultTourSteps() []tourStep {
-	return []tourStep{
+	steps := []tourStep{
 		{
 			Title: "Welcome to ccmux",
 			Body: []string{
 				"ccmux is a terminal UI for managing long-lived Claude Code",
 				"sessions on top of tmux, Mosh, and Tailscale.",
 				"",
-				"This 5-step tour shows you the essentials. It runs once on",
+				"This %d-step tour shows you the essentials. It runs once on",
 				"first launch and re-opens any time with `T`.",
 			},
 			KeyHint: "→ / space / enter: next  ·  esc: skip",
@@ -79,6 +84,16 @@ func defaultTourSteps() []tourStep {
 			KeyHint: "Press enter to finish the tour, esc to skip — you can re-open with T",
 		},
 	}
+	// Stamp the derived step count into any body line carrying a %d
+	// placeholder (today just the welcome slide). Done by scan rather
+	// than a hard-coded line index so reflowing the copy can't silently
+	// point the Sprintf at the wrong line.
+	for i, line := range steps[0].Body {
+		if strings.Contains(line, "%d") {
+			steps[0].Body[i] = fmt.Sprintf(line, len(steps))
+		}
+	}
+	return steps
 }
 
 // tourModel manages the active tour. Zero value is "tour not active".
