@@ -2000,11 +2000,14 @@ func (a App) refreshSessionsCmd() tea.Cmd {
 					localName = "local"
 				}
 				hs = append(hs, hostStatus{
-					Name:      localName,
-					Local:     true,
-					Source:    "local",
-					Address:   local.Addr(),
-					OK:        h.OK,
+					Name:    localName,
+					Local:   true,
+					Source:  "local",
+					Address: local.Addr(),
+					OK:      h.OK,
+					// The daemon answered /v1/health, so the chip can
+					// honestly say so.
+					DaemonOK:  h.OK,
 					Sessions:  h.Sessions,
 					SleepMode: h.SleepMode,
 					Version:   h.Version,
@@ -2021,16 +2024,20 @@ func (a App) refreshSessionsCmd() tea.Cmd {
 					}
 					// tmux is responding — sessions came back. ccmuxd
 					// is down, but the device itself is fine; mark OK
-					// so the dot stays green. The "(no daemon)"
-					// address is the only visible breadcrumb that
-					// something's off — the user can `ccmux daemon
-					// install` to fix.
+					// so the Devices dot stays green.
+					//
+					// DaemonOK stays false: the status-bar chip must
+					// say "offline" here. Without the daemon there are
+					// no bells, no push notifications, and no sleep
+					// lock — the user needs to see that, not a green
+					// check. `ccmux daemon install` fixes it.
 					hs = append(hs, hostStatus{
 						Name:      name,
 						Local:     true,
 						Source:    "local",
 						Address:   "tmux (no daemon)",
 						OK:        true,
+						DaemonOK:  false,
 						LastProbe: time.Now(),
 					})
 				} else {
@@ -2066,7 +2073,10 @@ func (a App) refreshSessionsCmd() tea.Cmd {
 				LastProbe: time.Now(),
 			}
 			if e == nil {
+				// A configured host is reached THROUGH its ccmuxd, so
+				// a successful session list means its daemon answered.
 				st.OK = true
+				st.DaemonOK = true
 				st.Sessions = len(ss)
 				for i := range ss {
 					ss[i].Host = h.Name
@@ -2107,7 +2117,9 @@ func (a App) refreshSessionsCmd() tea.Cmd {
 					Name: d.Name, Address: d.Address,
 					Source:     "discovered",
 					Discovered: true, DialHost: d.DialHost,
-					Version: d.Version, OK: true,
+					// Discovered via a successful ccmuxd health probe,
+					// so its daemon is by definition answering.
+					Version: d.Version, OK: true, DaemonOK: true,
 					TailscaleSSH: d.TailscaleSSH,
 					LastProbe:    time.Now(),
 				}
@@ -2834,6 +2846,14 @@ func fallbackDirectTmux(ctx context.Context) ([]daemon.SessionState, error) {
 	return out, nil
 }
 
+// daemonOnline reports whether the LOCAL ccmuxd answered — the question
+// the status bar's daemon chip asks.
+//
+// It deliberately reads DaemonOK, not OK. OK means "this device's
+// sessions are listable", which stays true on the direct-tmux fallback
+// path with no daemon running at all; reading it here made the chip
+// render "✓ daemon" on a machine whose daemon was dead, hiding the loss
+// of bells, push, and the sleep lock behind a green check.
 func daemonOnline(hs []hostStatus) bool {
 	for _, h := range hs {
 		// Check the Local flag, not the literal name "local": refresh
@@ -2841,7 +2861,7 @@ func daemonOnline(hs []hostStatus) bool {
 		// Devices panel can show it alongside other machines. The
 		// flag was added precisely so this predicate didn't need to
 		// know the convention.
-		if h.Local && h.OK {
+		if h.Local && h.DaemonOK {
 			return true
 		}
 	}

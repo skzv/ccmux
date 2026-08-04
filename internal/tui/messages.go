@@ -46,9 +46,20 @@ type hostStatus struct {
 	// Local marks the row representing this machine. The Devices
 	// panel renders it with a small "(this device)" tag so the user
 	// can tell at a glance which row is which.
-	Local     bool
-	Address   string
-	OK        bool
+	Local   bool
+	Address string
+	// OK means the DEVICE is usable — its sessions are listable. On the
+	// local row that stays true even when ccmuxd is down, because ccmux
+	// falls back to driving tmux directly and everything the user sees
+	// still works. Drives the Devices-panel dot.
+	OK bool
+	// DaemonOK means ccmuxd itself answered. This is NOT the same
+	// question as OK: with the daemon dead but tmux fine, OK is true and
+	// DaemonOK is false. Keep them separate — the status bar's daemon
+	// chip read OK and so claimed "✓ daemon" on a machine with no
+	// daemon running at all, which hides exactly the failure that
+	// silently kills bells, push notifications, and the sleep lock.
+	DaemonOK  bool
 	Sessions  int
 	SleepMode string
 	Err       error
