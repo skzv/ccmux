@@ -1417,6 +1417,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// project discovery, otherwise a project added/removed
 			// from disk while ccmux is open never appears until
 			// restart.
+			//
+			// The user pressing "r" is an explicit ask for current
+			// numbers, so drop the ccusage memo — the 15s background
+			// tick reuses it (see internal/ccusage.cacheTTL), but a
+			// deliberate refresh should pay for a real re-run.
+			ccusage.InvalidateCache()
 			if a.screen == ScreenProjects {
 				return a, tea.Batch(a.refreshSessionsCmd(), a.refreshProjectsCmd())
 			}

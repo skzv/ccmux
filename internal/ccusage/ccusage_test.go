@@ -2,7 +2,9 @@ package ccusage
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 )
 
 const twoBlocksJSON = `{
@@ -91,10 +93,157 @@ const emptyBlocksJSON = `{"blocks": []}`
 
 func fakeRunner(t *testing.T, payload []byte, cmdErr error) {
 	t.Helper()
+	resetCache(t)
 	orig := runCmd
 	t.Cleanup(func() { runCmd = orig })
 	runCmd = func(_ context.Context, _ ...string) ([]byte, error) {
 		return payload, cmdErr
+	}
+}
+
+// resetCache clears the memoized block and restores the clock seam so
+// each test starts from a cold cache regardless of test order.
+func resetCache(t *testing.T) {
+	t.Helper()
+	InvalidateCache()
+	origNow := nowFn
+	t.Cleanup(func() {
+		nowFn = origNow
+		InvalidateCache()
+	})
+}
+
+// countingRunner installs a fake executor that records how many times
+// the subprocess would actually have been spawned.
+func countingRunner(t *testing.T, payload []byte) *int {
+	t.Helper()
+	resetCache(t)
+	orig := runCmd
+	t.Cleanup(func() { runCmd = orig })
+	calls := 0
+	runCmd = func(_ context.Context, _ ...string) ([]byte, error) {
+		calls++
+		return payload, nil
+	}
+	return &calls
+}
+
+// TestCurrentBlock_CachesWithinTTL pins the fix for the npx poll storm.
+// The dashboard calls CurrentBlock every 15s; each real call shells out
+// to `npx ccusage`, which contacts the npm registry (and installs the
+// package when it's not cached). Left open, a ccmux window generated one
+// npm invocation — and one ~/.npm/_logs debug log — every 15 seconds.
+//
+// Repeated calls inside the TTL must reuse the memoized block and spawn
+// nothing. Before the fix this counted one spawn per call.
+func TestCurrentBlock_CachesWithinTTL(t *testing.T) {
+	calls := countingRunner(t, []byte(twoBlocksJSON))
+
+	// 20 calls stands in for five minutes of 15s dashboard ticks.
+	var last Block
+	for i := 0; i < 20; i++ {
+		b, err := CurrentBlock(context.Background())
+		if err != nil {
+			t.Fatalf("CurrentBlock #%d: %v", i, err)
+		}
+		last = b
+	}
+
+	if *calls != 1 {
+		t.Errorf("ccusage spawned %d times across 20 calls within the TTL; want exactly 1 "+
+			"(each spawn is an npx invocation that hits the npm registry)", *calls)
+	}
+	// The cached value must be the real parsed block, not a zero value.
+	if !last.IsActive || last.CostUSD != 48.21 {
+		t.Errorf("cached block lost data: got IsActive=%v CostUSD=%v; want true/48.21",
+			last.IsActive, last.CostUSD)
+	}
+}
+
+// TestCurrentBlock_RefetchesAfterTTL — the cache must expire, or the
+// burn-rate readout would freeze for the life of the process.
+func TestCurrentBlock_RefetchesAfterTTL(t *testing.T) {
+	calls := countingRunner(t, []byte(twoBlocksJSON))
+
+	base := time.Now()
+	nowFn = func() time.Time { return base }
+	if _, err := CurrentBlock(context.Background()); err != nil {
+		t.Fatalf("first CurrentBlock: %v", err)
+	}
+	// Just inside the TTL: still cached.
+	nowFn = func() time.Time { return base.Add(cacheTTL - time.Second) }
+	if _, err := CurrentBlock(context.Background()); err != nil {
+		t.Fatalf("second CurrentBlock: %v", err)
+	}
+	if *calls != 1 {
+		t.Fatalf("spawned %d times before the TTL elapsed; want 1", *calls)
+	}
+	// Past the TTL: re-fetch.
+	nowFn = func() time.Time { return base.Add(cacheTTL + time.Second) }
+	if _, err := CurrentBlock(context.Background()); err != nil {
+		t.Fatalf("third CurrentBlock: %v", err)
+	}
+	if *calls != 2 {
+		t.Errorf("spawned %d times after the TTL elapsed; want 2 (cache must expire)", *calls)
+	}
+}
+
+// TestCurrentBlock_FailureAlsoCached — the failure path is the one that
+// actually needed fixing. "npx missing", "ccusage missing", and "no
+// transcripts yet" all cost a full npx spawn to discover, and all were
+// re-discovered every 15s. Caching successes alone left the storm
+// running for exactly the users least likely to want it.
+func TestCurrentBlock_FailureAlsoCached(t *testing.T) {
+	resetCache(t)
+	orig := runCmd
+	t.Cleanup(func() { runCmd = orig })
+	calls := 0
+	runCmd = func(_ context.Context, _ ...string) ([]byte, error) {
+		calls++
+		return nil, errors.New("npx: command not found")
+	}
+
+	for i := 0; i < 10; i++ {
+		if _, err := CurrentBlock(context.Background()); err == nil {
+			t.Fatalf("call #%d: want error from failing ccusage", i)
+		}
+	}
+	if calls != 1 {
+		t.Errorf("failing ccusage spawned %d times across 10 calls; want 1 "+
+			"(a machine without npx must not re-probe every tick)", calls)
+	}
+}
+
+// TestCurrentBlock_EmptyBlocksCached — the sandbox case that exposed the
+// gap: ccusage exits 0 with `{"blocks": []}` on a machine with no Claude
+// transcripts, which CurrentBlock reports as an error. It must memoize
+// like any other outcome.
+func TestCurrentBlock_EmptyBlocksCached(t *testing.T) {
+	calls := countingRunner(t, []byte(emptyBlocksJSON))
+
+	for i := 0; i < 10; i++ {
+		if _, err := CurrentBlock(context.Background()); err == nil {
+			t.Fatalf("call #%d: want error for empty blocks", i)
+		}
+	}
+	if *calls != 1 {
+		t.Errorf("empty-blocks ccusage spawned %d times across 10 calls; want 1", *calls)
+	}
+}
+
+// TestInvalidateCache_ForcesRefetch backs the explicit refresh key.
+func TestInvalidateCache_ForcesRefetch(t *testing.T) {
+	calls := countingRunner(t, []byte(twoBlocksJSON))
+
+	if _, err := CurrentBlock(context.Background()); err != nil {
+		t.Fatalf("first CurrentBlock: %v", err)
+	}
+	InvalidateCache()
+	if _, err := CurrentBlock(context.Background()); err != nil {
+		t.Fatalf("post-invalidate CurrentBlock: %v", err)
+	}
+	if calls := *calls; calls != 2 {
+		t.Errorf("spawned %d times; want 2 (InvalidateCache must force a re-fetch)", calls)
 	}
 }
 
