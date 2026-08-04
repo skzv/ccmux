@@ -102,26 +102,49 @@ func TestDaemonOnline_UsesLocalFlag(t *testing.T) {
 		want  bool
 	}{
 		{
-			"local row with hostname-as-Name + OK + Local flag",
+			"local row with hostname-as-Name + DaemonOK + Local flag",
 			[]hostStatus{
-				{Name: "sputnik", Local: true, OK: true},
-				{Name: "mac-mini", Discovered: true, OK: true},
+				{Name: "sputnik", Local: true, OK: true, DaemonOK: true},
+				{Name: "mac-mini", Discovered: true, OK: true, DaemonOK: true},
 			},
 			true,
 		},
 		{
 			"local row exists but daemon down",
-			[]hostStatus{{Name: "sputnik", Local: true, OK: false}},
+			[]hostStatus{{Name: "sputnik", Local: true, OK: false, DaemonOK: false}},
+			false,
+		},
+		// The direct-tmux fallback: ccmuxd is dead, but ccmux drives
+		// tmux itself so sessions still list and the DEVICE is fine
+		// (OK: true). Observed live — a sandbox with no daemon process
+		// and no socket rendered "✓ daemon" because this predicate read
+		// OK. It must read DaemonOK and report offline, since a dead
+		// daemon means no bells, no push, and no sleep lock.
+		{
+			"direct-tmux fallback: device OK but no daemon → offline",
+			[]hostStatus{{
+				Name: "sputnik", Local: true,
+				Address: "tmux (no daemon)",
+				OK:      true, DaemonOK: false,
+			}},
+			false,
+		},
+		{
+			"remote daemon up but local daemon down → still offline",
+			[]hostStatus{
+				{Name: "sputnik", Local: true, OK: true, DaemonOK: false},
+				{Name: "mac-mini", Discovered: true, OK: true, DaemonOK: true},
+			},
 			false,
 		},
 		{
 			"no local row at all",
-			[]hostStatus{{Name: "mac-mini", Discovered: true, OK: true}},
+			[]hostStatus{{Name: "mac-mini", Discovered: true, OK: true, DaemonOK: true}},
 			false,
 		},
 		{
 			"old-style row named literally 'local' but Local flag missing → no",
-			[]hostStatus{{Name: "local", OK: true /* Local: false */}},
+			[]hostStatus{{Name: "local", OK: true, DaemonOK: true /* Local: false */}},
 			false,
 		},
 		{
@@ -619,6 +642,51 @@ func TestStatusBar_NarrowKeepsDaemonAndBattery(t *testing.T) {
 	bar := a.renderStatusBar()
 	assertNoOverflow(t, bar, 50)
 	assertPresent(t, bar, "BATT", "daemon")
+}
+
+// TestStatusBar_ReflectsRealDaemonState — end-to-end for the chip the
+// user actually reads, driven from a hosts slice the way a refresh
+// would.
+//
+// The direct-tmux fallback case is the bug: with ccmuxd dead, ccmux
+// still lists sessions by driving tmux itself, so the local row is
+// OK (the device works). The chip used to read that flag and render
+// "✓ daemon" on a machine where no daemon process existed — hiding the
+// loss of bells, push notifications, and the sleep lock behind a green
+// check. It must show offline.
+func TestStatusBar_ReflectsRealDaemonState(t *testing.T) {
+	cases := []struct {
+		name      string
+		hosts     []hostStatus
+		wantChip  string
+		absentBit string
+	}{
+		{
+			name:      "daemon answering",
+			hosts:     []hostStatus{{Name: "sputnik", Local: true, OK: true, DaemonOK: true}},
+			wantChip:  "daemon",
+			absentBit: "offline",
+		},
+		{
+			name: "daemon dead, tmux fallback carrying the session list",
+			hosts: []hostStatus{{
+				Name: "sputnik", Local: true,
+				Address: "tmux (no daemon)",
+				OK:      true, DaemonOK: false,
+			}},
+			wantChip:  "offline",
+			absentBit: "✓ daemon",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := App{styles: styles.Default(), width: 200}
+			a.daemonOnline = daemonOnline(tc.hosts)
+			bar := a.renderStatusBar()
+			assertPresent(t, bar, tc.wantChip)
+			assertAbsent(t, bar, tc.absentBit)
+		})
+	}
 }
 
 // TestStatusBar_NarrowDropsClockAndVersion — the refreshed-at clock
