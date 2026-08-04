@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"sync"
 	"time"
 )
 
@@ -39,6 +40,81 @@ type Block struct {
 // runCmd is the injectable executor used by CurrentBlock. Tests replace
 // it with a fake; production code calls realRunCmd.
 var runCmd = realRunCmd
+
+// cacheTTL bounds how often the npx subprocess actually runs. The
+// dashboard refreshes usage every 15s, but a ccusage "block" is a
+// FIVE-HOUR billing window whose cost/burn-rate move slowly — polling
+// it four times a minute bought nothing and cost a great deal:
+//
+//   - `npx ccusage` contacts registry.npmjs.org on every invocation,
+//     and installs the package when it isn't already in the npx cache.
+//     A ccmux left open overnight made thousands of registry requests
+//     and filled ~/.npm/_logs with debug logs (observed: one npm log
+//     every 15s for the lifetime of the TUI).
+//   - Each run spawns node (~0.3-0.7s CPU). On battery, for a tool
+//     that also holds `caffeinate`, that adds up.
+//
+// 2 minutes keeps the burn-rate readout usefully fresh (it's a
+// 5h-window aggregate) while cutting subprocess + network churn by 8x.
+const cacheTTL = 2 * time.Minute
+
+// Failures are cached for the same TTL as successes, and that is
+// deliberate: the failure path IS the expensive one. The common cases —
+// npx not installed, ccusage not installed, or a machine with no Claude
+// transcripts yet (ccusage exits 0 with `{"blocks": []}`) — all cost a
+// full npx spawn + registry round-trip to discover. Re-detecting them
+// every 15s was the storm. None of those states change on a timescale
+// that a 2-minute delay matters for.
+var (
+	cacheMu     sync.Mutex
+	cachedBlock *Block
+	cachedErr   error
+	cachedAt    time.Time
+	cacheValid  bool
+	// nowFn is a seam so tests can advance the clock past cacheTTL
+	// without sleeping.
+	nowFn = time.Now
+)
+
+// InvalidateCache drops the memoized block so the next CurrentBlock
+// re-runs ccusage. Exposed for the TUI's explicit refresh key ("r"),
+// where the user is asking for fresh numbers on purpose.
+func InvalidateCache() {
+	cacheMu.Lock()
+	defer cacheMu.Unlock()
+	cachedBlock = nil
+	cachedErr = nil
+	cachedAt = time.Time{}
+	cacheValid = false
+}
+
+// cachedResult returns the memoized outcome when it is still fresh.
+func cachedResult() (Block, error, bool) {
+	cacheMu.Lock()
+	defer cacheMu.Unlock()
+	if !cacheValid || nowFn().Sub(cachedAt) >= cacheTTL {
+		return Block{}, nil, false
+	}
+	if cachedErr != nil {
+		return Block{}, cachedErr, true
+	}
+	return *cachedBlock, nil, true
+}
+
+// memoize stores an outcome (success or failure) as the current result.
+func memoize(b Block, err error) (Block, error) {
+	cacheMu.Lock()
+	defer cacheMu.Unlock()
+	cachedAt = nowFn()
+	cacheValid = true
+	if err != nil {
+		cachedBlock, cachedErr = nil, err
+		return Block{}, err
+	}
+	blk := b
+	cachedBlock, cachedErr = &blk, nil
+	return b, nil
+}
 
 func realRunCmd(ctx context.Context, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
@@ -86,29 +162,41 @@ type jsonResponse struct {
 	Blocks []jsonBlock `json:"blocks"`
 }
 
-// CurrentBlock runs `npx ccusage blocks --json` and returns the most
-// recently active block. When multiple blocks are present, an active
-// one (isActive=true) takes priority; if none are active the last
-// block by position (which corresponds to the highest ID) is returned.
+// CurrentBlock returns the most recently active billing block. When
+// multiple blocks are present, an active one (isActive=true) takes
+// priority; if none are active the last block by position (which
+// corresponds to the highest ID) is returned.
+//
+// The underlying `npx ccusage blocks --json` subprocess runs at most
+// once per cacheTTL — see that constant for why. Callers may still
+// call this as often as they like; within the TTL they get the
+// memoized block. Use InvalidateCache for a user-requested refresh.
 // A 10-second timeout is applied to the subprocess.
 func CurrentBlock(ctx context.Context) (Block, error) {
+	if b, err, ok := cachedResult(); ok {
+		return b, err
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
 	out, err := runCmd(ctx, "npx", "ccusage", "blocks", "--json")
 	if err != nil {
 		if errors.Is(err, exec.ErrNotFound) {
-			return Block{}, fmt.Errorf("npx not found; ccusage unavailable: %w", err)
+			return memoize(Block{}, fmt.Errorf("npx not found; ccusage unavailable: %w", err))
 		}
-		return Block{}, fmt.Errorf("run ccusage: %w", err)
+		return memoize(Block{}, fmt.Errorf("run ccusage: %w", err))
 	}
 
 	var resp jsonResponse
 	if err := json.Unmarshal(out, &resp); err != nil {
-		return Block{}, fmt.Errorf("parse ccusage output: %w", err)
+		return memoize(Block{}, fmt.Errorf("parse ccusage output: %w", err))
 	}
 	if len(resp.Blocks) == 0 {
-		return Block{}, fmt.Errorf("ccusage returned no blocks")
+		// Machine with no Claude transcripts yet — ccusage exits 0 with
+		// an empty list. Memoized like any other outcome so a fresh
+		// install doesn't spawn npx every 15s forever.
+		return memoize(Block{}, fmt.Errorf("ccusage returned no blocks"))
 	}
 
 	raw := resp.Blocks[len(resp.Blocks)-1]
@@ -119,7 +207,7 @@ func CurrentBlock(ctx context.Context) (Block, error) {
 		}
 	}
 
-	return Block{
+	block := Block{
 		ID:                  raw.ID,
 		StartTime:           raw.StartTime,
 		EndTime:             raw.EndTime,
@@ -135,5 +223,7 @@ func CurrentBlock(ctx context.Context) (Block, error) {
 			CacheCreateTokens: raw.TokenCounts.CacheCreationInputTokens,
 			CacheReadTokens:   raw.TokenCounts.CacheReadInputTokens,
 		},
-	}, nil
+	}
+
+	return memoize(block, nil)
 }
