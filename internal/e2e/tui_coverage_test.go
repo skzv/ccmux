@@ -164,6 +164,14 @@ func TestTUIFlow_NotesFolderExpandCollapse(t *testing.T) {
 // — with no panic and the process still responsive throughout.
 func TestTUIFlow_TerminalResize(t *testing.T) {
 	e := tuiEnv(t)
+	// A project gives the responsiveness check at the end something to
+	// wait for that is genuinely NEW paint. The wide tab bar lists every
+	// tab all the time, so "[2] Projects" is already on screen before
+	// the switch — waiting for it after a mark depends on the repaint
+	// happening to redraw that exact span, which differential rendering
+	// doesn't promise. (It passed on macOS and failed on Linux CI.)
+	// A project name only ever appears once Projects is showing.
+	mkProject(t, e, "resize-probe-proj")
 
 	d := newTUIDriver(t, e, 40, 120)
 	// Wide layout: hero banner + full tab labels.
@@ -186,11 +194,11 @@ func TestTUIFlow_TerminalResize(t *testing.T) {
 		t.Fatalf("TUI panicked during resize; output:\n%s", out)
 	}
 
-	// Still alive and responsive: switching screens repaints the tab
-	// bar with the new active tab.
+	// Still alive and responsive: switching screens paints the Projects
+	// body, which carries content that exists on no other screen.
 	respMark := d.Mark()
 	d.Send("2")
-	d.WaitForSince("[2] Projects", respMark)
+	d.WaitForSince("resize-probe-proj", respMark)
 	if !d.Alive() {
 		t.Fatal("TUI process exited after resize sequence")
 	}
