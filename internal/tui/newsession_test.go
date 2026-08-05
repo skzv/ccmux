@@ -345,3 +345,64 @@ func FuzzDialTarget(f *testing.F) {
 		}
 	})
 }
+
+// TestRemoteNewSessionAttach_DialsConfiguredPort closes the last link
+// in the SSH-port chain. The forms carry SSHPort into
+// remoteSessionStartedMsg (pinned above), but the attach process built
+// from that message used to drop it — so ccmux would create the session
+// on a custom-port host correctly and then dial 22 to attach to it,
+// leaving the user stranded with a session they couldn't reach.
+//
+// Covers both transports, because they spell the port differently:
+// ssh takes -p, while mosh's -p is its own UDP range and the ssh port
+// has to travel via --ssh.
+func TestRemoteNewSessionAttach_DialsConfiguredPort(t *testing.T) {
+	cases := []struct {
+		name        string
+		msg         remoteSessionStartedMsg
+		wantSubstr  string
+		wantNoDashP bool
+	}{
+		{
+			name:       "ssh with custom port",
+			msg:        remoteSessionStartedMsg{SessionName: "c-x", DialHost: "mini", User: "sasha", SSHPort: 2222},
+			wantSubstr: "-p 2222",
+		},
+		{
+			name:        "mosh with custom port routes through --ssh",
+			msg:         remoteSessionStartedMsg{SessionName: "c-x", DialHost: "mini", User: "sasha", SSHPort: 2222, Mosh: true},
+			wantSubstr:  "--ssh=ssh -p 2222",
+			wantNoDashP: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd, target, _ := remoteNewSessionAttachProcess(tc.msg)
+			joined := strings.Join(cmd.Args, " ")
+			if !strings.Contains(joined, tc.wantSubstr) {
+				t.Errorf("attach argv %v missing %q", cmd.Args, tc.wantSubstr)
+			}
+			if target != "sasha@mini" {
+				t.Errorf("target = %q, want sasha@mini", target)
+			}
+			if tc.wantNoDashP {
+				for i, a := range cmd.Args {
+					if a == "-p" {
+						t.Errorf("argv[%d] is a bare -p — mosh reads that as its UDP range, not the ssh port: %v", i, cmd.Args)
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestRemoteNewSessionAttach_DefaultPortUnchanged — the common case
+// (no configured port) must keep the exact argv it always had.
+func TestRemoteNewSessionAttach_DefaultPortUnchanged(t *testing.T) {
+	cmd, _, _ := remoteNewSessionAttachProcess(remoteSessionStartedMsg{SessionName: "c-x", DialHost: "mini"})
+	for _, a := range cmd.Args {
+		if a == "-p" || strings.HasPrefix(a, "--ssh") {
+			t.Errorf("default port should add no flags; got %v", cmd.Args)
+		}
+	}
+}

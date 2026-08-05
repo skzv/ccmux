@@ -189,9 +189,9 @@ func (m networkModel) SSHCmd() tea.Cmd {
 	if dial == "" {
 		return nil
 	}
-	cmd := remoteattach.SSHInteractive(dial)
+	cmd := remoteattach.SSHInteractive(dial, sel.SSHPort)
 	if dbg := debugLogger(); dbg != nil {
-		dbg.Printf("network ssh: %s", dial)
+		dbg.Printf("network ssh: %s port=%d", dial, sel.SSHPort)
 	}
 	rt := remoteTargetForSSH(*sel, dial)
 	return tea.ExecProcess(cmd, func(err error) tea.Msg {

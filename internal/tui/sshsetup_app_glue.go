@@ -47,7 +47,7 @@ func sshShellCommand(target sshsetup.Target) *exec.Cmd {
 	if u := strings.TrimSpace(target.User); u != "" {
 		dial = u + "@" + target.Host
 	}
-	return remoteattach.SSHInteractivePort(dial, target.Port)
+	return remoteattach.SSHInteractive(dial, target.Port)
 }
 
 // sshShellExec wraps sshShellCommand in a tea.ExecProcess so the App

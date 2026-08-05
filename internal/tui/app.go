@@ -2371,7 +2371,7 @@ func (a App) attachSelectedSession() (App, tea.Cmd) {
 			tick := a.startAttaching(attachKindRemote, sel.Host)
 			rt := &attachRemoteTarget{User: h.User, Host: h.Address, Port: h.EffectiveSSHPort()}
 			return a, tea.Batch(tick, tea.ExecProcess(
-				remoteattach.RunArgv(target, h.Mosh, append([]string{"tmux"}, remoteArgs...)),
+				remoteattach.RunArgv(target, h.Mosh, h.EffectiveSSHPort(), append([]string{"tmux"}, remoteArgs...)),
 				func(err error) tea.Msg { return attachExitedMsg{Err: err, RemoteSSHTarget: rt} },
 			))
 		}
@@ -2411,9 +2411,9 @@ func (a App) attachSelectedSession() (App, tea.Cmd) {
 				}
 			}
 			remoteCmd := remoteTmuxAttach(sel.Name, a.cfg.Sessions.DetachOthersOnAttach())
-			cmd := remoteattach.SSH(dial, remoteCmd)
+			cmd := remoteattach.SSH(dial, remoteCmd, hs.SSHPort)
 			if dbg := debugLogger(); dbg != nil {
-				dbg.Printf("attach discovered: ssh -t %s %q", dial, remoteCmd)
+				dbg.Printf("attach discovered: ssh -t %s port=%d %q", dial, hs.SSHPort, remoteCmd)
 			}
 			tick := a.startAttaching(attachKindRemote, sel.Host)
 			// Strip any "user@" prefix on dial so we can pass it
@@ -2554,10 +2554,13 @@ func remoteNewSessionAttachProcess(msg remoteSessionStartedMsg) (*exec.Cmd, stri
 		target = msg.User + "@" + msg.DialHost
 	}
 	remoteCmd := remoteTmuxAttach(msg.SessionName, false)
+	// msg.SSHPort is threaded from the create-session forms. Dropping
+	// it here was the last gap in that chain: the session was created
+	// on the right host and port, then the follow-up attach dialed 22.
 	if msg.Mosh {
-		return remoteattach.Mosh(target, remoteCmd), target, remoteCmd
+		return remoteattach.Mosh(target, remoteCmd, msg.SSHPort), target, remoteCmd
 	}
-	return remoteattach.SSH(target, remoteCmd), target, remoteCmd
+	return remoteattach.SSH(target, remoteCmd, msg.SSHPort), target, remoteCmd
 }
 
 // attachOrCreateForSelectedProject is Enter on Projects screen.

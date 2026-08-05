@@ -453,32 +453,11 @@ func runDoctor() error {
 			probeCtx, probeCancel := context.WithTimeout(context.Background(), 12*time.Second)
 			res := sshsetup.Probe(probeCtx, target)
 			probeCancel()
-			switch res {
-			case sshsetup.ProbeOK:
-				fmt.Printf("  ✓ %s (%s) — key auth ready\n", label, target.String())
-			case sshsetup.ProbeAuthFailed:
+			line, healthy := probeResultLine(res, label, target)
+			if !healthy {
 				bad++
-				fmt.Printf("  ✗ %s (%s) — key not installed; run `ccmux host setup-ssh %s`\n",
-					label, target.String(), label)
-			case sshsetup.ProbeSshdDisabled:
-				bad++
-				fmt.Printf("  ✗ %s — sshd not running on %s. On macOS: System Settings → General → Sharing → Remote Login\n",
-					label, target.Host)
-			case sshsetup.ProbeRefused:
-				bad++
-				fmt.Printf("  ✗ %s — port %d on %s closed; check sshd binding\n", label, target.Port, target.Host)
-			case sshsetup.ProbeTimeout:
-				bad++
-				fmt.Printf("  · %s — timeout reaching %s; is Tailscale connected on both ends?\n", label, target.Host)
-			case sshsetup.ProbeNoNetwork:
-				bad++
-				fmt.Printf("  · %s — can't resolve %s; check MagicDNS or use the tailnet IP\n", label, target.Host)
-			case sshsetup.ProbeHostKeyMismatch:
-				bad++
-				fmt.Printf("  ✗ %s — ⚠ host key changed for %s; investigate (possible MITM) before re-adding\n", label, target.Host)
-			default:
-				fmt.Printf("  · %s — probe inconclusive (%s)\n", label, res.String())
 			}
+			fmt.Println(line)
 		}
 	}
 
@@ -907,4 +886,46 @@ func newHostCmd() *cobra.Command {
 		newHostSetupSSHCmd(),
 	)
 	return c
+}
+
+// probeResultLine renders one `ccmux doctor` line for an SSH probe
+// result, returning the line and whether the host is healthy (false
+// increments doctor's bad count, and so its exit code).
+//
+// Extracted from the doctor loop so every branch's copy is testable
+// without a live host. The rule the tests pin: any branch whose cause
+// could be "we probed the wrong port" must name the port, because a
+// host with a custom ssh_port is exactly where the user needs to see
+// which port doctor actually tried.
+func probeResultLine(res sshsetup.ProbeResult, label string, target sshsetup.Target) (string, bool) {
+	switch res {
+	case sshsetup.ProbeOK:
+		return fmt.Sprintf("  ✓ %s (%s) — key auth ready", label, target.String()), true
+	case sshsetup.ProbeAuthFailed:
+		return fmt.Sprintf("  ✗ %s (%s) — key not installed; run `ccmux host setup-ssh %s`",
+			label, target.String(), label), false
+	case sshsetup.ProbeSshdDisabled:
+		return fmt.Sprintf("  ✗ %s — sshd not running on %s. On macOS: System Settings → General → Sharing → Remote Login",
+			label, target.Host), false
+	case sshsetup.ProbeRefused:
+		return fmt.Sprintf("  ✗ %s — port %d on %s closed; check sshd binding",
+			label, target.Port, target.Host), false
+	case sshsetup.ProbeTimeout:
+		// Name the port here too: on a custom-port host a timeout is
+		// ambiguous between "host unreachable" and "probing the wrong
+		// port", and the refused/OK branches both report it — so
+		// omitting it left silent the one case that most needs it.
+		return fmt.Sprintf("  · %s — timeout reaching port %d on %s; is Tailscale connected on both ends?",
+			label, target.Port, target.Host), false
+	case sshsetup.ProbeNoNetwork:
+		// Name resolution failed, so no port was ever dialed — naming
+		// one here would be misleading noise.
+		return fmt.Sprintf("  · %s — can't resolve %s; check MagicDNS or use the tailnet IP",
+			label, target.Host), false
+	case sshsetup.ProbeHostKeyMismatch:
+		return fmt.Sprintf("  ✗ %s — ⚠ host key changed for %s; investigate (possible MITM) before re-adding",
+			label, target.Host), false
+	default:
+		return fmt.Sprintf("  · %s — probe inconclusive (%s)", label, res.String()), true
+	}
 }
