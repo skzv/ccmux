@@ -60,4 +60,6 @@ jobs:
         # --tap mode: install through the real public tap path, exactly
         # what a random user runs. No gh clone needed now that the tap
         # is public, so no PAT either.
+        # The tap-trust allowlist Homebrew 6 requires lives in the script
+        # (see allow_tap there), so `make brew-test` works by hand too.
         run: bash scripts/brew-test.sh --tap

@@ -52,6 +52,31 @@ mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_STATE_HOME" "$HOME/Projects"
 # would see $TMUX and try to inspect the wrong server.
 unset TMUX TMUX_TMPDIR
 
+# Homebrew 6 refuses to load a formula from an untrusted third-party
+# tap ("Refusing to load formula skzv/tap/ccmux from untrusted tap
+# skzv/tap"), which broke the release job on v0.2.0. A human answers the
+# trust prompt once; CI has no TTY, so grant the trust explicitly.
+#
+# `brew trust` writes to $XDG_CONFIG_HOME/homebrew/trust.json, and this
+# script already points XDG_CONFIG_HOME at its throwaway sandbox — so the
+# grant disappears with the sandbox and the caller's real trust file is
+# never touched. That keeps `make brew-test` honest on a dev machine:
+# the run proves a cold install works, rather than passing because the
+# maintainer trusted the tap by hand at some point.
+#
+# Note the CANONICAL name: Homebrew strips the `homebrew-` prefix, so
+# the repo skzv/homebrew-tap is the tap `skzv/tap`.
+#
+# Deliberately not HOMEBREW_NO_REQUIRE_TAP_TRUST: Homebrew documents it
+# as "not recommended and will be removed in a later release", and it
+# would switch the check off for every tap instead of vouching for ours.
+# (HOMEBREW_ALLOWED_TAPS is a different feature — it restricts which
+# taps may be used; it does not grant trust.)
+trust_tap() {
+  echo "== brew trust --tap skzv/tap (sandboxed trust store)"
+  brew trust --tap skzv/tap
+}
+
 cleanup() {
   if [ "$keep" = false ]; then
     brew uninstall --ignore-dependencies ccmux >/dev/null 2>&1 || true
@@ -82,10 +107,12 @@ case "$mode" in
     # `brew tap` a no-op pointing at the wrong URL.
     brew untap skzv/homebrew-tap >/dev/null 2>&1 || true
     brew tap skzv/homebrew-tap "$tap_dir"
+    trust_tap
     echo "== brew install skzv/homebrew-tap/ccmux"
     brew install skzv/homebrew-tap/ccmux
     ;;
   tap)
+    trust_tap
     echo "== brew tap skzv/homebrew-tap"
     brew tap skzv/homebrew-tap 2>/dev/null || true
     echo "== brew install skzv/homebrew-tap/ccmux"
