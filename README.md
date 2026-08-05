@@ -21,15 +21,22 @@ ccmux is one TUI for every coding-agent session you've got running — Claude Co
 ## 🚀 Install
 
 ```bash
-brew install skzv/tap/ccmux
+curl -fsSL https://raw.githubusercontent.com/skzv/ccmux/main/scripts/install.sh | sh
 ccmux setup
 ```
 
-Homebrew is recommended on macOS; Linuxbrew works on Linux. `ccmux setup` finishes first-run setup for Tailscale, agent CLIs, and the background daemon.
+Drops `ccmux` + `ccmuxd` in `~/.local/bin`. `ccmux setup` finishes first-run setup for Tailscale, agent CLIs, and the background daemon.
 
 Other paths:
 
-- No Homebrew: `curl -fsSL https://raw.githubusercontent.com/skzv/ccmux/main/scripts/install.sh | sh`, then `ccmux setup`.
+- Homebrew (macOS, or Linuxbrew on Linux):
+
+  ```bash
+  brew trust --tap skzv/tap
+  brew install skzv/tap/ccmux
+  ```
+
+  Homebrew 6 refuses formulae from third-party taps until you vouch for the tap, so `brew trust` comes first — without it the install stops with `Refusing to load formula skzv/tap/ccmux from untrusted tap skzv/tap`. Once per machine. (It's `skzv/tap`, not `skzv/homebrew-tap` — Homebrew drops the prefix.)
 - From source: `git clone https://github.com/skzv/ccmux.git && cd ccmux && make setup`.
 
 Works on macOS, Linux, and Windows via WSL2. Source builds require Go 1.26+.
@@ -281,7 +288,7 @@ bell = true                          # ring local terminal BEL on needs_input
 
 ### 🔌 MCP server
 
-- `ccmux-mcp` ships in the same brew install — a Model Context Protocol server agents can plug into to see and act on every session
+- `ccmux-mcp` ships alongside ccmux in the same install — a Model Context Protocol server agents can plug into to see and act on every session
 - Wire it up in `~/.claude/settings.json` (or any MCP-aware client): `{"mcpServers": {"ccmux": {"command": "ccmux-mcp"}}}`
 - Read-only by default: `list_sessions`, `read_pane`, `list_projects`, `list_conversations`, `get_usage`, `list_machines`, notes ones, daemon health
 - `--allow-mutate` exposes `spawn_session`, `send_keys`, `kill_session` — opt-in, hidden from `tools/list` until the flag is on
