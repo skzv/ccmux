@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/skzv/ccmux/internal/agent"
+	"github.com/skzv/ccmux/internal/sshsetup"
 )
 
 // TestAgentInstallHint_CoversAllShippedAgents — every agent in
@@ -46,5 +47,77 @@ func TestAgentInstallHint_HasActionableCommand(t *testing.T) {
 func TestAgentInstallHint_UnknownReturnsEmpty(t *testing.T) {
 	if got := agentInstallHint(agent.ID("imaginary")); got != "" {
 		t.Errorf("agentInstallHint(unknown) = %q, want empty", got)
+	}
+}
+
+// TestProbeResultLine_NamesPortWhenPortIsSuspect — doctor's job on a
+// failing host is to point at the cause. When the host has a custom
+// ssh_port, "which port did you try?" is the first question, so every
+// branch whose cause could be a wrong port must name it.
+//
+// The timeout branch used to be the exception: it said "timeout
+// reaching mini" while refused/OK both reported the port — leaving the
+// custom-port user without the one fact that distinguishes "host is
+// down" from "ccmux probed the wrong port".
+func TestProbeResultLine_NamesPortWhenPortIsSuspect(t *testing.T) {
+	target := sshsetup.Target{User: "sasha", Host: "mini", Port: 2222}
+
+	portBranches := []struct {
+		name string
+		res  sshsetup.ProbeResult
+	}{
+		{"refused", sshsetup.ProbeRefused},
+		{"timeout", sshsetup.ProbeTimeout},
+	}
+	for _, tc := range portBranches {
+		t.Run(tc.name, func(t *testing.T) {
+			line, ok := probeResultLine(tc.res, "portbox", target)
+			if ok {
+				t.Errorf("%s should count as unhealthy", tc.name)
+			}
+			if !strings.Contains(line, "2222") {
+				t.Errorf("%s line must name the probed port; got %q", tc.name, line)
+			}
+			if strings.Contains(line, "port 22 on") {
+				t.Errorf("%s line names the default port despite ssh_port=2222; got %q", tc.name, line)
+			}
+		})
+	}
+}
+
+// TestProbeResultLine_HealthyAndExitAccounting — the bool drives
+// doctor's exit code, so it has to match the symbol in the line.
+func TestProbeResultLine_HealthyAndExitAccounting(t *testing.T) {
+	target := sshsetup.Target{Host: "mini", Port: 22}
+	cases := []struct {
+		res       sshsetup.ProbeResult
+		wantOK    bool
+		wantMarks string
+	}{
+		{sshsetup.ProbeOK, true, "✓"},
+		{sshsetup.ProbeAuthFailed, false, "✗"},
+		{sshsetup.ProbeSshdDisabled, false, "✗"},
+		{sshsetup.ProbeRefused, false, "✗"},
+		{sshsetup.ProbeTimeout, false, "·"},
+		{sshsetup.ProbeNoNetwork, false, "·"},
+		{sshsetup.ProbeHostKeyMismatch, false, "✗"},
+	}
+	for _, tc := range cases {
+		line, ok := probeResultLine(tc.res, "mini", target)
+		if ok != tc.wantOK {
+			t.Errorf("%v: ok = %v, want %v (drives doctor's exit code)", tc.res, ok, tc.wantOK)
+		}
+		if !strings.Contains(line, tc.wantMarks) {
+			t.Errorf("%v: line %q missing marker %q", tc.res, line, tc.wantMarks)
+		}
+	}
+}
+
+// TestProbeResultLine_NoNetworkOmitsPort — nothing was dialed when name
+// resolution failed, so naming a port there would be misleading noise.
+func TestProbeResultLine_NoNetworkOmitsPort(t *testing.T) {
+	line, _ := probeResultLine(sshsetup.ProbeNoNetwork, "mini", sshsetup.Target{Host: "mini", Port: 2222})
+	if strings.Contains(line, "2222") {
+		t.Errorf("no-network line should not name a port (none was dialed); got %q", line)
 	}
 }
