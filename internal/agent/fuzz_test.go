@@ -33,6 +33,7 @@ func FuzzParseID(f *testing.F) {
 		"cursor",
 		"pi",
 		"grok",
+		"Kimi", // roster-expansion agent that caught the stale hardcoded set
 		"",
 		"   ",
 		"opusplan",      // close to a Claude alias but not a valid id
@@ -49,11 +50,15 @@ func FuzzParseID(f *testing.F) {
 	f.Fuzz(func(t *testing.T, s string) {
 		id, ok := ParseID(s)
 		if ok {
-			switch id {
-			case IDClaude, IDCodex, IDAntigravity, IDCursor, IDPi, IDGrok:
-				// canonical id — good
-			default:
-				t.Fatalf("ParseID(%q) returned ok=true but id=%q is not in {claude,codex,antigravity,cursor,pi,grok}", s, id)
+			// The canonical set comes from All(), never a hand-written
+			// list: the roster grows, and a literal set silently goes
+			// stale until a fuzz draw happens to hit a newer agent's
+			// name. That is exactly how this target broke — it still
+			// listed six agents after the roster reached fifteen, and
+			// failed the day the fuzzer generated "Kimi". (FuzzReadAgent
+			// in internal/project had the identical bug; fixed in #175.)
+			if !canonicalIDs()[id] {
+				t.Fatalf("ParseID(%q) returned ok=true but id=%q is not in All()", s, id)
 			}
 		} else {
 			if id != "" {
@@ -61,4 +66,14 @@ func FuzzParseID(f *testing.F) {
 			}
 		}
 	})
+}
+
+// canonicalIDs is the set of agent IDs ParseID may legitimately return,
+// derived from the live roster so roster growth can never stale it.
+func canonicalIDs() map[ID]bool {
+	set := make(map[ID]bool)
+	for _, a := range All() {
+		set[a.ID()] = true
+	}
+	return set
 }
