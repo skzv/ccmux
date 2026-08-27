@@ -282,7 +282,7 @@ func (b *agentBrowser) updatePreview() {
 	}
 	content := row.item.Preview
 	if content == "" {
-		content = b.st.Muted.Render("(no preview)")
+		content = b.st.Muted.Render(tr("(no preview)"))
 	} else if row.item.Markdown {
 		width := b.preview.Width - 4
 		if width < 20 {
@@ -431,9 +431,9 @@ func (b agentBrowser) View(width, height int) string {
 func (b agentBrowser) renderHint() string {
 	st := b.st
 	if b.focus == agentBrowserFocusPreview {
-		return st.Muted.Render("↑↓ scroll · g/G top/bottom · ← focus list")
+		return st.Muted.Render(tr("↑↓ scroll · g/G top/bottom · ← focus list"))
 	}
-	return st.Muted.Render("↑↓ navigate · enter/→ focus preview")
+	return st.Muted.Render(tr("↑↓ navigate · enter/→ focus preview"))
 }
 
 // renderList renders the left list pane (sections + items). Items
@@ -445,7 +445,7 @@ func (b agentBrowser) renderHint() string {
 func (b agentBrowser) renderList(width, height int) string {
 	st := b.st
 	if len(b.flat) == 0 {
-		return st.Muted.Render("(no items)")
+		return st.Muted.Render(tr("(no items)"))
 	}
 	// Layout columns:
 	//   "▌ " or "  " (selection bar, 2 cells)

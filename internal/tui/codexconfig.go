@@ -80,10 +80,10 @@ func (m codexConfigModel) Update(msg tea.Msg) (codexConfigModel, tea.Cmd) {
 			// config.toml first.
 			cur, _ := codexconfig.EffectiveYoloMode()
 			if _, err := codexconfig.SetYoloMode(!cur); err != nil {
-				m.err = "set yolo: " + err.Error()
+				m.err = tr("set yolo: ") + err.Error()
 				m.saveMsg = ""
 			} else {
-				m.saveMsg = fmt.Sprintf("Codex YOLO → %v", !cur)
+				m.saveMsg = fmt.Sprintf(tr("Codex YOLO → %v"), !cur)
 				m.savedAt = time.Now()
 				m.reload()
 			}
@@ -93,10 +93,10 @@ func (m codexConfigModel) Update(msg tea.Msg) (codexConfigModel, tea.Cmd) {
 			// the next; reuse the same approach Claude's UI takes.
 			next := nextCodexEffort()
 			if _, err := codexconfig.SetEffortLevel(next); err != nil {
-				m.err = "set effort: " + err.Error()
+				m.err = tr("set effort: ") + err.Error()
 				m.saveMsg = ""
 			} else {
-				m.saveMsg = "Codex effort → " + next
+				m.saveMsg = tr("Codex effort → ") + next
 				m.savedAt = time.Now()
 				m.reload()
 			}
@@ -149,7 +149,7 @@ func (m codexConfigModel) ViewBody(width, height int) string {
 func (m codexConfigModel) viewBodyHeader(width int) string {
 	st := m.st
 	narrow := isNarrow(width)
-	header := []string{st.Emphasis.Render("Codex configuration")}
+	header := []string{st.Emphasis.Render(tr("Codex configuration"))}
 	if !narrow {
 		header = append(header, st.Muted.Render(summarizePath(m.paths.Config)))
 	}
@@ -167,7 +167,7 @@ func (m codexConfigModel) viewBodyHeader(width int) string {
 		yoloOn, _ := codexconfig.EffectiveYoloMode()
 		yoloLabel := "off"
 		if yoloOn {
-			yoloLabel = st.StatusError.Render("YOLO (no approval prompts, full filesystem)")
+			yoloLabel = st.StatusError.Render(tr("YOLO (no approval prompts, full filesystem)"))
 		}
 		header = append(header, fmt.Sprintf("yolo mode       %s", yoloLabel))
 	}
@@ -219,7 +219,7 @@ func (m codexConfigModel) browserSections() []agentBrowserSection {
 }
 
 func (m codexConfigModel) browserHooksSection() agentBrowserSection {
-	section := agentBrowserSection{Title: "Hooks", Color: m.st.P.Peach}
+	section := agentBrowserSection{Title: tr("Hooks"), Color: m.st.P.Peach}
 	if len(m.hooks.Hooks) == 0 {
 		return section
 	}
@@ -271,7 +271,7 @@ func (m codexConfigModel) browserHooksSection() agentBrowserSection {
 }
 
 func (m codexConfigModel) browserMCPSection() agentBrowserSection {
-	section := agentBrowserSection{Title: "MCP servers", Color: m.st.P.Sky}
+	section := agentBrowserSection{Title: tr("MCP servers"), Color: m.st.P.Sky}
 	for _, s := range m.mcp {
 		preview := []string{s.Name, "", "  type: " + s.Type}
 		if s.URL != "" {
@@ -301,7 +301,7 @@ func (m codexConfigModel) browserMCPSection() agentBrowserSection {
 }
 
 func (m codexConfigModel) browserPromptsSection() agentBrowserSection {
-	section := agentBrowserSection{Title: "Commands", Color: m.st.P.Green}
+	section := agentBrowserSection{Title: tr("Commands"), Color: m.st.P.Green}
 	for _, p := range m.prompts {
 		section.Items = append(section.Items, agentBrowserItem{
 			Label:    "/" + p.Name,
@@ -313,7 +313,7 @@ func (m codexConfigModel) browserPromptsSection() agentBrowserSection {
 }
 
 func (m codexConfigModel) browserRulesSection() agentBrowserSection {
-	section := agentBrowserSection{Title: "Rules", Color: m.st.P.Mauve}
+	section := agentBrowserSection{Title: tr("Rules"), Color: m.st.P.Mauve}
 	for _, r := range m.rules {
 		// Rule files use the .rules extension but the body is markdown-
 		// adjacent (frontmatter + freeform prose); Glamour renders it

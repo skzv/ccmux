@@ -67,10 +67,10 @@ func (m antigravityConfigModel) Update(msg tea.Msg) (antigravityConfigModel, tea
 		case "y":
 			cur, _ := antigravityconfig.EffectiveYoloMode()
 			if _, err := antigravityconfig.SetYoloMode(!cur); err != nil {
-				m.err = "set yolo: " + err.Error()
+				m.err = tr("set yolo: ") + err.Error()
 				m.saveMsg = ""
 			} else {
-				m.saveMsg = fmt.Sprintf("Antigravity YOLO → %v", !cur)
+				m.saveMsg = fmt.Sprintf(tr("Antigravity YOLO → %v"), !cur)
 				m.savedAt = time.Now()
 				m.reload()
 			}
@@ -78,10 +78,10 @@ func (m antigravityConfigModel) Update(msg tea.Msg) (antigravityConfigModel, tea
 		case "r":
 			next := nextAntigravityEffort()
 			if _, err := antigravityconfig.SetEffortLevel(next); err != nil {
-				m.err = "set effort: " + err.Error()
+				m.err = tr("set effort: ") + err.Error()
 				m.saveMsg = ""
 			} else {
-				m.saveMsg = "Antigravity effort → " + next
+				m.saveMsg = tr("Antigravity effort → ") + next
 				m.savedAt = time.Now()
 				m.reload()
 			}
@@ -129,7 +129,7 @@ func (m antigravityConfigModel) ViewBody(width, height int) string {
 func (m antigravityConfigModel) viewBodyHeader(width int) string {
 	st := m.st
 	narrow := isNarrow(width)
-	header := []string{st.Emphasis.Render("Antigravity configuration")}
+	header := []string{st.Emphasis.Render(tr("Antigravity configuration"))}
 	if !narrow {
 		header = append(header, st.Muted.Render(summarizePath(m.paths.Settings)))
 	}
@@ -145,7 +145,7 @@ func (m antigravityConfigModel) viewBodyHeader(width int) string {
 		yoloOn, _ := antigravityconfig.EffectiveYoloMode()
 		yoloLabel := "off"
 		if yoloOn {
-			yoloLabel = st.StatusError.Render("YOLO (no approval prompts)")
+			yoloLabel = st.StatusError.Render(tr("YOLO (no approval prompts)"))
 		}
 		header = append(header, fmt.Sprintf("yolo mode       %s", yoloLabel))
 	}
@@ -182,7 +182,7 @@ func (m antigravityConfigModel) browserSections() []agentBrowserSection {
 }
 
 func (m antigravityConfigModel) browserMCPSection() agentBrowserSection {
-	section := agentBrowserSection{Title: "MCP servers", Color: m.st.P.Sky}
+	section := agentBrowserSection{Title: tr("MCP servers"), Color: m.st.P.Sky}
 	for _, s := range m.mcp {
 		preview := []string{s.Name, "", "  type: " + s.Type}
 		if s.URL != "" {
