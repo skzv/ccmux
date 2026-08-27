@@ -159,16 +159,16 @@ func (m *dashboardModel) SetVersion(v string) {
 func (m dashboardModel) HelpBarProps(width int) components.HelpBarProps {
 	return components.HelpBarProps{
 		Hints: []components.KeyHint{
-			{Key: "?", Label: "help", Priority: 10},
-			{Key: "q", Label: "quit", Priority: 10},
-			{Key: "enter", Label: "attach", Priority: 8},
-			{Key: "n", Label: "new", Priority: 7},
-			{Key: "x", Label: "kill", Priority: 6},
-			{Key: "u", Label: "usage", Priority: 5},
-			{Key: "p", Label: "preview", Priority: 5},
-			{Key: "R", Label: "rename", Priority: 4},
-			{Key: "r", Label: "refresh", Priority: 3},
-			{Key: "1-7", Label: "screens", Priority: 2},
+			{Key: "?", Label: tr("help"), Priority: 10},
+			{Key: "q", Label: tr("quit"), Priority: 10},
+			{Key: "enter", Label: tr("attach"), Priority: 8},
+			{Key: "n", Label: tr("new"), Priority: 7},
+			{Key: "x", Label: tr("kill"), Priority: 6},
+			{Key: "u", Label: tr("usage"), Priority: 5},
+			{Key: "p", Label: tr("preview"), Priority: 5},
+			{Key: "R", Label: tr("rename"), Priority: 4},
+			{Key: "r", Label: tr("refresh"), Priority: 3},
+			{Key: "1-7", Label: tr("screens"), Priority: 2},
 		},
 		Width: width,
 	}
@@ -196,7 +196,7 @@ func (m dashboardModel) StatsView(width int) string {
 // content for vertical real estate (see renderStatusBar).
 func (m dashboardModel) heroPanel(width int) string {
 	_ = width
-	return "   " + m.st.Title.Render("Hello.")
+	return "   " + m.st.Title.Render(tr("Hello."))
 }
 
 // devicesPanel renders the tailnet/network view. Two layouts:
@@ -223,7 +223,7 @@ func (m dashboardModel) devicesPanel(width int) string {
 	// small AND the rendered strip fits the inner width.
 	if len(m.hosts) <= 3 {
 		strip := m.renderDevicesStrip()
-		heading := st.Emphasis.Render("Devices")
+		heading := st.Emphasis.Render(tr("Devices"))
 		oneLine := heading + "   " + strip
 		if lipgloss.Width(oneLine) <= inner {
 			return st.Pane.Width(width - 2).MaxWidth(width).Render(oneLine)
@@ -231,7 +231,7 @@ func (m dashboardModel) devicesPanel(width int) string {
 	}
 
 	// Multi-row list. Header + blank + one row per device.
-	rows := []string{st.Emphasis.Render("Devices"), ""}
+	rows := []string{st.Emphasis.Render(tr("Devices")), ""}
 	for _, h := range m.hosts {
 		rows = append(rows, "  "+m.renderDeviceRow(h))
 	}
@@ -267,16 +267,16 @@ func (m dashboardModel) renderDeviceRow(h hostStatus) string {
 	}
 	name := st.HostColor(h.Name).Render(h.Name)
 	if h.Local {
-		name += " " + st.Muted.Render("(this)")
+		name += " " + st.Muted.Render(tr("(this)"))
 	}
 	row := dot + " " + name
 	switch {
 	case h.Mobile:
 		row += " " + st.Muted.Render("(Moshi)")
 	case h.NeedsInstall:
-		row += " " + st.Muted.Render("(unreachable)")
+		row += " " + st.Muted.Render(tr("(unreachable)"))
 	case !h.Local && h.Version != "" && m.version != "" && versionsDiffer(m.version, h.Version):
-		row += " " + lipgloss.NewStyle().Foreground(st.P.Yellow).Bold(true).Render("[↑ update]")
+		row += " " + lipgloss.NewStyle().Foreground(st.P.Yellow).Bold(true).Render(tr("[↑ update]"))
 	}
 	return row
 }
@@ -368,13 +368,13 @@ func (m dashboardModel) usagePanel(width int) string {
 	}
 	if m.usage == nil && m.ccusage == nil {
 		return st.Pane.Width(width - 2).MaxWidth(width).Render(strings.Join([]string{
-			st.Emphasis.Render("Usage"),
+			st.Emphasis.Render(tr("Usage")),
 			"",
-			st.Muted.Render("(loading transcripts…)"),
+			st.Muted.Render(tr("(loading transcripts…)")),
 		}, "\n"))
 	}
 
-	rows := []string{st.Emphasis.Render("Usage"), ""}
+	rows := []string{st.Emphasis.Render(tr("Usage")), ""}
 
 	// Indent hierarchy is 4 levels:
 	//
@@ -393,30 +393,30 @@ func (m dashboardModel) usagePanel(width int) string {
 	// claudeusage walks Claude's transcripts). Codex and Antigravity
 	// don't have an equivalent so they stay as flat peer sections.
 	if m.usage != nil {
-		rows = append(rows, " "+agentSectionHeading(st, agent.IDClaude, "Claude · 5h window"))
+		rows = append(rows, " "+agentSectionHeading(st, agent.IDClaude, "Claude · "+tr("5h window")))
 		rows = append(rows, m.renderClaudeWindowSection()...)
 		if m.ccusage != nil {
 			rows = append(rows, "")
-			rows = append(rows, "   "+st.Subtitle.Render("Cost · billing block"))
+			rows = append(rows, "   "+st.Subtitle.Render(tr("Cost · billing block")))
 			rows = append(rows, m.renderCostSection()...)
 		}
 		rows = append(rows, "")
-		rows = append(rows, "   "+st.Subtitle.Render("Tokens · this window"))
+		rows = append(rows, "   "+st.Subtitle.Render(tr("Tokens · this window")))
 		rows = append(rows, m.renderTokensSection()...)
 		rows = append(rows, "")
 	} else if m.ccusage != nil {
 		// Edge case: ccusage block arrived before transcripts. Render
 		// Cost as its own top-level section (no Claude heading to
 		// nest under).
-		rows = append(rows, " "+st.Subtitle.Render("Cost · billing block"))
+		rows = append(rows, " "+st.Subtitle.Render(tr("Cost · billing block")))
 		rows = append(rows, m.renderCostSection()...)
 		rows = append(rows, "")
 	}
 
-	rows = append(rows, " "+agentSectionHeading(st, agent.IDCodex, "Codex · recent"))
+	rows = append(rows, " "+agentSectionHeading(st, agent.IDCodex, "Codex · "+tr("recent")))
 	rows = append(rows, m.renderOtherAgentSection(m.codexUsage)...)
 	rows = append(rows, "")
-	rows = append(rows, " "+agentSectionHeading(st, agent.IDAntigravity, "Antigravity · recent"))
+	rows = append(rows, " "+agentSectionHeading(st, agent.IDAntigravity, "Antigravity · "+tr("recent")))
 	rows = append(rows, m.renderOtherAgentSection(m.antigravityUsage)...)
 	rows = append(rows, "")
 	// Second-wave agents (OpenCode, Kimi, …) — one heading + row each,
@@ -426,7 +426,7 @@ func (m dashboardModel) usagePanel(width int) string {
 	// with its dashboard tag and project dot.
 	for _, o := range m.otherUsage {
 		id := agent.ID(o.Agent)
-		title := agent.ByID(id).DisplayName() + " · recent"
+		title := agent.ByID(id).DisplayName() + " · " + tr("recent")
 		rows = append(rows, " "+agentSectionHeading(st, id, title))
 		rows = append(rows, m.renderOtherAgentSection(o.Summary)...)
 		rows = append(rows, "")
@@ -435,12 +435,12 @@ func (m dashboardModel) usagePanel(width int) string {
 	// Different shape from the per-agent token rows (dollars against the
 	// key, not a token window) so it reads as its own section.
 	if m.openRouter.Enabled {
-		rows = append(rows, " "+st.Subtitle.Render("OpenRouter · account"))
+		rows = append(rows, " "+st.Subtitle.Render(tr("OpenRouter · account")))
 		rows = append(rows, m.renderOpenRouterSection()...)
 		rows = append(rows, "")
 	}
-	rows = append(rows, " "+st.Muted.Render("press ")+st.Key.Render("u")+
-		st.Muted.Render(" for top projects · cache hit rate · per-prompt cost"))
+	rows = append(rows, " "+st.Muted.Render(tr("press "))+st.Key.Render("u")+
+		st.Muted.Render(tr(" for top projects · cache hit rate · per-prompt cost")))
 
 	return st.Pane.Width(width - 2).MaxWidth(width).Render(strings.Join(rows, "\n"))
 }
@@ -460,10 +460,10 @@ func (m dashboardModel) renderClaudeWindowSection() []string {
 	a := m.usage
 
 	headlineCount := a.UserPrompts
-	headlineLabel := "prompts"
+	headlineLabel := tr("prompts")
 	if headlineCount == 0 {
 		headlineCount = a.Messages
-		headlineLabel = "msgs"
+		headlineLabel = tr("msgs")
 	}
 	limit := planMessageLimit(m.cfg.Subscription.TierFor("claude"))
 
@@ -471,7 +471,7 @@ func (m dashboardModel) renderClaudeWindowSection() []string {
 		Render(fmt.Sprintf("%d", headlineCount))
 	headline := "   " + count
 	if limit > 0 {
-		headline += " " + st.Muted.Render(fmt.Sprintf("/ %d (est.) %s", limit, headlineLabel))
+		headline += " " + st.Muted.Render(fmt.Sprintf("/ %d %s %s", limit, tr("(est.)"), headlineLabel))
 		ratio := float64(headlineCount) / float64(limit)
 		if ratio > 1 {
 			ratio = 1
@@ -484,7 +484,7 @@ func (m dashboardModel) renderClaudeWindowSection() []string {
 		case ratio >= 0.7:
 			pctStyle = lipgloss.NewStyle().Foreground(st.P.Yellow).Bold(true)
 		}
-		headline += st.Muted.Render("  ·  ") + pctStyle.Render(fmt.Sprintf("%d%% used", pct))
+		headline += st.Muted.Render("  ·  ") + pctStyle.Render(fmt.Sprintf(tr("%d%% used"), pct))
 	} else {
 		headline += " " + st.Muted.Render(headlineLabel)
 	}
@@ -495,9 +495,9 @@ func (m dashboardModel) renderClaudeWindowSection() []string {
 	}
 	if reset := a.ResetAt(5 * time.Hour); !reset.IsZero() {
 		if remaining := time.Until(reset); remaining > 0 {
-			lines = append(lines, "   "+st.Muted.Render("resets in "+humanDuration(remaining)))
+			lines = append(lines, "   "+st.Muted.Render(tr("resets in")+" "+humanDuration(remaining)))
 		} else {
-			lines = append(lines, "   "+st.Muted.Render("resetting now"))
+			lines = append(lines, "   "+st.Muted.Render(tr("resetting now")))
 		}
 	}
 	return lines
@@ -540,19 +540,19 @@ func (m dashboardModel) renderCostSection() []string {
 	st := m.st
 	b := m.ccusage
 	spent := lipgloss.NewStyle().Foreground(st.P.Lavender).Bold(true).Render(fmt.Sprintf("$%.2f", b.CostUSD))
-	line := "     " + spent + " " + st.Muted.Render("spent")
+	line := "     " + spent + " " + st.Muted.Render(tr("spent"))
 	if b.BurnRateCostPerHour > 0 {
 		rate := lipgloss.NewStyle().Foreground(st.P.Lavender).Bold(true).
 			Render(fmt.Sprintf("$%.1f", b.BurnRateCostPerHour))
-		line += st.Muted.Render("  ·  ") + rate + st.Muted.Render("/hr")
+		line += st.Muted.Render("  ·  ") + rate + st.Muted.Render(tr("/hr"))
 	}
 	lines := []string{line}
 	if b.ProjectedTotalCost > 0 && b.IsActive {
 		projection := lipgloss.NewStyle().Foreground(st.P.Peach).Bold(true).
 			Render(fmt.Sprintf("$%.2f", b.ProjectedTotalCost))
 		local := b.EndTime.Local()
-		lines = append(lines, "     "+st.Muted.Render("projected ")+projection+
-			st.Muted.Render(" by "+local.Format("15:04")))
+		lines = append(lines, "     "+st.Muted.Render(tr("projected "))+projection+
+			st.Muted.Render(tr(" by ")+local.Format("15:04")))
 	}
 	return lines
 }
@@ -564,11 +564,11 @@ func (m dashboardModel) renderTokensSection() []string {
 	a := m.usage
 	in := lipgloss.NewStyle().Foreground(st.P.Lavender).Bold(true).Render(claudeusage.HumanCount(a.Total.Input))
 	out := lipgloss.NewStyle().Foreground(st.P.Lavender).Bold(true).Render(claudeusage.HumanCount(a.Total.Output))
-	line := "     " + in + st.Muted.Render(" in  ·  ") + out + st.Muted.Render(" out")
+	line := "     " + in + st.Muted.Render(tr(" in  ·  ")) + out + st.Muted.Render(tr(" out"))
 	if a.Total.CacheRead > 0 {
 		cache := lipgloss.NewStyle().Foreground(st.P.Green).Bold(true).
 			Render(claudeusage.HumanCount(a.Total.CacheRead))
-		line += st.Muted.Render("  ·  ") + cache + st.Muted.Render(" cache hit")
+		line += st.Muted.Render("  ·  ") + cache + st.Muted.Render(tr(" cache hit"))
 	}
 	return []string{line}
 }
@@ -581,13 +581,13 @@ func (m dashboardModel) renderTokensSection() []string {
 // is the "at a glance"; this overlay is the "deep dive."
 func (m dashboardModel) renderUsageOverlay(st styles.Styles, width, height int) string {
 	lines := []string{
-		st.Emphasis.Render("Usage detail"),
-		st.Subtitle.Render("Pressed-u expansion of the dashboard's Usage panel — top projects, cache efficiency, cost-per-prompt, and the data gaps the inline panel papers over."),
+		st.Emphasis.Render(tr("Usage detail")),
+		st.Subtitle.Render(tr("Pressed-u expansion of the dashboard's Usage panel — top projects, cache efficiency, cost-per-prompt, and the data gaps the inline panel papers over.")),
 		"",
 	}
 
 	if m.usage == nil && m.ccusage == nil {
-		lines = append(lines, st.Muted.Render("(loading transcripts…)"))
+		lines = append(lines, st.Muted.Render(tr("(loading transcripts…)")))
 	}
 
 	// Subscription tier + the (est.) caveat. Sourced per-agent so a
@@ -596,13 +596,13 @@ func (m dashboardModel) renderUsageOverlay(st styles.Styles, width, height int) 
 	// explicit about scope.
 	if tier := m.cfg.Subscription.TierFor("claude"); tier != "" {
 		limit := planMessageLimit(tier)
-		lines = append(lines, st.Subtitle.Render("Subscription · Claude · 5h window"))
-		lines = append(lines, fmt.Sprintf("  tier            %s", tier))
+		lines = append(lines, st.Subtitle.Render("Subscription · Claude · "+tr("5h window")))
+		lines = append(lines, fmt.Sprintf("  %s            %s", tr("tier"), tier))
 		if limit > 0 {
 			lines = append(lines,
-				fmt.Sprintf("  per-window cap  %d prompts (est.)", limit),
-				st.Muted.Render("                  Anthropic does not publish exact caps;"),
-				st.Muted.Render("                  ccmux uses a soft default per tier."),
+				fmt.Sprintf("  %s  %d %s %s", tr("per-window cap"), limit, tr("prompts"), tr("(est.)")),
+				st.Muted.Render("                  "+tr("Anthropic does not publish exact caps;")),
+				st.Muted.Render("                  "+tr("ccmux uses a soft default per tier.")),
 			)
 		}
 		lines = append(lines, "")
@@ -610,45 +610,45 @@ func (m dashboardModel) renderUsageOverlay(st styles.Styles, width, height int) 
 
 	// Claude detail: prompts, tokens, cache, cost-per-prompt.
 	if a := m.usage; a != nil {
-		lines = append(lines, st.Subtitle.Render("Claude · 5h window"))
-		lines = append(lines, fmt.Sprintf("  prompts         %d (user) · %d (total messages)",
-			a.UserPrompts, a.Messages))
-		lines = append(lines, fmt.Sprintf("  input tokens    %s",
-			claudeusage.HumanCount(a.Total.Input)))
-		lines = append(lines, fmt.Sprintf("  output tokens   %s",
-			claudeusage.HumanCount(a.Total.Output)))
-		lines = append(lines, fmt.Sprintf("  cache create    %s",
-			claudeusage.HumanCount(a.Total.CacheCreation)))
-		lines = append(lines, fmt.Sprintf("  cache read      %s",
-			claudeusage.HumanCount(a.Total.CacheRead)))
+		lines = append(lines, st.Subtitle.Render("Claude · "+tr("5h window")))
+		lines = append(lines, fmt.Sprintf("  %s         %d %s · %d %s",
+			tr("prompts"), a.UserPrompts, tr("(user)"), a.Messages, tr("(total messages)")))
+		lines = append(lines, fmt.Sprintf("  %s    %s",
+			tr("input tokens"), claudeusage.HumanCount(a.Total.Input)))
+		lines = append(lines, fmt.Sprintf("  %s   %s",
+			tr("output tokens"), claudeusage.HumanCount(a.Total.Output)))
+		lines = append(lines, fmt.Sprintf("  %s    %s",
+			tr("cache create"), claudeusage.HumanCount(a.Total.CacheCreation)))
+		lines = append(lines, fmt.Sprintf("  %s      %s",
+			tr("cache read"), claudeusage.HumanCount(a.Total.CacheRead)))
 		// Cache efficiency: how much of the input came from cache reads.
 		// 0..1 ratio. Useful signal of whether prompt caching is working.
 		if a.Total.Input > 0 {
 			total := a.Total.Input + a.Total.CacheRead + a.Total.CacheCreation
 			if total > 0 {
 				ratio := float64(a.Total.CacheRead) / float64(total)
-				lines = append(lines, fmt.Sprintf("  cache hit rate  %.0f%%", ratio*100))
+				lines = append(lines, fmt.Sprintf("  %s  %.0f%%", tr("cache hit rate"), ratio*100))
 			}
 		}
 		if cost := a.EstimatedCost(); cost > 0 {
-			lines = append(lines, fmt.Sprintf("  est. cost       $%.2f at API rates", cost))
+			lines = append(lines, fmt.Sprintf("  %s       $%.2f %s", tr("est. cost"), cost, tr("at API rates")))
 			if a.UserPrompts > 0 {
-				lines = append(lines, fmt.Sprintf("  per-prompt avg  $%.4f",
-					cost/float64(a.UserPrompts)))
+				lines = append(lines, fmt.Sprintf("  %s  $%.4f",
+					tr("per-prompt avg"), cost/float64(a.UserPrompts)))
 			}
-			lines = append(lines, st.Muted.Render("                  subscription users pay $0 in-plan;"))
-			lines = append(lines, st.Muted.Render("                  the figure is what the same usage"))
-			lines = append(lines, st.Muted.Render("                  would cost on the pay-per-token API."))
+			lines = append(lines, st.Muted.Render("                  "+tr("subscription users pay $0 in-plan;")))
+			lines = append(lines, st.Muted.Render("                  "+tr("the figure is what the same usage")))
+			lines = append(lines, st.Muted.Render("                  "+tr("would cost on the pay-per-token API.")))
 		}
 		lines = append(lines, "")
 
 		// Top projects.
 		if tp := a.TopProjects(5); len(tp) > 0 {
-			lines = append(lines, st.Subtitle.Render("Top projects · this 5h window"))
+			lines = append(lines, st.Subtitle.Render(tr("Top projects · this 5h window")))
 			for _, p := range tp {
 				lines = append(lines, fmt.Sprintf("  %-32s %s",
 					truncate(p.Project, 32),
-					st.Muted.Render(claudeusage.HumanCount(p.Tokens.Total())+" tokens"),
+					st.Muted.Render(claudeusage.HumanCount(p.Tokens.Total())+" "+tr("tokens")),
 				))
 			}
 			lines = append(lines, "")
@@ -657,21 +657,21 @@ func (m dashboardModel) renderUsageOverlay(st styles.Styles, width, height int) 
 
 	// Billing-block (ccusage) detail.
 	if b := m.ccusage; b != nil {
-		lines = append(lines, st.Subtitle.Render("Cost · billing block (via ccusage)"))
-		lines = append(lines, fmt.Sprintf("  spent           $%.2f", b.CostUSD))
+		lines = append(lines, st.Subtitle.Render(tr("Cost · billing block (via ccusage)")))
+		lines = append(lines, fmt.Sprintf("  %s           $%.2f", tr("spent"), b.CostUSD))
 		if b.BurnRateCostPerHour > 0 {
-			lines = append(lines, fmt.Sprintf("  burn rate       $%.2f/hr", b.BurnRateCostPerHour))
+			lines = append(lines, fmt.Sprintf("  %s       $%.2f%s", tr("burn rate"), b.BurnRateCostPerHour, tr("/hr")))
 		}
 		if b.ProjectedTotalCost > 0 && b.IsActive {
 			local := b.EndTime.Local()
-			lines = append(lines, fmt.Sprintf("  projected       $%.2f by %s",
-				b.ProjectedTotalCost, local.Format("15:04")))
+			lines = append(lines, fmt.Sprintf("  %s       $%.2f %s %s",
+				tr("projected"), b.ProjectedTotalCost, tr("by"), local.Format("15:04")))
 		}
 		lines = append(lines, "")
 	}
 
 	// Per-agent.
-	lines = append(lines, st.Subtitle.Render("Other agents"))
+	lines = append(lines, st.Subtitle.Render(tr("Other agents")))
 	for _, ag := range []struct {
 		id   agent.ID
 		name string
@@ -682,28 +682,28 @@ func (m dashboardModel) renderUsageOverlay(st styles.Styles, width, height int) 
 	} {
 		heading := agentSectionHeading(st, ag.id, "  "+ag.name)
 		if !ag.s.HasData {
-			lines = append(lines, heading+"  "+st.Muted.Render("— no conversations yet"))
+			lines = append(lines, heading+"  "+st.Muted.Render(tr("— no conversations yet")))
 			continue
 		}
-		parts := []string{fmt.Sprintf("%d prompts", ag.s.Prompts)}
+		parts := []string{fmt.Sprintf("%d %s", ag.s.Prompts, tr("prompts"))}
 		if ag.s.InputTokens > 0 || ag.s.OutputTokens > 0 {
-			parts = append(parts, fmt.Sprintf("%s in · %s out",
-				claudeusage.HumanCount(ag.s.InputTokens),
-				claudeusage.HumanCount(ag.s.OutputTokens),
+			parts = append(parts, fmt.Sprintf("%s %s · %s %s",
+				claudeusage.HumanCount(ag.s.InputTokens), tr("in"),
+				claudeusage.HumanCount(ag.s.OutputTokens), tr("out"),
 			))
 		} else {
-			parts = append(parts, "tokens unavailable (opaque transcript format)")
+			parts = append(parts, tr("tokens unavailable (opaque transcript format)"))
 		}
 		if ag.s.EstimatedCost > 0 {
-			parts = append(parts, fmt.Sprintf("~$%.2f est.", ag.s.EstimatedCost))
+			parts = append(parts, fmt.Sprintf("~$%.2f %s", ag.s.EstimatedCost, tr("est.")))
 		} else {
-			parts = append(parts, "no cost estimate (no ccusage-equivalent for this agent)")
+			parts = append(parts, tr("no cost estimate (no ccusage-equivalent for this agent)"))
 		}
 		lines = append(lines, heading+"  "+st.Muted.Render(strings.Join(parts, "  ·  ")))
 	}
 	lines = append(lines, "")
 
-	lines = append(lines, st.Muted.Render("press u or esc to close"))
+	lines = append(lines, st.Muted.Render(tr("press u or esc to close")))
 
 	modalW := minInt(96, width-4)
 	body := strings.Join(lines, "\n")
@@ -727,27 +727,27 @@ func (m dashboardModel) renderUsageOverlay(st styles.Styles, width, height int) 
 func (m dashboardModel) renderOtherAgentSection(s usage.AgentSummary) []string {
 	st := m.st
 	if !s.HasData {
-		return []string{"   " + st.Muted.Render("no conversations yet")}
+		return []string{"   " + st.Muted.Render(tr("no conversations yet"))}
 	}
 	prompts := lipgloss.NewStyle().Foreground(st.P.Lavender).Bold(true).
 		Render(fmt.Sprintf("%d", s.Prompts))
-	line := "   " + prompts + " " + st.Muted.Render("prompts")
+	line := "   " + prompts + " " + st.Muted.Render(tr("prompts"))
 	if s.InputTokens > 0 || s.OutputTokens > 0 {
 		in := lipgloss.NewStyle().Foreground(st.P.Lavender).Bold(true).
 			Render(claudeusage.HumanCount(s.InputTokens))
 		out := lipgloss.NewStyle().Foreground(st.P.Lavender).Bold(true).
 			Render(claudeusage.HumanCount(s.OutputTokens))
-		line += st.Muted.Render("  ·  ") + in + st.Muted.Render(" in  ·  ") +
-			out + st.Muted.Render(" out")
+		line += st.Muted.Render("  ·  ") + in + st.Muted.Render(tr(" in  ·  ")) +
+			out + st.Muted.Render(tr(" out"))
 	} else {
-		line += st.Muted.Render("  ·  tokens unavailable")
+		line += st.Muted.Render("  ·  " + tr("tokens unavailable"))
 	}
 	if s.EstimatedCost > 0 {
 		cost := lipgloss.NewStyle().Foreground(st.P.Lavender).Bold(true).
 			Render(fmt.Sprintf("$%.2f", s.EstimatedCost))
-		line += st.Muted.Render("  ·  ~") + cost + st.Muted.Render(" est.")
+		line += st.Muted.Render("  ·  ~") + cost + st.Muted.Render(tr(" est."))
 	} else {
-		line += st.Muted.Render("  ·  no cost estimate")
+		line += st.Muted.Render("  ·  " + tr("no cost estimate"))
 	}
 	return []string{line}
 }
@@ -760,21 +760,21 @@ func (m dashboardModel) renderOpenRouterSection() []string {
 	st := m.st
 	or := m.openRouter
 	if or.ErrMsg != "" {
-		return []string{"   " + st.StateNeedsInput.Render("unavailable") + st.Muted.Render("  ·  "+or.ErrMsg)}
+		return []string{"   " + st.StateNeedsInput.Render(tr("unavailable")) + st.Muted.Render("  ·  "+or.ErrMsg)}
 	}
 	bold := func(s string) string {
 		return lipgloss.NewStyle().Foreground(st.P.Lavender).Bold(true).Render(s)
 	}
-	line := "   " + bold(fmt.Sprintf("$%.2f", or.Usage)) + st.Muted.Render(" spent")
+	line := "   " + bold(fmt.Sprintf("$%.2f", or.Usage)) + st.Muted.Render(tr(" spent"))
 	// Remaining == -1 is the uncapped sentinel; otherwise show the cap.
 	if or.Remaining < 0 || or.Limit <= 0 {
-		line += st.Muted.Render("  ·  uncapped")
+		line += st.Muted.Render("  ·  " + tr("uncapped"))
 	} else {
 		line += st.Muted.Render("  ·  ") + bold(fmt.Sprintf("$%.2f", or.Remaining)) +
-			st.Muted.Render(fmt.Sprintf(" of $%.2f left", or.Limit))
+			st.Muted.Render(fmt.Sprintf(tr(" of $%.2f left"), or.Limit))
 	}
 	if or.IsFreeTier {
-		line += st.Muted.Render("  ·  free tier")
+		line += st.Muted.Render("  ·  " + tr("free tier"))
 	}
 	return []string{line}
 }
@@ -787,22 +787,22 @@ func (m dashboardModel) renderOpenRouterSection() []string {
 // so the narrow and wide phrasings stay consistent.
 func (m dashboardModel) usageSummaryLine() string {
 	st := m.st
-	parts := []string{st.Emphasis.Render("Usage")}
+	parts := []string{st.Emphasis.Render(tr("Usage"))}
 	if a := m.usage; a != nil {
-		count, label := a.UserPrompts, "prompts"
+		count, label := a.UserPrompts, tr("prompts")
 		if count == 0 {
-			count, label = a.Messages, "msgs"
+			count, label = a.Messages, tr("msgs")
 		}
 		parts = append(parts, fmt.Sprintf("%d %s", count, label))
 	} else {
-		parts = append(parts, st.Muted.Render("loading…"))
+		parts = append(parts, st.Muted.Render(tr("loading…")))
 	}
 	if b := m.ccusage; b != nil {
 		parts = append(parts, fmt.Sprintf("$%.2f", b.CostUSD))
 	}
 	if a := m.usage; a != nil {
 		if reset := a.ResetAt(5 * time.Hour); !reset.IsZero() {
-			parts = append(parts, "resets "+reset.Local().Format("15:04"))
+			parts = append(parts, tr("resets ")+reset.Local().Format("15:04"))
 		}
 	}
 	return strings.Join(parts, " · ")
@@ -893,9 +893,9 @@ func renderSessionLine(st styles.Styles, s daemon.SessionState, inner int) strin
 	var suffix string
 	switch {
 	case s.Attached && age != "":
-		suffix = "  " + lipgloss.NewStyle().Foreground(st.P.Mauve).Bold(true).Render("attached") + " " + st.Muted.Render(age)
+		suffix = "  " + lipgloss.NewStyle().Foreground(st.P.Mauve).Bold(true).Render(tr("attached")) + " " + st.Muted.Render(age)
 	case s.Attached:
-		suffix = "  " + lipgloss.NewStyle().Foreground(st.P.Mauve).Bold(true).Render("attached")
+		suffix = "  " + lipgloss.NewStyle().Foreground(st.P.Mauve).Bold(true).Render(tr("attached"))
 	case age != "":
 		suffix = "  " + st.Muted.Render(age)
 	}
