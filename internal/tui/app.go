@@ -84,13 +84,13 @@ const (
 // here is the canonical place since both the tab bar and the help
 // footer read String().
 var screenLabels = [screenCount]string{
-	ScreenSessions:      "Sessions",
-	ScreenProjects:      "Projects",
-	ScreenConversations: "Conversations",
-	ScreenNotes:         "Notes",
-	ScreenAgents:        "Agents",
-	ScreenSettings:      "Settings",
-	ScreenNetwork:       "Network",
+	ScreenSessions:      tr("Sessions"),
+	ScreenProjects:      tr("Projects"),
+	ScreenConversations: tr("Conversations"),
+	ScreenNotes:         tr("Notes"),
+	ScreenAgents:        tr("Agents"),
+	ScreenSettings:      tr("Settings"),
+	ScreenNetwork:       tr("Network"),
 }
 
 func (s Screen) String() string {
@@ -136,9 +136,9 @@ func screenKey(s Screen) string {
 // Formula: width of " ccmux " brand + sum of " [N] Name " per tab.
 // Matches renderHeader's wide-form rendering verbatim.
 func tabBarMinWidth() int {
-	width := len(" ccmux ")
+	width := lipgloss.Width(" ccmux ")
 	for _, t := range allScreens() {
-		width += len(fmt.Sprintf(" [%d] %s ", int(t)+1, t.String()))
+		width += lipgloss.Width(fmt.Sprintf(" [%d] %s ", int(t)+1, t.String()))
 	}
 	return width
 }
@@ -545,7 +545,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		until := time.Now().Add(4 * time.Second)
 		return a, func() tea.Msg {
 			return toastMsg{
-				Text:  "SSH ready for " + msg.target.String(),
+				Text:  tr("SSH ready for ") + msg.target.String(),
 				Kind:  toastInfo,
 				Until: until,
 			}
@@ -1821,7 +1821,9 @@ func (a App) renderHeader() string {
 			// Just the number when space is tight.
 			label = fmt.Sprintf(" %d ", num)
 			if t == a.screen {
-				label = fmt.Sprintf("[%d %s]", num, t.String()[:1])
+				// First rune, not first byte: labels are translated and
+				// "会话"[0] would split a UTF-8 sequence.
+				label = fmt.Sprintf("[%d %s]", num, string([]rune(t.String())[:1]))
 			}
 		} else {
 			label = fmt.Sprintf("[%d] %s", num, t.String())
@@ -1845,14 +1847,14 @@ func (a App) renderStatusBar() string {
 	host, _ := os.Hostname()
 	hostChip := a.styles.HostColor("local").Render("● " + shortHostname(host))
 
-	daemonChip := a.styles.StatusError.Render("⚠ offline")
+	daemonChip := a.styles.StatusError.Render("⚠ " + tr("offline"))
 	if a.daemonOnline {
-		daemonChip = a.styles.StatusGood.Render("✓ daemon")
+		daemonChip = a.styles.StatusGood.Render("✓ " + tr("daemon"))
 	}
 
 	dangerBanner := ""
 	if a.cfg.Sleep.DangerousKeepAwakeOnBattery {
-		dangerBanner = a.styles.StatusDanger.Render("⚠ BATT") + " "
+		dangerBanner = a.styles.StatusDanger.Render("⚠ "+tr("BATT")) + " "
 	}
 
 	// Left block ordered T0-first — battery-danger, daemon, then host
@@ -1863,7 +1865,7 @@ func (a App) renderStatusBar() string {
 	// Right block: the session count (T1) always; the refreshed-at
 	// clock and the version chip (both T2) only when wide. Dirty
 	// builds (`<sha>-dirty`) still self-flag in the wide version chip.
-	right := a.styles.Muted.Render(fmt.Sprintf("%d sess", len(a.sessions)))
+	right := a.styles.Muted.Render(fmt.Sprintf(tr("%d sess"), len(a.sessions)))
 	if !narrow {
 		refreshed := "—"
 		if !a.lastRefresh.IsZero() {
@@ -1873,7 +1875,7 @@ func (a App) renderStatusBar() string {
 		if strings.Contains(a.version, "dirty") {
 			versionChip = a.styles.StatusWarning.Render(a.version)
 		}
-		right = a.styles.Muted.Render(fmt.Sprintf("%d sess • %s", len(a.sessions), refreshed)) + "  " + versionChip
+		right = a.styles.Muted.Render(fmt.Sprintf(tr("%d sess • %s"), len(a.sessions), refreshed)) + "  " + versionChip
 	}
 
 	// Local ccmux update chip — appended to the right block when the
@@ -1881,12 +1883,12 @@ func (a App) renderStatusBar() string {
 	// Replaces the old hero-panel update banner so the chrome doesn't
 	// compete with screen content for vertical space.
 	if r := a.dashboard.updateAvailable; r.Available() {
-		commits := "1 commit"
+		commits := tr("1 commit")
 		if r.Behind != 1 {
-			commits = fmt.Sprintf("%d commits", r.Behind)
+			commits = fmt.Sprintf(tr("%d commits"), r.Behind)
 		}
 		updateChip := lipgloss.NewStyle().Foreground(a.styles.P.Yellow).Bold(true).
-			Render(fmt.Sprintf("[↑ ccmux update — %s behind %s]", commits, r.Branch))
+			Render(fmt.Sprintf(tr("[↑ ccmux update — %s behind %s]"), commits, r.Branch))
 		right = right + "  " + updateChip
 	}
 
@@ -1938,10 +1940,10 @@ func (a App) helpBarProps() components.HelpBarProps {
 	default:
 		return components.HelpBarProps{
 			Hints: []components.KeyHint{
-				{Key: "?", Label: "help", Priority: 10},
-				{Key: "q", Label: "quit", Priority: 10},
-				{Key: "r", Label: "refresh", Priority: 6},
-				{Key: "1-7", Label: "screens", Priority: 4},
+				{Key: "?", Label: tr("help"), Priority: 10},
+				{Key: "q", Label: tr("quit"), Priority: 10},
+				{Key: "r", Label: tr("refresh"), Priority: 6},
+				{Key: "1-7", Label: tr("screens"), Priority: 4},
 			},
 			Width: a.width,
 		}

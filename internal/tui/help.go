@@ -23,12 +23,12 @@ func globalHelp(km Keymap) []HelpItem {
 	last := km.Network.Keys()[0]
 	switchHint := first + "-" + last + " / F" + first + "-F" + last
 	return []HelpItem{
-		{switchHint, "switch screens"},
-		{"?", "this help"},
-		{"T", "re-open the first-run tour"},
-		{"M", "matrix 🐇"},
-		{"esc", "dismiss toast"},
-		{"q / Ctrl-c", "quit"},
+		{switchHint, tr("switch screens")},
+		{"?", tr("this help")},
+		{"T", tr("re-open the first-run tour")},
+		{"M", tr("matrix 🐇")},
+		{"esc", tr("dismiss toast")},
+		{"q / Ctrl-c", tr("quit")},
 	}
 }
 
@@ -44,67 +44,67 @@ func helpForScreen(s Screen, km Keymap) []HelpItem {
 	switch s {
 	case ScreenSessions:
 		return []HelpItem{
-			{"↑↓ / j k", "navigate session list"},
-			{"enter", "attach (Ctrl-b then d to detach back to ccmux)"},
-			{"n", "new session"},
-			{"x", "kill selected session"},
-			{"R", "rename selected session"},
-			{"u", "open the full usage overlay"},
-			{"r", "refresh sessions + usage"},
+			{"↑↓ / j k", tr("navigate session list")},
+			{"enter", tr("attach (Ctrl-b then d to detach back to ccmux)")},
+			{"n", tr("new session")},
+			{"x", tr("kill selected session")},
+			{"R", tr("rename selected session")},
+			{"u", tr("open the full usage overlay")},
+			{"r", tr("refresh sessions + usage")},
 		}
 	case ScreenProjects:
 		return []HelpItem{
-			{"↑↓ / j k", "navigate project list"},
-			{"/", "filter projects by name (esc to clear, enter to attach to top match)"},
-			{"enter", "attach to (or create) that project's session"},
-			{"n", "scaffold a new project (modal form)"},
-			{"a", "switch the selected project's agent (local only)"},
-			{"i", "open the full project-info overlay"},
-			{"c", "show conversations for this project"},
-			{"r", "refresh projects + sessions"},
+			{"↑↓ / j k", tr("navigate project list")},
+			{"/", tr("filter projects by name (esc to clear, enter to attach to top match)")},
+			{"enter", tr("attach to (or create) that project's session")},
+			{"n", tr("scaffold a new project (modal form)")},
+			{"a", tr("switch the selected project's agent (local only)")},
+			{"i", tr("open the full project-info overlay")},
+			{"c", tr("show conversations for this project")},
+			{"r", tr("refresh projects + sessions")},
 		}
 	case ScreenConversations:
 		return []HelpItem{
-			{"↑↓ / j k", "navigate conversation list"},
-			{"enter", "resume the selected conversation"},
-			{"H", "toggle headless / SDK conversations"},
-			{"r", "refresh conversation list"},
+			{"↑↓ / j k", tr("navigate conversation list")},
+			{"enter", tr("resume the selected conversation")},
+			{"H", tr("toggle headless / SDK conversations")},
+			{"r", tr("refresh conversation list")},
 		}
 	case ScreenNotes:
 		return []HelpItem{
-			{"p / space", "switch project (picker modal)"},
-			{"tab / h / l / ←→", "toggle focus between list and preview"},
-			{"↑↓ / j k (list focused)", "navigate files (wraps around)"},
-			{"↑↓ / j k (preview focused)", "scroll within open doc"},
-			{"mouse wheel", "scroll list (left) or doc (right)"},
-			{"enter / e", "open selected file in $EDITOR"},
-			{"n", "new note (asks for filename + optional title, then $EDITOR)"},
-			{"i", "show selected note's info (path, frontmatter, counts)"},
-			{"/", "search notes in this project"},
+			{"p / space", tr("switch project (picker modal)")},
+			{"tab / h / l / ←→", tr("toggle focus between list and preview")},
+			{"↑↓ / j k (list focused)", tr("navigate files (wraps around)")},
+			{"↑↓ / j k (preview focused)", tr("scroll within open doc")},
+			{"mouse wheel", tr("scroll list (left) or doc (right)")},
+			{"enter / e", tr("open selected file in $EDITOR")},
+			{"n", tr("new note (asks for filename + optional title, then $EDITOR)")},
+			{"i", tr("show selected note's info (path, frontmatter, counts)")},
+			{"/", tr("search notes in this project")},
 		}
 	case ScreenAgents:
 		return []HelpItem{
-			{"m", "pick default model (modal)"},
-			{"e", "pick reasoning effort (modal)"},
-			{"a", "toggle alwaysThinkingEnabled on/off"},
-			{"y", "toggle yolo mode (permissions.defaultMode = bypassPermissions)"},
-			{"c", "edit global ~/.claude/CLAUDE.md in $EDITOR"},
-			{"↑↓ / j k + enter", "activate a row (the settings.json row opens $EDITOR)"},
+			{"m", tr("pick default model (modal)")},
+			{"e", tr("pick reasoning effort (modal)")},
+			{"a", tr("toggle alwaysThinkingEnabled on/off")},
+			{"y", tr("toggle yolo mode (permissions.defaultMode = bypassPermissions)")},
+			{"c", tr("edit global ~/.claude/CLAUDE.md in $EDITOR")},
+			{"↑↓ / j k + enter", tr("activate a row (the settings.json row opens $EDITOR)")},
 		}
 	case ScreenSettings:
 		return []HelpItem{
-			{"↑↓ / j k", "navigate fields"},
-			{"enter", "edit field (or cycle enum)"},
-			{"esc", "cancel edit"},
-			{"i", "open info modal (version, paths, last save)"},
-			{"e", "open ~/.config/ccmux/config.toml in $EDITOR"},
+			{"↑↓ / j k", tr("navigate fields")},
+			{"enter", tr("edit field (or cycle enum)")},
+			{"esc", tr("cancel edit")},
+			{"i", tr("open info modal (version, paths, last save)")},
+			{"e", tr("open ~/.config/ccmux/config.toml in $EDITOR")},
 		}
 	case ScreenNetwork:
 		return []HelpItem{
-			{"↑↓ / j k", "navigate device list"},
-			{"enter", "plain `ssh -t <host>` into the selected peer"},
-			{"s", "open the SSH setup wizard for the focused host"},
-			{"r", "refresh tailnet scan + ccmuxd probes"},
+			{"↑↓ / j k", tr("navigate device list")},
+			{"enter", tr("plain `ssh -t <host>` into the selected peer")},
+			{"s", tr("open the SSH setup wizard for the focused host")},
+			{"r", tr("refresh tailnet scan + ccmuxd probes")},
 		}
 	}
 	return nil
@@ -142,13 +142,13 @@ func (a App) renderHelpOverlay(width, height int) string {
 	}
 
 	lines := []string{
-		st.Emphasis.Render("Help — " + screenName),
-		st.Subtitle.Render("Bindings on this screen, then globals."),
+		st.Emphasis.Render(fmt.Sprintf("%s — %s", tr("Help"), screenName)),
+		st.Subtitle.Render(tr("Bindings on this screen, then globals.")),
 		"",
 	}
 
 	if len(perScreen) > 0 {
-		lines = append(lines, st.Subtitle.Render("On this screen"))
+		lines = append(lines, st.Subtitle.Render(tr("On this screen")))
 		for _, it := range perScreen {
 			lines = append(lines, fmt.Sprintf("  %s   %s",
 				st.Key.Render(padRight(it.Key, maxKeyW)),
@@ -158,7 +158,7 @@ func (a App) renderHelpOverlay(width, height int) string {
 		lines = append(lines, "")
 	}
 
-	lines = append(lines, st.Subtitle.Render("Anywhere"))
+	lines = append(lines, st.Subtitle.Render(tr("Anywhere")))
 	for _, it := range global {
 		lines = append(lines, fmt.Sprintf("  %s   %s",
 			st.Key.Render(padRight(it.Key, maxKeyW)),
@@ -167,7 +167,7 @@ func (a App) renderHelpOverlay(width, height int) string {
 	}
 
 	if log := a.toasts.Log(); len(log) > 0 {
-		lines = append(lines, "", st.Subtitle.Render("Recent activity"))
+		lines = append(lines, "", st.Subtitle.Render(tr("Recent activity")))
 		for _, t := range log {
 			label := t.Text
 			color := st.Muted
@@ -181,13 +181,13 @@ func (a App) renderHelpOverlay(width, height int) string {
 			}
 			ago := humanDuration(time.Since(t.At))
 			lines = append(lines, fmt.Sprintf("  %s   %s",
-				st.Muted.Render(ago+" ago"),
+				st.Muted.Render(ago+" "+tr("ago")),
 				color.Render(label),
 			))
 		}
 	}
 
-	lines = append(lines, "", st.Muted.Render("press ? or esc to close"))
+	lines = append(lines, "", st.Muted.Render(tr("press ? or esc to close")))
 
 	modalW := minInt(96, width-4)
 	body := strings.Join(lines, "\n")
