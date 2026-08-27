@@ -156,7 +156,7 @@ func newNotes(st styles.Styles, km Keymap) notesModel {
 	vp := viewport.New(80, 20)
 	ti := textinput.New()
 	ti.Prompt = "/ "
-	ti.Placeholder = "search this project's notes…"
+	ti.Placeholder = tr("search this project's notes…")
 	ti.CharLimit = 200
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
@@ -288,17 +288,17 @@ func (m notesModel) projectRoot() string {
 func (m notesModel) createAndOpenNote(filename, title string) tea.Cmd {
 	if m.project == nil {
 		return func() tea.Msg {
-			return toastMsg{Text: "no project selected", Kind: toastError, Until: time.Now().Add(5 * time.Second)}
+			return toastMsg{Text: tr("no project selected"), Kind: toastError, Until: time.Now().Add(5 * time.Second)}
 		}
 	}
 	full := filepath.Join(m.project.Path, filepath.FromSlash(filename))
 	if _, err := os.Stat(full); err == nil {
 		return func() tea.Msg {
-			return toastMsg{Text: "file already exists: " + filename, Kind: toastError, Until: time.Now().Add(5 * time.Second)}
+			return toastMsg{Text: tr("file already exists: ") + filename, Kind: toastError, Until: time.Now().Add(5 * time.Second)}
 		}
 	}
 	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
-		msg := "mkdir failed: " + err.Error()
+		msg := tr("mkdir failed: ") + err.Error()
 		return func() tea.Msg {
 			return toastMsg{Text: msg, Kind: toastError, Until: time.Now().Add(5 * time.Second)}
 		}
@@ -308,7 +308,7 @@ func (m notesModel) createAndOpenNote(filename, title string) tea.Cmd {
 		body = "# " + title + "\n\n"
 	}
 	if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
-		msg := "write failed: " + err.Error()
+		msg := tr("write failed: ") + err.Error()
 		return func() tea.Msg {
 			return toastMsg{Text: msg, Kind: toastError, Until: time.Now().Add(5 * time.Second)}
 		}
@@ -402,11 +402,11 @@ func (m *notesModel) refreshPreview() tea.Cmd {
 		// Remote: show a placeholder and fetch the body asynchronously.
 		m.previewRel = rel
 		m.previewSrc = ""
-		m.preview.SetContent(m.st.Muted.Render("Loading…"))
+		m.preview.SetContent(m.st.Muted.Render(tr("Loading…")))
 		m.preview.GotoTop()
 		addr, ok := m.remoteAddr(label)
 		if !ok {
-			m.previewSrc = m.st.StatusError.Render("device " + label + " is unreachable")
+			m.previewSrc = m.st.StatusError.Render(fmt.Sprintf(tr("device %s is unreachable"), label))
 			m.preview.SetContent(m.previewSrc)
 			return nil
 		}
@@ -672,7 +672,7 @@ func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
 			if !switched {
 				return m, func() tea.Msg {
 					return toastMsg{
-						Text:  "no other devices reachable",
+						Text:  tr("no other devices reachable"),
 						Kind:  toastInfo,
 						Until: time.Now().Add(3 * time.Second),
 					}
@@ -683,7 +683,7 @@ func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
 			if m.project == nil {
 				return m, func() tea.Msg {
 					return toastMsg{
-						Text:  "select a project first (press p)",
+						Text:  tr("select a project first (press p)"),
 						Kind:  toastInfo,
 						Until: time.Now().Add(3 * time.Second),
 					}
@@ -692,7 +692,7 @@ func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
 			if m.activeIsRemote() {
 				return m, func() tea.Msg {
 					return toastMsg{
-						Text:  "remote notes are read-only — create on " + m.deviceName + " directly",
+						Text:  fmt.Sprintf(tr("remote notes are read-only — create on %s directly"), m.deviceName),
 						Kind:  toastInfo,
 						Until: time.Now().Add(4 * time.Second),
 					}
@@ -816,7 +816,7 @@ func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
 				if m.activeIsRemote() {
 					return m, func() tea.Msg {
 						return toastMsg{
-							Text:  "remote notes are read-only — preview only",
+							Text:  tr("remote notes are read-only — preview only"),
 							Kind:  toastInfo,
 							Until: time.Now().Add(4 * time.Second),
 						}
@@ -1166,17 +1166,18 @@ func (m notesModel) HelpBarProps(width int) components.HelpBarProps {
 func (m notesModel) View(width, height int) string {
 	if m.project == nil {
 		bodyLines := []string{
-			m.st.Emphasis.Render("Notes"),
+			m.st.Emphasis.Render(tr("Notes")),
 			"",
-			m.st.Muted.Render("No project selected."),
+			m.st.Muted.Render(tr("No project selected.")),
 			"",
-			"Press " + m.st.Key.Render("p") + " here to pick one, or " + m.st.Key.Render(screenKey(ScreenProjects)) + " to go to the Projects tab.",
+			fmt.Sprintf(tr("Press %s here to pick one, or %s to go to the Projects tab."),
+				m.st.Key.Render("p"), m.st.Key.Render(screenKey(ScreenProjects))),
 		}
 		if len(m.selectableDeviceLabels()) > 1 {
 			bodyLines = append(bodyLines,
 				"",
-				"Viewing device: "+m.st.HostColor(m.deviceName).Render(m.deviceName)+
-					"  — press "+m.st.Key.Render("H")+" to switch device.",
+				tr("Viewing device: ")+m.st.HostColor(m.deviceName).Render(m.deviceName)+
+					fmt.Sprintf(tr("  — press %s to switch device."), m.st.Key.Render("H")),
 			)
 		}
 		return m.st.Pane.Width(width - 2).Height(height - 2).Render(strings.Join(bodyLines, "\n"))
@@ -1240,11 +1241,11 @@ func (m notesModel) renderList(width, height int, narrow bool) string {
 		var empty string
 		switch {
 		case m.loading:
-			empty = m.loadingSpinner.View() + m.st.Muted.Render(" scanning project for markdown…")
+			empty = m.loadingSpinner.View() + m.st.Muted.Render(tr(" scanning project for markdown…"))
 		case m.hasActiveSearch():
-			empty = m.st.Muted.Render("(no matches)")
+			empty = m.st.Muted.Render(tr("(no matches)"))
 		default:
-			empty = m.st.Muted.Render("(no markdown files yet — press n to create one)")
+			empty = m.st.Muted.Render(tr("(no markdown files yet — press n to create one)"))
 		}
 		lines = append(lines, empty)
 		return m.listPaneStyle().Width(width - 2).Height(height - 2).Render(strings.Join(lines, "\n"))
@@ -1426,7 +1427,7 @@ func (m notesModel) renderPreview(width, height int) string {
 	if e := m.selected(); e != nil {
 		focusMark := ""
 		if m.focus == focusPreview {
-			focusMark = " " + m.st.Emphasis.Render("◀ scrolling")
+			focusMark = " " + m.st.Emphasis.Render(tr("◀ scrolling"))
 		}
 		// The H1 (when present) sits at the top of the rendered
 		// body, so the header above shows only the file location
@@ -1449,7 +1450,7 @@ func (m notesModel) renderPreview(width, height int) string {
 		}
 		return paneStyle.Width(width - 2).Height(height - 2).Render(body)
 	}
-	return m.st.Pane.Width(width - 2).Height(height - 2).Render(m.st.Muted.Render("No selection."))
+	return m.st.Pane.Width(width - 2).Height(height - 2).Render(m.st.Muted.Render(tr("No selection.")))
 }
 
 func focusLabel(f notesFocus) string {
@@ -1468,8 +1469,8 @@ func (m notesModel) renderListOnly(width, height int) string {
 // discovered project, with a cursor.
 func (m notesModel) renderProjectPicker(width, height int) string {
 	lines := []string{
-		m.st.Emphasis.Render("Switch project"),
-		m.st.Subtitle.Render("Notes context follows your selection."),
+		m.st.Emphasis.Render(tr("Switch project")),
+		m.st.Subtitle.Render(tr("Notes context follows your selection.")),
 		"",
 	}
 	maxVisible := height - 8
@@ -1491,7 +1492,7 @@ func (m notesModel) renderProjectPicker(width, height int) string {
 	if end < len(m.projects) {
 		lines = append(lines, m.st.Muted.Render(fmt.Sprintf("  … %d more (scroll with j/k)", len(m.projects)-end)))
 	}
-	lines = append(lines, "", m.st.Muted.Render("↑↓ or j/k: navigate   enter: open   esc: cancel"))
+	lines = append(lines, "", m.st.Muted.Render(tr("↑↓ or j/k: navigate   enter: open   esc: cancel")))
 	modal := m.st.PaneFocused.Width(minInt(70, width-4)).Render(strings.Join(lines, "\n"))
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, modal)
 }
@@ -1646,8 +1647,8 @@ func (m notesModel) renderNoteInfoOverlay(width, height int) string {
 	st := m.st
 	o := m.noteInfo
 	lines := []string{
-		st.Emphasis.Render("Note info"),
-		st.Subtitle.Render("Press i or esc to close."),
+		st.Emphasis.Render(tr("Note info")),
+		st.Subtitle.Render(tr("Press i or esc to close.")),
 		"",
 	}
 	if o.readErr != "" {

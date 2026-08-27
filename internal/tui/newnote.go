@@ -52,7 +52,7 @@ func newNewNoteForm(st styles.Styles, now time.Time) newNoteFormModel {
 	fn.Focus()
 
 	tt := textinput.New()
-	tt.Placeholder = "optional H1 title"
+	tt.Placeholder = tr("optional H1 title")
 	tt.CharLimit = 120
 	tt.Width = 60
 	tt.Prompt = ""
@@ -81,7 +81,7 @@ func (m newNoteFormModel) Update(msg tea.Msg) (newNoteFormModel, tea.Cmd) {
 		case "enter":
 			fn := strings.TrimSpace(m.filename.Value())
 			if fn == "" {
-				m.err = "filename is required"
+				m.err = tr("filename is required")
 				return m, nil
 			}
 			if !strings.HasSuffix(strings.ToLower(fn), ".md") {
@@ -114,11 +114,11 @@ func (m *newNoteFormModel) applyFocus() {
 
 func (m newNoteFormModel) View(width int) string {
 	st := m.st
-	title := st.Emphasis.Render("New note")
-	hint := st.Subtitle.Render("Creates the file under the project and opens it in $EDITOR.")
+	title := st.Emphasis.Render(tr("New note"))
+	hint := st.Subtitle.Render(tr("Creates the file under the project and opens it in $EDITOR."))
 
-	filenameLabel := st.Muted.Render("filename  ")
-	titleLabel := st.Muted.Render("title     ")
+	filenameLabel := st.Muted.Render(padLabel(tr("filename"), 10))
+	titleLabel := st.Muted.Render(padLabel(tr("title"), 10))
 	filenameField := m.filename.View()
 	titleField := m.title.View()
 
@@ -131,7 +131,7 @@ func (m newNoteFormModel) View(width int) string {
 		}
 	}
 
-	keys := st.Muted.Render("tab: next field   enter: create   esc: cancel")
+	keys := st.Muted.Render(tr("tab: next field   enter: create   esc: cancel"))
 
 	parts := []string{
 		title,
