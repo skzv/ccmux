@@ -248,6 +248,17 @@ func (e *Env) ccmux(args ...string) (stdout, stderr string, err error) {
 	return e.ccmuxIn(e.Home, args...)
 }
 
+// envWithEnglish forces an English locale on a child process so e2e
+// assertions — which match English TUI/CLI text — stay stable regardless
+// of the runner's LANG/LC_ALL. The TUI follows $LANG when config.lang is
+// unset, so a zh-locale runner would otherwise render Chinese and break
+// the English anchors. os/exec dedups env keys with the last value
+// winning, so the appended overrides survive the inherited environment.
+func envWithEnglish(extra ...string) []string {
+	env := append(os.Environ(), "LANG=en_US.UTF-8", "LC_ALL=en_US.UTF-8")
+	return append(env, extra...)
+}
+
 // ccmuxIn is ccmux with an explicit working directory — needed for
 // cwd-sensitive commands like `ccmux upgrade`.
 func (e *Env) ccmuxIn(dir string, args ...string) (stdout, stderr string, err error) {
@@ -256,7 +267,7 @@ func (e *Env) ccmuxIn(dir string, args ...string) (stdout, stderr string, err er
 	defer cancel()
 	cmd := exec.CommandContext(ctx, builtCcmux, args...)
 	cmd.Dir = dir
-	cmd.Env = os.Environ()
+	cmd.Env = envWithEnglish()
 	var out, errBuf bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errBuf
 	err = cmd.Run()
@@ -338,7 +349,7 @@ func (e *Env) startDaemon() *daemonProc {
 	e.t.Helper()
 	cmd := exec.Command(builtCcmuxd)
 	cmd.Dir = e.Home
-	cmd.Env = os.Environ()
+	cmd.Env = envWithEnglish()
 	logBuf := &safeBuffer{}
 	cmd.Stdout, cmd.Stderr = logBuf, logBuf
 	if err := cmd.Start(); err != nil {

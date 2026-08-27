@@ -43,7 +43,7 @@ func newTUIDriver(t *testing.T, e *Env, rows, cols uint16) *tuiDriver {
 
 	cmd := exec.Command(builtCcmux)
 	cmd.Dir = e.Home
-	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+	cmd.Env = envWithEnglish("TERM=xterm-256color")
 
 	f, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: rows, Cols: cols})
 	if err != nil {
