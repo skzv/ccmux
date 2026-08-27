@@ -18,6 +18,7 @@
 │   agents.default         [claude]                        │ │                                                         │
 │   sessions.attach_mode   [mirror]                        │ │                                                         │
 │   update.auto_check      [on]                            │ │                                                         │
+│   i18n.lang              [en]                            │ │                                                         │
 │   theme                  catppuccin-mocha  (read-only)   │ │                                                         │
 │                                                          │ │                                                         │
 │ Sleep prevention                                         │ │                                                         │
@@ -35,6 +36,5 @@
 │   (none pinned — tailnet peers running ccmuxd are auto-  │ │                                                         │
 │ discovered.                                              │ │                                                         │
 │    Use `ccmux host add` only for non-Tailscale hosts or  │ │                                                         │
-│ non-default ports.)                                      │ │                                                         │
-╰──────────────────────────────────────────────────────────╯ ╰─────────────────────────────────────────────────────────╯
+│ non-default ports.)                                      │ ╰─────────────────────────────────────────────────────────╯
 ? help · q quit · i info · e edit config · 1-7 screens                                                                  

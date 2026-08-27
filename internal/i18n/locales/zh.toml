@@ -18,3 +18,4 @@
 "refresh conversation list" = "刷新对话列表"
 "toggle focus between list and preview" = "在列表与预览间切换焦点"
 "kill selected session" = "结束选中的会话"
+"Interface language. Switches immediately. en / zh" = "界面语言。切换后立即生效。en / zh"

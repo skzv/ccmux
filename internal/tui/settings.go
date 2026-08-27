@@ -13,6 +13,7 @@ import (
 
 	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/config"
+	"github.com/skzv/ccmux/internal/i18n"
 	"github.com/skzv/ccmux/internal/moshi"
 	"github.com/skzv/ccmux/internal/tui/components"
 	"github.com/skzv/ccmux/internal/tui/styles"
@@ -295,6 +296,32 @@ func editableFields() []editableField {
 					return nil
 				}
 				return fmt.Errorf("must be 'on' or 'off'")
+			},
+		},
+		{
+			label:   "i18n.lang",
+			hint:    tr("Interface language. Switches immediately. en / zh"),
+			chip:    true,
+			options: []string{"en", "zh"},
+			get: func(c *config.Config) string {
+				if c.Lang == "" {
+					return "en"
+				}
+				return c.Lang
+			},
+			set: func(c *config.Config, raw string) error {
+				switch strings.ToLower(strings.TrimSpace(raw)) {
+				case "en", "":
+					c.Lang = "en"
+				case "zh":
+					c.Lang = "zh"
+				default:
+					return fmt.Errorf("must be 'en' or 'zh'")
+				}
+				// Hot-switch: flip the live language now; every future
+				// View() re-reads through tr(), so no restart is needed.
+				i18n.SetLanguage(c.Lang)
+				return nil
 			},
 		},
 		{

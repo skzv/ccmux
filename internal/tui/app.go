@@ -25,6 +25,7 @@ import (
 	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/conversations"
 	"github.com/skzv/ccmux/internal/daemon"
+	"github.com/skzv/ccmux/internal/i18n"
 	"github.com/skzv/ccmux/internal/moshi"
 	"github.com/skzv/ccmux/internal/openrouterusage"
 	"github.com/skzv/ccmux/internal/project"
@@ -238,6 +239,11 @@ func (a App) modalCapturingText() bool {
 // adopted value to disk — the user's explicit override (if they ever
 // set one) always wins on next launch.
 func New(cfg config.Config, version string) App {
+	// Establish the UI language once, before any model is constructed —
+	// every screen renders through tr() at View() time, so this one call
+	// is all the wiring hot-switching needs.
+	i18n.SetLanguage(cfg.Lang)
+
 	st := styles.Default()
 	km := DefaultKeymap()
 
