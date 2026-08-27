@@ -867,15 +867,6 @@ func (m conversationsModel) renderDetail(c conversations.Conversation, width, he
 	return constrainBlockWidth(strings.Join(lines, "\n"), width)
 }
 
-// padLabel right-pads a label to a fixed width so the value column
-// in the detail pane lines up. Plain spaces (not lipgloss padding) so
-// the result composes cleanly with Render() calls.
-func padLabel(s string, width int) string {
-	if len(s) >= width {
-		return s
-	}
-	return s + strings.Repeat(" ", width-len(s))
-}
 
 // displayPath collapses $HOME → "~" so the detail pane reads
 // "~/Projects/auth-redesign" instead of "/Users/skz/Projects/...".

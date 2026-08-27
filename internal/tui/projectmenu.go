@@ -119,7 +119,7 @@ func (m projectMenuModel) View(width int) string {
 		text := m.entryLabel(e)
 		lines = append(lines, components.RenderListRow(st, text, i == m.cursor, rowW))
 	}
-	lines = append(lines, "", st.Muted.Render("↑/↓: move   enter: select   esc: cancel"))
+	lines = append(lines, "", st.Muted.Render(tr("↑/↓: move   enter: select   esc: cancel")))
 	return st.PaneFocused.Width(width - 2).Render(strings.Join(lines, "\n"))
 }
 
@@ -128,11 +128,11 @@ func (m projectMenuModel) View(width int) string {
 func menuSectionHeader(k projectMenuEntryKind) string {
 	switch k {
 	case menuSession:
-		return "Running sessions"
+		return tr("Running sessions")
 	case menuConversation:
-		return "Past conversations"
+		return tr("Past conversations")
 	default:
-		return "Actions"
+		return tr("Actions")
 	}
 }
 
@@ -140,9 +140,9 @@ func menuSectionHeader(k projectMenuEntryKind) string {
 func (m projectMenuModel) entryLabel(e projectMenuEntry) string {
 	switch e.kind {
 	case menuSession:
-		label := "attach   " + e.session.Name
+		label := padLabel(tr("attach"), 8) + e.session.Name
 		if e.session.Attached {
-			label += "   " + m.st.Muted.Render("(attached)")
+			label += "   " + m.st.Muted.Render(tr("(attached)"))
 		}
 		return label
 	case menuConversation:
@@ -154,9 +154,9 @@ func (m projectMenuModel) entryLabel(e projectMenuEntry) string {
 		// truncate is the canonical ANSI-aware helper (sessions.go);
 		// it replaced a rune-count-based local (truncRunes) that could
 		// overflow the column budget on wide (CJK) characters.
-		return "resume   " + name + "  " + m.st.Muted.Render(truncate(preview, 48))
+		return padLabel(tr("resume"), 8) + name + "  " + m.st.Muted.Render(truncate(preview, 48))
 	default:
-		return "＋ Start a new session"
+		return tr("＋ Start a new session")
 	}
 }
 
