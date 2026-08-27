@@ -84,20 +84,24 @@ const (
 // here is the canonical place since both the tab bar and the help
 // footer read String().
 var screenLabels = [screenCount]string{
-	ScreenSessions:      tr("Sessions"),
-	ScreenProjects:      tr("Projects"),
-	ScreenConversations: tr("Conversations"),
-	ScreenNotes:         tr("Notes"),
-	ScreenAgents:        tr("Agents"),
-	ScreenSettings:      tr("Settings"),
-	ScreenNetwork:       tr("Network"),
+	ScreenSessions:      "Sessions",
+	ScreenProjects:      "Projects",
+	ScreenConversations: "Conversations",
+	ScreenNotes:         "Notes",
+	ScreenAgents:        "Agents",
+	ScreenSettings:      "Settings",
+	ScreenNetwork:       "Network",
 }
 
 func (s Screen) String() string {
 	if s < 0 || s >= screenCount {
 		return "?"
 	}
-	return screenLabels[s]
+	// Apply tr() at call time, not init time: a runtime language switch
+	// (Settings → i18n.lang) must re-label the tab bar / help footer on
+	// the next render. An array initialized with tr() at package init
+	// would be frozen in the startup language.
+	return tr(screenLabels[s])
 }
 
 // allScreens returns every Screen in tab-bar order. Derived from the
