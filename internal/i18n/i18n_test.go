@@ -1,6 +1,12 @@
 package i18n
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/BurntSushi/toml"
+)
+
+func tomlDecode(data string, v any) (toml.MetaData, error) { return toml.Decode(data, v) }
 
 func TestResolve(t *testing.T) {
 	env := func(m map[string]string) func(string) string {
