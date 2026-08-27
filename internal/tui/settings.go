@@ -304,10 +304,10 @@ func editableFields() []editableField {
 			chip:    true,
 			options: []string{"en", "zh"},
 			get: func(c *config.Config) string {
-				if c.Lang == "" {
-					return "en"
-				}
-				return c.Lang
+				// Surface the effective language, not the raw config value — when
+				// config.lang is empty the row should show what's actually in use
+				// (which follows $LANG), mirroring the attach_mode row.
+				return string(i18n.Current())
 			},
 			set: func(c *config.Config, raw string) error {
 				switch strings.ToLower(strings.TrimSpace(raw)) {

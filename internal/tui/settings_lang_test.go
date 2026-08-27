@@ -40,6 +40,26 @@ func TestSettingsLanguageRow_HotSwitch(t *testing.T) {
 	if cfg.Lang != "zh" {
 		t.Errorf("cfg.Lang changed after bogus set = %q, want zh unchanged", cfg.Lang)
 	}
+
+	if err := langField.set(&cfg, "en"); err != nil {
+		t.Fatalf("set en: %v", err)
+	}
+	if i18n.Current() != i18n.LangEn {
+		t.Errorf("after set en, Current() = %q, want en", i18n.Current())
+	}
+	if cfg.Lang != "en" {
+		t.Errorf("cfg.Lang = %q, want en", cfg.Lang)
+	}
+
+	if err := langField.set(&cfg, ""); err != nil {
+		t.Fatalf("set empty: %v", err)
+	}
+	if cfg.Lang != "en" {
+		t.Errorf("cfg.Lang after empty set = %q, want en (normalized)", cfg.Lang)
+	}
+	if i18n.Current() != i18n.LangEn {
+		t.Errorf("after empty set, Current() = %q, want en", i18n.Current())
+	}
 }
 
 // findEditableField locates one row in the Settings list by its label
