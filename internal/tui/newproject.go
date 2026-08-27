@@ -183,7 +183,7 @@ func (m newProjectFormModel) Update(msg tea.Msg) (newProjectFormModel, tea.Cmd) 
 		case "enter":
 			name := strings.TrimSpace(m.name.Value())
 			if name == "" {
-				m.err = "name is required"
+				m.err = tr("name is required")
 				return m, nil
 			}
 			h := m.currentHost()
@@ -250,12 +250,12 @@ func (m newProjectFormModel) currentAgent() agent.Agent {
 // places it inside an outer Pane; we don't draw our own border.
 func (m newProjectFormModel) View(width int) string {
 	st := m.st
-	title := st.Emphasis.Render("New project")
-	hint := st.Subtitle.Render("ccmux creates the directory and starts your agent — nothing else. Run /init or openspec yourself.")
+	title := st.Emphasis.Render(tr("New project"))
+	hint := st.Subtitle.Render(tr("ccmux creates the directory and starts your agent — nothing else. Run /init or openspec yourself."))
 
-	nameLabel := st.Muted.Render("name    ")
-	hostLabel := st.Muted.Render("device  ")
-	agentLabel := st.Muted.Render("agent   ")
+	nameLabel := st.Muted.Render(padLabel(tr("name"), 10))
+	hostLabel := st.Muted.Render(padLabel(tr("device"), 10))
+	agentLabel := st.Muted.Render(padLabel(tr("agent"), 10))
 	nameField := m.name.View()
 	hostField := m.renderHostPicker()
 	agentField := m.renderAgentPicker()
@@ -272,7 +272,7 @@ func (m newProjectFormModel) View(width int) string {
 		}
 	}
 
-	keys := st.Muted.Render("tab: next field   ←/→: pick device/agent   enter: create   esc: cancel")
+	keys := st.Muted.Render(tr("tab: next field   ←/→: pick device/agent   enter: create   esc: cancel"))
 
 	parts := []string{
 		title,

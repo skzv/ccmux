@@ -76,7 +76,7 @@ func agentChoicesForBareSession(commands agent.Commands) []sessionAgentChoice {
 	for _, a := range installed {
 		out = append(out, sessionAgentChoice{ID: a.ID(), Label: a.DisplayName()})
 	}
-	out = append(out, sessionAgentChoice{ID: "", Label: "shell (no agent)"})
+	out = append(out, sessionAgentChoice{ID: "", Label: tr("shell (no agent)")})
 	return out
 }
 
@@ -244,20 +244,20 @@ func (m newSessionFormModel) currentHost() hostChoice {
 // constructor seeds it, so this is unreachable in practice.
 func (m newSessionFormModel) currentAgent() sessionAgentChoice {
 	if len(m.agents) == 0 {
-		return sessionAgentChoice{ID: "", Label: "shell (no agent)"}
+		return sessionAgentChoice{ID: "", Label: tr("shell (no agent)")}
 	}
 	return m.agents[m.agentIdx]
 }
 
 func (m newSessionFormModel) View(width int) string {
 	st := m.st
-	title := st.Emphasis.Render("New session")
-	hint := st.Subtitle.Render("Spawn a tmux session running the picked agent (or a bare shell) on the picked device.")
+	title := st.Emphasis.Render(tr("New session"))
+	hint := st.Subtitle.Render(tr("Spawn a tmux session running the picked agent (or a bare shell) on the picked device."))
 
-	nameLabel := st.Muted.Render("name        ")
-	workLabel := st.Muted.Render("working dir ")
-	hostLabel := st.Muted.Render("device      ")
-	agentLabel := st.Muted.Render("agent       ")
+	nameLabel := st.Muted.Render(padLabel(tr("name"), 12))
+	workLabel := st.Muted.Render(padLabel(tr("working dir"), 12))
+	hostLabel := st.Muted.Render(padLabel(tr("device"), 12))
+	agentLabel := st.Muted.Render(padLabel(tr("agent"), 12))
 
 	nameField := m.name.View()
 	workField := m.workdir.View()
@@ -272,7 +272,7 @@ func (m newSessionFormModel) View(width int) string {
 		}
 	}
 
-	keys := st.Muted.Render("tab: next field   ←/→: pick device/agent   enter: create   esc: cancel")
+	keys := st.Muted.Render(tr("tab: next field   ←/→: pick device/agent   enter: create   esc: cancel"))
 	parts := []string{
 		title,
 		hint,
@@ -310,7 +310,7 @@ func spawnBareSessionCmd(submit newBareSessionSubmitMsg) tea.Cmd {
 			})
 			if err != nil {
 				return toastMsg{
-					Text:  "new session on " + submit.Host + ": " + err.Error(),
+					Text:  tr("new session on ") + submit.Host + ": " + err.Error(),
 					Kind:  toastError,
 					Until: time.Now().Add(6 * time.Second),
 				}
@@ -340,7 +340,7 @@ func spawnBareSessionCmd(submit newBareSessionSubmitMsg) tea.Cmd {
 		}
 		if _, err := os.Stat(path); err != nil {
 			return toastMsg{
-				Text:  "new session: path not found: " + path,
+				Text:  tr("new session: path not found: ") + path,
 				Kind:  toastError,
 				Until: time.Now().Add(5 * time.Second),
 			}
@@ -355,7 +355,7 @@ func spawnBareSessionCmd(submit newBareSessionSubmitMsg) tea.Cmd {
 		defer cancel()
 		if err := tmux.New(ctx, name, path, launch); err != nil {
 			return toastMsg{
-				Text:  "tmux new-session: " + err.Error(),
+				Text:  tr("tmux new-session: ") + err.Error(),
 				Kind:  toastError,
 				Until: time.Now().Add(5 * time.Second),
 			}

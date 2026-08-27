@@ -31,7 +31,7 @@ type tourStep struct {
 func defaultTourSteps() []tourStep {
 	steps := []tourStep{
 		{
-			Title: "Welcome to ccmux",
+			Title: tr("Welcome to ccmux"),
 			Body: []string{
 				"ccmux is a terminal UI for managing long-lived Claude Code",
 				"sessions on top of tmux, Mosh, and Tailscale.",
@@ -42,7 +42,7 @@ func defaultTourSteps() []tourStep {
 			KeyHint: "→ / space / enter: next  ·  esc: skip",
 		},
 		{
-			Title: "Sessions (" + screenKey(ScreenSessions) + ") — Sessions + Stats",
+			Title: tr("Sessions (") + screenKey(ScreenSessions) + ") — Sessions + Stats",
 			Body: []string{
 				"Sessions is your command centre. Left pane: live sessions. Right pane: usage stats.",
 			},
@@ -55,7 +55,7 @@ func defaultTourSteps() []tourStep {
 			KeyHint: "Press " + screenKey(ScreenSessions) + " / F1 anywhere to come back here",
 		},
 		{
-			Title: "Projects, Conversations, Notes, Agents (" + screenKey(ScreenProjects) + "-" + screenKey(ScreenSettings) + ")",
+			Title: tr("Projects, Conversations, Notes, Agents (") + screenKey(ScreenProjects) + "-" + screenKey(ScreenSettings) + ")",
 			Body: []string{
 				"The remaining screens cover the full workflow loop:",
 			},
@@ -69,7 +69,7 @@ func defaultTourSteps() []tourStep {
 			KeyHint: "Number keys jump between screens · `?` opens contextual help · q quits",
 		},
 		{
-			Title: "Mobile, remote, the daemon",
+			Title: tr("Mobile, remote, the daemon"),
 			Body: []string{
 				"Two pieces you'll want eventually:",
 				"",

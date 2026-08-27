@@ -183,20 +183,20 @@ func tierField(agentID, label, hint string, options []string) editableField {
 func editableFields() []editableField {
 	return []editableField{
 		tierField("claude", "claude.tier",
-			"Anthropic / Claude.ai tier. Enter cycles: api → pro → max5x → max20x. Drives the dashboard 5-hour quota bar.",
+			tr("Anthropic / Claude.ai tier. Enter cycles: api → pro → max5x → max20x. Drives the dashboard 5-hour quota bar."),
 			[]string{"api", "pro", "max5x", "max20x"}),
 		tierField("codex", "codex.tier",
-			"OpenAI / ChatGPT tier for the Codex CLI. Enter cycles: api → free → plus → pro → team.",
+			tr("OpenAI / ChatGPT tier for the Codex CLI. Enter cycles: api → free → plus → pro → team."),
 			[]string{"api", "free", "plus", "pro", "team"}),
 		tierField("antigravity", "antigravity.tier",
-			"Google AI / Gemini tier for the Antigravity CLI. Enter cycles: api → free → ai-pro → ai-ultra.",
+			tr("Google AI / Gemini tier for the Antigravity CLI. Enter cycles: api → free → ai-pro → ai-ultra."),
 			[]string{"api", "free", "ai-pro", "ai-ultra"}),
 		tierField("cursor", "cursor.tier",
-			"Cursor subscription tier. Enter cycles: free → pro → pro+ → ultra → teams.",
+			tr("Cursor subscription tier. Enter cycles: free → pro → pro+ → ultra → teams."),
 			[]string{"free", "pro", "pro+", "ultra", "teams"}),
 		{
 			label: "projects.root",
-			hint:  "Where ccmux looks for projects (~/Projects default).",
+			hint:  tr("Where ccmux looks for projects (~/Projects default)."),
 			get:   func(c *config.Config) string { return c.Projects.Root },
 			set: func(c *config.Config, raw string) error {
 				raw = strings.TrimSpace(raw)
@@ -221,7 +221,7 @@ func editableFields() []editableField {
 		},
 		{
 			label:   "agents.default",
-			hint:    "Default agent for new projects and bare sessions. Enter cycles: claude → codex → antigravity → cursor → shell.",
+			hint:    tr("Default agent for new projects and bare sessions. Enter cycles: claude → codex → antigravity → cursor → shell."),
 			options: []string{"claude", "codex", "antigravity", "cursor", "shell"},
 			chip:    true,
 			get:     func(c *config.Config) string { return c.Agents.Default },
@@ -251,7 +251,7 @@ func editableFields() []editableField {
 		},
 		{
 			label:   "sessions.attach_mode",
-			hint:    "mirror = other devices stay attached (default).\nexclusive = attaching detaches them.\nEnter cycles.",
+			hint:    tr("mirror = other devices stay attached (default).\nexclusive = attaching detaches them.\nEnter cycles."),
 			chip:    true,
 			options: []string{"mirror", "exclusive"},
 			get: func(c *config.Config) string {
@@ -277,7 +277,7 @@ func editableFields() []editableField {
 		},
 		{
 			label:   "update.auto_check",
-			hint:    "Check for ccmux updates on launch and show a banner. Enter cycles on/off. Never auto-installs.",
+			hint:    tr("Check for ccmux updates on launch and show a banner. Enter cycles on/off. Never auto-installs."),
 			chip:    true,
 			options: []string{"on", "off"},
 			get: func(c *config.Config) string {
@@ -326,7 +326,7 @@ func editableFields() []editableField {
 		},
 		{
 			label: "theme",
-			hint:  "Theme picker UI coming in v0.2. Edit config.toml directly to switch.",
+			hint:  tr("Theme picker UI coming in v0.2. Edit config.toml directly to switch."),
 			get:   func(c *config.Config) string { return c.Theme },
 			set: func(c *config.Config, raw string) error {
 				return fmt.Errorf("not yet editable from the TUI — coming v0.2")
@@ -687,7 +687,7 @@ func (m settingsModel) renderDetailPane(width, height int, focused bool) string 
 			title = m.st.AgentAccent(f.agentID).Bold(true).Render(f.label)
 		}
 		if f.readOnly {
-			title += "  " + m.st.Muted.Render("(read-only)")
+			title += "  " + m.st.Muted.Render(tr("(read-only)"))
 		}
 		lines = append(lines,
 			title,
@@ -766,18 +766,18 @@ func (m settingsModel) renderFieldGroups(contentW int, inlineDetail bool) []stri
 func (m settingsModel) staticBlocks() []string {
 	return []string{
 		"",
-		m.st.Subtitle.Render("Sleep prevention"),
+		m.st.Subtitle.Render(tr("Sleep prevention")),
 		"  " + fmt.Sprintf("mode             %s", m.renderChip(sleepModeDisplay(m.cfg.Sleep), false)),
 		"  " + fmt.Sprintf("idle release     %d minutes", m.cfg.Sleep.IdleReleaseMinutes),
 		"  " + fmt.Sprintf("low-batt cutoff  %d%%", m.cfg.Sleep.LowBatteryCutoff),
-		"  " + m.st.Muted.Render("dangerous mode auto-downgrades below the cutoff"),
+		"  " + m.st.Muted.Render(tr("dangerous mode auto-downgrades below the cutoff")),
 		"",
 		m.st.Subtitle.Render("Daemon"),
 		"  " + fmt.Sprintf("poll interval    %ds", m.cfg.Daemon.PollIntervalSeconds),
 		"  " + fmt.Sprintf("needs-input idle %ds", m.cfg.Daemon.IdleSecondsForNeedsInput),
 		"  " + fmt.Sprintf("tailnet listen   %s (port %d)", m.renderChip(boolOnOff(m.cfg.Daemon.ListenTailnet), false), m.cfg.Daemon.TailnetPort),
 		"",
-		m.st.Subtitle.Render("Hosts"),
+		m.st.Subtitle.Render(tr("Hosts")),
 		m.renderHosts(),
 	}
 }
@@ -789,7 +789,7 @@ func (m settingsModel) fieldValue(f editableField, active bool) string {
 	rawVal := f.get(&m.cfg)
 	switch {
 	case rawVal == "":
-		return m.st.Muted.Render("(default)")
+		return m.st.Muted.Render(tr("(default)"))
 	case f.chip:
 		return m.renderChipColor(rawVal, m.chipColorForField(f, rawVal), active)
 	case looksLikePath(rawVal):
@@ -813,7 +813,7 @@ func (m settingsModel) renderFieldRow(f editableField, active bool, contentW int
 	}
 	content := label + " " + m.fieldValue(f, active)
 	if f.readOnly {
-		content += "  " + m.st.Muted.Render("(read-only)")
+		content += "  " + m.st.Muted.Render(tr("(read-only)"))
 	}
 	return components.RenderListRow(m.st, content, active, contentW)
 }
@@ -827,7 +827,7 @@ func (m settingsModel) renderDetailOptions(f editableField) []string {
 		return nil
 	}
 	current := strings.TrimSpace(strings.ToLower(f.get(&m.cfg)))
-	lines := []string{m.st.Subtitle.Render("Options") + "  " + m.st.Muted.Render("enter cycles")}
+	lines := []string{m.st.Subtitle.Render(tr("Options")) + "  " + m.st.Muted.Render(tr("enter cycles"))}
 	for _, opt := range f.options {
 		if strings.ToLower(opt) == current {
 			lines = append(lines, "  "+m.renderChipColor(opt, m.chipColorForField(f, opt), true))
@@ -929,39 +929,39 @@ func boolOnOff(b bool) string {
 // `ccmux moshi-setup`, so users know what to do next.
 func (m settingsModel) renderMoshiBlock() string {
 	s := m.moshiState
-	title := m.st.Subtitle.Render("Moshi (mobile push)")
+	title := m.st.Subtitle.Render(tr("Moshi (mobile push)"))
 	var blockLines []string
 	if m.moshiProbing() {
 		blockLines = []string{
-			"  " + m.moshiProbe.View() + " " + m.st.Muted.Render("detecting moshi-hook…"),
+			"  " + m.moshiProbe.View() + " " + m.st.Muted.Render(tr("detecting moshi-hook…")),
 		}
 		return strings.Join(append([]string{title}, blockLines...), "\n")
 	}
 	switch {
 	case !s.BinaryInstalled:
 		blockLines = []string{
-			m.st.Muted.Render("  · moshi-hook not installed."),
+			m.st.Muted.Render(tr("  · moshi-hook not installed.")),
 			"  Run " + m.st.Key.Render("ccmux moshi-setup") + " in a shell to install + pair.",
 		}
 	case !s.Paired:
 		blockLines = []string{
-			m.st.StatusWarning.Render("  · moshi-hook installed but not paired."),
+			m.st.StatusWarning.Render(tr("  · moshi-hook installed but not paired.")),
 			"  Run " + m.st.Key.Render("ccmux moshi-setup") + " and provide a token from the Moshi app.",
 		}
 	case !s.HooksInstalled:
 		blockLines = []string{
-			m.st.StatusWarning.Render("  ⚠ paired but Claude Code hooks not wired."),
+			m.st.StatusWarning.Render(tr("  ⚠ paired but Claude Code hooks not wired.")),
 			"  Run " + m.st.Key.Render("moshi-hook install"),
 		}
 	case !s.ServiceRunning:
 		blockLines = []string{
-			m.st.StatusWarning.Render("  ⚠ hooks wired but daemon not running."),
+			m.st.StatusWarning.Render(tr("  ⚠ hooks wired but daemon not running.")),
 			"  Run " + m.st.Key.Render("brew services start moshi-hook"),
 		}
 	default:
 		blockLines = []string{
-			m.st.StatusGood.Render("  ✓ installed, paired, hooks wired, service running."),
-			m.st.Muted.Render("  ccmuxd will defer to moshi-hook for push notifications."),
+			m.st.StatusGood.Render(tr("  ✓ installed, paired, hooks wired, service running.")),
+			m.st.Muted.Render(tr("  ccmuxd will defer to moshi-hook for push notifications.")),
 		}
 	}
 	return strings.Join(append([]string{title}, blockLines...), "\n")
@@ -1006,25 +1006,25 @@ func (m settingsModel) renderSettingsInfoOverlay(width, height int) string {
 
 	lines := []string{
 		st.Emphasis.Render("ccmux info"),
-		st.Subtitle.Render("Reference metadata: version, paths, last save."),
+		st.Subtitle.Render(tr("Reference metadata: version, paths, last save.")),
 		"",
-		fmt.Sprintf("  %s   %s", st.Key.Render("version "), m.version),
-		fmt.Sprintf("  %s   %s", st.Key.Render("config  "), summarizePath(cfgPath)),
-		fmt.Sprintf("  %s   %s", st.Key.Render("log     "), summarizePath(logPath)),
+		fmt.Sprintf("  %s   %s", st.Key.Render(padLabel(tr("version"), 8)), m.version),
+		fmt.Sprintf("  %s   %s", st.Key.Render(padLabel(tr("config"), 8)), summarizePath(cfgPath)),
+		fmt.Sprintf("  %s   %s", st.Key.Render(padLabel(tr("log"), 8)), summarizePath(logPath)),
 		"",
 	}
 	if !m.savedAt.IsZero() {
 		lines = append(lines, fmt.Sprintf("  %s   %s ago",
-			st.Key.Render("saved   "),
+			st.Key.Render(padLabel(tr("saved"), 8)),
 			humanDuration(time.Since(m.savedAt))))
 	} else {
-		lines = append(lines, "  "+st.Muted.Render("no saves this session"))
+		lines = append(lines, "  "+st.Muted.Render(tr("no saves this session")))
 	}
 	if m.lastErr != "" {
 		lines = append(lines, "  "+st.StatusError.Render("last error: "+m.lastErr))
 	}
 
-	lines = append(lines, "", st.Muted.Render("press i or esc to close"))
+	lines = append(lines, "", st.Muted.Render(tr("press i or esc to close")))
 
 	modalW := minInt(96, width-4)
 	body := strings.Join(lines, "\n")

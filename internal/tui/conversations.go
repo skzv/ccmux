@@ -867,7 +867,6 @@ func (m conversationsModel) renderDetail(c conversations.Conversation, width, he
 	return constrainBlockWidth(strings.Join(lines, "\n"), width)
 }
 
-
 // displayPath collapses $HOME → "~" so the detail pane reads
 // "~/Projects/auth-redesign" instead of "/Users/skz/Projects/...".
 // Falls back to the literal path when $HOME isn't set or doesn't
