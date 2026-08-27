@@ -667,7 +667,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Err != nil {
 			return a, func() tea.Msg {
 				return toastMsg{
-					Text:  "delete failed: " + msg.Err.Error(),
+					Text:  tr("delete failed: ") + msg.Err.Error(),
 					Kind:  toastError,
 					Until: time.Now().Add(5 * time.Second),
 				}
@@ -680,7 +680,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.refreshConversationsCmd(),
 			func() tea.Msg {
 				return toastMsg{
-					Text:  fmt.Sprintf("deleted %s conversation %s", msg.Agent, shortConversationID(msg.ID)),
+					Text:  fmt.Sprintf(tr("deleted %s conversation %s"), msg.Agent, shortConversationID(msg.ID)),
 					Kind:  toastSuccess,
 					Until: time.Now().Add(4 * time.Second),
 				}
@@ -695,7 +695,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.stopAttaching()
 			return a, func() tea.Msg {
 				return toastMsg{
-					Text:  "resume failed: " + msg.Err.Error(),
+					Text:  tr("resume failed: ") + msg.Err.Error(),
 					Kind:  toastError,
 					Until: time.Now().Add(5 * time.Second),
 				}
@@ -714,7 +714,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.refreshSessionsCmd(),
 			func() tea.Msg {
 				return toastMsg{
-					Text:  fmt.Sprintf("resumed %s conversation in %s", msg.Agent, msg.Session),
+					Text:  fmt.Sprintf(tr("resumed %s conversation in %s"), msg.Agent, msg.Session),
 					Kind:  toastSuccess,
 					Until: time.Now().Add(4 * time.Second),
 				}
@@ -755,7 +755,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.dashboard.SetVersion(a.version)
 		a.sessionsM.SetSessions(a.sessions)
 		if msg.Err != nil {
-			a.toasts.Set(toastError, "refresh: "+msg.Err.Error(), 5*time.Second)
+			a.toasts.Set(toastError, tr("refresh: ")+msg.Err.Error(), 5*time.Second)
 		}
 		return a, nil
 
@@ -823,7 +823,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					name = uniqueSessionName(ctx, name)
 				}
 				if err := tmux.New(ctx, name, projectPath, launch); err != nil {
-					return toastMsg{Text: "start session: " + err.Error(), Kind: toastError, Until: time.Now().Add(5 * time.Second)}
+					return toastMsg{Text: tr("start session: ") + err.Error(), Kind: toastError, Until: time.Now().Add(5 * time.Second)}
 				}
 				return projectSessionReadyMsg{Session: name, Project: projectLabel}
 			})
@@ -844,9 +844,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case sessionRenamedMsg:
 		if msg.Err != nil {
-			a.toasts.Set(toastError, "rename failed: "+msg.Err.Error(), 5*time.Second)
+			a.toasts.Set(toastError, tr("rename failed: ")+msg.Err.Error(), 5*time.Second)
 		} else {
-			a.toasts.Set(toastSuccess, "renamed "+msg.OldName+" → "+msg.NewName, 3*time.Second)
+			a.toasts.Set(toastSuccess, fmt.Sprintf(tr("renamed %s → %s"), msg.OldName, msg.NewName), 3*time.Second)
 		}
 		return a, a.refreshSessionsCmd()
 
@@ -856,7 +856,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// for discovered hosts (PATH prepend + login shell, etc.).
 		if msg.DialHost == "" {
 			a.stopAttaching()
-			a.toasts.Set(toastError, "remote session created but no dial host known", 5*time.Second)
+			a.toasts.Set(toastError, tr("remote session created but no dial host known"), 5*time.Second)
 			return a, nil
 		}
 		c, target, remoteCmd := remoteNewSessionAttachProcess(msg)
@@ -935,9 +935,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case sessionKilledMsg:
 		if msg.Err != nil {
-			a.toasts.Set(toastError, "kill failed: "+msg.Err.Error(), 5*time.Second)
+			a.toasts.Set(toastError, tr("kill failed: ")+msg.Err.Error(), 5*time.Second)
 		} else {
-			a.toasts.Set(toastSuccess, "killed "+msg.Name, 3*time.Second)
+			a.toasts.Set(toastSuccess, fmt.Sprintf(tr("killed %s"), msg.Name), 3*time.Second)
 		}
 		return a, a.refreshSessionsCmd()
 
@@ -957,9 +957,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// holds a cached copy. Errors surface as a toast — the previous
 		// in-memory config stays in place so the TUI doesn't go blank.
 		if cfg, err := config.Load(); err != nil {
-			a.toasts.Set(toastError, "reload config: "+err.Error(), 5*time.Second)
+			a.toasts.Set(toastError, tr("reload config: ")+err.Error(), 5*time.Second)
 		} else {
 			a.cfg = cfg
+			// A config.toml edit may have changed `lang` — re-apply it so
+			// a $EDITOR-based language switch takes effect without a
+			// restart (the Settings row path hot-switches already).
+			i18n.SetLanguage(cfg.Lang)
 			a.settings.SetConfig(cfg)
 			a.dashboard.SetConfig(cfg)
 			a.sessionsM.SetDefaultDir(cfg.Sessions.DefaultDir)
@@ -967,7 +971,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.sessionsM.SetAgentCommands(cfg.AgentCommands())
 			a.projectsM.SetDefaultAgent(cfg.Agents.Default)
 			a.projectsM.SetAgentCommands(cfg.AgentCommands())
-			a.toasts.Set(toastSuccess, "config reloaded", 2*time.Second)
+			a.toasts.Set(toastSuccess, tr("config reloaded"), 2*time.Second)
 		}
 		return a, nil
 
@@ -1018,7 +1022,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			until := time.Now().Add(5 * time.Second)
 			cmds = append(cmds, func() tea.Msg {
-				return toastMsg{Text: "tmux: " + msg.Err.Error(), Kind: toastError, Until: until}
+				return toastMsg{Text: tr("tmux: ") + msg.Err.Error(), Kind: toastError, Until: until}
 			})
 		}
 		return a, tea.Batch(cmds...)
@@ -1472,9 +1476,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// reads conversationsM.showHeadless to build Options.
 			now := a.conversationsM.ToggleHeadless()
 			a.conversationsM.SetLoading(true)
-			label := "Headless / SDK conversations: hidden"
+			label := tr("Headless / SDK conversations: hidden")
 			if now {
-				label = "Headless / SDK conversations: shown"
+				label = tr("Headless / SDK conversations: shown")
 			}
 			toast := func() tea.Msg {
 				return toastMsg{Text: label, Kind: toastInfo, Until: time.Now().Add(2 * time.Second)}
@@ -1485,7 +1489,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return a, c
 			}
 			return a, func() tea.Msg {
-				return toastMsg{Text: "nothing to ssh into for that row", Kind: toastInfo, Until: time.Now().Add(3 * time.Second)}
+				return toastMsg{Text: tr("nothing to ssh into for that row"), Kind: toastInfo, Until: time.Now().Add(3 * time.Second)}
 			}
 		case msg.String() == "s" && a.screen == ScreenNetwork && !a.modalCapturingText():
 			// `s` on the Network screen opens the SSH setup wizard
@@ -1496,7 +1500,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return a, c
 			}
 			return a, func() tea.Msg {
-				return toastMsg{Text: "nothing to set up for that row", Kind: toastInfo, Until: time.Now().Add(3 * time.Second)}
+				return toastMsg{Text: tr("nothing to set up for that row"), Kind: toastInfo, Until: time.Now().Add(3 * time.Second)}
 			}
 		case msg.String() == "i" && a.screen == ScreenNetwork && !a.modalCapturingText():
 			// `i` opens the host-detail overlay for the focused
@@ -2419,7 +2423,7 @@ func (a App) attachSelectedSession() (App, tea.Cmd) {
 			}
 			if dial == "" {
 				return a, func() tea.Msg {
-					return toastMsg{Text: "no reachable address for " + sel.Host, Kind: toastError, Until: time.Now().Add(5 * time.Second)}
+					return toastMsg{Text: fmt.Sprintf(tr("no reachable address for %s"), sel.Host), Kind: toastError, Until: time.Now().Add(5 * time.Second)}
 				}
 			}
 			remoteCmd := remoteTmuxAttach(sel.Name, a.cfg.Sessions.DetachOthersOnAttach())
@@ -2450,7 +2454,7 @@ func (a App) attachSelectedSession() (App, tea.Cmd) {
 	}
 
 	return a, func() tea.Msg {
-		return toastMsg{Text: "no host config for " + sel.Host, Kind: toastError, Until: time.Now().Add(5 * time.Second)}
+		return toastMsg{Text: fmt.Sprintf(tr("no host config for %s"), sel.Host), Kind: toastError, Until: time.Now().Add(5 * time.Second)}
 	}
 }
 
@@ -2642,7 +2646,7 @@ func (a App) attachOrCreateLocal(p project.Project) tea.Cmd {
 			defer ncancel()
 			session := p.SessionName()
 			if err := tmux.New(nctx, session, path, launch); err != nil {
-				return toastMsg{Text: "start session: " + err.Error(), Kind: toastError, Until: time.Now().Add(5 * time.Second)}
+				return toastMsg{Text: tr("start session: ") + err.Error(), Kind: toastError, Until: time.Now().Add(5 * time.Second)}
 			}
 			return projectSessionReadyMsg{Session: session, Project: label}
 		}
@@ -2685,7 +2689,7 @@ func (a App) attachOrCreateRemote(p project.Project, host string) tea.Cmd {
 	hs := a.lookupHostByName(host)
 	if hs == nil {
 		return func() tea.Msg {
-			return toastMsg{Text: "no reachable daemon for host: " + host, Kind: toastError, Until: time.Now().Add(5 * time.Second)}
+			return toastMsg{Text: fmt.Sprintf(tr("no reachable daemon for host: %s"), host), Kind: toastError, Until: time.Now().Add(5 * time.Second)}
 		}
 	}
 	// Snapshot the dial/address (and the SSH addressing fields the
@@ -2708,7 +2712,7 @@ func (a App) attachOrCreateRemote(p project.Project, host string) tea.Cmd {
 				Continue: true,
 			})
 			if err != nil {
-				return toastMsg{Text: "remote start: " + err.Error(), Kind: toastError, Until: time.Now().Add(6 * time.Second)}
+				return toastMsg{Text: tr("remote start: ") + err.Error(), Kind: toastError, Until: time.Now().Add(6 * time.Second)}
 			}
 			return remoteSessionStartedMsg{
 				SessionName: ss.Name,

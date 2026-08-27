@@ -297,7 +297,7 @@ func (m newProjectFormModel) View(width int) string {
 func (m newProjectFormModel) renderHostPicker() string {
 	cur := m.currentHost().Label
 	if len(m.hosts) <= 1 {
-		return m.st.Muted.Render(cur + "  (only host available)")
+		return m.st.Muted.Render(cur + "  " + tr("(only host available)"))
 	}
 	if m.focus == 1 {
 		return "‹ " + m.st.Emphasis.Render(cur) + " ›   " +
@@ -321,7 +321,7 @@ func (m newProjectFormModel) hostCountHint() string {
 func (m newProjectFormModel) renderAgentPicker() string {
 	cur := m.currentAgent().DisplayName()
 	if len(m.agents) <= 1 {
-		return m.st.Muted.Render(cur + "  (only agent available)")
+		return m.st.Muted.Render(cur + "  " + tr("(only agent available)"))
 	}
 	if m.focus == 2 {
 		return "‹ " + m.st.Emphasis.Render(cur) + " ›   " +

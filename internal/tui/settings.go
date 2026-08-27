@@ -346,9 +346,9 @@ func editableFields() []editableField {
 // picker.
 func groupedFields(fields []editableField) []fieldGroup {
 	groups := []fieldGroup{
-		{label: "Subscription"},
-		{label: "Projects"},
-		{label: "Agents"},
+		{label: tr("Subscription")},
+		{label: tr("Projects")},
+		{label: tr("Agents")},
 	}
 	for _, f := range fields {
 		switch {
@@ -593,16 +593,16 @@ func (m *settingsModel) SetConfig(cfg config.Config) {
 // state to refetch; the hint used to be a silent no-op.
 func (m settingsModel) HelpBarProps(width int) components.HelpBarProps {
 	hints := []components.KeyHint{
-		{Key: "?", Label: "help", Priority: 10},
-		{Key: "q", Label: "quit", Priority: 10},
-		{Key: "i", Label: "info", Priority: 8},
-		{Key: "e", Label: "edit config", Priority: 7},
-		{Key: "1-7", Label: "screens", Priority: 2},
+		{Key: "?", Label: tr("help"), Priority: 10},
+		{Key: "q", Label: tr("quit"), Priority: 10},
+		{Key: "i", Label: tr("info"), Priority: 8},
+		{Key: "e", Label: tr("edit config"), Priority: 7},
+		{Key: "1-7", Label: tr("screens"), Priority: 2},
 	}
 	if m.editing {
 		hints = append(hints,
-			components.KeyHint{Key: "enter", Label: "save", Priority: 9},
-			components.KeyHint{Key: "esc", Label: "cancel", Priority: 9},
+			components.KeyHint{Key: "enter", Label: tr("save"), Priority: 9},
+			components.KeyHint{Key: "esc", Label: tr("cancel"), Priority: 9},
 		)
 	}
 	return components.HelpBarProps{Hints: hints, Width: width}
@@ -700,7 +700,7 @@ func (m settingsModel) renderDetailPane(width, height int, focused bool) string 
 			lines = append(lines, opts...)
 		}
 		if m.editing {
-			lines = append(lines, "", m.editor.View(), m.st.Muted.Render("enter to save, esc to cancel"))
+			lines = append(lines, "", m.editor.View(), m.st.Muted.Render(tr("enter to save, esc to cancel")))
 		}
 		if m.errMsg != "" {
 			lines = append(lines, "", m.st.StatusError.Render("✗ "+m.errMsg))
@@ -750,7 +750,7 @@ func (m settingsModel) renderFieldGroups(contentW int, inlineDetail bool) []stri
 				if m.editing {
 					lines = append(lines,
 						"  "+m.editor.View(),
-						"  "+m.st.Muted.Render("enter to save, esc to cancel"))
+						"  "+m.st.Muted.Render(tr("enter to save, esc to cancel")))
 				}
 				if m.errMsg != "" {
 					lines = append(lines, "  "+m.st.StatusError.Render("✗ "+m.errMsg))
@@ -772,7 +772,7 @@ func (m settingsModel) staticBlocks() []string {
 		"  " + fmt.Sprintf("low-batt cutoff  %d%%", m.cfg.Sleep.LowBatteryCutoff),
 		"  " + m.st.Muted.Render(tr("dangerous mode auto-downgrades below the cutoff")),
 		"",
-		m.st.Subtitle.Render("Daemon"),
+		m.st.Subtitle.Render(tr("Daemon")),
 		"  " + fmt.Sprintf("poll interval    %ds", m.cfg.Daemon.PollIntervalSeconds),
 		"  " + fmt.Sprintf("needs-input idle %ds", m.cfg.Daemon.IdleSecondsForNeedsInput),
 		"  " + fmt.Sprintf("tailnet listen   %s (port %d)", m.renderChip(boolOnOff(m.cfg.Daemon.ListenTailnet), false), m.cfg.Daemon.TailnetPort),
@@ -941,12 +941,12 @@ func (m settingsModel) renderMoshiBlock() string {
 	case !s.BinaryInstalled:
 		blockLines = []string{
 			m.st.Muted.Render(tr("  · moshi-hook not installed.")),
-			"  Run " + m.st.Key.Render("ccmux moshi-setup") + " in a shell to install + pair.",
+			fmt.Sprintf(tr("  Run %s in a shell to install + pair."), m.st.Key.Render("ccmux moshi-setup")),
 		}
 	case !s.Paired:
 		blockLines = []string{
 			m.st.StatusWarning.Render(tr("  · moshi-hook installed but not paired.")),
-			"  Run " + m.st.Key.Render("ccmux moshi-setup") + " and provide a token from the Moshi app.",
+			fmt.Sprintf(tr("  Run %s and provide a token from the Moshi app."), m.st.Key.Render("ccmux moshi-setup")),
 		}
 	case !s.HooksInstalled:
 		blockLines = []string{
@@ -969,7 +969,7 @@ func (m settingsModel) renderMoshiBlock() string {
 
 func (m settingsModel) renderHosts() string {
 	if len(m.cfg.Hosts) == 0 {
-		return m.st.Muted.Render("  (none pinned — tailnet peers running ccmuxd are auto-discovered.\n   Use `ccmux host add` only for non-Tailscale hosts or non-default ports.)")
+		return m.st.Muted.Render(tr("  (none pinned — tailnet peers running ccmuxd are auto-discovered.\n   Use `ccmux host add` only for non-Tailscale hosts or non-default ports.)"))
 	}
 	out := []string{}
 	for _, h := range m.cfg.Hosts {
@@ -1005,7 +1005,7 @@ func (m settingsModel) renderSettingsInfoOverlay(width, height int) string {
 	logPath := ccmuxLogPath()
 
 	lines := []string{
-		st.Emphasis.Render("ccmux info"),
+		st.Emphasis.Render(tr("ccmux info")),
 		st.Subtitle.Render(tr("Reference metadata: version, paths, last save.")),
 		"",
 		fmt.Sprintf("  %s   %s", st.Key.Render(padLabel(tr("version"), 8)), m.version),

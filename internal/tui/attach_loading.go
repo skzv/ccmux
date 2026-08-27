@@ -186,29 +186,29 @@ func (a App) renderAttachingOverlay(width, height int) string {
 func attachVerb(k attachKind) string {
 	switch k {
 	case attachKindResume:
-		return "Resuming"
+		return tr("Resuming")
 	case attachKindNew:
-		return "Starting"
+		return tr("Starting")
 	case attachKindRemote:
-		return "Connecting to"
+		return tr("Connecting to")
 	case attachKindOpening:
-		return "Opening"
+		return tr("Opening")
 	default:
-		return "Attaching to"
+		return tr("Attaching to")
 	}
 }
 
 func attachHint(k attachKind) string {
 	switch k {
 	case attachKindResume:
-		return "loading conversation history…"
+		return tr("loading conversation history…")
 	case attachKindNew:
-		return "spawning agent…"
+		return tr("spawning agent…")
 	case attachKindRemote:
-		return "negotiating ssh/mosh…"
+		return tr("negotiating ssh/mosh…")
 	case attachKindOpening:
-		return "listing sessions and conversations…"
+		return tr("listing sessions and conversations…")
 	default:
-		return "applying chrome and attaching…"
+		return tr("applying chrome and attaching…")
 	}
 }

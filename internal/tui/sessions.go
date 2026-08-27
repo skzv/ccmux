@@ -653,7 +653,17 @@ func relTime(t time.Time) string {
 	if t.IsZero() {
 		return "—"
 	}
-	return humanDuration(time.Since(t)) + " " + tr("ago")
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf(tr("%ds ago"), int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf(tr("%dm ago"), int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf(tr("%dh ago"), int(d.Hours()))
+	default:
+		return fmt.Sprintf(tr("%dd ago"), int(d.Hours()/24))
+	}
 }
 
 // truncate shortens s to at most n display columns, replacing the tail

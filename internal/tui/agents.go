@@ -255,9 +255,9 @@ func (m agentsModel) View(width, height int) string {
 	case agent.IDCursor:
 		body = m.cursor.ViewBody(innerW, innerH)
 	case agent.IDPi:
-		body = m.st.Muted.Render("pi settings are managed by the pi CLI (~/.pi + AGENTS.md).")
+		body = m.st.Muted.Render(tr("pi settings are managed by the pi CLI (~/.pi + AGENTS.md)."))
 	case agent.IDGrok:
-		body = m.st.Muted.Render("Grok settings are managed by the grok CLI (~/.grok/config.toml + AGENTS.md).")
+		body = m.st.Muted.Render(tr("Grok settings are managed by the grok CLI (~/.grok/config.toml + AGENTS.md)."))
 	}
 	inner := lipgloss.JoinVertical(lipgloss.Left, header, "", body)
 	return m.st.Pane.Width(width - 2).Height(height - 2).MaxWidth(width).Render(inner)

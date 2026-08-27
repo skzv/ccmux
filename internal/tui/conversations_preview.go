@@ -98,7 +98,7 @@ func (o conversationPreviewOverlay) View(st styles.Styles, width, height int) st
 
 	heading := st.AgentAccent(o.conversation.Agent).Bold(true).
 		Render(fmt.Sprintf("%s · transcript preview", o.conversation.Agent))
-	sub := st.Subtitle.Render(fmt.Sprintf("Last %d messages from %s",
+	sub := st.Subtitle.Render(fmt.Sprintf(tr("Last %d messages from %s"),
 		previewMessageLimit, emptyOr(o.conversation.Project, "(unknown project)")))
 
 	body := o.renderBody(st, overlayW)
@@ -134,7 +134,7 @@ func (o conversationPreviewOverlay) renderBody(st styles.Styles, overlayW int) s
 	}
 	if len(o.messages) == 0 {
 		if o.conversation.Agent == agent.IDAntigravity {
-			return st.Muted.Render("Antigravity protobuf transcripts are opaque — preview is unavailable for this conversation.")
+			return st.Muted.Render(tr("Antigravity protobuf transcripts are opaque — preview is unavailable for this conversation."))
 		}
 		return st.Muted.Render(tr("No messages found in this transcript."))
 	}

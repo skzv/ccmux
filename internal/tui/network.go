@@ -500,8 +500,8 @@ func (m networkModel) renderDetailOverlay(width, height int) string {
 	}
 
 	lines := []string{
-		st.Emphasis.Render("Host detail · " + sel.Name),
-		st.Subtitle.Render("Pressed-i expansion of the Network row — tailnet IP, ccmuxd version, SSH status, and last-probe timestamp."),
+		st.Emphasis.Render(tr("Host detail · ") + sel.Name),
+		st.Subtitle.Render(tr("Pressed-i expansion of the Network row — tailnet IP, ccmuxd version, SSH status, and last-probe timestamp.")),
 		"",
 	}
 
@@ -557,7 +557,7 @@ func (m networkModel) renderDetailOverlay(width, height int) string {
 	}
 	lines = append(lines, "")
 
-	lines = append(lines, st.Muted.Render("press i or esc to close"))
+	lines = append(lines, st.Muted.Render(tr("press i or esc to close")))
 
 	modalW := minInt(72, width-4)
 	body := strings.Join(lines, "\n")

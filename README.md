@@ -217,6 +217,8 @@ Attaching to an auto-discovered peer execs `ssh -t <host> -- tmux attach -t <nam
 `~/.config/ccmux/config.toml` — the knobs that matter:
 
 ```toml
+lang = "zh"                          # UI language: "en" | "zh"; empty = follow $LANG
+
 [projects]
 root = "~/Projects"                  # where ccmux looks for projects
 
@@ -253,6 +255,8 @@ bell = true                          # ring local terminal BEL on needs_input
 > ```
 
 `projects.root` and `subscription.tier` are also editable inline from the Settings screen — `↑/↓` to move, `Enter` to edit, `e` to open `$EDITOR` for the prose-heavy fields. After editing, run `ccmux update` to reload the daemon with the new config.
+
+> **Language / 语言:** the TUI follows `$LANG`/`$LC_ALL` by default (`zh*` → Simplified Chinese, anything else → English). Set `lang = "en"` or `"zh"` to override — from config.toml or the Settings screen, where the switch applies immediately. Untranslated strings fall back to English.
 
 ---
 
