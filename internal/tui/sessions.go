@@ -385,7 +385,7 @@ var errRemotePreviewNotWired = remotePreviewErr{}
 type remotePreviewErr struct{}
 
 func (remotePreviewErr) Error() string {
-	return "preview for remote sessions not yet supported — attach with Enter to view live content"
+	return tr("preview for remote sessions not yet supported — attach with Enter to view live content")
 }
 
 // View renders the sessions list with a detail pane for the selected
@@ -440,7 +440,7 @@ func (m sessionsModel) renderPreview(width, height int) string {
 	if sel := m.Selected(); sel != nil {
 		header = m.st.Emphasis.Render(sel.Name)
 	} else {
-		header = m.st.Muted.Render("No session selected.")
+		header = m.st.Muted.Render(tr("No session selected."))
 	}
 	innerW := width - 4    // 2 border + 2 padding
 	contentH := height - 4 // 2 border + header + blank spacer
@@ -461,13 +461,13 @@ func (m sessionsModel) renderPreview(width, height int) string {
 	case m.previewErr != "":
 		// Show the err verbatim — the remote-not-supported sentinel and
 		// any real tmux error both fit on a couple of lines.
-		body := m.st.StateNeedsInput.Render("preview unavailable") +
+		body := m.st.StateNeedsInput.Render(tr("preview unavailable")) +
 			"\n\n" + m.st.Muted.Render(m.previewErr)
 		return render(body)
 	case m.previewLoading && m.preview == "":
-		return render(m.st.Muted.Render("capturing…"))
+		return render(m.st.Muted.Render(tr("capturing…")))
 	case strings.TrimSpace(m.preview) == "":
-		return render(m.st.Muted.Render("(empty pane)"))
+		return render(m.st.Muted.Render(tr("(empty pane)")))
 	}
 	// Tail to the last contentH non-padding lines and clamp each to the
 	// inner width so a long agent line can't blow out the box.
@@ -501,14 +501,14 @@ func (m sessionsModel) renderList(width, height int) string {
 	// components.List selection treatment, so each row's content
 	// fits in (width - 6) cells.
 	inner := width - 4
-	header := m.st.Emphasis.Render("Sessions") + "  " + m.sessionsCount()
+	header := m.st.Emphasis.Render(tr("Sessions")) + "  " + m.sessionsCount()
 	if len(m.sessions) == 0 {
 		body := lipgloss.JoinVertical(lipgloss.Left,
 			header,
 			"",
-			m.st.Muted.Render("No sessions yet."),
+			m.st.Muted.Render(tr("No sessions yet.")),
 			"",
-			"Press "+m.st.Key.Render(screenKey(ScreenProjects))+" to open Projects and create one.",
+			fmt.Sprintf("%s %s %s", tr("Press"), m.st.Key.Render(screenKey(ScreenProjects)), tr("to open Projects and create one.")),
 		)
 		return m.st.Pane.Width(width - 2).Height(height - 2).Render(body)
 	}
@@ -539,16 +539,16 @@ func (m sessionsModel) renderList(width, height int) string {
 func (m sessionsModel) renderDetail(width int, narrow bool) string {
 	sel := m.Selected()
 	if sel == nil {
-		return m.st.Pane.Width(width - 2).MaxWidth(width).Render(m.st.Muted.Render("No session selected."))
+		return m.st.Pane.Width(width - 2).MaxWidth(width).Render(m.st.Muted.Render(tr("No session selected.")))
 	}
 	if narrow {
 		return m.renderDetailNarrow(*sel, width)
 	}
-	attachedLine := fmt.Sprintf("attached %s", m.st.Muted.Render("no"))
+	attachedLine := fmt.Sprintf("%s %s", tr("attached"), m.st.Muted.Render(tr("no")))
 	if sel.Attached {
-		attachedLine = "attached " + lipgloss.NewStyle().Foreground(m.st.P.Mauve).Bold(true).Render("⊙ yes")
+		attachedLine = tr("attached") + " " + lipgloss.NewStyle().Foreground(m.st.P.Mauve).Bold(true).Render("⊙ "+tr("yes"))
 	}
-	subtitle := fmt.Sprintf("on %s", sel.Host)
+	subtitle := fmt.Sprintf("%s %s", tr("on"), sel.Host)
 	if sel.Project != "" {
 		subtitle += " · " + sel.Project
 	}
@@ -556,13 +556,13 @@ func (m sessionsModel) renderDetail(width int, narrow bool) string {
 		m.st.Emphasis.Render(sel.Name),
 		m.st.Muted.Render(subtitle),
 		"",
-		fmt.Sprintf("state    %s %s", stateGlyph(m.st, sel.State), sel.State),
-		fmt.Sprintf("path     %s", truncate(summarizePath(sel.Path), width-12)),
+		fmt.Sprintf("%s    %s %s", tr("state"), stateGlyph(m.st, sel.State), sel.State),
+		fmt.Sprintf("%s     %s", tr("path"), truncate(summarizePath(sel.Path), width-12)),
 		attachedLine,
 		// "changed" duplicates the age the sessions list already shows
 		// on the row itself, so the detail pane carries "created"
 		// instead — the one timestamp the list doesn't surface.
-		fmt.Sprintf("created  %s", relTime(sel.Created)),
+		fmt.Sprintf("%s  %s", tr("created"), relTime(sel.Created)),
 	}
 	return m.st.Pane.Width(width - 2).MaxWidth(width).Render(strings.Join(lines, "\n"))
 }
@@ -573,18 +573,18 @@ func (m sessionsModel) renderDetail(width int, narrow bool) string {
 // count, timestamps, and the full key cheatsheet (all T2) are dropped
 // — the wide layout and the CLI still carry them.
 func (m sessionsModel) renderDetailNarrow(sel daemon.SessionState, width int) string {
-	attached := "no"
+	attached := tr("no")
 	if sel.Attached {
-		attached = lipgloss.NewStyle().Foreground(m.st.P.Mauve).Bold(true).Render("⊙ yes")
+		attached = lipgloss.NewStyle().Foreground(m.st.P.Mauve).Bold(true).Render("⊙ " + tr("yes"))
 	}
 	lines := []string{
 		m.st.Emphasis.Render(sel.Name),
-		m.st.Muted.Render("on " + sel.Host),
+		m.st.Muted.Render(tr("on") + " " + sel.Host),
 		"",
-		fmt.Sprintf("state     %s %s", stateGlyph(m.st, sel.State), sel.State),
-		fmt.Sprintf("project   %s", sel.Project),
-		fmt.Sprintf("attached  %s", attached),
-		m.st.Muted.Render("detach: press " + detectedPrefix() + " then d"),
+		fmt.Sprintf("%s     %s %s", tr("state"), stateGlyph(m.st, sel.State), sel.State),
+		fmt.Sprintf("%s   %s", tr("project"), sel.Project),
+		fmt.Sprintf("%s  %s", tr("attached"), attached),
+		m.st.Muted.Render(tr("detach: press ") + detectedPrefix() + tr(" then d")),
 	}
 	return m.st.Pane.Width(width - 2).MaxWidth(width).Render(strings.Join(lines, "\n"))
 }
@@ -627,13 +627,13 @@ func (m sessionsModel) sessionsCount() string {
 	}
 	parts := []string{m.st.Muted.Render(fmt.Sprintf("%d", total))}
 	if active > 0 {
-		parts = append(parts, m.st.StatusGood.Render(fmt.Sprintf("%d active", active)))
+		parts = append(parts, m.st.StatusGood.Render(fmt.Sprintf("%d %s", active, tr("active"))))
 	}
 	if idle > 0 {
-		parts = append(parts, m.st.StateIdle.Render(fmt.Sprintf("%d idle", idle)))
+		parts = append(parts, m.st.StateIdle.Render(fmt.Sprintf("%d %s", idle, tr("idle"))))
 	}
 	if waiting > 0 {
-		parts = append(parts, m.st.StateNeedsInput.Render(fmt.Sprintf("%d waiting", waiting)))
+		parts = append(parts, m.st.StateNeedsInput.Render(fmt.Sprintf("%d %s", waiting, tr("waiting"))))
 	}
 	return m.st.Muted.Render("(") + strings.Join(parts, m.st.Muted.Render(" · ")) + m.st.Muted.Render(")")
 }
@@ -653,7 +653,7 @@ func relTime(t time.Time) string {
 	if t.IsZero() {
 		return "—"
 	}
-	return humanDuration(time.Since(t)) + " ago"
+	return humanDuration(time.Since(t)) + " " + tr("ago")
 }
 
 // truncate shortens s to at most n display columns, replacing the tail
