@@ -633,7 +633,7 @@ func (m settingsModel) renderSingleColumn(width, height int) string {
 	paneInner := width - 2 - 2*m.st.Spacing.SM
 
 	lines := []string{
-		m.st.Emphasis.Render("Settings"),
+		m.st.Emphasis.Render(tr("Settings")),
 		"",
 		m.renderMoshiBlock(),
 		"",
@@ -655,7 +655,7 @@ func (m settingsModel) renderListPane(width, height int, focused bool) string {
 		contentW = 1
 	}
 	lines := []string{
-		m.st.Emphasis.Render("Settings"),
+		m.st.Emphasis.Render(tr("Settings")),
 		"",
 		m.renderMoshiBlock(),
 		"",

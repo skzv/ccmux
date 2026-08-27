@@ -508,7 +508,7 @@ func (m conversationsModel) Update(msg tea.Msg) (conversationsModel, tea.Cmd) {
 
 func (m conversationsModel) View(width, height int) string {
 	st := m.st
-	header := st.Title.Render("Conversations")
+	header := st.Title.Render(tr("Conversations"))
 	if m.projectFilter != "" {
 		header = lipgloss.JoinHorizontal(lipgloss.Top, header,
 			"  "+st.Muted.Render("filter: "+m.projectFilter+"  (esc to clear)"))
@@ -568,7 +568,7 @@ func (m conversationsModel) View(width, height int) string {
 }
 
 func (m conversationsModel) renderListPanel(sections []conversationAgentSection, width, height int) string {
-	header := m.st.Title.Render("Conversations")
+	header := m.st.Title.Render(tr("Conversations"))
 	if m.projectFilter != "" {
 		header = lipgloss.JoinHorizontal(lipgloss.Top, header,
 			"  "+m.st.Muted.Render("filter: "+m.projectFilter+"  (esc to clear)"))
