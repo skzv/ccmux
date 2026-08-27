@@ -15,7 +15,7 @@ Goal: let the TUI display Simplified Chinese, switchable at runtime, without bre
 2. **Switch mechanism: config + system fallback.** New `config.lang` field; empty → follow `$LANG`/`$LC_ALL` (`zh*` → Chinese, else English); explicit value overrides. Settings screen gets a Language row.
 3. **Coverage: full, one pass.** All user-visible strings in all screens plus shared components (keybindings, toasts, confirmation dialogs, tab names). Missing translations fall back to English by design — a miss can never break rendering.
 4. **Language set: English (default) + Simplified Chinese.** No plural system (Chinese has none; English strings are preserved verbatim as the default).
-5. **Mechanism: self-built lightweight `internal/i18n`** (zero new deps), English-phrase-as-key, `go:generate` AST extractor + a sync lint test (the repo's "test-enforced invariant" style, cf. `FUZZ_TARGETS`, `agent.All()/ByID()/ParseID()`).
+5. **Mechanism: self-built lightweight `internal/i18n`** (zero new deps), English-phrase-as-key, and a sync lint test (`internal/i18n/sync_test.go`) whose **inline `go/ast` extractor** walks `internal/tui/...` collecting every `tr("…")` key and asserts each has a `zh.toml` entry (the repo's "test-enforced invariant" style, cf. `FUZZ_TARGETS`, `agent.All()/ByID()/ParseID()`, `styles_lint_test.go`). Extractor lives inside the test (not a separate `go:generate` command) so the check can never go stale.
 
 ## Architecture
 
@@ -53,12 +53,14 @@ Goal: let the TUI display Simplified Chinese, switchable at runtime, without bre
 ## Implementation order (per-screen commits)
 
 1. `internal/i18n` package + `Resolve` + unit tests + `zh.toml` skeleton
-2. `go:generate` AST extractor + `sync_test.go`
-3. `internal/tui` `tr()` + Settings language row + `config.lang`
-4. Screen-by-screen replacement: components/shared chrome → Dashboard → Sessions → Projects → Notes → Conversations → Agents → Network → Settings → misc (help/confirm/toast/confirmation)
-5. Alignment/width code review (manual padding audit) + English isolation of existing tests
-6. Full Chinese translation fill (800–1,500 entries; translated in-repo, no external tooling)
-7. Final verification: zh width-sweep (`assertNoOverflow` over all screens with `SetLanguage("zh")`) + optional zh e2e smoke
+2. `internal/tui` + `internal/tui/components` `tr()` thin wrappers + `sync_test.go` (inline AST extractor)
+3. `config.lang` + `App.New` hook + Settings language row (hot-switch) + related tests
+4. English isolation of existing tests (`TestMain` pins `en`; `withLang(t, …)` helper for zh tests)
+5. Screen-by-screen replacement — **each screen's commit ships both the `tr()` edits and that screen's `zh.toml` entries**, so the sync test stays green throughout: components/shared chrome (help/keys) → Dashboard → Sessions → Projects → Notes → Conversations → Agents → Network → Settings/misc (confirm/toast/menus/wizards)
+6. Alignment/width code review (manual padding audit) + zh width-sweep test
+7. Final verification: `go test ./...` + `make lint`; e2e harness pinned to English (`LANG` or `lang="en"` config) so e2e anchors stay stable
+
+Translation is filled per-screen inside task 5 rather than as a final bulk pass — the sync test error list is the machine-readable "which keys still need zh" checklist.
 
 ## Error handling
 
