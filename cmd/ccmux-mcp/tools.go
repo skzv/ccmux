@@ -100,10 +100,10 @@ func buildTools(s *Server) map[string]Tool {
 			Handler: wrap(s.handleReadNote),
 		},
 		"search_notes": {
-			Description: "Ripgrep-style search across a project's notes tree. Returns matching file path, line number, and the matching line trimmed.",
+			Description: "Case-insensitive literal search across a project's notes tree. Returns matching file path, line number, and the matching line trimmed.",
 			InputSchema: object(map[string]any{
 				"project": stringSchema("project name (from list_projects[].name)", true),
-				"query":   stringSchema("search pattern (literal substring by default; ripgrep regex syntax)", true),
+				"query":   stringSchema("literal substring to find (case-insensitive)", true),
 			}, []string{"project", "query"}),
 			Handler: wrap(s.handleSearchNotes),
 		},

@@ -32,7 +32,7 @@ type agentBrowserItem struct {
 // title and each item row — a per-type visual key (hooks vs MCP vs
 // commands vs skills) so categories pop in the list pane.
 type agentBrowserSection struct {
-	Title string
+	Title string // English translation key; translated when rendered.
 	Color lipgloss.Color
 	Items []agentBrowserItem
 }
@@ -466,7 +466,7 @@ func (b agentBrowser) renderList(width, height int) string {
 		if r.section != "" {
 			// Section headers anchor at column 0 (no item indent) so
 			// the colored dot reads as a category marker, not a row.
-			lines = append(lines, dot+st.Subtitle.Render(r.section))
+			lines = append(lines, dot+st.Subtitle.Render(tr(r.section)))
 			continue
 		}
 		it := r.item

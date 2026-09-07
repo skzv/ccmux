@@ -198,7 +198,11 @@ vet: check-go
 	go vet ./...
 
 lint: fmt vet
-	@command -v staticcheck >/dev/null && staticcheck ./... || echo "staticcheck not installed; skipping"
+	@if command -v staticcheck >/dev/null 2>&1; then \
+		staticcheck ./...; \
+	else \
+		echo "staticcheck not installed; skipping"; \
+	fi
 
 clean:
 	rm -rf $(BIN_DIR) dist

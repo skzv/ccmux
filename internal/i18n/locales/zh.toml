@@ -441,7 +441,7 @@
 "Headless / SDK conversations: hidden" = "无头 / SDK 对话：隐藏"
 "Headless / SDK conversations: shown" = "无头 / SDK 对话：显示"
 "Host detail · " = "主机详情 · "
-"Last %d messages from %s" = "来自 %s 的最近 %d 条消息"
+"Last %d messages from %s" = "来自 %[2]s 的最近 %[1]d 条消息"
 "Number keys jump between screens · `?` opens contextual help · q quits" = "数字键在各屏幕间跳转 · `?` 打开上下文帮助 · q 退出"
 "Opening" = "正在打开"
 "Press %s / F1 anywhere to come back here" = "按 %s / F1 随时返回这里"

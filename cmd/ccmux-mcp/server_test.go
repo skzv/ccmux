@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -506,3 +507,35 @@ type errFakeMsg string
 
 func errFake(s string) error       { return errFakeMsg(s) }
 func (e errFakeMsg) Error() string { return string(e) }
+
+type failingWriter struct{ err error }
+
+func (w failingWriter) Write([]byte) (int, error) { return 0, w.err }
+
+func TestRun_StopsOnWriteFailure(t *testing.T) {
+	writeErr := errors.New("output disconnected")
+	for _, tc := range []struct{ name, frame string }{
+		{"response", `{"jsonrpc":"2.0","id":1,"method":"ping"}`},
+		{"parse error", `{`},
+		{"invalid request", `{"jsonrpc":"1.0","id":1,"method":"ping"}`},
+		{"oversized", strings.Repeat("x", (4<<20)+1)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &fakeClient{}
+			srv := newTestServer(true, fake)
+			mutation := `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"kill_session","arguments":{"name":"session"}}}`
+			in := strings.NewReader(tc.frame + "\n" + mutation + "\n")
+			if err := srv.Run(context.Background(), in, failingWriter{writeErr}); !errors.Is(err, writeErr) {
+				t.Fatalf("Run error = %v; want underlying write error", err)
+			}
+			if len(fake.killCalls) != 0 {
+				t.Fatal("mutation executed after response write failed")
+			}
+		})
+	}
+	// EOF on a final unterminated frame must not hide its write failure.
+	srv := newTestServer(false, nil)
+	if err := srv.Run(context.Background(), strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"ping"}`), failingWriter{writeErr}); !errors.Is(err, writeErr) {
+		t.Fatalf("final frame: %v", err)
+	}
+}

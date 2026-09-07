@@ -411,6 +411,8 @@ func (m projectsModel) View(width, height int) string {
 // narrow state (not derived from `width`, which in wide mode is only
 // the left sub-pane): on narrow the T2 key-hint is dropped.
 func (m projectsModel) renderList(width, height int, narrow bool) string {
+	// This input survives Settings language changes; translate at render time.
+	m.filter.Placeholder = tr("type to filter…")
 	// Pane chrome reservation: border (2) + Padding(0,1) (2) = 4 cells
 	// eaten before content. The components row-decorator owns 2 more
 	// on the left for the accent bar (selection treatment).

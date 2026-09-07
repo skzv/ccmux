@@ -857,7 +857,7 @@ func (m claudeModel) browserSections() []agentBrowserSection {
 }
 
 func (m claudeModel) browserHooksSection() agentBrowserSection {
-	section := agentBrowserSection{Title: tr("Hooks"), Color: m.st.P.Peach}
+	section := agentBrowserSection{Title: "Hooks", Color: m.st.P.Peach}
 	if m.settings == nil || len(m.settings.Hooks) == 0 {
 		return section
 	}
@@ -885,7 +885,7 @@ func (m claudeModel) browserHooksSection() agentBrowserSection {
 }
 
 func (m claudeModel) browserMCPSection() agentBrowserSection {
-	section := agentBrowserSection{Title: tr("MCP servers"), Color: m.st.P.Sky}
+	section := agentBrowserSection{Title: "MCP servers", Color: m.st.P.Sky}
 	if m.settings == nil || len(m.settings.MCPServers) == 0 {
 		return section
 	}
@@ -932,7 +932,7 @@ func (m claudeModel) browserMCPSection() agentBrowserSection {
 }
 
 func (m claudeModel) browserCommandsSection() agentBrowserSection {
-	section := agentBrowserSection{Title: tr("Commands"), Color: m.st.P.Green}
+	section := agentBrowserSection{Title: "Commands", Color: m.st.P.Green}
 	for _, c := range m.commands {
 		// The Command struct only carries Description in-memory; the
 		// underlying ~/.claude/commands/<name>.md body lives on disk

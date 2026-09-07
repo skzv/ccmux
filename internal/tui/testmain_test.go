@@ -12,6 +12,14 @@ import (
 // snapshots (which assert English text) stay byte-identical. Tests that
 // need Chinese opt in via withLang(t, "zh").
 func TestMain(m *testing.M) {
+	// New(Config{}) resolves the environment again, so pin the locale as
+	// well as the initial global state. Locale-specific tests use t.Setenv.
+	if err := os.Setenv("LC_ALL", "en_US.UTF-8"); err != nil {
+		panic(err)
+	}
+	if err := os.Setenv("LANG", "en_US.UTF-8"); err != nil {
+		panic(err)
+	}
 	i18n.SetLanguage("en")
 	os.Exit(m.Run())
 }
