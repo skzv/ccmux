@@ -110,6 +110,9 @@ func newTour(st styles.Styles) tourModel {
 
 // Open begins the tour from step 0.
 func (m *tourModel) Open() {
+	// A language switch may have happened since construction or the last
+	// tour. Rebuild translated copy before displaying the first slide.
+	m.steps = defaultTourSteps()
 	m.active = true
 	m.step = 0
 }

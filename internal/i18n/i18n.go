@@ -9,6 +9,7 @@ import (
 	"embed"
 	"os"
 	"strings"
+	"sync/atomic"
 
 	"github.com/BurntSushi/toml"
 )
@@ -25,8 +26,8 @@ const (
 var localesFS embed.FS
 
 var (
-	current Lang = LangEn
-	zhTable map[string]string
+	useChinese atomic.Bool
+	zhTable    map[string]string
 )
 
 func init() {
@@ -41,8 +42,8 @@ func init() {
 
 // Resolve picks the effective language. A non-empty explicit value wins
 // (recognized as zh by prefix match, anything else is English); an empty
-// explicit value probes the environment (LC_ALL then LANG) for a zh*
-// prefix. Pure so it is table-testable; env may be nil to use os.Getenv.
+// explicit value uses the first non-empty locale (LC_ALL then LANG).
+// Pure so it is table-testable; env may be nil to use os.Getenv.
 func Resolve(lang string, env func(string) string) Lang {
 	if lang != "" {
 		if strings.HasPrefix(strings.ToLower(lang), "zh") {
@@ -54,8 +55,8 @@ func Resolve(lang string, env func(string) string) Lang {
 		env = os.Getenv
 	}
 	for _, k := range []string{"LC_ALL", "LANG"} {
-		if v := strings.ToLower(env(k)); strings.HasPrefix(v, "zh") {
-			return LangZh
+		if v := env(k); v != "" {
+			return Resolve(v, nil)
 		}
 	}
 	return LangEn
@@ -64,20 +65,21 @@ func Resolve(lang string, env func(string) string) Lang {
 // SetLanguage switches the package's current language. An empty value
 // resolves from the environment.
 func SetLanguage(lang string) {
-	if Resolve(lang, nil) == LangZh {
-		current = LangZh
-	} else {
-		current = LangEn
-	}
+	useChinese.Store(Resolve(lang, nil) == LangZh)
 }
 
 // Current returns the active language.
-func Current() Lang { return current }
+func Current() Lang {
+	if useChinese.Load() {
+		return LangZh
+	}
+	return LangEn
+}
 
 // T returns the current language's translation of key, or the key
 // itself when untranslated. Never panics.
 func T(key string) string {
-	if current == LangZh && zhTable != nil {
+	if Current() == LangZh && zhTable != nil {
 		if v, ok := zhTable[key]; ok {
 			return v
 		}
