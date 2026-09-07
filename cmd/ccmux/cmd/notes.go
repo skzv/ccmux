@@ -122,7 +122,7 @@ func newNotesCmd() *cobra.Command {
 
 	search := &cobra.Command{
 		Use:   "search <project> <query>",
-		Short: "Search a project's notes for a query",
+		Short: "Search a project's notes for literal text (case-insensitive)",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(_ *cobra.Command, args []string) error {
 			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)

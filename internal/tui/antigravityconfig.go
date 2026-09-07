@@ -182,7 +182,7 @@ func (m antigravityConfigModel) browserSections() []agentBrowserSection {
 }
 
 func (m antigravityConfigModel) browserMCPSection() agentBrowserSection {
-	section := agentBrowserSection{Title: tr("MCP servers"), Color: m.st.P.Sky}
+	section := agentBrowserSection{Title: "MCP servers", Color: m.st.P.Sky}
 	for _, s := range m.mcp {
 		preview := []string{s.Name, "", "  type: " + s.Type}
 		if s.URL != "" {

@@ -1,6 +1,6 @@
 #!/bin/sh
 # install.sh — download the latest ccmux release and install ccmux +
-# ccmuxd into ~/.local/bin. macOS and Linux, amd64 and arm64.
+# ccmuxd and ccmux-mcp into ~/.local/bin. macOS and Linux, amd64 and arm64.
 #
 #   curl -fsSL https://raw.githubusercontent.com/skzv/ccmux/main/scripts/install.sh | sh
 #
@@ -50,9 +50,16 @@ fi
 tar -xzf "$tmp/$archive" -C "$tmp"
 
 mkdir -p "$BIN_DIR"
-for bin in ccmux ccmuxd; do
+# Older releases predate the MCP binary; keep installing those while
+# the next release is being published.
+bins="ccmux ccmuxd"
+if [ -f "$tmp/ccmux-mcp" ]; then
+	bins="$bins ccmux-mcp"
+fi
+for bin in $bins; do
 	[ -f "$tmp/$bin" ] || fail "release archive is missing $bin"
-	install -m 0755 "$tmp/$bin" "$BIN_DIR/$bin"
+	install -m 0755 "$tmp/$bin" "$BIN_DIR/$bin.new"
+	mv -f "$BIN_DIR/$bin.new" "$BIN_DIR/$bin"
 	# macOS quarantines anything downloaded; strip it so Gatekeeper
 	# doesn't silently kill the unsigned binary (notarization is
 	# pending an Apple Developer account).
@@ -61,7 +68,7 @@ for bin in ccmux ccmuxd; do
 	fi
 done
 
-echo "ccmux: installed ccmux + ccmuxd to ${BIN_DIR}"
+echo "ccmux: installed $bins to ${BIN_DIR}"
 case ":$PATH:" in
 	*":$BIN_DIR:"*) ;;
 	*) echo "ccmux: add ${BIN_DIR} to your PATH, then re-open your shell" ;;

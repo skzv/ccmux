@@ -22,7 +22,7 @@ type SearchHit struct {
 	Snippet string // the matching line, trimmed of leading whitespace
 }
 
-// Search runs a case-insensitive search across every markdown file
+// Search runs a case-insensitive literal search across every markdown file
 // under the vault root. Uses `rg --json` when ripgrep is on PATH —
 // faster, gitignore-aware, and respects file types — and falls back
 // to a pure-Go scanner otherwise so search works on every install.
@@ -49,33 +49,33 @@ func (v Vault) Search(ctx context.Context, query string, limit int) ([]SearchHit
 	return v.searchFallback(ctx, query, limit)
 }
 
-// searchRipgrep shells out to `rg --json --type md --smart-case
-// --max-count 5 -- <query> <root>` and parses the JSON-lines output.
-// Smart-case means lowercase queries match case-insensitively while
-// queries with any uppercase character match exactly — matches what
-// most users expect from a search box. max-count caps hits per file
-// so a single noisy doc doesn't drown the rest of the vault.
+// searchRipgrep streams JSON-lines output, stopping the process once
+// enough hits have arrived. max-count also caps hits per file.
 func (v Vault) searchRipgrep(ctx context.Context, query string, limit int) ([]SearchHit, error) {
-	cmd := exec.CommandContext(ctx, "rg",
-		"--json", "--type", "md", "--smart-case",
+	searchCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	cmd := exec.CommandContext(searchCtx, "rg",
+		"--json", "--type", "md", "--fixed-strings", "--ignore-case",
 		"--max-count", "5",
 		"--", query, v.Root,
 	)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	out, err := cmd.StdoutPipe()
 	if err != nil {
-		// rg exits 1 when there are no matches — that's not a real error.
-		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
-			return nil, nil
+		return nil, fmt.Errorf("rg stdout: %w", err)
+	}
+	if err := cmd.Start(); err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
 		}
-		return nil, fmt.Errorf("rg: %w (%s)", err, strings.TrimSpace(stderr.String()))
+		return nil, fmt.Errorf("start rg: %w", err)
 	}
 
 	var hits []SearchHit
-	sc := bufio.NewScanner(bytes.NewReader(out))
+	sc := bufio.NewScanner(out)
 	sc.Buffer(make([]byte, 1<<16), 1<<22)
-	for sc.Scan() && len(hits) < limit {
+	for len(hits) < limit && sc.Scan() {
 		var rec struct {
 			Type string `json:"type"`
 			Data struct {
@@ -96,6 +96,29 @@ func (v Vault) searchRipgrep(ctx context.Context, query string, limit int) ([]Se
 		}
 		hits = append(hits, hitFor(v.Root, rec.Data.Path.Text, rec.Data.LineNumber, rec.Data.Lines.Text))
 	}
+	scanErr := sc.Err()
+	if len(hits) >= limit || scanErr != nil {
+		cancel()
+		_ = out.Close()
+	}
+	waitErr := cmd.Wait() // Always reap, including early limit/error exits.
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if scanErr != nil {
+		return nil, fmt.Errorf("read rg output: %w", scanErr)
+	}
+	if len(hits) >= limit {
+		return hits, nil
+	}
+	if waitErr != nil {
+		// rg exits 1 when there are no matches — that's not a real error.
+		var exitErr *exec.ExitError
+		if errors.As(waitErr, &exitErr) && exitErr.ExitCode() == 1 {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("rg: %w (%s)", waitErr, strings.TrimSpace(stderr.String()))
+	}
 	return hits, nil
 }
 
@@ -107,7 +130,13 @@ func (v Vault) searchFallback(ctx context.Context, query string, limit int) ([]S
 	needle := strings.ToLower(query)
 	var hits []SearchHit
 	err := filepath.WalkDir(v.Root, func(path string, d os.DirEntry, err error) error {
-		if err != nil || len(hits) >= limit {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if len(hits) >= limit {
+			return filepath.SkipAll
+		}
+		if err != nil {
 			return nil
 		}
 		if d.IsDir() {
@@ -119,11 +148,6 @@ func (v Vault) searchFallback(ctx context.Context, query string, limit int) ([]S
 		if !strings.EqualFold(filepath.Ext(d.Name()), ".md") {
 			return nil
 		}
-		select {
-		case <-ctx.Done():
-			return errors.New("cancelled")
-		default:
-		}
 		f, err := os.Open(path)
 		if err != nil {
 			return nil
@@ -132,8 +156,11 @@ func (v Vault) searchFallback(ctx context.Context, query string, limit int) ([]S
 		sc := bufio.NewScanner(f)
 		sc.Buffer(make([]byte, 1<<16), 1<<22)
 		perFile := 0
-		for ln := 1; sc.Scan(); ln++ {
-			if perFile >= 5 || len(hits) >= limit {
+		for ln := 1; perFile < 5 && len(hits) < limit; ln++ {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if !sc.Scan() {
 				break
 			}
 			line := sc.Text()
@@ -141,6 +168,12 @@ func (v Vault) searchFallback(ctx context.Context, query string, limit int) ([]S
 				hits = append(hits, hitFor(v.Root, path, ln, line))
 				perFile++
 			}
+		}
+		if err := sc.Err(); err != nil {
+			return fmt.Errorf("scan note %q: %w", path, err)
+		}
+		if len(hits) >= limit {
+			return filepath.SkipAll
 		}
 		return nil
 	})

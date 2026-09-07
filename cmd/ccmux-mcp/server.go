@@ -109,10 +109,14 @@ func (s *Server) Run(ctx context.Context, in io.Reader, out io.Writer) error {
 
 	for {
 		line, tooLong, err := readLimitedLine(r, maxLine)
+		var writeErr error
 		if tooLong {
-			s.writeFrame(enc, rpcResponse{JSONRPC: "2.0", ID: nullID, Error: &rpcError{Code: errParseError, Message: fmt.Sprintf("parse error: request exceeds %d bytes", maxLine)}})
+			writeErr = s.writeFrame(enc, rpcResponse{JSONRPC: "2.0", ID: nullID, Error: &rpcError{Code: errParseError, Message: fmt.Sprintf("parse error: request exceeds %d bytes", maxLine)}})
 		} else if len(line) > 0 {
-			s.dispatchLine(ctx, enc, line)
+			writeErr = s.dispatchLine(ctx, enc, line)
+		}
+		if writeErr != nil {
+			return fmt.Errorf("write stdout: %w", writeErr)
 		}
 		if errors.Is(err, io.EOF) {
 			return nil
@@ -125,27 +129,25 @@ func (s *Server) Run(ctx context.Context, in io.Reader, out io.Writer) error {
 
 // dispatchLine parses and handles one raw frame, writing the response
 // (if any) to enc.
-func (s *Server) dispatchLine(ctx context.Context, enc *json.Encoder, line []byte) {
+func (s *Server) dispatchLine(ctx context.Context, enc *json.Encoder, line []byte) error {
 	var req rpcRequest
 	if err := json.Unmarshal(line, &req); err != nil {
 		// The id couldn't be determined, so per spec it must be
 		// literal null — not absent.
-		s.writeFrame(enc, rpcResponse{JSONRPC: "2.0", ID: nullID, Error: &rpcError{Code: errParseError, Message: "parse error: " + err.Error()}})
-		return
+		return s.writeFrame(enc, rpcResponse{JSONRPC: "2.0", ID: nullID, Error: &rpcError{Code: errParseError, Message: "parse error: " + err.Error()}})
 	}
 	if req.JSONRPC != "2.0" {
 		id := req.ID
 		if len(id) == 0 {
 			id = nullID
 		}
-		s.writeFrame(enc, rpcResponse{JSONRPC: "2.0", ID: id, Error: &rpcError{Code: errInvalidRequest, Message: `jsonrpc must be "2.0"`}})
-		return
+		return s.writeFrame(enc, rpcResponse{JSONRPC: "2.0", ID: id, Error: &rpcError{Code: errInvalidRequest, Message: `jsonrpc must be "2.0"`}})
 	}
 	resp, isNotification := s.handle(ctx, &req)
 	if isNotification {
-		return
+		return nil
 	}
-	s.writeFrame(enc, resp)
+	return s.writeFrame(enc, resp)
 }
 
 // readLimitedLine reads one newline-terminated line from r, capped at
@@ -199,12 +201,11 @@ func trimLineEnding(b []byte) []byte {
 }
 
 // writeFrame serializes a response and writes it to the encoder.
-// Errors are dropped to stderr — there's no recovery path when stdout
-// is broken.
-func (s *Server) writeFrame(enc *json.Encoder, resp rpcResponse) {
+// Errors propagate to Run so no more requests execute after stdout fails.
+func (s *Server) writeFrame(enc *json.Encoder, resp rpcResponse) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	_ = enc.Encode(resp)
+	return enc.Encode(resp)
 }
 
 // handle dispatches one request. Returns (response, isNotification).

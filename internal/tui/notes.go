@@ -1215,6 +1215,8 @@ func (m notesModel) View(width, height int) string {
 // state (not derived from `width`, which in wide mode is only the
 // left sub-pane): on narrow the T2 key-hint line is dropped.
 func (m notesModel) renderList(width, height int, narrow bool) string {
+	// This input survives Settings language changes; translate at render time.
+	m.searchInput.Placeholder = tr("search this project's notes…")
 	focusMark := ""
 	if m.focus == focusList {
 		focusMark = m.st.Emphasis.Render(" ◀")

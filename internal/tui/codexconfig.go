@@ -219,7 +219,7 @@ func (m codexConfigModel) browserSections() []agentBrowserSection {
 }
 
 func (m codexConfigModel) browserHooksSection() agentBrowserSection {
-	section := agentBrowserSection{Title: tr("Hooks"), Color: m.st.P.Peach}
+	section := agentBrowserSection{Title: "Hooks", Color: m.st.P.Peach}
 	if len(m.hooks.Hooks) == 0 {
 		return section
 	}
@@ -271,7 +271,7 @@ func (m codexConfigModel) browserHooksSection() agentBrowserSection {
 }
 
 func (m codexConfigModel) browserMCPSection() agentBrowserSection {
-	section := agentBrowserSection{Title: tr("MCP servers"), Color: m.st.P.Sky}
+	section := agentBrowserSection{Title: "MCP servers", Color: m.st.P.Sky}
 	for _, s := range m.mcp {
 		preview := []string{s.Name, "", "  type: " + s.Type}
 		if s.URL != "" {
@@ -301,7 +301,7 @@ func (m codexConfigModel) browserMCPSection() agentBrowserSection {
 }
 
 func (m codexConfigModel) browserPromptsSection() agentBrowserSection {
-	section := agentBrowserSection{Title: tr("Commands"), Color: m.st.P.Green}
+	section := agentBrowserSection{Title: "Commands", Color: m.st.P.Green}
 	for _, p := range m.prompts {
 		section.Items = append(section.Items, agentBrowserItem{
 			Label:    "/" + p.Name,
@@ -313,7 +313,7 @@ func (m codexConfigModel) browserPromptsSection() agentBrowserSection {
 }
 
 func (m codexConfigModel) browserRulesSection() agentBrowserSection {
-	section := agentBrowserSection{Title: tr("Rules"), Color: m.st.P.Mauve}
+	section := agentBrowserSection{Title: "Rules", Color: m.st.P.Mauve}
 	for _, r := range m.rules {
 		// Rule files use the .rules extension but the body is markdown-
 		// adjacent (frontmatter + freeform prose); Glamour renders it

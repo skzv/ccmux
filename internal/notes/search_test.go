@@ -2,10 +2,13 @@ package notes
 
 import (
 	"context"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // makeSearchVault writes a small fixture: a Specs file, an Architecture
@@ -176,5 +179,80 @@ func TestHitFor_RelUsesSlashes(t *testing.T) {
 	}
 	if h.Snippet != "snippet text" {
 		t.Errorf("Snippet = %q, want trimmed", h.Snippet)
+	}
+}
+
+func TestSearch_BackendQueryBehavior(t *testing.T) {
+	for _, backend := range []string{"fallback", "ripgrep"} {
+		t.Run(backend, func(t *testing.T) {
+			v := Vault{Root: t.TempDir()}
+			body := "passkey\naXb\na.b\n[brackets]\n" + strings.Repeat("repeated\n", 8)
+			if err := os.WriteFile(filepath.Join(v.Root, "note.md"), []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			search := v.searchFallback
+			if backend == "ripgrep" {
+				if _, err := exec.LookPath("rg"); err != nil {
+					t.Skip("ripgrep unavailable")
+				}
+				search = v.searchRipgrep
+			}
+			for _, tc := range []struct {
+				query       string
+				limit, want int
+			}{
+				{"PASSKEY", 100, 1}, {"[", 100, 1}, {"a.b", 100, 1},
+				{"missing", 100, 0}, {"repeated", 100, 5}, {"repeated", 2, 2},
+			} {
+				hits, err := search(context.Background(), tc.query, tc.limit)
+				if err != nil || len(hits) != tc.want {
+					t.Errorf("query=%q limit=%d: got %d hits, %v; want %d", tc.query, tc.limit, len(hits), err, tc.want)
+				}
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			if _, err := search(ctx, "passkey", 100); !errors.Is(err, context.Canceled) {
+				t.Errorf("canceled search: %v", err)
+			}
+		})
+	}
+}
+
+func TestSearch_OversizedLineReturnsError(t *testing.T) {
+	for _, backend := range []string{"fallback", "ripgrep"} {
+		t.Run(backend, func(t *testing.T) {
+			v := Vault{Root: t.TempDir()}
+			body := "match\n" + strings.Repeat("x", 1<<22) + "match\n"
+			if err := os.WriteFile(filepath.Join(v.Root, "note.md"), []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			search := v.searchFallback
+			if backend == "ripgrep" {
+				if _, err := exec.LookPath("rg"); err != nil {
+					t.Skip("ripgrep unavailable")
+				}
+				search = v.searchRipgrep
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if hits, err := search(ctx, "match", 100); err == nil || errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("expected scanner error, got hits=%d err=%v", len(hits), err)
+			}
+		})
+	}
+}
+
+func TestSearch_FallbackStopsBeforeUnreadResults(t *testing.T) {
+	v := Vault{Root: t.TempDir()}
+	// The oversized line must not be read after either limit is satisfied.
+	for _, tc := range []struct{ matches, limit int }{{1, 1}, {5, 100}} {
+		body := strings.Repeat("match\n", tc.matches) + strings.Repeat("x", 1<<22)
+		if err := os.WriteFile(filepath.Join(v.Root, "note.md"), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		hits, err := v.searchFallback(context.Background(), "match", tc.limit)
+		if err != nil || len(hits) != tc.matches {
+			t.Fatalf("limit=%d: hits=%d err=%v", tc.limit, len(hits), err)
+		}
 	}
 }

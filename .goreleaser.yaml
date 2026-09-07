@@ -1,4 +1,4 @@
-# .goreleaser.yaml — cross-platform release builds for ccmux + ccmuxd.
+# .goreleaser.yaml — cross-platform release builds for ccmux, ccmuxd, and ccmux-mcp.
 #
 #   Validate config:  make release-check     (goreleaser check)
 #   Local dry run:     make release-snapshot  (builds dist/, publishes nothing)
@@ -30,8 +30,17 @@ builds:
     goarch: [amd64, arm64]
     ldflags:
       - -s -w -X main.version={{ .Version }}
+  - id: ccmux-mcp
+    main: ./cmd/ccmux-mcp
+    binary: ccmux-mcp
+    env:
+      - CGO_ENABLED=0
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
 
-# One archive per OS/arch carrying both binaries. The name matches what
+# One archive per OS/arch carrying all three binaries. The name matches what
 # scripts/install.sh downloads: ccmux_<os>_<arch>.tar.gz.
 archives:
   - id: ccmux
@@ -75,6 +84,7 @@ brews:
     install: |
       bin.install "ccmux"
       bin.install "ccmuxd"
+      bin.install "ccmux-mcp"
     post_install: |
       # `brew upgrade ccmux` replaces the binary on disk, but the
       # ccmuxd process already running under launchd keeps its old
@@ -93,6 +103,7 @@ brews:
         ccmux setup
     test: |
       system "#{bin}/ccmux", "--help"
+      system "#{bin}/ccmux-mcp", "--version"
 
 release:
   draft: false

@@ -65,7 +65,7 @@ When `--host` is set, the server talks to that ccmuxd over HTTP on the tailnet i
 | `list_machines`     | tailnet peers, whether each runs ccmuxd                                                                              |
 | `list_notes`        | every markdown note in a project, grouped by directory                                                               |
 | `read_note`         | one note's full contents                                                                                             |
-| `search_notes`      | ripgrep search across a project's notes tree                                                                         |
+| `search_notes`      | case-insensitive literal search across a project's notes tree                                                                         |
 | `get_daemon_health` | first-probe surface: ccmuxd hostname, version, session count, sleep mode                                             |
 
 ### Mutating (only with `--allow-mutate`)

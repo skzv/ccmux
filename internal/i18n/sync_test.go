@@ -14,7 +14,7 @@ import (
 
 // collectTRKeys walks internal/tui (recursively, skipping testdata and
 // _test.go files) and returns every literal first argument of a tr("…")
-// call — the full set of user-visible strings the TUI expects localized.
+// call, plus agent-browser section titles translated at render time.
 func collectTRKeys(t *testing.T) []string {
 	t.Helper()
 	var keys []string
@@ -38,6 +38,23 @@ func collectTRKeys(t *testing.T) []string {
 			return nil
 		}
 		ast.Inspect(f, func(n ast.Node) bool {
+			if section, ok := n.(*ast.CompositeLit); ok {
+				if typ, ok := section.Type.(*ast.Ident); ok && typ.Name == "agentBrowserSection" {
+					for _, elt := range section.Elts {
+						field, ok := elt.(*ast.KeyValueExpr)
+						if !ok {
+							continue
+						}
+						if name, ok := field.Key.(*ast.Ident); ok && name.Name == "Title" {
+							if lit, ok := field.Value.(*ast.BasicLit); ok && lit.Kind == token.STRING {
+								if key, err := strconv.Unquote(lit.Value); err == nil {
+									keys = append(keys, key)
+								}
+							}
+						}
+					}
+				}
+			}
 			call, ok := n.(*ast.CallExpr)
 			if !ok {
 				return true

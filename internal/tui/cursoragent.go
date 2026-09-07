@@ -335,7 +335,7 @@ func (m cursorAgentModel) browserSections() []agentBrowserSection {
 }
 
 func (m cursorAgentModel) browserHooksSection() agentBrowserSection {
-	section := agentBrowserSection{Title: tr("Hooks"), Color: m.st.P.Peach}
+	section := agentBrowserSection{Title: "Hooks", Color: m.st.P.Peach}
 	if len(m.hooks.Hooks) == 0 {
 		return section
 	}
@@ -366,7 +366,7 @@ func (m cursorAgentModel) browserHooksSection() agentBrowserSection {
 }
 
 func (m cursorAgentModel) browserSkillsSection() agentBrowserSection {
-	section := agentBrowserSection{Title: tr("Skills"), Color: m.st.P.Mauve}
+	section := agentBrowserSection{Title: "Skills", Color: m.st.P.Mauve}
 	for _, s := range m.skills {
 		// Skill.Body is already loaded by cursorconfig.ListSkills.
 		body := s.Body
