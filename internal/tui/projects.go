@@ -68,7 +68,7 @@ type projectsModel struct {
 
 func newProjects(st styles.Styles, km Keymap) projectsModel {
 	ti := textinput.New()
-	ti.Placeholder = "type to filter…"
+	ti.Placeholder = tr("type to filter…")
 	ti.Prompt = "/ "
 	ti.CharLimit = 64
 	ti.Width = 40
@@ -307,7 +307,7 @@ func (m projectsModel) Update(msg tea.Msg) (projectsModel, tea.Cmd) {
 				}
 				return m, func() tea.Msg {
 					return toastMsg{
-						Text:  "agent switch for remote projects not yet supported",
+						Text:  tr("agent switch for remote projects not yet supported"),
 						Kind:  toastWarning,
 						Until: time.Now().Add(4 * time.Second),
 					}
@@ -364,7 +364,7 @@ func switchAgentCmd(p project.Project) tea.Cmd {
 		next := nextAgent(p.Agent)
 		if err := project.SetAgent(p.Path, next); err != nil {
 			return toastMsg{
-				Text:  "agent switch: " + err.Error(),
+				Text:  tr("agent switch: ") + err.Error(),
 				Kind:  toastError,
 				Until: time.Now().Add(5 * time.Second),
 			}
@@ -373,7 +373,7 @@ func switchAgentCmd(p project.Project) tea.Cmd {
 			func() tea.Msg { return projectAgentSwitchedMsg{Path: p.Path, Agent: next} },
 			func() tea.Msg {
 				return toastMsg{
-					Text:  p.Name + ": agent → " + string(next) + " (next session uses this)",
+					Text:  fmt.Sprintf(tr("%s: agent → %s (next session uses this)"), p.Name, string(next)),
 					Kind:  toastSuccess,
 					Until: time.Now().Add(5 * time.Second),
 				}
@@ -415,7 +415,7 @@ func (m projectsModel) renderList(width, height int, narrow bool) string {
 	// eaten before content. The components row-decorator owns 2 more
 	// on the left for the accent bar (selection treatment).
 	inner := width - 4
-	header := m.st.Emphasis.Render("Projects")
+	header := m.st.Emphasis.Render(tr("Projects"))
 	if !narrow {
 		header += "  " + m.st.Muted.Render(fmt.Sprintf("(%d)", len(m.projects)))
 	}
@@ -425,15 +425,15 @@ func (m projectsModel) renderList(width, height int, narrow bool) string {
 			body = lipgloss.JoinVertical(lipgloss.Left,
 				header,
 				"",
-				m.spin.View()+" "+m.st.Muted.Render("Discovering projects…"),
+				m.spin.View()+" "+m.st.Muted.Render(tr("Discovering projects…")),
 			)
 		} else {
 			body = lipgloss.JoinVertical(lipgloss.Left,
 				header,
 				"",
-				m.st.Muted.Render("No projects found under your projects root."),
+				m.st.Muted.Render(tr("No projects found under your projects root.")),
 				"",
-				"Press "+m.st.Key.Render("n")+" to scaffold a new one.",
+				fmt.Sprintf(tr("Press %s to scaffold a new one."), m.st.Key.Render("n")),
 			)
 		}
 		return m.st.Pane.Width(width - 2).Height(height - 2).Render(body)
@@ -457,9 +457,9 @@ func (m projectsModel) renderList(width, height int, narrow bool) string {
 
 	if len(vis) == 0 {
 		rows = append(rows,
-			m.st.Muted.Render("No projects match "+m.filter.Value()+"."),
+			m.st.Muted.Render(fmt.Sprintf(tr("No projects match %s."), m.filter.Value())),
 			"",
-			m.st.Muted.Render("Press esc to clear the filter."),
+			m.st.Muted.Render(tr("Press esc to clear the filter.")),
 		)
 		return m.st.PaneFocused.Width(width - 2).Height(height - 2).Render(strings.Join(rows, "\n"))
 	}
@@ -481,7 +481,7 @@ func (m projectsModel) renderList(width, height int, narrow bool) string {
 			if i > start {
 				rows = append(rows, "")
 			}
-			rows = append(rows, m.st.Subtitle.Render("on "+host))
+			rows = append(rows, m.st.Subtitle.Render(fmt.Sprintf(tr("on %s"), host)))
 			currentHost = host
 		}
 		selected := i == m.cursor
@@ -504,16 +504,16 @@ func (m projectsModel) renderList(width, height int, narrow bool) string {
 func (m projectsModel) HelpBarProps(width int) components.HelpBarProps {
 	return components.HelpBarProps{
 		Hints: []components.KeyHint{
-			{Key: "?", Label: "help", Priority: 10},
-			{Key: "q", Label: "quit", Priority: 10},
-			{Key: "enter", Label: "attach", Priority: 8},
-			{Key: "n", Label: "new", Priority: 7},
-			{Key: "i", Label: "info", Priority: 7},
-			{Key: "/", Label: "filter", Priority: 6},
-			{Key: "a", Label: "switch agent", Priority: 5},
-			{Key: "c", Label: "conversations", Priority: 4},
-			{Key: "r", Label: "refresh", Priority: 3},
-			{Key: "1-7", Label: "screens", Priority: 2},
+			{Key: "?", Label: tr("help"), Priority: 10},
+			{Key: "q", Label: tr("quit"), Priority: 10},
+			{Key: "enter", Label: tr("attach"), Priority: 8},
+			{Key: "n", Label: tr("new"), Priority: 7},
+			{Key: "i", Label: tr("info"), Priority: 7},
+			{Key: "/", Label: tr("filter"), Priority: 6},
+			{Key: "a", Label: tr("switch agent"), Priority: 5},
+			{Key: "c", Label: tr("conversations"), Priority: 4},
+			{Key: "r", Label: tr("refresh"), Priority: 3},
+			{Key: "1-7", Label: tr("screens"), Priority: 2},
 		},
 		Width: width,
 	}
@@ -522,7 +522,7 @@ func (m projectsModel) HelpBarProps(width int) components.HelpBarProps {
 func (m projectsModel) renderDetail(width, height int) string {
 	sel := m.Selected()
 	if sel == nil {
-		return m.st.Pane.Width(width - 2).Height(height - 2).Render(m.st.Muted.Render("No selection."))
+		return m.st.Pane.Width(width - 2).Height(height - 2).Render(m.st.Muted.Render(tr("No selection.")))
 	}
 	p := *sel
 	host := projectHost(p)
@@ -531,7 +531,7 @@ func (m projectsModel) renderDetail(width, height int) string {
 	agentDisplay := agent.ByID(p.Agent).DisplayName()
 	detected := renderScaffoldChips(m.st, p, false)
 	if detected == "" {
-		detected = m.st.Muted.Render("(none)")
+		detected = m.st.Muted.Render(tr("(none)"))
 	} else {
 		detected = strings.TrimLeft(detected, " ")
 	}
@@ -539,12 +539,12 @@ func (m projectsModel) renderDetail(width, height int) string {
 		m.st.Emphasis.Render(p.Name) + "   " + m.st.HostColor(host).Render("● "+host),
 		m.st.Muted.Render(summarizePath(p.Path)),
 		"",
-		"session   " + m.st.Emphasis.Render(p.SessionName()),
-		"agent     " + m.st.AgentAccent(p.Agent).Render("• ") + m.st.Emphasis.Render(agentDisplay),
-		"detected  " + detected,
+		padLabel(tr("session"), 10) + m.st.Emphasis.Render(p.SessionName()),
+		padLabel(tr("agent"), 10) + m.st.AgentAccent(p.Agent).Render("• ") + m.st.Emphasis.Render(agentDisplay),
+		padLabel(tr("detected"), 10) + detected,
 		"",
-		m.st.Key.Render("a") + " " + m.st.Muted.Render("switch agent") + "   " +
-			m.st.Key.Render("i") + " " + m.st.Muted.Render("full project info"),
+		m.st.Key.Render("a") + " " + m.st.Muted.Render(tr("switch agent")) + "   " +
+			m.st.Key.Render("i") + " " + m.st.Muted.Render(tr("full project info")),
 	}
 	return m.st.Pane.Width(width - 2).Height(height - 2).Render(strings.Join(lines, "\n"))
 }
@@ -578,7 +578,7 @@ func renderAgentLegend(st styles.Styles, projects []project.Project) string {
 		}
 		inUse[id] = true
 	}
-	parts := []string{st.Muted.Render("agents:")}
+	parts := []string{st.Muted.Render(tr("agents:"))}
 	for _, a := range agent.All() {
 		if !inUse[a.ID()] {
 			continue
@@ -643,7 +643,7 @@ func createProjectCmd(submit newProjectSubmitMsg) tea.Cmd {
 			})
 			if err != nil {
 				return toastMsg{
-					Text:  "new project on " + submit.Host + ": " + err.Error(),
+					Text:  fmt.Sprintf(tr("new project on %s: %s"), submit.Host, err.Error()),
 					Kind:  toastError,
 					Until: time.Now().Add(8 * time.Second),
 				}
@@ -668,7 +668,7 @@ func createProjectCmd(submit newProjectSubmitMsg) tea.Cmd {
 		}
 		session, err := scaffold.StartSession(context.Background(), opts)
 		if err != nil {
-			return toastMsg{Text: "new project: " + err.Error(), Kind: toastError, Until: time.Now().Add(6 * time.Second)}
+			return toastMsg{Text: fmt.Sprintf(tr("new project: %s"), err.Error()), Kind: toastError, Until: time.Now().Add(6 * time.Second)}
 		}
 		return projectSessionReadyMsg{Session: session, Project: submit.Name}
 	}

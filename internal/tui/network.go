@@ -99,13 +99,13 @@ func (m *networkModel) StartRefresh() tea.Cmd {
 func (m networkModel) HelpBarProps(width int) components.HelpBarProps {
 	return components.HelpBarProps{
 		Hints: []components.KeyHint{
-			{Key: "?", Label: "help", Priority: 10},
-			{Key: "q", Label: "quit", Priority: 10},
-			{Key: "enter", Label: "ssh", Priority: 8},
-			{Key: "s", Label: "setup ssh", Priority: 7},
-			{Key: "i", Label: "details", Priority: 5},
-			{Key: "r", Label: "refresh", Priority: 4},
-			{Key: "1-7", Label: "screens", Priority: 2},
+			{Key: "?", Label: tr("help"), Priority: 10},
+			{Key: "q", Label: tr("quit"), Priority: 10},
+			{Key: "enter", Label: tr("ssh"), Priority: 8},
+			{Key: "s", Label: tr("setup ssh"), Priority: 7},
+			{Key: "i", Label: tr("details"), Priority: 5},
+			{Key: "r", Label: tr("refresh"), Priority: 4},
+			{Key: "1-7", Label: tr("screens"), Priority: 2},
 		},
 		Width: width,
 	}
@@ -296,11 +296,11 @@ func (m networkModel) View(width, height int) string {
 	// Header: just the title and a small device count. The inline
 	// action hint that used to live here is now in the HelpBar —
 	// avoid duplicating the key vocabulary across two places.
-	header := st.Emphasis.Render("Network") + "  " +
+	header := st.Emphasis.Render(tr("Network")) + "  " +
 		st.Muted.Render(fmt.Sprintf("(%d)", len(m.hosts)))
 
 	if len(m.hosts) == 0 {
-		parts := []string{header, "", st.Muted.Render("No devices discovered yet.")}
+		parts := []string{header, "", st.Muted.Render(tr("No devices discovered yet."))}
 		// One-sentence hint about the tailnet dependency — kept on
 		// wide because the empty state is rare and the user benefits
 		// from the pointer. The legend / glossary block is gone:
@@ -309,7 +309,7 @@ func (m networkModel) View(width, height int) string {
 			parts = append(parts,
 				"",
 				"This screen lists every machine on your tailnet that ccmux can see.",
-				"Make sure tailscale is signed in ("+st.Key.Render("tailscale status")+") and try "+st.Key.Render("r")+" to refresh.",
+				"Make sure tailscale is signed in ("+st.Key.Render(tr("tailscale status"))+") and try "+st.Key.Render("r")+" to refresh.",
 			)
 		}
 		return st.Pane.Width(width - 2).Height(height - 2).MaxWidth(width).Render(strings.Join(parts, "\n"))
@@ -349,7 +349,7 @@ func (m networkModel) View(width, height int) string {
 
 	rows = append(rows, "")
 	if sel := m.Selected(); sel != nil {
-		rows = append(rows, st.Subtitle.Render("Selected"))
+		rows = append(rows, st.Subtitle.Render(tr("Selected")))
 		rows = append(rows, "  name      "+sel.Name)
 		// The os / address / dial / ccmuxd-version detail is T2 —
 		// dropped on narrow so the Selected block stays compact.
@@ -382,9 +382,9 @@ func (m networkModel) View(width, height int) string {
 		rows = append(rows, "")
 		switch {
 		case sel.Local:
-			rows = append(rows, st.Muted.Render("This is the local machine — nothing to ssh into."))
+			rows = append(rows, st.Muted.Render(tr("This is the local machine — nothing to ssh into.")))
 		case sel.Mobile:
-			rows = append(rows, st.Muted.Render("Mobile device — connect via the Moshi iOS app, not ssh."))
+			rows = append(rows, st.Muted.Render(tr("Mobile device — connect via the Moshi iOS app, not ssh.")))
 		default:
 			rows = append(rows, st.Key.Render("enter")+"  ssh -t "+sel.DialHostOrAddr())
 		}
@@ -411,7 +411,7 @@ func (m networkModel) renderRow(h hostStatus, selected, narrow bool) string {
 	icon := iconForHost(h, st)
 	name := h.Name
 	if h.Local {
-		name += "  " + st.Muted.Render("(this device)")
+		name += "  " + st.Muted.Render(tr("(this device)"))
 	}
 	// Chip column: spinner while a refresh is in flight; the
 	// resolved chip set once state lands.
@@ -494,18 +494,18 @@ func (m networkModel) renderDetailOverlay(width, height int) string {
 	st := m.st
 	sel := m.Selected()
 	if sel == nil {
-		body := st.Muted.Render("(no host selected)")
+		body := st.Muted.Render(tr("(no host selected)"))
 		modal := st.PaneFocused.Width(40).Render(body)
 		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, modal)
 	}
 
 	lines := []string{
-		st.Emphasis.Render("Host detail · " + sel.Name),
-		st.Subtitle.Render("Pressed-i expansion of the Network row — tailnet IP, ccmuxd version, SSH status, and last-probe timestamp."),
+		st.Emphasis.Render(tr("Host detail · ") + sel.Name),
+		st.Subtitle.Render(tr("Pressed-i expansion of the Network row — tailnet IP, ccmuxd version, SSH status, and last-probe timestamp.")),
 		"",
 	}
 
-	lines = append(lines, st.Subtitle.Render("Identity"))
+	lines = append(lines, st.Subtitle.Render(tr("Identity")))
 	lines = append(lines, fmt.Sprintf("  name             %s", sel.Name))
 	if sel.OS != "" {
 		lines = append(lines, fmt.Sprintf("  os               %s", sel.OS))
@@ -515,7 +515,7 @@ func (m networkModel) renderDetailOverlay(width, height int) string {
 	}
 	lines = append(lines, "")
 
-	lines = append(lines, st.Subtitle.Render("Network"))
+	lines = append(lines, st.Subtitle.Render(tr("Network")))
 	if sel.Address != "" {
 		lines = append(lines, fmt.Sprintf("  tailnet address  %s", sel.Address))
 	}
@@ -527,13 +527,13 @@ func (m networkModel) renderDetailOverlay(width, height int) string {
 	}
 	lines = append(lines, "")
 
-	lines = append(lines, st.Subtitle.Render("Daemon"))
+	lines = append(lines, st.Subtitle.Render(tr("Daemon")))
 	if sel.Version != "" {
 		lines = append(lines, fmt.Sprintf("  ccmuxd version   %s", sel.Version))
 	} else if sel.NeedsInstall {
-		lines = append(lines, "  ccmuxd version   "+st.Muted.Render("(not installed)"))
+		lines = append(lines, "  ccmuxd version   "+st.Muted.Render(tr("(not installed)")))
 	} else {
-		lines = append(lines, "  ccmuxd version   "+st.Muted.Render("(unknown)"))
+		lines = append(lines, "  ccmuxd version   "+st.Muted.Render(tr("(unknown)")))
 	}
 	lines = append(lines, fmt.Sprintf("  sessions         %d", sel.Sessions))
 	if !sel.LastProbe.IsZero() {
@@ -557,7 +557,7 @@ func (m networkModel) renderDetailOverlay(width, height int) string {
 	}
 	lines = append(lines, "")
 
-	lines = append(lines, st.Muted.Render("press i or esc to close"))
+	lines = append(lines, st.Muted.Render(tr("press i or esc to close")))
 
 	modalW := minInt(72, width-4)
 	body := strings.Join(lines, "\n")

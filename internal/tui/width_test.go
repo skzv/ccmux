@@ -105,3 +105,34 @@ func TestWidthSweep_AllScreens(t *testing.T) {
 		}
 	}
 }
+
+// TestWidthSweep_AllScreensZh renders every screen under the zh language
+// and asserts the same no-overflow contract. Chinese labels are
+// double-width; this is the regression net for manual-padding
+// misalignment introduced by translated text. Agent names (Claude,
+// Codex, …) stay English by design, so they're valid anchors here too.
+func TestWidthSweep_AllScreensZh(t *testing.T) {
+	withLang(t, "zh")
+	widths := []int{50, 80, 100, 120, 200}
+	cases := []struct {
+		screen Screen
+		t0     []string // anchors that must appear at every width
+	}{
+		{ScreenSessions, []string{"会话"}},
+		{ScreenConversations, []string{"对话"}},
+		{ScreenProjects, []string{"项目"}},
+		{ScreenNotes, []string{"笔记"}},
+		{ScreenAgents, []string{"Claude", "Codex"}}, // agent names stay untranslated
+		{ScreenSettings, []string{"设置"}},
+		{ScreenNetwork, []string{"网络"}},
+	}
+	for _, tc := range cases {
+		for _, w := range widths {
+			t.Run(fmt.Sprintf("%s/%d", tc.screen, w), func(t *testing.T) {
+				out := renderScreenAt(tc.screen, w, 44)
+				assertNoOverflow(t, out, w)
+				assertPresent(t, out, tc.t0...)
+			})
+		}
+	}
+}

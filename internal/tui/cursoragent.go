@@ -233,17 +233,17 @@ func (m cursorAgentModel) viewBodyHeader() string {
 	case m.notInstalled:
 		header = append(header,
 			"",
-			"  "+st.Muted.Render("Cursor not detected — install from cursor.com"),
+			"  "+st.Muted.Render(tr("Cursor not detected — install from cursor.com")),
 		)
 	case m.loading && m.loadedAt.IsZero():
 		header = append(header,
 			"",
-			"  "+m.spinner.View()+" "+st.Muted.Render("reading ~/.cursor/ai-tracking…"),
+			"  "+m.spinner.View()+" "+st.Muted.Render(tr("reading ~/.cursor/ai-tracking…")),
 		)
 	case m.err != "":
 		header = append(header,
 			"",
-			st.Subtitle.Render("Usage"),
+			st.Subtitle.Render(tr("Usage")),
 			"  "+st.StatusWarning.Render("error: "+m.err),
 		)
 	default:
@@ -278,30 +278,30 @@ func (m cursorAgentModel) renderUsageSection() []string {
 	s := m.summary
 	lines := []string{
 		"",
-		st.Subtitle.Render("Usage"),
+		st.Subtitle.Render(tr("Usage")),
 	}
 
 	conv := lipgloss.NewStyle().Foreground(st.P.Lavender).Bold(true).
 		Render(fmt.Sprintf("%d", s.Conversations))
-	lines = append(lines, "  "+conv+" "+st.Muted.Render("conversations"))
+	lines = append(lines, "  "+conv+" "+st.Muted.Render(tr("conversations")))
 
 	if len(s.Models) > 0 {
-		lines = append(lines, "  "+st.Muted.Render("top models: ")+strings.Join(s.Models, ", "))
+		lines = append(lines, "  "+st.Muted.Render(tr("top models: "))+strings.Join(s.Models, ", "))
 	} else {
-		lines = append(lines, "  "+st.Muted.Render("top models: (none recorded)"))
+		lines = append(lines, "  "+st.Muted.Render(tr("top models: (none recorded)")))
 	}
 
 	linesAdded := lipgloss.NewStyle().Foreground(st.P.Lavender).Bold(true).
 		Render(fmt.Sprintf("%d", s.AILinesLast7d))
-	lines = append(lines, "  "+linesAdded+" "+st.Muted.Render("AI lines this week"))
+	lines = append(lines, "  "+linesAdded+" "+st.Muted.Render(tr("AI lines this week")))
 
 	if !s.LastActivity.IsZero() {
 		ago := humanDuration(m.clock().Sub(s.LastActivity))
-		lines = append(lines, "  "+st.Muted.Render("last activity: ")+
+		lines = append(lines, "  "+st.Muted.Render(tr("last activity: "))+
 			s.LastActivity.Local().Format("2006-01-02 15:04")+
 			" "+st.Muted.Render("("+ago+" ago)"))
 	} else {
-		lines = append(lines, "  "+st.Muted.Render("last activity: (no activity yet)"))
+		lines = append(lines, "  "+st.Muted.Render(tr("last activity: (no activity yet)")))
 	}
 	return lines
 }
@@ -315,10 +315,10 @@ func (m cursorAgentModel) renderConfigSection() []string {
 	configRoot := agent.Cursor{}.ConfigRoot(home)
 	transcriptsRoot := agent.Cursor{}.TranscriptsRoot(home)
 	return []string{
-		st.Subtitle.Render("Config files"),
-		"  " + st.Muted.Render("config: ") + summarizePath(configRoot),
-		"  " + st.Muted.Render("transcripts: ") + summarizePath(transcriptsRoot),
-		"  " + st.Muted.Render("tracking db: ") + summarizePath(m.dbPath),
+		st.Subtitle.Render(tr("Config files")),
+		"  " + st.Muted.Render(tr("config: ")) + summarizePath(configRoot),
+		"  " + st.Muted.Render(tr("transcripts: ")) + summarizePath(transcriptsRoot),
+		"  " + st.Muted.Render(tr("tracking db: ")) + summarizePath(m.dbPath),
 	}
 }
 
@@ -335,7 +335,7 @@ func (m cursorAgentModel) browserSections() []agentBrowserSection {
 }
 
 func (m cursorAgentModel) browserHooksSection() agentBrowserSection {
-	section := agentBrowserSection{Title: "Hooks", Color: m.st.P.Peach}
+	section := agentBrowserSection{Title: tr("Hooks"), Color: m.st.P.Peach}
 	if len(m.hooks.Hooks) == 0 {
 		return section
 	}
@@ -366,7 +366,7 @@ func (m cursorAgentModel) browserHooksSection() agentBrowserSection {
 }
 
 func (m cursorAgentModel) browserSkillsSection() agentBrowserSection {
-	section := agentBrowserSection{Title: "Skills", Color: m.st.P.Mauve}
+	section := agentBrowserSection{Title: tr("Skills"), Color: m.st.P.Mauve}
 	for _, s := range m.skills {
 		// Skill.Body is already loaded by cursorconfig.ListSkills.
 		body := s.Body

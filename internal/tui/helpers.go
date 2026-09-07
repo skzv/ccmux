@@ -3,11 +3,26 @@ package tui
 import (
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
+
+// padLabel right-pads a field label to `width` display columns so
+// mixed-width labels (CJK vs Latin) align in the same column. The
+// detail panes use fixed-width field labels ("session", "agent",
+// "detected"); Chinese translations are shorter but double-width, so a
+// byte/rune count would misalign them. lipgloss.Width measures display
+// columns, which is what the terminal actually shows.
+func padLabel(label string, width int) string {
+	if n := width - lipgloss.Width(label); n > 0 {
+		return label + strings.Repeat(" ", n)
+	}
+	return label
+}
 
 // pickEditor picks the editor to suspend ccmux into. Order: $VISUAL,
 // $EDITOR, then the first of nvim/vim/nano found on PATH; falls back

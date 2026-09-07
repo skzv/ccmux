@@ -175,7 +175,7 @@ func (a App) renderConfirmationOverlay(width, height int) string {
 	contentWidth := maxInt(10, modalWidth-6)
 	title := a.styles.Title.Render(a.confirm.title())
 	body := truncate(a.confirm.body(), contentWidth)
-	hint := a.styles.Muted.Render("y confirm  n/esc cancel  arrows move")
+	hint := a.styles.Muted.Render(tr("y confirm  n/esc cancel  arrows move"))
 
 	cancel := a.renderConfirmationButton("Cancel", a.confirm.focus == confirmationFocusCancel)
 	confirm := a.renderConfirmationButton(a.confirm.confirmLabel(), a.confirm.focus == confirmationFocusConfirm)

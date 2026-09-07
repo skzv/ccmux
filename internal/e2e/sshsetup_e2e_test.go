@@ -56,7 +56,7 @@ func TestSSHSetupCLI_EndToEnd_KeyInstalledAndProbeOK(t *testing.T) {
 	// y/N loop entirely.
 	args := []string{"host", "setup-ssh", "--skip-enumerate", "sputnik"}
 	cmd := exec.Command(builtCcmux, args...)
-	cmd.Env = os.Environ() // newEnv already set HOME via t.Setenv
+	cmd.Env = envWithEnglish() // newEnv already set HOME via t.Setenv
 	cmd.Dir = e.Home
 	cmd.Stdin = strings.NewReader("hunter2\n")
 	var stdout, stderr bytes.Buffer
@@ -111,7 +111,7 @@ func TestSSHSetupCLI_WrongPasswordExitsNonZero(t *testing.T) {
 	e.writeConfig(cfg)
 
 	cmd := exec.Command(builtCcmux, "host", "setup-ssh", "--skip-enumerate", "sputnik")
-	cmd.Env = os.Environ()
+	cmd.Env = envWithEnglish()
 	cmd.Dir = e.Home
 	cmd.Stdin = strings.NewReader("wrong-password\n")
 	out, err := cmd.CombinedOutput()

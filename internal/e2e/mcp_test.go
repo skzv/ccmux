@@ -6,7 +6,6 @@ import (
 	"bufio"
 	"encoding/json"
 	"io"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -28,7 +27,7 @@ func (e *Env) startMCP(args ...string) *mcpProc {
 	e.t.Helper()
 	cmd := exec.Command(builtCcmuxMCP, args...)
 	cmd.Dir = e.Home
-	cmd.Env = os.Environ() // newEnv already set sandbox HOME / PATH on the process env
+	cmd.Env = envWithEnglish() // newEnv already set sandbox HOME / PATH on the process env
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		e.t.Fatalf("mcp stdin: %v", err)

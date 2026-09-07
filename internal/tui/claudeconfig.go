@@ -460,14 +460,14 @@ func (m claudeModel) viewBodyHeader() string {
 		selected = m.rowCursor
 	}
 	header := []string{
-		st.Emphasis.Render("Claude Code Configuration"),
+		st.Emphasis.Render(tr("Claude Code Configuration")),
 		"",
-		st.AgentAccent(agent.IDClaude).Render("Defaults"),
+		st.AgentAccent(agent.IDClaude).Render(tr("Defaults")),
 	}
 	header = append(header, m.renderDefaultsRows(selected)...)
 	header = append(header,
 		"",
-		st.AgentAccent(agent.IDClaude).Render("Config files"),
+		st.AgentAccent(agent.IDClaude).Render(tr("Config files")),
 	)
 	header = append(header, m.renderConfigFilesRows(selected)...)
 	header = append(header, "")
@@ -598,7 +598,7 @@ func (m claudeModel) renderConfiguredRows() []string {
 // "<n> events").
 func (m claudeModel) hooksSummaryValue() string {
 	if m.settings == nil || len(m.settings.Hooks) == 0 {
-		return m.st.Muted.Render("(none)")
+		return m.st.Muted.Render(tr("(none)"))
 	}
 	return fmt.Sprintf("%d events", len(m.settings.Hooks))
 }
@@ -650,7 +650,7 @@ func sortedHookEventNames(hooks map[string][]claudeconfig.HookGroup) []string {
 
 func (m claudeModel) mcpSummaryValue() string {
 	if m.settings == nil || len(m.settings.MCPServers) == 0 {
-		return m.st.Muted.Render("(none)")
+		return m.st.Muted.Render(tr("(none)"))
 	}
 	return fmt.Sprintf("%d", len(m.settings.MCPServers))
 }
@@ -674,7 +674,7 @@ func (m claudeModel) mcpSummarySample() string {
 
 func (m claudeModel) permissionsSummaryValue() string {
 	if m.settings == nil || (len(m.settings.Permissions.Allow) == 0 && len(m.settings.Permissions.Deny) == 0) {
-		return m.st.Muted.Render("(prompt each time)")
+		return m.st.Muted.Render(tr("(prompt each time)"))
 	}
 	return fmt.Sprintf("%d allow · %d deny",
 		len(m.settings.Permissions.Allow), len(m.settings.Permissions.Deny))
@@ -682,7 +682,7 @@ func (m claudeModel) permissionsSummaryValue() string {
 
 func (m claudeModel) commandsSummaryValue() string {
 	if len(m.commands) == 0 {
-		return m.st.Muted.Render("(none)")
+		return m.st.Muted.Render(tr("(none)"))
 	}
 	return fmt.Sprintf("%d", len(m.commands))
 }
@@ -704,7 +704,7 @@ func (m claudeModel) commandsSummarySample() string {
 
 func (m claudeModel) skillsSummaryValue() string {
 	if len(m.skills) == 0 {
-		return m.st.Muted.Render("(none)")
+		return m.st.Muted.Render(tr("(none)"))
 	}
 	return fmt.Sprintf("%d", len(m.skills))
 }
@@ -730,14 +730,14 @@ func (m claudeModel) viewPicker(width, height int) string {
 	var rows []pickerRow
 	switch m.picker {
 	case pickerModel:
-		title = "Pick model"
-		subtitle = "Sets Claude Code's default (settings.json) AND pins it for ccmux-launched sessions."
+		title = tr("Pick model")
+		subtitle = tr("Sets Claude Code's default (settings.json) AND pins it for ccmux-launched sessions.")
 		for _, c := range m.unifiedModelChoices() {
 			rows = append(rows, pickerRow{Label: c.Label, Desc: c.Desc})
 		}
 	case pickerEffort:
-		title = "Pick reasoning effort"
-		subtitle = "Writes to " + m.paths.Settings + " (backed up first)."
+		title = tr("Pick reasoning effort")
+		subtitle = tr("Writes to ") + m.paths.Settings + tr(" (backed up first).")
 		for _, o := range claudeconfig.KnownEffortLevels() {
 			rows = append(rows, pickerRow{Label: o.Label, Desc: o.Desc})
 		}
@@ -756,7 +756,7 @@ func (m claudeModel) viewPicker(width, height int) string {
 	if m.picker == pickerModel && m.modelSource == "$ANTHROPIC_MODEL" {
 		lines = append(lines,
 			st.StatusWarning.Render("⚠ Your shell exports ANTHROPIC_MODEL="+m.model+"."),
-			st.Muted.Render("  Your pick is pinned for ccmux sessions (takes effect here)."),
+			st.Muted.Render(tr("  Your pick is pinned for ccmux sessions (takes effect here).")),
 			st.Muted.Render("  To change it everywhere, unset ANTHROPIC_MODEL in your shell (e.g. ~/.zshrc)."),
 		)
 	}
@@ -767,7 +767,7 @@ func (m claudeModel) viewPicker(width, height int) string {
 		lines = append(lines, components.RenderListRow(st, row, i == m.pickerCursor, pickerW))
 	}
 	lines = append(lines, "",
-		st.Muted.Render("↑↓ navigate  enter: choose  esc: cancel"),
+		st.Muted.Render(tr("↑↓ navigate  enter: choose  esc: cancel")),
 	)
 	modal := st.PaneFocused.Width(minInt(96, width-4)).Render(strings.Join(lines, "\n"))
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, modal)
@@ -857,7 +857,7 @@ func (m claudeModel) browserSections() []agentBrowserSection {
 }
 
 func (m claudeModel) browserHooksSection() agentBrowserSection {
-	section := agentBrowserSection{Title: "Hooks", Color: m.st.P.Peach}
+	section := agentBrowserSection{Title: tr("Hooks"), Color: m.st.P.Peach}
 	if m.settings == nil || len(m.settings.Hooks) == 0 {
 		return section
 	}
@@ -885,7 +885,7 @@ func (m claudeModel) browserHooksSection() agentBrowserSection {
 }
 
 func (m claudeModel) browserMCPSection() agentBrowserSection {
-	section := agentBrowserSection{Title: "MCP servers", Color: m.st.P.Sky}
+	section := agentBrowserSection{Title: tr("MCP servers"), Color: m.st.P.Sky}
 	if m.settings == nil || len(m.settings.MCPServers) == 0 {
 		return section
 	}
@@ -932,7 +932,7 @@ func (m claudeModel) browserMCPSection() agentBrowserSection {
 }
 
 func (m claudeModel) browserCommandsSection() agentBrowserSection {
-	section := agentBrowserSection{Title: "Commands", Color: m.st.P.Green}
+	section := agentBrowserSection{Title: tr("Commands"), Color: m.st.P.Green}
 	for _, c := range m.commands {
 		// The Command struct only carries Description in-memory; the
 		// underlying ~/.claude/commands/<name>.md body lives on disk

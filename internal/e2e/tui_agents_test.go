@@ -43,7 +43,7 @@ func TestTUIAgents_CodexReasoningEffortKeyPersists(t *testing.T) {
 
 	cmd := exec.Command(builtCcmux)
 	cmd.Dir = e.Home
-	cmd.Env = append(os.Environ(),
+	cmd.Env = envWithEnglish(
 		"CODEX_HOME="+codexHome,
 		"TERM=xterm-256color",
 	)

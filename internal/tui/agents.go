@@ -192,31 +192,31 @@ func (m agentsModel) onSubtabSwitch() (agentsModel, tea.Cmd) {
 //   - Cursor: (read-only) — no per-sub-tab keys.
 func (m agentsModel) HelpBarProps(width int) components.HelpBarProps {
 	hints := []components.KeyHint{
-		{Key: "?", Label: "help", Priority: 10},
-		{Key: "q", Label: "quit", Priority: 10},
-		{Key: "tab", Label: "next agent", Priority: 6},
-		{Key: "h/l", Label: "switch", Priority: 5},
-		{Key: "←→", Label: "pane", Priority: 5},
+		{Key: "?", Label: tr("help"), Priority: 10},
+		{Key: "q", Label: tr("quit"), Priority: 10},
+		{Key: "tab", Label: tr("next agent"), Priority: 6},
+		{Key: "h/l", Label: tr("switch"), Priority: 5},
+		{Key: "←→", Label: tr("pane"), Priority: 5},
 	}
 	switch m.active {
 	case agent.IDClaude:
 		hints = append(hints,
-			components.KeyHint{Key: "↑↓", Label: "nav", Priority: 5},
-			components.KeyHint{Key: "enter", Label: "select", Priority: 4},
-			components.KeyHint{Key: "m", Label: "model", Priority: 4},
-			components.KeyHint{Key: "e", Label: "effort", Priority: 4},
-			components.KeyHint{Key: "a", Label: "always", Priority: 3},
-			components.KeyHint{Key: "y", Label: "yolo", Priority: 3},
+			components.KeyHint{Key: "↑↓", Label: tr("nav"), Priority: 5},
+			components.KeyHint{Key: "enter", Label: tr("select"), Priority: 4},
+			components.KeyHint{Key: "m", Label: tr("model"), Priority: 4},
+			components.KeyHint{Key: "e", Label: tr("effort"), Priority: 4},
+			components.KeyHint{Key: "a", Label: tr("always"), Priority: 3},
+			components.KeyHint{Key: "y", Label: tr("yolo"), Priority: 3},
 			components.KeyHint{Key: "c", Label: "CLAUDE.md", Priority: 3},
 		)
 	case agent.IDCodex, agent.IDAntigravity:
 		hints = append(hints,
-			components.KeyHint{Key: "r", Label: "effort", Priority: 4},
-			components.KeyHint{Key: "y", Label: "yolo", Priority: 4},
-			components.KeyHint{Key: "e", Label: "edit", Priority: 3},
+			components.KeyHint{Key: "r", Label: tr("effort"), Priority: 4},
+			components.KeyHint{Key: "y", Label: tr("yolo"), Priority: 4},
+			components.KeyHint{Key: "e", Label: tr("edit"), Priority: 3},
 		)
 	}
-	hints = append(hints, components.KeyHint{Key: "1-7", Label: "screens", Priority: 2})
+	hints = append(hints, components.KeyHint{Key: "1-7", Label: tr("screens"), Priority: 2})
 	return components.HelpBarProps{Hints: hints, Width: width}
 }
 
@@ -255,9 +255,9 @@ func (m agentsModel) View(width, height int) string {
 	case agent.IDCursor:
 		body = m.cursor.ViewBody(innerW, innerH)
 	case agent.IDPi:
-		body = m.st.Muted.Render("pi settings are managed by the pi CLI (~/.pi + AGENTS.md).")
+		body = m.st.Muted.Render(tr("pi settings are managed by the pi CLI (~/.pi + AGENTS.md)."))
 	case agent.IDGrok:
-		body = m.st.Muted.Render("Grok settings are managed by the grok CLI (~/.grok/config.toml + AGENTS.md).")
+		body = m.st.Muted.Render(tr("Grok settings are managed by the grok CLI (~/.grok/config.toml + AGENTS.md)."))
 	}
 	inner := lipgloss.JoinVertical(lipgloss.Left, header, "", body)
 	return m.st.Pane.Width(width - 2).Height(height - 2).MaxWidth(width).Render(inner)
@@ -289,7 +289,7 @@ func (m agentsModel) renderSubtabs(narrow bool) string {
 		return strings.Join(parts, "\n")
 	}
 	subtabs := strings.Join(parts, "   ")
-	return subtabs + "   " + m.st.Muted.Render("(tab / h·l: switch agent)")
+	return subtabs + "   " + m.st.Muted.Render(tr("(tab / h·l: switch agent)"))
 }
 
 // agentConfigSubtabs is the fixed set of agents that get a config

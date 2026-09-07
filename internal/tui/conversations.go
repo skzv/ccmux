@@ -508,7 +508,7 @@ func (m conversationsModel) Update(msg tea.Msg) (conversationsModel, tea.Cmd) {
 
 func (m conversationsModel) View(width, height int) string {
 	st := m.st
-	header := st.Title.Render("Conversations")
+	header := st.Title.Render(tr("Conversations"))
 	if m.projectFilter != "" {
 		header = lipgloss.JoinHorizontal(lipgloss.Top, header,
 			"  "+st.Muted.Render("filter: "+m.projectFilter+"  (esc to clear)"))
@@ -568,7 +568,7 @@ func (m conversationsModel) View(width, height int) string {
 }
 
 func (m conversationsModel) renderListPanel(sections []conversationAgentSection, width, height int) string {
-	header := m.st.Title.Render("Conversations")
+	header := m.st.Title.Render(tr("Conversations"))
 	if m.projectFilter != "" {
 		header = lipgloss.JoinHorizontal(lipgloss.Top, header,
 			"  "+m.st.Muted.Render("filter: "+m.projectFilter+"  (esc to clear)"))
@@ -628,7 +628,7 @@ func (m conversationsModel) prependBanner(body string, width int) string {
 // each agent's directory" — much louder than a one-line muted hint.
 func (m conversationsModel) renderLoading(width, height int) string {
 	st := m.st
-	heading := st.Title.Render("Scanning transcripts")
+	heading := st.Title.Render(tr("Scanning transcripts"))
 	bar := m.spinner.View()
 	headLine := lipgloss.JoinHorizontal(lipgloss.Top, bar, "  ", heading)
 
@@ -741,7 +741,7 @@ func (m conversationsModel) renderConversationRowContent(c conversations.Convers
 	// truncated preview stay visible. The user still sees which row
 	// they armed; the chip says what `x` will do next.
 	if c.ID == m.pendingDelete {
-		chip := m.st.StatusError.Render("[delete? x to confirm · esc]")
+		chip := m.st.StatusError.Render(tr("[delete? x to confirm · esc]"))
 		chipW := lipgloss.Width(chip)
 		if chipW >= remaining {
 			return truncateDisplay(prefix+chip, width)
@@ -764,21 +764,21 @@ func (m conversationsModel) renderConversationRowContent(c conversations.Convers
 // Conversations. Replaces the legacy inline hint line that used to
 // hang under the body.
 func (m conversationsModel) HelpBarProps(width int) components.HelpBarProps {
-	hStatus := "hidden"
+	hStatus := tr("hidden")
 	if m.showHeadless {
-		hStatus = "shown"
+		hStatus = tr("shown")
 	}
 	return components.HelpBarProps{
 		Hints: []components.KeyHint{
-			{Key: "?", Label: "help", Priority: 10},
-			{Key: "q", Label: "quit", Priority: 10},
-			{Key: "enter", Label: "resume", Priority: 8},
-			{Key: "p", Label: "preview", Priority: 7},
-			{Key: "x", Label: "delete", Priority: 6},
-			{Key: "tab", Label: "sections", Priority: 5},
-			{Key: "H", Label: "headless: " + hStatus, Priority: 4},
-			{Key: "r", Label: "refresh", Priority: 3},
-			{Key: "1-7", Label: "screens", Priority: 2},
+			{Key: "?", Label: tr("help"), Priority: 10},
+			{Key: "q", Label: tr("quit"), Priority: 10},
+			{Key: "enter", Label: tr("resume"), Priority: 8},
+			{Key: "p", Label: tr("preview"), Priority: 7},
+			{Key: "x", Label: tr("delete"), Priority: 6},
+			{Key: "tab", Label: tr("sections"), Priority: 5},
+			{Key: "H", Label: tr("headless: ") + hStatus, Priority: 4},
+			{Key: "r", Label: tr("refresh"), Priority: 3},
+			{Key: "1-7", Label: tr("screens"), Priority: 2},
 		},
 		Width: width,
 	}
@@ -834,11 +834,11 @@ func (m conversationsModel) renderDetail(c conversations.Conversation, width, he
 	}
 
 	const labelW = 12
-	lines = append(lines, indent+st.Muted.Render(padLabel("last active", labelW))+"  "+relativeTimeLong(c.LastActivity))
+	lines = append(lines, indent+st.Muted.Render(padLabel(tr("last active"), labelW))+"  "+relativeTimeLong(c.LastActivity))
 	if count, ok := m.statsCache[c.ID]; ok && count >= 0 {
-		lines = append(lines, indent+st.Muted.Render(padLabel("messages", labelW))+"  "+fmt.Sprintf("%d", count))
+		lines = append(lines, indent+st.Muted.Render(padLabel(tr("messages"), labelW))+"  "+fmt.Sprintf("%d", count))
 	} else if !ok {
-		lines = append(lines, indent+st.Muted.Render(padLabel("messages", labelW))+"  "+st.Muted.Render("…"))
+		lines = append(lines, indent+st.Muted.Render(padLabel(tr("messages"), labelW))+"  "+st.Muted.Render("…"))
 	}
 	if c.IsHeadless() {
 		label := "headless"
@@ -848,7 +848,7 @@ func (m conversationsModel) renderDetail(c conversations.Conversation, width, he
 		case "codex_exec":
 			label = "headless / exec"
 		}
-		lines = append(lines, indent+st.Muted.Render(padLabel("mode", labelW))+"  "+st.StatusError.Render(label))
+		lines = append(lines, indent+st.Muted.Render(padLabel(tr("mode"), labelW))+"  "+st.StatusError.Render(label))
 	}
 
 	if c.Preview != "" {
@@ -856,7 +856,7 @@ func (m conversationsModel) renderDetail(c conversations.Conversation, width, he
 		if previewW < 1 {
 			previewW = 1
 		}
-		lines = append(lines, "", st.Muted.Render("First prompt"), indentBlock(wrapDetailText(c.Preview, previewW), indent))
+		lines = append(lines, "", st.Muted.Render(tr("First prompt")), indentBlock(wrapDetailText(c.Preview, previewW), indent))
 	}
 
 	// No keybind hints in the side pane — the screen-wide HelpBar at
@@ -865,16 +865,6 @@ func (m conversationsModel) renderDetail(c conversations.Conversation, width, he
 
 	_ = height
 	return constrainBlockWidth(strings.Join(lines, "\n"), width)
-}
-
-// padLabel right-pads a label to a fixed width so the value column
-// in the detail pane lines up. Plain spaces (not lipgloss padding) so
-// the result composes cleanly with Render() calls.
-func padLabel(s string, width int) string {
-	if len(s) >= width {
-		return s
-	}
-	return s + strings.Repeat(" ", width-len(s))
 }
 
 // displayPath collapses $HOME → "~" so the detail pane reads
@@ -935,23 +925,23 @@ func relativeTimeLong(t time.Time) string {
 	d := time.Since(t)
 	switch {
 	case d < time.Minute:
-		return "just now"
+		return tr("just now")
 	case d < time.Hour:
 		n := int(d.Minutes())
 		if n == 1 {
-			return "1 minute ago"
+			return tr("1 minute ago")
 		}
-		return fmt.Sprintf("%d minutes ago", n)
+		return fmt.Sprintf(tr("%d minutes ago"), n)
 	case d < 24*time.Hour:
 		n := int(d.Hours())
 		if n == 1 {
-			return "1 hour ago"
+			return tr("1 hour ago")
 		}
-		return fmt.Sprintf("%d hours ago", n)
+		return fmt.Sprintf(tr("%d hours ago"), n)
 	case d < 2*24*time.Hour:
-		return "yesterday"
+		return tr("yesterday")
 	case d < 30*24*time.Hour:
-		return fmt.Sprintf("%d days ago", int(d.Hours()/24))
+		return fmt.Sprintf(tr("%d days ago"), int(d.Hours()/24))
 	default:
 		return t.Format("Jan 02")
 	}

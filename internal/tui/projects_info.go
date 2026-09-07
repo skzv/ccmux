@@ -58,17 +58,17 @@ func (projectInfoOverlay) View(st styles.Styles, p project.Project, sessions []d
 		"",
 	}
 
-	lines = append(lines, st.Subtitle.Render("Identity"))
-	lines = append(lines, fmt.Sprintf("  session   %s", st.Emphasis.Render(p.SessionName())))
-	lines = append(lines, fmt.Sprintf("  agent     %s", st.Emphasis.Render(agentDisplay)))
+	lines = append(lines, st.Subtitle.Render(tr("Identity")))
+	lines = append(lines, fmt.Sprintf("  %s%s", padLabel(tr("session"), 10), st.Emphasis.Render(p.SessionName())))
+	lines = append(lines, fmt.Sprintf("  %s%s", padLabel(tr("agent"), 10), st.Emphasis.Render(agentDisplay)))
 	detected := renderScaffoldChips(st, p, false)
 	if detected == "" {
-		lines = append(lines, "  detected  "+st.Muted.Render("(none)"))
+		lines = append(lines, "  "+padLabel(tr("detected"), 10)+st.Muted.Render(tr("(none)")))
 	} else {
-		lines = append(lines, "  detected  "+strings.TrimLeft(detected, " "))
+		lines = append(lines, "  "+padLabel(tr("detected"), 10)+strings.TrimLeft(detected, " "))
 	}
 	if !p.Modified.IsZero() {
-		lines = append(lines, fmt.Sprintf("  modified  %s", st.Muted.Render(humanModified(p.Modified))))
+		lines = append(lines, fmt.Sprintf("  %s%s", padLabel(tr("modified"), 10), st.Muted.Render(humanModified(p.Modified))))
 	}
 	lines = append(lines, "")
 
@@ -76,11 +76,11 @@ func (projectInfoOverlay) View(st styles.Styles, p project.Project, sessions []d
 	// claim this project's session name as a prefix. Cheap O(n) scan of
 	// the already-loaded live session list.
 	count := countSessionsForProject(p, sessions)
-	lines = append(lines, st.Subtitle.Render("Sessions"))
+	lines = append(lines, st.Subtitle.Render(tr("Sessions")))
 	if count == 0 {
-		lines = append(lines, "  "+st.Muted.Render("no active sessions"))
+		lines = append(lines, "  "+st.Muted.Render(tr("no active sessions")))
 	} else {
-		lines = append(lines, fmt.Sprintf("  %s active", st.Emphasis.Render(fmt.Sprintf("%d", count))))
+		lines = append(lines, "  "+fmt.Sprintf(tr("%s active"), st.Emphasis.Render(fmt.Sprintf("%d", count))))
 	}
 	lines = append(lines, "")
 
@@ -88,7 +88,7 @@ func (projectInfoOverlay) View(st styles.Styles, p project.Project, sessions []d
 	// when the project doesn't have one (back-compat path).
 	if host == "local" {
 		if sidecar := readAgentSidecar(p.Path); sidecar != "" {
-			lines = append(lines, st.Subtitle.Render("Agent sidecar"))
+			lines = append(lines, st.Subtitle.Render(tr("Agent sidecar")))
 			lines = append(lines, indentedBlock.Render(st.Muted.Render(".ccmux/agent")))
 			lines = append(lines, indentedBlock.Render(strings.TrimRight(sidecar, "\n")))
 			lines = append(lines, "")
@@ -102,21 +102,21 @@ func (projectInfoOverlay) View(st styles.Styles, p project.Project, sessions []d
 	if host == "local" {
 		if p.HasCM {
 			if head := readMarkdownHead(p.Path, "CLAUDE.md", claudeMdHeadLines); head != "" {
-				lines = append(lines, st.Subtitle.Render(fmt.Sprintf("CLAUDE.md (first %d lines)", claudeMdHeadLines)))
+				lines = append(lines, st.Subtitle.Render(fmt.Sprintf(tr("CLAUDE.md (first %d lines)"), claudeMdHeadLines)))
 				lines = append(lines, indentedBlock.Render(head))
 				lines = append(lines, "")
 			}
 		}
 		if p.HasAgents {
 			if head := readMarkdownHead(p.Path, "AGENTS.md", claudeMdHeadLines); head != "" {
-				lines = append(lines, st.Subtitle.Render(fmt.Sprintf("AGENTS.md (first %d lines)", claudeMdHeadLines)))
+				lines = append(lines, st.Subtitle.Render(fmt.Sprintf(tr("AGENTS.md (first %d lines)"), claudeMdHeadLines)))
 				lines = append(lines, indentedBlock.Render(head))
 				lines = append(lines, "")
 			}
 		}
 	}
 
-	lines = append(lines, st.Muted.Render("press i or esc to close"))
+	lines = append(lines, st.Muted.Render(tr("press i or esc to close")))
 
 	body := strings.Join(lines, "\n")
 	modal := st.PaneFocused.Width(modalW).Render(body)
@@ -180,16 +180,16 @@ func readMarkdownHead(projectPath, name string, n int) string {
 func humanModified(t time.Time) string {
 	d := time.Since(t)
 	if d < time.Minute {
-		return "just now"
+		return tr("just now")
 	}
 	if d < time.Hour {
-		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+		return fmt.Sprintf(tr("%dm ago"), int(d.Minutes()))
 	}
 	if d < 24*time.Hour {
-		return fmt.Sprintf("%dh ago", int(d.Hours()))
+		return fmt.Sprintf(tr("%dh ago"), int(d.Hours()))
 	}
 	if d < 7*24*time.Hour {
-		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+		return fmt.Sprintf(tr("%dd ago"), int(d.Hours()/24))
 	}
 	return t.Format("2006-01-02")
 }

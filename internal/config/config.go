@@ -18,7 +18,8 @@ import (
 // Config is the root user-configurable state.
 type Config struct {
 	Projects      ProjectsConfig      `toml:"projects"`
-	Theme         string              `toml:"theme"` // catppuccin-mocha (default), dracula, nord, gruvbox, tokyo-night
+	Theme         string              `toml:"theme"`          // catppuccin-mocha (default), dracula, nord, gruvbox, tokyo-night
+	Lang          string              `toml:"lang,omitempty"` // UI language: "en"/"zh"; empty = follow $LANG
 	Editor        string              `toml:"editor"`
 	Sleep         SleepConfig         `toml:"sleep"`
 	Daemon        DaemonConfig        `toml:"daemon"`

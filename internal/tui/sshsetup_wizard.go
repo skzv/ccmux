@@ -624,20 +624,20 @@ func (m *sshWizardModel) View(w, h int) string {
 			m.st.Key.Render("•")+" idempotent — safe to re-run",
 		)
 		lines = append(lines, "")
-		lines = append(lines, m.st.Muted.Render("[Enter] continue   [Esc] cancel"))
+		lines = append(lines, m.st.Muted.Render(tr("[Enter] continue   [Esc] cancel")))
 	case sshWizardUser:
 		lines = append(lines, title.Render("Username on "+m.target.Host))
 		lines = append(lines, "")
 		lines = append(lines, "We'll install your key for this user. Edit if needed.")
 		lines = append(lines, "")
 		lines = append(lines, "Username:  "+m.userInput.View())
-		lines = append(lines, "Port:      "+m.portInput.View()+m.st.Muted.Render("   (Tab to edit if non-default)"))
+		lines = append(lines, "Port:      "+m.portInput.View()+m.st.Muted.Render(tr("   (Tab to edit if non-default)")))
 		if m.err != "" {
 			lines = append(lines, "")
 			lines = append(lines, m.st.Title.Foreground(m.st.P.Red).Render(m.err))
 		}
 		lines = append(lines, "")
-		lines = append(lines, m.st.Muted.Render("[Tab] switch field   [Enter] continue   [Esc] cancel"))
+		lines = append(lines, m.st.Muted.Render(tr("[Tab] switch field   [Enter] continue   [Esc] cancel")))
 	case sshWizardPassword:
 		lines = append(lines, title.Render("Password for "+m.target.String()))
 		lines = append(lines, "")
@@ -647,24 +647,24 @@ func (m *sshWizardModel) View(w, h int) string {
 			lines = append(lines, m.st.Title.Foreground(m.st.P.Red).Render(m.err))
 		}
 		lines = append(lines, "")
-		lines = append(lines, m.st.Muted.Render("[Enter] install key   [Esc] cancel"))
+		lines = append(lines, m.st.Muted.Render(tr("[Enter] install key   [Esc] cancel")))
 	case sshWizardProbing:
 		lines = append(lines, title.Render("Checking "+m.target.String()))
 		lines = append(lines, "")
 		lines = append(lines, m.st.Muted.Render("Testing key auth — if you're already set up, no password needed…"))
 		lines = append(lines, "")
-		lines = append(lines, m.st.Muted.Render("[Esc] cancel"))
+		lines = append(lines, m.st.Muted.Render(tr("[Esc] cancel")))
 	case sshWizardRunning:
 		lines = append(lines, title.Render("Installing on "+m.target.String()))
 		lines = append(lines, "")
 		if len(m.stages) == 0 {
-			lines = append(lines, m.st.Muted.Render("connecting…"))
+			lines = append(lines, m.st.Muted.Render(tr("connecting…")))
 		}
 		for _, s := range m.stages {
 			lines = append(lines, "  "+m.st.Key.Render("·")+" "+s)
 		}
 		lines = append(lines, "")
-		lines = append(lines, m.st.Muted.Render("[Esc] cancel"))
+		lines = append(lines, m.st.Muted.Render(tr("[Esc] cancel")))
 	case sshWizardEnumerate:
 		lines = append(lines, title.Render("Other users on "+m.target.Host))
 		lines = append(lines, "")
@@ -682,16 +682,16 @@ func (m *sshWizardModel) View(w, h int) string {
 			lines = append(lines, cursor+box+" "+u)
 		}
 		lines = append(lines, "")
-		lines = append(lines, m.st.Muted.Render("[space] toggle  [a] all  [n] none  [Enter] done  [Esc] skip"))
+		lines = append(lines, m.st.Muted.Render(tr("[space] toggle  [a] all  [n] none  [Enter] done  [Esc] skip")))
 	case sshWizardError:
-		lines = append(lines, title.Foreground(m.st.P.Red).Render("Setup failed"))
+		lines = append(lines, title.Foreground(m.st.P.Red).Render(tr("Setup failed")))
 		lines = append(lines, "")
 		// Wrap long error lines for readability inside the card.
 		lines = append(lines, wizardWrap(m.err, cardW-6)...)
 		lines = append(lines, "")
-		lines = append(lines, m.st.Muted.Render("[r] retry password   [Esc] cancel"))
+		lines = append(lines, m.st.Muted.Render(tr("[r] retry password   [Esc] cancel")))
 	case sshWizardHostKeyMismatch:
-		lines = append(lines, title.Foreground(m.st.P.Yellow).Render("⚠ Host key changed"))
+		lines = append(lines, title.Foreground(m.st.P.Yellow).Render(tr("⚠ Host key changed")))
 		lines = append(lines, "")
 		lines = append(lines,
 			fmt.Sprintf("The host key for %s doesn't match the one", m.target.Host),
@@ -708,13 +708,13 @@ func (m *sshWizardModel) View(w, h int) string {
 			"ccmux can drop the stale entry and retry. Otherwise — investigate.",
 		)
 		lines = append(lines, "")
-		lines = append(lines, m.st.Muted.Render("[y] remove + retry   [n / Esc] cancel"))
+		lines = append(lines, m.st.Muted.Render(tr("[y] remove + retry   [n / Esc] cancel")))
 	case sshWizardDone:
-		lines = append(lines, title.Foreground(m.st.P.Green).Render("Setup complete"))
+		lines = append(lines, title.Foreground(m.st.P.Green).Render(tr("Setup complete")))
 		lines = append(lines, "")
 		lines = append(lines, m.target.String()+" is ready for attach")
 		lines = append(lines, "")
-		lines = append(lines, m.st.Muted.Render("[Enter] continue"))
+		lines = append(lines, m.st.Muted.Render(tr("[Enter] continue")))
 	}
 
 	body := strings.Join(lines, "\n")

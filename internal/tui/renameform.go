@@ -41,7 +41,7 @@ func (m renameFormModel) Update(msg tea.Msg) (renameFormModel, tea.Cmd) {
 		case "enter":
 			newName := strings.TrimSpace(m.input.Value())
 			if newName == "" {
-				m.err = "name cannot be empty"
+				m.err = tr("name cannot be empty")
 				return m, nil
 			}
 			if newName == m.oldName {
@@ -60,12 +60,12 @@ func (m renameFormModel) Update(msg tea.Msg) (renameFormModel, tea.Cmd) {
 
 func (m renameFormModel) View(width int) string {
 	st := m.st
-	title := st.Emphasis.Render("Rename session")
-	hint := st.Subtitle.Render("Edit the tmux session name and press enter.")
+	title := st.Emphasis.Render(tr("Rename session"))
+	hint := st.Subtitle.Render(tr("Edit the tmux session name and press enter."))
 
-	label := st.Muted.Render("name  ")
+	label := st.Muted.Render(padLabel(tr("name"), 8))
 	field := st.Emphasis.Render("▌ ") + m.input.View()
-	keys := st.Muted.Render("enter: confirm   esc: cancel")
+	keys := st.Muted.Render(tr("enter: confirm   esc: cancel"))
 
 	parts := []string{title, hint, "", label + field, "", keys}
 	if m.err != "" {

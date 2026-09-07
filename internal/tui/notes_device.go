@@ -180,7 +180,7 @@ func (m notesModel) deviceHeaderLine() string {
 	}
 	chip := m.st.HostColor(label).Render("● " + label)
 	if len(m.selectableDeviceLabels()) > 1 {
-		chip += "  " + m.st.Muted.Render("H: switch device")
+		chip += "  " + m.st.Muted.Render(tr("H: switch device"))
 	}
 	return chip
 }
