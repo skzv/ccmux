@@ -1,7 +1,8 @@
 # muse-code Specification
 
 ## Purpose
-TBD - created by archiving change add-muse-code. Update Purpose after archive.
+Integrate native Meta Muse Code sessions into ccmux so users can launch, monitor, resume, inspect usage and safely remove conversations through both the terminal UI and CLI.
+
 ## Requirements
 ### Requirement: Muse session control
 ccmux SHALL expose Muse Code through CLI and TUI selection, setup and monitoring with custom executable support and native fresh/latest/exact resume commands.
