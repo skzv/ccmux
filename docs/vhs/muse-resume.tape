@@ -24,6 +24,7 @@ Type "/terminal"
 Enter
 Sleep 1s
 Screenshot docs/launch/v0.5.0/muse-history.png
+Sleep 1s
 Enter
 Sleep 3s
 # Resume still asks for native workspace trust after a headless seed.

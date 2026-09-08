@@ -65,3 +65,18 @@ The capture harness cleaned up its private daemon and tmux processes.
   homepage advertise v0.5.0.
 - Launch assets and three English X drafts are under docs/launch/v0.5.0/.
   No posts were published.
+
+## Media color correction
+
+The initial media review missed an inherited `NO_COLOR=1` in the automation
+shell. ccmux honored that setting, suppressing its palette in the recordings.
+The capture harness now explicitly selects true color and clears `NO_COLOR`;
+the authenticated recordings and screenshots were regenerated and rechecked.
+This changes capture settings only; the released application continues to
+honor terminal color preferences.
+
+The corrected clips are 26.32s and 24.92s (1600×960, H.264/yuv420p).
+Both MP4s and GIFs decode successfully. All three screenshots and key video
+transitions were visually checked, including agent accents and state colors.
+A one-second hold after screenshots prevents the next action from entering
+the captured frame. The live local daemon remains healthy at 0.5.0.

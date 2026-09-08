@@ -21,6 +21,13 @@ set -euo pipefail
 tape="${1:?usage: render.sh <tape.tape>}"
 repo="$(cd "$(dirname "$0")/../.." && pwd)"
 
+# VHS supplies a true-color terminal. Do not inherit an automation shell
+# color-disable preference into public demos (ccmux honors NO_COLOR).
+unset NO_COLOR
+export TERM=xterm-256color
+export COLORTERM=truecolor
+export CLICOLOR=1
+
 command -v vhs >/dev/null 2>&1 || { echo "render: vhs not installed — 'brew install vhs'"; exit 1; }
 [ -x "$repo/bin/ccmux" ] && [ -x "$repo/bin/ccmuxd" ] || { echo "render: build first — 'make build'"; exit 1; }
 
