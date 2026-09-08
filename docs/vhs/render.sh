@@ -33,7 +33,12 @@ REAL_HOME="$HOME"
 # output). Defaulting to $TMPDIR on macOS produced 80+-char paths
 # like /private/var/folders/h4/lcrsqwgs4d.../T/ccmux-vhs.XXX which
 # made every public-demo agent screen unreadable.
-root="$(mktemp -d "/tmp/ccmux-vhs.XXXXXX")"
+if [ "${CCMUX_MUSE_DEMO:-}" = "true" ]; then
+  mkdir -p "$REAL_HOME/.cache"
+  root="$(mktemp -d "$REAL_HOME/.cache/ccmux-vhs.XXXXXX")"
+else
+  root="$(mktemp -d "/tmp/ccmux-vhs.XXXXXX")"
+fi
 TMUX_SOCK="$root/tmux.sock"
 
 export HOME="$root/home"
@@ -81,6 +86,13 @@ chmod +x "$root/bin/tmux"
 
 # Shorthand for tmux calls within this script (real binary + socket).
 T() { "$REAL_TMUX" -S "$TMUX_SOCK" "$@"; }
+
+# Muse launch recordings use native Muse sessions and a separate minimal
+# fixture. Keep credentials in Muse's real config, with all session data here.
+if [ "${CCMUX_MUSE_DEMO:-}" = "true" ]; then
+  source "$repo/docs/vhs/muse-demo.sh"
+  exit 0
+fi
 
 # Agent wrappers — restore REAL_HOME before exec'ing each agent so they
 # authenticate against the real keychain/config, while ccmux/ccmuxd keep

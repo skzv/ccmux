@@ -19,7 +19,7 @@ func TestAll_CanonicalOrder(t *testing.T) {
 	got := All()
 	wantIDs := []ID{
 		IDClaude, IDCodex, IDAntigravity, IDCursor, IDPi, IDGrok,
-		IDOpenCode, IDKimi, IDDroid, IDCopilot, IDQoder, IDKilo, IDHermes, IDAmp, IDKiro,
+		IDOpenCode, IDKimi, IDDroid, IDCopilot, IDQoder, IDKilo, IDHermes, IDAmp, IDKiro, IDMuse,
 	}
 	if len(got) != len(wantIDs) {
 		t.Fatalf("All() len = %d, want %d", len(got), len(wantIDs))
@@ -224,7 +224,7 @@ func TestAgent_LaunchCmd_NewVsContinue(t *testing.T) {
 					fresh, a.Binary())
 			}
 			switch a.ID() {
-			case IDCursor:
+			case IDCursor, IDMuse:
 				if !strings.Contains(cont, " resume") {
 					t.Errorf("continue LaunchCmd = %q, expected resume subcommand", cont)
 				}

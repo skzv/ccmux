@@ -120,7 +120,7 @@ func newNewCmd() *cobra.Command {
 			if agentFlag != "" {
 				id, ok := agent.ParseID(agentFlag)
 				if !ok {
-					return fmt.Errorf("unknown agent %q (want claude, codex, antigravity, cursor, pi, or grok)", agentFlag)
+					return fmt.Errorf("unknown agent %q (want claude, codex, antigravity, cursor, pi, grok, or muse)", agentFlag)
 				}
 				opts.Agent = id
 			}
@@ -132,7 +132,7 @@ func newNewCmd() *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&agentFlag, "agent", "",
-		"agent to launch: claude, codex, antigravity, cursor, pi, or grok (default claude)")
+		"agent to launch: claude, codex, antigravity, cursor, pi, grok, or muse (default claude)")
 	return c
 }
 
@@ -259,6 +259,8 @@ func configuredDoctorCommand(cfg config.Config, id agent.ID) string {
 		return strings.TrimSpace(cfg.Agents.Cursor.Command)
 	case agent.IDPi:
 		return strings.TrimSpace(cfg.Agents.Pi.Command)
+	case agent.IDMuse:
+		return strings.TrimSpace(cfg.Agents.Muse.Command)
 	case agent.IDGrok:
 		return strings.TrimSpace(cfg.Agents.Grok.Command)
 	default:
@@ -501,6 +503,8 @@ func agentInstallHint(id agent.ID) string {
 		return "`uv tool install hermes-agent` (or see https://hermes-agent.nousresearch.com)"
 	case agent.IDAmp:
 		return "`npm i -g @sourcegraph/amp` (or see Amp docs at ampcode.com)"
+	case agent.IDMuse:
+		return "curl -fsSL https://dev.meta.ai/install.sh | bash  (macOS: brew install --cask muse-code); then muse login"
 	case agent.IDKiro:
 		return "see Kiro CLI install at https://kiro.dev/docs/cli"
 	}

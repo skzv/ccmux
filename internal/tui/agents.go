@@ -139,7 +139,7 @@ func (m agentsModel) Update(msg tea.Msg) (agentsModel, tea.Cmd) {
 		c, cmd := m.cursor.Update(msg)
 		m.cursor = c
 		return m, cmd
-	case agent.IDPi, agent.IDGrok:
+	case agent.IDPi, agent.IDGrok, agent.IDMuse:
 		// pi and grok are AGENTS.md-centric and manage their own
 		// config via their CLIs — no editable surface in ccmux yet,
 		// so the sub-tab is a placeholder.
@@ -256,6 +256,8 @@ func (m agentsModel) View(width, height int) string {
 		body = m.cursor.ViewBody(innerW, innerH)
 	case agent.IDPi:
 		body = m.st.Muted.Render(tr("pi settings are managed by the pi CLI (~/.pi + AGENTS.md)."))
+	case agent.IDMuse:
+		body = m.st.Muted.Render(tr("Muse settings and authentication are managed by the muse CLI. Run muse login to sign in."))
 	case agent.IDGrok:
 		body = m.st.Muted.Render(tr("Grok settings are managed by the grok CLI (~/.grok/config.toml + AGENTS.md)."))
 	}
@@ -303,7 +305,7 @@ func (m agentsModel) renderSubtabs(narrow bool) string {
 // grows.
 func agentConfigSubtabs() []agent.Agent {
 	return []agent.Agent{
-		agent.Claude{}, agent.Codex{}, agent.Antigravity{}, agent.Cursor{}, agent.Pi{}, agent.Grok{},
+		agent.Claude{}, agent.Codex{}, agent.Antigravity{}, agent.Cursor{}, agent.Pi{}, agent.Grok{}, agent.Muse{},
 	}
 }
 

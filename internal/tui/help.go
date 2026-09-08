@@ -68,6 +68,7 @@ func helpForScreen(s Screen, km Keymap) []HelpItem {
 			{"↑↓ / j k", tr("navigate conversation list")},
 			{"enter", tr("resume the selected conversation")},
 			{"H", tr("toggle headless / SDK conversations")},
+			{"/", tr("Search projects, previews, or IDs")},
 			{"r", tr("refresh conversation list")},
 		}
 	case ScreenNotes:

@@ -38,6 +38,7 @@ const (
 	IDCursor      ID = "cursor"
 	IDPi          ID = "pi"
 	IDGrok        ID = "grok"
+	IDMuse        ID = "muse"
 	// Second wave of terminal coding agents. Same strategy-interface
 	// shape as the originals; each reads AGENTS.md for project context
 	// (the cross-agent convention) and resolves by binary name on PATH.
@@ -147,6 +148,7 @@ type Commands struct {
 	Cursor      string
 	Pi          string
 	Grok        string
+	Muse        string
 	ClaudeModel string
 
 	// OpenRouter routing. OpenRouterAgents is the set of agent IDs the
@@ -174,7 +176,7 @@ func (c Commands) RoutesThroughOpenRouter(id ID) bool {
 func All() []Agent {
 	return []Agent{
 		Claude{}, Codex{}, Antigravity{}, Cursor{}, Pi{}, Grok{},
-		OpenCode{}, Kimi{}, Droid{}, Copilot{}, Qoder{}, Kilo{}, Hermes{}, Amp{}, Kiro{},
+		OpenCode{}, Kimi{}, Droid{}, Copilot{}, Qoder{}, Kilo{}, Hermes{}, Amp{}, Kiro{}, Muse{},
 	}
 }
 
@@ -216,6 +218,8 @@ func ByID(id ID) Agent {
 		return Cursor{}
 	case IDPi:
 		return Pi{}
+	case IDMuse, "muse-code":
+		return Muse{}
 	case IDGrok:
 		return Grok{}
 	case IDOpenCode:
@@ -258,6 +262,8 @@ func ParseID(s string) (ID, bool) {
 		return IDCursor, true
 	case IDPi:
 		return IDPi, true
+	case IDMuse, "muse-code":
+		return IDMuse, true
 	case IDGrok:
 		return IDGrok, true
 	case IDOpenCode:
@@ -442,6 +448,8 @@ func ResumeArgs(id ID, conversationID string, commands Commands) []string {
 		return nil
 	}
 	switch id {
+	case IDMuse:
+		return []string{configuredBinary(IDMuse, "muse", commands), "resume", conversationID}
 	case IDClaude:
 		argv := []string{configuredBinary(IDClaude, "claude", commands), "--resume", conversationID}
 		if model := strings.TrimSpace(commands.ClaudeModel); model != "" {
@@ -485,6 +493,8 @@ func configuredBinary(id ID, fallback string, commands Commands) string {
 
 func commandOverride(id ID, commands Commands) string {
 	switch id {
+	case IDMuse:
+		return strings.TrimSpace(commands.Muse)
 	case IDClaude:
 		if strings.TrimSpace(commands.Claude) != "" {
 			return strings.TrimSpace(commands.Claude)
@@ -549,6 +559,8 @@ func launchCmdWithBinary(a Agent, binary string, continueFlag bool, commands Com
 		return prefix + cmd
 	}
 	switch a.ID() {
+	case IDMuse:
+		return prefix + cmd + " resume --last || " + cmd + " || zsh || bash || sh"
 	case IDCursor:
 		return prefix + cmd + " resume || " + cmd + " || zsh || bash || sh"
 	}

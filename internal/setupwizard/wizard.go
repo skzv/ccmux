@@ -373,6 +373,8 @@ func configuredAgentCommand(cfg config.Config, id agent.ID) string {
 		return strings.TrimSpace(cfg.Agents.Cursor.Command)
 	case agent.IDPi:
 		return strings.TrimSpace(cfg.Agents.Pi.Command)
+	case agent.IDMuse:
+		return strings.TrimSpace(cfg.Agents.Muse.Command)
 	case agent.IDGrok:
 		return strings.TrimSpace(cfg.Agents.Grok.Command)
 	default:
@@ -393,6 +395,8 @@ func setConfiguredAgentCommand(cfg *config.Config, id agent.ID, command string) 
 		cfg.Agents.Cursor.Command = command
 	case agent.IDPi:
 		cfg.Agents.Pi.Command = command
+	case agent.IDMuse:
+		cfg.Agents.Muse.Command = command
 	case agent.IDGrok:
 		cfg.Agents.Grok.Command = command
 	}
@@ -433,6 +437,8 @@ func installHintFor(id agent.ID) string {
 		return "uv tool install hermes-agent"
 	case agent.IDAmp:
 		return "npm i -g @sourcegraph/amp"
+	case agent.IDMuse:
+		return "curl -fsSL https://dev.meta.ai/install.sh | bash  (macOS: brew install --cask muse-code); then muse login"
 	case agent.IDKiro:
 		return "see https://kiro.dev/docs/cli"
 	}

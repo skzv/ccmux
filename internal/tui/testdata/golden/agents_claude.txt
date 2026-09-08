@@ -1,5 +1,5 @@
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ • Claude Code   • Codex   • Antigravity CLI   • Cursor   • Pi   • Grok   (tab / h·l: switch agent)                   │
+│ • Claude Code   • Codex   • Antigravity CLI   • Cursor   • Pi   • Grok   • Muse Code   (tab / h·l: switch agent)     │
 │                                                                                                                      │
 │ Claude Code Configuration                                                                                            │
 │                                                                                                                      │

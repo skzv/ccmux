@@ -502,3 +502,8 @@
 "Interface language. Switches immediately." = "界面语言，切换后立即生效。"
 "Help improve ccmux" = "一起改进 ccmux"
 "Report issues, improve translations, or submit a PR." = "报告问题、完善翻译，或提交 PR。"
+
+"Muse settings and authentication are managed by the muse CLI. Run muse login to sign in." = "Muse 的设置和身份验证由 muse CLI 管理。运行 muse login 登录。"
+"cached input" = "缓存输入"
+"reasoning tokens" = "推理令牌"
+"Search projects, previews, or IDs" = "搜索项目、预览或 ID"

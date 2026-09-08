@@ -494,3 +494,8 @@
 "Interface language. Switches immediately." = "Idioma de la interfaz. Cambia inmediatamente."
 "Help improve ccmux" = "Ayuda a mejorar ccmux"
 "Report issues, improve translations, or submit a PR." = "Informa de errores, mejora las traducciones o envía un PR."
+
+"Muse settings and authentication are managed by the muse CLI. Run muse login to sign in." = "La CLI de Muse gestiona la configuración y la autenticación. Ejecuta muse login para iniciar sesión."
+"cached input" = "entrada en caché"
+"reasoning tokens" = "tokens de razonamiento"
+"Search projects, previews, or IDs" = "Buscar proyectos, vistas previas o ID"

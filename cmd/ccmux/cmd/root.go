@@ -154,6 +154,7 @@ func init() {
 		newNotesCmd(),
 		newAgentsCmd(),
 		newLanguageCmd(),
+		newUsageCmd(),
 		newContributeCmd(),
 	)
 }

@@ -117,11 +117,31 @@ Headless agent runs (`claude -p`, `codex exec`, SDK invocations) are filtered ou
 <img src="docs/vhs/out/cuj05_pick_agent.gif" alt="ccmux new-project form: cycle Claude / Codex / Antigravity / Cursor with arrow keys, the agent picker writes the per-project choice into .ccmux/agent." width="900" />
 </div>
 
-Pick per project which AI runs it — ccmux works with [Claude Code](https://claude.ai/code), [Codex](https://github.com/openai/codex), [Antigravity CLI](https://antigravity.google/download), [Cursor](https://cursor.com/cli), [pi](https://pi.dev), [Grok](https://x.ai/cli), and more, speaking each one's launch and resume dialect. The choice is sticky, stored at `<project>/.ccmux/agent`. The dashboard, daemon state-detection, and dispatch all follow per-project. Press `a` in the Projects tab to switch the selected project's agent (cycles claude → codex → antigravity → cursor → pi → grok).
+Pick per project which AI runs it — ccmux works with [Claude Code](https://claude.ai/code), [Codex](https://github.com/openai/codex), [Antigravity CLI](https://antigravity.google/download), [Cursor](https://cursor.com/cli), [pi](https://pi.dev), [Grok](https://x.ai/cli), [Muse Code](https://ccmux.ai/docs/muse-code/), and more, speaking each one's launch and resume dialect. The choice is sticky, stored at `<project>/.ccmux/agent`. The dashboard, daemon state-detection, and dispatch all follow per-project. Press `a` in the Projects tab to switch the selected project's agent (cycles claude → codex → antigravity → cursor → pi → grok).
 
 Dashboard rows on non-default agents get a small `[codex]`, `[antigravity]`, `[cursor]`, `[pi]`, or `[grok]` tag so a single glance tells you what's running where.
 
 ---
+
+### Muse Code
+
+Install Meta's CLI with `brew install --cask muse-code`, then run `muse login`.
+Start a fresh project with `ccmux new muse-demo --agent muse`, or select Muse Code
+in the new-project form. Reopen a project to continue its latest session, or
+choose an exact conversation in Conversations (`ccmux resume <id>` in the CLI).
+
+Muse history, previews, search, message counts, and token usage come from native
+session logs. Press `/` in Conversations to search project paths, previews, or IDs;
+use `ccmux list-conversations --query "cache"` from the CLI. Child-agent usage is included once; unavailable cost is shown
+explicitly. `ccmux usage --json` exposes the same recorded totals as the dashboard.
+Deleting an inactive conversation removes its complete session and derived cache;
+Muse's native locks protect active sessions and child agents.
+
+Read the guide in [English](https://ccmux.ai/docs/muse-code/),
+[中文](https://ccmux.ai/zh/docs/muse-code/), [Español](https://ccmux.ai/es/docs/muse-code/),
+[日本語](https://ccmux.ai/ja/docs/muse-code/), [한국어](https://ccmux.ai/ko/docs/muse-code/),
+[Français](https://ccmux.ai/fr/docs/muse-code/), [Deutsch](https://ccmux.ai/de/docs/muse-code/),
+[Português](https://ccmux.ai/pt-br/docs/muse-code/), or [Русский](https://ccmux.ai/ru/docs/muse-code/).
 
 ## 📝 Project notes, terminal-native.
 

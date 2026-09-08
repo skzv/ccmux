@@ -227,7 +227,8 @@ func (a App) modalCapturingText() bool {
 		return true
 	}
 	// Per-screen seams.
-	return a.sessionsM.capturesInput() ||
+	return a.conversationsM.capturesInput() ||
+		a.sessionsM.capturesInput() ||
 		a.projectsM.capturesInput() ||
 		a.notes.capturesInput() ||
 		a.agentsM.capturesInput() ||
@@ -1283,6 +1284,17 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			var cmd tea.Cmd
 			a.projectsM, cmd = a.projectsM.Update(msg)
+			return a, cmd
+		}
+
+		// Conversation search owns digits, delete/quit keys, and Enter until
+		// committed; typing a query must never launch or delete a conversation.
+		if a.screen == ScreenConversations && a.conversationsM.capturesInput() {
+			if msg.String() == "ctrl+c" {
+				return a, tea.Quit
+			}
+			var cmd tea.Cmd
+			a.conversationsM, cmd = a.conversationsM.Update(msg)
 			return a, cmd
 		}
 

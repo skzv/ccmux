@@ -1130,12 +1130,15 @@ func (s *server) openRouterSpend(ctx context.Context) daemon.OpenRouterSpend {
 
 func toUsageSummary(s usage.AgentSummary) daemon.UsageSummary {
 	return daemon.UsageSummary{
-		HasData:       s.HasData,
-		WindowSeconds: int(s.Window / time.Second),
-		Prompts:       s.Prompts,
-		InputTokens:   s.InputTokens,
-		OutputTokens:  s.OutputTokens,
-		EstimatedCost: s.EstimatedCost,
+		CachedInputTokens: s.CachedInputTokens,
+		ReasoningTokens:   s.ReasoningTokens,
+		CostAvailable:     s.CostAvailable,
+		HasData:           s.HasData,
+		WindowSeconds:     int(s.Window / time.Second),
+		Prompts:           s.Prompts,
+		InputTokens:       s.InputTokens,
+		OutputTokens:      s.OutputTokens,
+		EstimatedCost:     s.EstimatedCost,
 	}
 }
 
