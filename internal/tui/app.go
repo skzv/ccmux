@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -706,12 +707,16 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// refresh Sessions so the row shows up immediately on return.
 		// Re-label the overlay now that we know the destination
 		// session name (the resume cmd builds c-resume-<id>).
-		a.attach.label = msg.Project
+		label := ""
+		if msg.Project != "" {
+			label = filepath.Base(msg.Project)
+		}
+		a.attach.label = label
 		if a.attach.label == "" {
 			a.attach.label = msg.Session
 		}
 		return a, tea.Batch(
-			a.localNewSessionAttachCmd(msg.Session, msg.Project),
+			a.localNewSessionAttachCmd(msg.Session, label),
 			a.refreshSessionsCmd(),
 			func() tea.Msg {
 				return toastMsg{
@@ -2811,6 +2816,10 @@ func (a App) resumeConversationCmd(c conversations.Conversation) tea.Cmd {
 		defer cancel()
 		if err := tmux.New(ctx, sessionName, c.Project, cmdline); err != nil {
 			return conversationResumedMsg{Err: fmt.Errorf("tmux new-session: %w", err)}
+		}
+		if err := tmux.SetSessionAgent(ctx, sessionName, string(c.Agent)); err != nil {
+			_ = tmux.Kill(ctx, sessionName)
+			return conversationResumedMsg{Err: err}
 		}
 		return conversationResumedMsg{
 			Session: sessionName,

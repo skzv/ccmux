@@ -45,6 +45,8 @@ env HOME="$REAL_HOME" XDG_CONFIG_HOME="${CCMUX_MUSE_CONFIG_ROOT:-$REAL_HOME/.con
   cat "$root/seed.err" >&2
   exit 1
 }
+# Use a readable native tmux window title in the launch footage.
+T start-server \; set-option -g exit-empty off \; set-option -g automatic-rename off \; set-hook -g after-new-session 'rename-window Muse'
 "$root/bin/ccmuxd" > "$root/daemon.log" 2>&1 &
 sleep 2
 mkdir -p "$repo/docs/launch/v0.5.0"

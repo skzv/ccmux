@@ -167,6 +167,9 @@ func resumeNow(target conversations.Conversation) error {
 		}
 		detachOthers = attachDetachOthers()
 	}
+	if err := tmux.SetSessionAgent(ctx, sessionName, string(target.Agent)); err != nil {
+		return err
+	}
 	// Hand off to tmux attach via exec — replaces the current process
 	// so when the user detaches they return to whatever shell launched
 	// `ccmux resume`, not to ccmux itself. attachWithChrome applies

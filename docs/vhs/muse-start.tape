@@ -5,7 +5,7 @@ Output docs/launch/v0.5.0/muse-start.gif
 Set Theme "Catppuccin Mocha"
 Set FontSize 18
 Set Width 1600
-Set Height 840
+Set Height 960
 Set Padding 24
 Set TypingSpeed 55ms
 Hide
@@ -19,7 +19,7 @@ Sleep 2s
 Type "1"
 Enter
 Sleep 1s
-Type "What keeps a tmux session alive?"
+Type "In one sentence: what keeps a tmux session alive?"
 Enter
 Sleep 10s
 Screenshot docs/launch/v0.5.0/muse-session.png

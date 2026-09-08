@@ -95,6 +95,9 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 		live[ts.Name] = true
 		t, ok := s.seen[ts.Name]
 		agentID := s.projectAgent(ts.Path)
+		if explicit, ok := agent.ParseID(ts.Agent); ok {
+			agentID = explicit
+		}
 		if !ok {
 			t = &tracked{
 				created:     ts.Created,

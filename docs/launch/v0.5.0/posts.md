@@ -1,8 +1,8 @@
 # ccmux v0.5.0 — X drafts
 
 Drafts only. Publish after the v0.5.0 release and website deployment are verified.
-Current media are offline Muse echo previews pending authenticated acceptance.
-Replace them with `CCMUX_MUSE_PROVIDER=meta` recordings before using these drafts.
+Media were regenerated with authenticated Meta Muse Code 1.0.3 on 2026-09-08.
+Fresh responses, exact conversation resume, screenshots and video transitions were reviewed.
 No posts have been sent to X.
 
 ## 1. Release announcement
@@ -34,8 +34,11 @@ Alt text, in order: Muse conversation history and preview in ccmux; a native Mus
 
 ## Capture notes
 
-- Two VHS tapes under `docs/vhs/`; each targets 15–30 seconds, 1600×840.
+- Two VHS tapes under `docs/vhs/`; 25.48s and 24.16s, both 1600×960.
 - MP4 is the primary X upload; GIF is a fallback. PNGs are standalone stills.
 - Disposable content only; native authentication is never filmed.
 - Watch each clip and inspect the screenshots after a rerender. Model response
   latency can require adjusting the tape's sleep before capture.
+
+- Verified H.264 / yuv420p MP4s; both GIFs decode successfully.
+- Build version is 0.5.0; native Muse model is muse-spark-1.3-contributor.

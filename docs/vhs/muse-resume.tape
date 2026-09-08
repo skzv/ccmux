@@ -5,7 +5,7 @@ Output docs/launch/v0.5.0/muse-resume.gif
 Set Theme "Catppuccin Mocha"
 Set FontSize 18
 Set Width 1600
-Set Height 840
+Set Height 960
 Set Padding 24
 Set TypingSpeed 55ms
 Hide
