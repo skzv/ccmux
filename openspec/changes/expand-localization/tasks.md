@@ -10,6 +10,6 @@
 - [x] 2.3 Test all locales, language switching, mobile layouts, examples, internal links and SEO invariants.
 
 ## 3. Delivery
-- [ ] 3.1 Review and merge passing app and website PRs.
-- [ ] 3.2 Publish an app release and deploy the website with localized nginx errors.
-- [ ] 3.3 Verify production pages, metadata, links, language navigation and release artifacts.
+- [x] 3.1 Review and merge passing app and website PRs.
+- [x] 3.2 Publish an app release and deploy the website with localized nginx errors.
+- [x] 3.3 Verify production pages, metadata, links, language navigation and release artifacts.
