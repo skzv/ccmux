@@ -2504,21 +2504,26 @@ func joinShellArgs(argv []string) string {
 }
 
 // launchCmdForProject and launchCmdForProjectPath are the canonical
-// places to resolve the tmux launch command for a project session.
-// Both go through agent.LaunchCmd(..., true, ...) — `true` because
-// every project-attach path is "resume the existing conversation"
-// from the user's POV; `--continue` is what makes the resume real.
+// places to resolve the tmux launch command for a new project session.
+// Both go through agent.LaunchCmd(..., false, ...) — `false` because
+// every caller creates a session the user asked for as new: the
+// project menu's "Start a new session" row, and the direct create for
+// a project with no sessions and no history. Resuming an existing
+// conversation is a separate menu row that goes through
+// resumeConversationCmd with the conversation's own ID, so a
+// `--continue` here would only ever pick up a conversation the user
+// did not choose.
 //
 // Two flavors because some sites have the Project in hand and others
 // only have the path. Both must agree so a project whose sidecar
-// says Antigravity launches `agy --continue || agy || zsh` no matter
-// which code path the user took.
+// says Antigravity launches `agy` no matter which code path the user
+// took.
 func launchCmdForProject(p project.Project) string {
 	return launchCmdForProjectWithCommands(p, agent.Commands{})
 }
 
 func launchCmdForProjectWithCommands(p project.Project, commands agent.Commands) string {
-	return agent.LaunchCmd(p.Agent, true, commands)
+	return agent.LaunchCmd(p.Agent, false, commands)
 }
 
 func launchCmdForProjectPath(projectPath string) string {
@@ -2526,7 +2531,7 @@ func launchCmdForProjectPath(projectPath string) string {
 }
 
 func launchCmdForProjectPathWithCommands(projectPath string, commands agent.Commands) string {
-	return agent.LaunchCmd(project.ReadAgent(projectPath), true, commands)
+	return agent.LaunchCmd(project.ReadAgent(projectPath), false, commands)
 }
 
 // remoteTmuxAttach builds the single-string command we hand to ssh
