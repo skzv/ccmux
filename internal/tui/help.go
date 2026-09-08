@@ -187,6 +187,9 @@ func (a App) renderHelpOverlay(width, height int) string {
 		}
 	}
 
+	lines = append(lines, "", st.Subtitle.Render(tr("Help improve ccmux")),
+		st.Muted.Render(tr("Report issues, improve translations, or submit a PR.")),
+		st.Muted.Render("ccmux contribute"))
 	lines = append(lines, "", st.Muted.Render(tr("press ? or esc to close")))
 
 	modalW := minInt(96, width-4)

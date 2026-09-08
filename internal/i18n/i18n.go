@@ -1,8 +1,5 @@
-// Package i18n provides the ccmux TUI's lightweight localization.
-// English phrases are the keys; a translation table maps them to the
-// current language. A missing key returns the English key verbatim, so
-// English needs no table and an untranslated string degrades to English
-// rather than breaking rendering.
+// Package i18n localizes the TUI using embedded, immutable catalogs.
+// English phrases are keys and remain the fallback for unknown phrases.
 package i18n
 
 import (
@@ -14,7 +11,6 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-// Lang is a supported UI language.
 type Lang string
 
 const (
@@ -22,67 +18,99 @@ const (
 	LangZh Lang = "zh"
 )
 
+type Language struct {
+	Code Lang
+	Name string
+}
+
+var languages = []Language{
+	{LangEn, "English"}, {LangZh, "简体中文"}, {"es", "Español"},
+	{"ja", "日本語"}, {"ko", "한국어"}, {"fr", "Français"},
+	{"de", "Deutsch"}, {"pt-br", "Português (Brasil)"}, {"ru", "Русский"},
+}
+
+// Languages returns a copy so callers cannot mutate the registry.
+func Languages() []Language { return append([]Language(nil), languages...) }
+func Name(code Lang) string {
+	for _, language := range languages {
+		if language.Code == code {
+			return language.Name
+		}
+	}
+	return string(code)
+}
+
+func Codes() []string {
+	codes := make([]string, len(languages))
+	for i, language := range languages {
+		codes[i] = string(language.Code)
+	}
+	return codes
+}
+
 //go:embed locales/*.toml
 var localesFS embed.FS
-
-var (
-	useChinese atomic.Bool
-	zhTable    map[string]string
-)
+var active atomic.Value
+var tables = map[Lang]map[string]string{}
 
 func init() {
-	b, err := localesFS.ReadFile("locales/zh.toml")
-	if err != nil {
-		return // no zh table: everything falls back to English
-	}
-	if _, err := toml.Decode(string(b), &zhTable); err != nil {
-		zhTable = nil // corrupt file: fall back to English, never crash
+	active.Store(LangEn)
+	for _, language := range languages {
+		if language.Code == LangEn {
+			continue
+		}
+		b, err := localesFS.ReadFile("locales/" + string(language.Code) + ".toml")
+		if err != nil {
+			continue
+		}
+		table := map[string]string{}
+		if _, err := toml.Decode(string(b), &table); err == nil {
+			tables[language.Code] = table
+		}
 	}
 }
 
-// Resolve picks the effective language. A non-empty explicit value wins
-// (recognized as zh by prefix match, anything else is English); an empty
-// explicit value uses the first non-empty locale (LC_ALL then LANG).
-// Pure so it is table-testable; env may be nil to use os.Getenv.
+// Parse accepts supported language tags and common POSIX locale variants.
+// Unknown tags are rejected, rather than accidentally matching a prefix.
+func Parse(value string) (Lang, bool) {
+	tag := strings.ToLower(strings.TrimSpace(value))
+	tag = strings.SplitN(strings.SplitN(tag, ".", 2)[0], "@", 2)[0]
+	tag = strings.ReplaceAll(tag, "_", "-")
+	base := strings.SplitN(tag, "-", 2)[0]
+	if base == "pt" {
+		return "pt-br", true
+	}
+	for _, language := range languages {
+		if tag == string(language.Code) || base == string(language.Code) {
+			return language.Code, true
+		}
+	}
+	return LangEn, false
+}
+
+// Resolve honors explicit config, then the first nonempty LC_ALL / LANG.
+// Unsupported and C/POSIX locales use English.
 func Resolve(lang string, env func(string) string) Lang {
 	if lang != "" {
-		if strings.HasPrefix(strings.ToLower(lang), "zh") {
-			return LangZh
-		}
-		return LangEn
+		code, _ := Parse(lang)
+		return code
 	}
 	if env == nil {
 		env = os.Getenv
 	}
-	for _, k := range []string{"LC_ALL", "LANG"} {
-		if v := env(k); v != "" {
-			return Resolve(v, nil)
+	for _, key := range []string{"LC_ALL", "LANG"} {
+		if value := env(key); value != "" {
+			code, _ := Parse(value)
+			return code
 		}
 	}
 	return LangEn
 }
-
-// SetLanguage switches the package's current language. An empty value
-// resolves from the environment.
-func SetLanguage(lang string) {
-	useChinese.Store(Resolve(lang, nil) == LangZh)
-}
-
-// Current returns the active language.
-func Current() Lang {
-	if useChinese.Load() {
-		return LangZh
-	}
-	return LangEn
-}
-
-// T returns the current language's translation of key, or the key
-// itself when untranslated. Never panics.
+func SetLanguage(lang string) { active.Store(Resolve(lang, nil)) }
+func Current() Lang           { return active.Load().(Lang) }
 func T(key string) string {
-	if Current() == LangZh && zhTable != nil {
-		if v, ok := zhTable[key]; ok {
-			return v
-		}
+	if value, ok := tables[Current()][key]; ok && value != "" {
+		return value
 	}
 	return key
 }

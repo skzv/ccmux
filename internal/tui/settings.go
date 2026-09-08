@@ -300,9 +300,9 @@ func editableFields() []editableField {
 		},
 		{
 			label:   "i18n.lang",
-			hint:    tr("Interface language. Switches immediately. en / zh"),
+			hint:    tr("Interface language. Switches immediately."),
 			chip:    true,
-			options: []string{"en", "zh"},
+			options: i18n.Codes(),
 			get: func(c *config.Config) string {
 				// Surface the effective language, not the raw config value — when
 				// config.lang is empty the row should show what's actually in use
@@ -310,14 +310,14 @@ func editableFields() []editableField {
 				return string(i18n.Current())
 			},
 			set: func(c *config.Config, raw string) error {
-				switch strings.ToLower(strings.TrimSpace(raw)) {
-				case "en", "":
-					c.Lang = "en"
-				case "zh":
-					c.Lang = "zh"
-				default:
-					return fmt.Errorf("must be 'en' or 'zh'")
+				if strings.TrimSpace(raw) == "" {
+					raw = "en"
 				}
+				code, ok := i18n.Parse(raw)
+				if !ok {
+					return fmt.Errorf("unsupported language: %s (choose %s)", raw, strings.Join(i18n.Codes(), ", "))
+				}
+				c.Lang = string(code)
 				// Hot-switch: flip the live language now; every future
 				// View() re-reads through tr(), so no restart is needed.
 				i18n.SetLanguage(c.Lang)
@@ -829,10 +829,14 @@ func (m settingsModel) renderDetailOptions(f editableField) []string {
 	current := strings.TrimSpace(strings.ToLower(f.get(&m.cfg)))
 	lines := []string{m.st.Subtitle.Render(tr("Options")) + "  " + m.st.Muted.Render(tr("enter cycles"))}
 	for _, opt := range f.options {
+		label := opt
+		if f.label == "i18n.lang" {
+			label += " · " + i18n.Name(i18n.Lang(opt))
+		}
 		if strings.ToLower(opt) == current {
-			lines = append(lines, "  "+m.renderChipColor(opt, m.chipColorForField(f, opt), true))
+			lines = append(lines, "  "+m.renderChipColor(label, m.chipColorForField(f, opt), true))
 		} else {
-			lines = append(lines, "  "+m.st.Muted.Render(opt))
+			lines = append(lines, "  "+m.st.Muted.Render(label))
 		}
 	}
 	return lines

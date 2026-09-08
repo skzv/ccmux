@@ -548,3 +548,17 @@ The workflow this tool wraps was developed in public by the AI-first software en
 - The Tailscale and Mosh teams for the connectivity layers
 - Anthropic for shipping Claude Code
 - The Blink Shell and Moshi maintainers for making mobile terminals actually good
+
+## Languages and contributions
+
+The TUI supports English, Simplified Chinese, Spanish, Japanese, Korean, French, German, Brazilian Portuguese, and Russian. Change the language immediately in Settings, or save a preference from the shell:
+
+```sh
+ccmux language       # list codes and native language names
+ccmux language ru    # save Russian; reopen the TUI to apply
+ccmux contribute    # contribution and issue links
+```
+
+With no configured language, ccmux follows `LC_ALL`, then `LANG`, falling back to English. Website language choices are available in the top toolbar at [ccmux.ai](https://ccmux.ai).
+
+Found a bug or wording that could be clearer? [Report it or submit a pull request](CONTRIBUTING.md). Translation improvements from native speakers are welcome.

@@ -19,7 +19,7 @@ import (
 type Config struct {
 	Projects      ProjectsConfig      `toml:"projects"`
 	Theme         string              `toml:"theme"`          // catppuccin-mocha (default), dracula, nord, gruvbox, tokyo-night
-	Lang          string              `toml:"lang,omitempty"` // UI language: "en"/"zh"; empty = follow $LANG
+	Lang          string              `toml:"lang,omitempty"` // UI language code; empty = follow LC_ALL, then LANG
 	Editor        string              `toml:"editor"`
 	Sleep         SleepConfig         `toml:"sleep"`
 	Daemon        DaemonConfig        `toml:"daemon"`
