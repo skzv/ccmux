@@ -23,6 +23,7 @@ Type "In one sentence: what keeps a tmux session alive?"
 Enter
 Sleep 10s
 Screenshot docs/launch/v0.5.0/muse-session.png
+Sleep 1s
 Ctrl+b
 Sleep 300ms
 Type "d"

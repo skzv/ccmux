@@ -34,7 +34,7 @@ Alt text, in order: Muse conversation history and preview in ccmux; a native Mus
 
 ## Capture notes
 
-- Two VHS tapes under `docs/vhs/`; 25.48s and 24.16s, both 1600×960.
+- Two VHS tapes under `docs/vhs/`; 26.32s and 24.92s, both 1600×960.
 - MP4 is the primary X upload; GIF is a fallback. PNGs are standalone stills.
 - Disposable content only; native authentication is never filmed.
 - Watch each clip and inspect the screenshots after a rerender. Model response
@@ -42,3 +42,5 @@ Alt text, in order: Muse conversation history and preview in ccmux; a native Mus
 
 - Verified H.264 / yuv420p MP4s; both GIFs decode successfully.
 - Build version is 0.5.0; native Muse model is muse-spark-1.3-contributor.
+- Color-corrected rerender: the harness clears inherited `NO_COLOR=1`;
+  screenshots and clips show the normal ccmux palette.

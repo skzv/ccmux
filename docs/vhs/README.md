@@ -18,6 +18,11 @@ C11 (update banner) needs an extra env var, which `make tapes` handles automatic
 CCMUX_UPDATE_DEMO=true bash docs/vhs/render.sh docs/vhs/cuj11_update.tape
 ```
 
+The capture harness clears inherited `NO_COLOR` and selects a true-color
+terminal (`TERM=xterm-256color`, `COLORTERM=truecolor`, `CLICOLOR=1`). This
+keeps automation-shell preferences from suppressing ccmux colors in recordings.
+Normal ccmux launches continue to respect the user's terminal preferences.
+
 ## Dependencies
 
 | Tool | Install | Required for |
