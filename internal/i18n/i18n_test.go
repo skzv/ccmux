@@ -28,7 +28,7 @@ func TestResolve(t *testing.T) {
 		{name: "explicit Chinese overrides C locale", lang: "zh", env: map[string]string{"LC_ALL": "C"}, want: LangZh},
 		{name: "empty + english LANG", lang: "", env: map[string]string{"LANG": "en_US.UTF-8"}, want: LangEn},
 		{name: "empty + no locale", lang: "", env: map[string]string{}, want: LangEn},
-		{name: "unknown explicit falls back to env", lang: "fr", env: map[string]string{"LANG": "en_US"}, want: LangEn},
+		{name: "unknown explicit uses English", lang: "unsupported", env: map[string]string{"LANG": "en_US"}, want: LangEn},
 		{name: "explicit zh-CN variant", lang: "zh-CN", env: map[string]string{"LANG": "en_US"}, want: LangZh},
 	}
 	for _, tc := range cases {
@@ -58,7 +58,7 @@ func TestT_ChineseTranslation(t *testing.T) {
 
 func TestSetLanguage_EmptyResolvesEnv(t *testing.T) {
 	SetLanguage("")
-	if l := Current(); l != LangEn && l != LangZh {
-		t.Errorf("Current() = %q, want en or zh", l)
+	if _, ok := Parse(string(Current())); !ok {
+		t.Errorf("Current() = %q, want a supported language", Current())
 	}
 }

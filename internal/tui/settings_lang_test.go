@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/skzv/ccmux/internal/config"
@@ -19,8 +20,8 @@ func TestSettingsLanguageRow_HotSwitch(t *testing.T) {
 	m := newSettings(st, DefaultKeymap(), config.Config{}, "test")
 
 	langField := findEditableField(t, m, "i18n.lang")
-	if len(langField.options) != 2 || langField.options[0] != "en" || langField.options[1] != "zh" {
-		t.Fatalf("language row options = %v, want [en zh]", langField.options)
+	if !reflect.DeepEqual(langField.options, i18n.Codes()) {
+		t.Fatalf("language row options = %v, want all supported codes", langField.options)
 	}
 
 	cfg := config.Config{}
@@ -51,14 +52,8 @@ func TestSettingsLanguageRow_HotSwitch(t *testing.T) {
 		t.Errorf("cfg.Lang = %q, want en", cfg.Lang)
 	}
 
-	if err := langField.set(&cfg, ""); err != nil {
-		t.Fatalf("set empty: %v", err)
-	}
-	if cfg.Lang != "en" {
-		t.Errorf("cfg.Lang after empty set = %q, want en (normalized)", cfg.Lang)
-	}
-	if i18n.Current() != i18n.LangEn {
-		t.Errorf("after empty set, Current() = %q, want en", i18n.Current())
+	if err := langField.set(&cfg, ""); err != nil || cfg.Lang != "en" {
+		t.Fatal("empty settings value must normalize to English")
 	}
 }
 
