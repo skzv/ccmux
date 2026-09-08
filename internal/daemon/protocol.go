@@ -225,12 +225,15 @@ type PreviewResponse struct {
 // window, returned by GET /v1/usage. Drives a mobile client's dashboard
 // usage card and any future "what am I spending" surface.
 type UsageSummary struct {
-	HasData       bool    `json:"has_data"` // false → no transcripts found
-	WindowSeconds int     `json:"window_seconds"`
-	Prompts       int     `json:"prompts"`
-	InputTokens   int     `json:"input_tokens"`
-	OutputTokens  int     `json:"output_tokens"`
-	EstimatedCost float64 `json:"estimated_cost"` // USD at published API rates
+	CachedInputTokens int     `json:"cached_input_tokens,omitempty"`
+	ReasoningTokens   int     `json:"reasoning_tokens,omitempty"`
+	CostAvailable     *bool   `json:"cost_available,omitempty"`
+	HasData           bool    `json:"has_data"` // false → no transcripts found
+	WindowSeconds     int     `json:"window_seconds"`
+	Prompts           int     `json:"prompts"`
+	InputTokens       int     `json:"input_tokens"`
+	OutputTokens      int     `json:"output_tokens"`
+	EstimatedCost     float64 `json:"estimated_cost"` // USD at published API rates
 }
 
 // AgentUsage groups the per-agent token summaries plus the OpenRouter

@@ -1,7 +1,7 @@
 ╭─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ Conversations                                                                                                       │
 │                                                                                                                     │
-│ • Claude 1  • Codex 1  • Cursor 0  • Agy 1  • Pi 0                                                                  │
+│ • Claude 1  • Codex 1  • Cursor 0  • Agy 1  • Pi 0  • Muse 0                                                        │
 │                                                                                                                     │
 │ ▌ claude  now  rebuild login with passkeys                                                                          │
 │                                                                                                                     │
@@ -37,4 +37,4 @@
 │                                                                                                                     │
 │                                                                                                                     │
 ╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-? help · q quit · enter resume · p preview · x delete · tab sections · H headless: hidden · r refresh · 1-7 screens    
+/ search · ? help · q quit · enter resume · p preview · x delete · tab sections · H headless: hidden · r refresh       

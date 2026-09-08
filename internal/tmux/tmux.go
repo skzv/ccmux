@@ -86,6 +86,7 @@ func exactPane(name string) string { return "=" + name + ":" }
 
 // Session is the static metadata about a tmux session.
 type Session struct {
+	Agent      string    // optional explicit agent for a resumed conversation
 	Name       string    // tmux session name, e.g. "c-foo"
 	Created    time.Time // tmux's create timestamp
 	LastAttach time.Time // tmux's last activity timestamp
@@ -132,7 +133,13 @@ func List(ctx context.Context) ([]Session, error) {
 		}
 		return nil, fmt.Errorf("tmux list-sessions: %w", withStderr(err))
 	}
-	return parseList(out), nil
+	sessions := parseList(out)
+	tags, err := command(ctx, "tmux", "list-sessions", "-F", "#{session_name}\t#{@ccmux_agent}").Output()
+	if err != nil {
+		return nil, fmt.Errorf("read tmux session agents: %w", withStderr(err))
+	}
+	applySessionAgents(sessions, tags)
+	return sessions, nil
 }
 
 // parseList turns raw `tmux list-sessions -F listFormat` output into
@@ -426,4 +433,25 @@ func atoi(s string) int {
 		n = n*10 + int(c-'0')
 	}
 	return n
+}
+
+// SetSessionAgent pins a resumed conversation's agent without changing the
+// workspace's default agent or other sessions running in that workspace.
+func SetSessionAgent(ctx context.Context, name, id string) error {
+	if out, err := command(ctx, "tmux", "set-option", "-t", exactPane(name), "@ccmux_agent", id).CombinedOutput(); err != nil {
+		return fmt.Errorf("set session agent: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func applySessionAgents(sessions []Session, raw []byte) {
+	byName := make(map[string]string, len(sessions))
+	for _, line := range strings.Split(string(raw), "\n") {
+		if parts := strings.SplitN(line, "\t", 2); len(parts) == 2 {
+			byName[parts[0]] = parts[1]
+		}
+	}
+	for i := range sessions {
+		sessions[i].Agent = byName[sessions[i].Name]
+	}
 }

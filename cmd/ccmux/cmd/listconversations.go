@@ -22,6 +22,7 @@ import (
 // remote-host probing.
 func newListConversationsCmd() *cobra.Command {
 	var (
+		query           string
 		limit           int
 		since           time.Duration
 		jsonOut         bool
@@ -29,13 +30,15 @@ func newListConversationsCmd() *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:   "list-conversations",
-		Short: "List past agent conversations across Claude, Codex, and Antigravity",
+		Short: "List past conversations across supported coding agents",
 		Long: `List past conversations every agent has had on this machine, regardless of
 whether ccmux launched them. Sources:
 
   Claude       ~/.claude/projects/<encoded-cwd>/<uuid>.jsonl
   Codex        ~/.codex/sessions/<yyyy>/<mm>/<dd>/rollout-*.jsonl
   Antigravity  ~/.gemini/antigravity-cli/conversations/<uuid>.pb
+  Muse Code    $XDG_DATA_HOME/muse/sessions/<yyyy>/<mm>/<dd>/<uuid>/session.jsonl
+               (defaults to ~/.local/share/muse/sessions)
 
 Antigravity transcripts are opaque protobuf, so the preview column is
 empty for those rows. ID and last-activity are always populated.
@@ -59,6 +62,7 @@ Default ordering is most-recent first.`,
 				}
 			}
 			list, err := conversations.All(conversations.Options{
+				Query:           query,
 				Limit:           limit,
 				Since:           since,
 				ExcludeHeadless: !showHeadless,
@@ -73,6 +77,7 @@ Default ordering is most-recent first.`,
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&query, "query", "", "search project paths, previews, or conversation IDs")
 	cmd.Flags().IntVar(&limit, "limit", 0, "cap the output to N rows (default: no limit)")
 	cmd.Flags().DurationVar(&since, "since", 0, "only conversations active within this duration (e.g. 24h, 7d)")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit one JSON object per conversation on stdout (for scripting)")
@@ -86,7 +91,7 @@ Default ordering is most-recent first.`,
 func printConversationsTable(list []conversations.Conversation) {
 	if len(list) == 0 {
 		fmt.Println("No conversations found.")
-		fmt.Println("Run claude / codex / agy at least once to create transcripts.")
+		fmt.Println("Run claude / codex / agy / muse at least once to create transcripts.")
 		return
 	}
 	const (

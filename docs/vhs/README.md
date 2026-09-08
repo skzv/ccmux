@@ -1,9 +1,8 @@
 # ccmux demo tapes
 
-VHS recordings of the 11 canonical CUJs. Each tape is hermetic — it
-runs against a fully isolated environment (fake `$HOME`, isolated tmux
-socket, stub agents) so renders are deterministic and never touch your
-live sessions.
+VHS recordings of the 11 canonical CUJs. The harness isolates ccmux
+configuration, project fixtures, and tmux sessions. It starts real agent CLIs
+with their existing sign-ins; those agents can read their native settings.
 
 ## Quick render
 
@@ -55,8 +54,8 @@ CCMUX_UPDATE_DEMO=true bash docs/vhs/render.sh docs/vhs/cuj11_update.tape
    session inheritance so the user running inside tmux is safe.
 3. **`tmux` wrapper** in `$root/bin/` prepends `-S $TMUX_SOCK` to every tmux
    call so `ccmuxd` and the TUI also hit the isolated socket.
-4. **Stub agents** (`claude`, `codex`, `agy`) in `$root/bin/` print a plausible
-   banner and `exec sleep 86400` — they look alive without running a real model.
+4. **Agent wrappers** (`claude`, `codex`, `agy`) in `$root/bin/` restore the
+   real home directory for native authentication before starting each CLI.
 5. **`cleanup()`** kills only the isolated socket server and the isolated ccmuxd;
    the user's real tmux sessions and daemon are never touched.
 
@@ -91,3 +90,21 @@ for the landing page and tutorial MDX. Copy manually after a re-render:
 ```bash
 cp docs/vhs/out/cuj*.gif ../ccmux-website/public/demos/
 ```
+
+## Muse launch recordings
+
+The Muse variants cover C1/C3 (start, attach, detach) and C4 (history and exact
+resume). They use the installed Muse binary, native logs and a disposable project.
+They never copy credentials; the native CLI uses the existing Muse sign-in.
+
+```sh
+CCMUX_MUSE_DEMO=true CCMUX_MUSE_PROVIDER=meta bash docs/vhs/render.sh docs/vhs/muse-start.tape
+CCMUX_MUSE_DEMO=true CCMUX_MUSE_PROVIDER=meta bash docs/vhs/render.sh docs/vhs/muse-resume.tape
+```
+
+Omitting `CCMUX_MUSE_PROVIDER=meta` creates an offline echo preview, which must
+not be presented as a Meta model response. Outputs are two MP4/GIF pairs and
+three PNG screenshots in `docs/launch/v0.5.0/`. Review all frames before sharing.
+Unlike the older seeded demos, the history recording resumes a native session
+created during that same run. The Muse sandbox lives under the user's cache
+directory because Muse requires a private local-messaging runtime directory.

@@ -494,3 +494,8 @@
 "Interface language. Switches immediately." = "인터페이스 언어. 즉시 전환됩니다."
 "Help improve ccmux" = "ccmux 개선에 참여해 주세요"
 "Report issues, improve translations, or submit a PR." = "문제 제보, 번역 개선, PR 제출을 환영합니다."
+
+"Muse settings and authentication are managed by the muse CLI. Run muse login to sign in." = "Muse 설정과 인증은 muse CLI에서 관리합니다. muse login을 실행해 로그인하세요."
+"cached input" = "캐시된 입력"
+"reasoning tokens" = "추론 토큰"
+"Search projects, previews, or IDs" = "프로젝트, 미리 보기 또는 ID 검색"

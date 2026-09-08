@@ -40,7 +40,7 @@ func TestLaunchCmdForProject_PerAgent(t *testing.T) {
 					a.ID(), got, a.Binary())
 			}
 			switch a.ID() {
-			case agent.IDCursor:
+			case agent.IDCursor, agent.IDMuse:
 				if !strings.Contains(got, " resume") {
 					t.Errorf("launchCmdForProject(Agent=%q) = %q, expected resume subcommand (project attach resumes)",
 						a.ID(), got)

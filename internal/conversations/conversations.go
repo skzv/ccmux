@@ -44,6 +44,7 @@ import (
 	"time"
 
 	"github.com/skzv/ccmux/internal/agent"
+	"github.com/skzv/ccmux/internal/muse"
 )
 
 // Conversation is one past agent session as found on disk. Stable
@@ -150,6 +151,8 @@ func (c Conversation) ResumeArgs() []string {
 // ccmux's setup-time command choice to propagate to resume flows.
 func (c Conversation) ResumeArgsWithCommands(commands agent.Commands) []string {
 	switch c.Agent {
+	case agent.IDMuse:
+		return agent.ResumeArgs(agent.IDMuse, c.ID, commands)
 	case agent.IDClaude:
 		return agent.ResumeArgs(agent.IDClaude, c.ID, commands)
 	case agent.IDCodex:
@@ -203,6 +206,14 @@ func RecentMessages(c Conversation, limit int) ([]Message, error) {
 	}
 	var all []Message
 	switch c.Agent {
+	case agent.IDMuse:
+		s, err := muse.Read(c.Path)
+		if err != nil {
+			return nil, err
+		}
+		for _, m := range s.Messages {
+			all = append(all, Message{Role: m.Role, Content: m.Content, Timestamp: m.Time})
+		}
 	case agent.IDClaude:
 		for _, path := range paths {
 			msgs, err := readClaudeMessages(path, limit)
@@ -422,6 +433,9 @@ func CountMessages(c Conversation) (int, error) {
 	}
 	total := 0
 	switch c.Agent {
+	case agent.IDMuse:
+		s, err := muse.Read(c.Path)
+		return len(s.Messages), err
 	case agent.IDClaude:
 		for _, path := range paths {
 			n, err := countClaudeMessages(path)
@@ -571,6 +585,9 @@ func Delete(c Conversation) error {
 	if err != nil {
 		return fmt.Errorf("resolve home: %w", err)
 	}
+	if c.Agent == agent.IDMuse {
+		return muse.Delete(home, c.ID, c.Path)
+	}
 	for _, path := range paths {
 		if err := guardTranscriptPath(home, c.Agent, path); err != nil {
 			return err
@@ -627,6 +644,9 @@ func guardTranscriptPath(home string, agentID agent.ID, path string) error {
 // Options modulates a List call. Zero value works (no limit, default
 // home dir resolution).
 type Options struct {
+	// Query matches project paths, previews, or conversation IDs (case-insensitive).
+	Query string
+
 	// HomeDir overrides $HOME for transcript-directory resolution.
 	// Empty falls back to os.UserHomeDir. Tests pass a tempdir.
 	HomeDir string
@@ -678,6 +698,7 @@ func All(opts Options) ([]Conversation, error) {
 		ListCursor,
 		ListAntigravity,
 		ListPi,
+		ListMuse,
 	} {
 		got, err := fn(opts.HomeDir)
 		if err != nil {
@@ -711,6 +732,16 @@ func All(opts Options) ([]Conversation, error) {
 		filtered := all[:0]
 		for _, c := range all {
 			if !c.IsHeadless() {
+				filtered = append(filtered, c)
+			}
+		}
+		all = filtered
+	}
+
+	if strings.TrimSpace(opts.Query) != "" {
+		filtered := all[:0]
+		for _, c := range all {
+			if MatchesQuery(c, opts.Query) {
 				filtered = append(filtered, c)
 			}
 		}
@@ -2043,4 +2074,11 @@ func truncatedPreview(s string) string {
 		out = string(runes[:maxLen-1]) + "…"
 	}
 	return out
+}
+
+// MatchesQuery searches visible conversation metadata without loading every
+// full transcript on each keystroke. Message previews remain lazy-loaded.
+func MatchesQuery(c Conversation, query string) bool {
+	query = strings.ToLower(strings.TrimSpace(query))
+	return query == "" || strings.Contains(strings.ToLower(c.ID+"\n"+c.Project+"\n"+c.Preview), query)
 }

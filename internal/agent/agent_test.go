@@ -19,7 +19,7 @@ func TestAll_CanonicalOrder(t *testing.T) {
 	got := All()
 	wantIDs := []ID{
 		IDClaude, IDCodex, IDAntigravity, IDCursor, IDPi, IDGrok,
-		IDOpenCode, IDKimi, IDDroid, IDCopilot, IDQoder, IDKilo, IDHermes, IDAmp, IDKiro,
+		IDOpenCode, IDKimi, IDDroid, IDCopilot, IDQoder, IDKilo, IDHermes, IDAmp, IDKiro, IDMuse,
 	}
 	if len(got) != len(wantIDs) {
 		t.Fatalf("All() len = %d, want %d", len(got), len(wantIDs))
@@ -43,6 +43,10 @@ func TestAll_CanonicalOrder(t *testing.T) {
 // agent to the const block but forgetting ByID/ParseID (or vice-versa)
 // fails loudly instead of panicking at runtime.
 func TestAll_EveryAgentIsComplete(t *testing.T) {
+	// This contract checks default locations. Muse correctly honors absolute
+	// XDG overrides, including the ones GitHub runners export.
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("XDG_DATA_HOME", "")
 	home := "/home/tester"
 	for _, a := range All() {
 		id := a.ID()
@@ -224,7 +228,7 @@ func TestAgent_LaunchCmd_NewVsContinue(t *testing.T) {
 					fresh, a.Binary())
 			}
 			switch a.ID() {
-			case IDCursor:
+			case IDCursor, IDMuse:
 				if !strings.Contains(cont, " resume") {
 					t.Errorf("continue LaunchCmd = %q, expected resume subcommand", cont)
 				}

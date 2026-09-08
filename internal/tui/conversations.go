@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -33,6 +34,7 @@ var conversationAgentSections = []conversationAgentSectionDef{
 	{Label: "Cursor", Agent: agent.IDCursor},
 	{Label: "Agy", Agent: agent.IDAntigravity},
 	{Label: "Pi", Agent: agent.IDPi},
+	{Label: "Muse", Agent: agent.IDMuse},
 }
 
 const conversationColumnGap = 3
@@ -79,6 +81,8 @@ type conversationsModel struct {
 	// filter (the global view). Set by the App when the user enters
 	// the screen via the Projects-tab `c` keybind.
 	projectFilter string
+	search        textinput.Model
+	searchActive  bool
 
 	// loadErr holds the last walker error so the screen can surface
 	// it instead of going silent. Cleared on a successful load.
@@ -132,6 +136,10 @@ type conversationsModel struct {
 }
 
 func newConversations(st styles.Styles, km Keymap) conversationsModel {
+	input := textinput.New()
+	input.Prompt = "/ "
+	input.CharLimit = 256
+	input.Placeholder = tr("Search projects, previews, or IDs")
 	sp := spinner.New()
 	// Meter renders a bar-style sweep ("▱▱▱" → "▰▰▰" → "▰▱▱") — closer
 	// to a progress bar than a dot, which reads as "ccmux is working"
@@ -139,6 +147,7 @@ func newConversations(st styles.Styles, km Keymap) conversationsModel {
 	sp.Spinner = spinner.Meter
 	sp.Style = lipgloss.NewStyle().Foreground(st.Semantic.Primary).Bold(true)
 	m := conversationsModel{
+		search:     input,
 		st:         st,
 		km:         km,
 		spinner:    sp,
@@ -293,17 +302,25 @@ func (m conversationsModel) Selected() *conversations.Conversation {
 // projectFilter. Empty filter returns the full list. Filter match is
 // case-insensitive substring on the Project field.
 func (m conversationsModel) filtered() []conversations.Conversation {
-	if m.projectFilter == "" {
-		return m.list
-	}
 	needle := strings.ToLower(m.projectFilter)
-	out := make([]conversations.Conversation, 0, len(m.list))
+	var out []conversations.Conversation
 	for _, c := range m.list {
-		if strings.Contains(strings.ToLower(c.Project), needle) {
+		if strings.Contains(strings.ToLower(c.Project), needle) && conversations.MatchesQuery(c, m.search.Value()) {
 			out = append(out, c)
 		}
 	}
 	return out
+}
+
+func (m conversationsModel) capturesInput() bool { return m.searchActive }
+
+func (m conversationsModel) searchHeader(header string, width int) string {
+	if m.searchActive || m.search.Value() != "" {
+		m.search.Width = max(8, width-24)
+		m.search.Placeholder = tr("Search projects, previews, or IDs")
+		return header + "  " + m.search.View()
+	}
+	return header
 }
 
 func (m conversationsModel) sections() []conversationAgentSection {
@@ -431,6 +448,28 @@ func (m conversationsModel) Update(msg tea.Msg) (conversationsModel, tea.Cmd) {
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd
 	}
+	if m.searchActive {
+		if key, ok := msg.(tea.KeyMsg); ok {
+			switch key.String() {
+			case "enter":
+				m.searchActive = false
+				m.search.Blur()
+				return m, m.LoadStatsCmd()
+			case "esc":
+				m.searchActive = false
+				m.search.Blur()
+				m.search.SetValue("")
+				m.clampSelection(m.sections())
+				return m, m.LoadStatsCmd()
+			}
+		}
+		var cmd tea.Cmd
+		m.search, cmd = m.search.Update(msg)
+		m.pendingDelete = ""
+		m.cursor = 0
+		m.clampSelection(m.sections())
+		return m, cmd
+	}
 	km, ok := msg.(tea.KeyMsg)
 	if !ok {
 		return m, nil
@@ -445,6 +484,16 @@ func (m conversationsModel) Update(msg tea.Msg) (conversationsModel, tea.Cmd) {
 		prevSelID = sel.ID
 	}
 	switch {
+	case km.String() == "/":
+		m.pendingDelete = ""
+		m.searchActive = true
+		return m, m.search.Focus()
+	case km.String() == "esc" && m.search.Value() != "":
+		m.search.SetValue("")
+		m.pendingDelete = ""
+		m.clampSelection(m.sections())
+		return m, m.LoadStatsCmd()
+
 	case keyMatches(km, m.km.Up):
 		m.moveFocusedRow(-1, sections)
 		// Moving off the armed row disarms — a delete confirm must be
@@ -508,7 +557,7 @@ func (m conversationsModel) Update(msg tea.Msg) (conversationsModel, tea.Cmd) {
 
 func (m conversationsModel) View(width, height int) string {
 	st := m.st
-	header := st.Title.Render(tr("Conversations"))
+	header := m.searchHeader(st.Title.Render(tr("Conversations")), width)
 	if m.projectFilter != "" {
 		header = lipgloss.JoinHorizontal(lipgloss.Top, header,
 			"  "+st.Muted.Render("filter: "+m.projectFilter+"  (esc to clear)"))
@@ -568,7 +617,7 @@ func (m conversationsModel) View(width, height int) string {
 }
 
 func (m conversationsModel) renderListPanel(sections []conversationAgentSection, width, height int) string {
-	header := m.st.Title.Render(tr("Conversations"))
+	header := m.searchHeader(m.st.Title.Render(tr("Conversations")), width)
 	if m.projectFilter != "" {
 		header = lipgloss.JoinHorizontal(lipgloss.Top, header,
 			"  "+m.st.Muted.Render("filter: "+m.projectFilter+"  (esc to clear)"))
@@ -642,6 +691,7 @@ func (m conversationsModel) renderLoading(width, height int) string {
 		agent.IDCursor:      "~/.cursor/projects",
 		agent.IDAntigravity: "~/.gemini",
 		agent.IDPi:          "~/.pi/agent/sessions",
+		agent.IDMuse:        "~/.local/share/muse/sessions (XDG_DATA_HOME)",
 	}
 	var legend []string
 	for _, def := range conversationAgentSections {
@@ -770,6 +820,7 @@ func (m conversationsModel) HelpBarProps(width int) components.HelpBarProps {
 	}
 	return components.HelpBarProps{
 		Hints: []components.KeyHint{
+			{Key: "/", Label: tr("search"), Priority: 7},
 			{Key: "?", Label: tr("help"), Priority: 10},
 			{Key: "q", Label: tr("quit"), Priority: 10},
 			{Key: "enter", Label: tr("resume"), Priority: 8},
