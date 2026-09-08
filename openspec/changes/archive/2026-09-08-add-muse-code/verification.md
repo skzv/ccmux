@@ -44,3 +44,24 @@ all three screenshots and video transitions: complete responses, exact native
 resume, clean status labels, readable panels and no billing/auth errors. MP4s
 are H.264/yuv420p at 1600×960, lasting 25.48s and 24.16s; GIFs also decode.
 The capture harness cleaned up its private daemon and tmux processes.
+
+## Delivery — 2026-09-08
+
+- App PR #191 merged at 8e5a84c after all six CI jobs passed (run 34278758502).
+- Website PR #20 merged at 98d5013 after its verification checks passed.
+- Published v0.5.0 from 8e5a84c. Release run 34279144379 passed both GoReleaser
+  and the public-tap Homebrew installation job.
+- The renewed Homebrew PAT automatically published tap commit e0b6305 for
+  v0.5.0. A second cold Homebrew installation also passed on the maintainer Mac.
+- SHA-256 checks passed for all four macOS/Linux archives, each containing
+  ccmux, ccmuxd and ccmux-mcp. Native release CLI/MCP and installed daemon IPC
+  report 0.5.0. The maintainer's active local installation was updated.
+- Backed up the previous website at
+  /home/deployer/ccmux-website-backups/pre-v0.5.0-20260908.tar.gz.
+  The staged VPS deployment passed type/build checks and all eight static tests.
+- Verified 171 live pages against built metadata and structured data, nine
+  localized 404 responses, 162 sitemap entries and canonical-host redirection.
+  All 90 live desktop/mobile browser tests passed. The live stats endpoint and
+  homepage advertise v0.5.0.
+- Launch assets and three English X drafts are under docs/launch/v0.5.0/.
+  No posts were published.

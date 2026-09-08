@@ -9,5 +9,5 @@
 - [x] 2.2 Record two VHS clips and three screenshots, review media, and write three English X drafts.
 
 ## 3. Delivery
-- [ ] 3.1 Run required checks and merge reviewed app and website PRs.
-- [ ] 3.2 Publish v0.5.0, verify archives and automatic Homebrew installation, deploy and verify website.
+- [x] 3.1 Run required checks and merge reviewed app and website PRs.
+- [x] 3.2 Publish v0.5.0, verify archives and automatic Homebrew installation, deploy and verify website.
