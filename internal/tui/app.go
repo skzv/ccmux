@@ -2534,13 +2534,14 @@ func joinShellArgs(argv []string) string {
 // Two flavors because some sites have the Project in hand and others
 // only have the path. Both must agree so a project whose sidecar
 // says Antigravity launches `agy` no matter which code path the user
-// took.
+// took. Keep a shell open if the agent fails so its startup error
+// remains visible and the user can repair the environment.
 func launchCmdForProject(p project.Project) string {
 	return launchCmdForProjectWithCommands(p, agent.Commands{})
 }
 
 func launchCmdForProjectWithCommands(p project.Project, commands agent.Commands) string {
-	return agent.LaunchCmd(p.Agent, false, commands)
+	return agent.LaunchCmd(p.Agent, false, commands) + " || zsh || bash || sh"
 }
 
 func launchCmdForProjectPath(projectPath string) string {
@@ -2548,7 +2549,7 @@ func launchCmdForProjectPath(projectPath string) string {
 }
 
 func launchCmdForProjectPathWithCommands(projectPath string, commands agent.Commands) string {
-	return agent.LaunchCmd(project.ReadAgent(projectPath), false, commands)
+	return launchCmdForProjectWithCommands(project.Project{Agent: project.ReadAgent(projectPath)}, commands)
 }
 
 // remoteTmuxAttach builds the single-string command we hand to ssh

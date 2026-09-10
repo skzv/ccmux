@@ -22,7 +22,7 @@ import (
 // resolution elsewhere doesn't silently regress.
 
 // TestLaunchCmdForProject_PerAgent — every supported agent ID on a
-// project.Project resolves to the agent's own LaunchCmd(false). The
+// project.Project resolves to a fresh launch with a shell fallback. The
 // `false` matters: both callers create a session the user asked for
 // as new, and `--continue` would resume whatever conversation the
 // agent last had in that directory instead. Resuming a specific past
@@ -32,7 +32,7 @@ func TestLaunchCmdForProject_PerAgent(t *testing.T) {
 		t.Run(string(a.ID()), func(t *testing.T) {
 			p := project.Project{Agent: a.ID()}
 			got := launchCmdForProject(p)
-			want := a.LaunchCmd(false)
+			want := a.LaunchCmd(false) + " || zsh || bash || sh"
 			if got != want {
 				t.Errorf("launchCmdForProject(Agent=%q) = %q, want %q",
 					a.ID(), got, want)
@@ -56,7 +56,7 @@ func TestLaunchCmdForProject_PerAgent(t *testing.T) {
 // launching claude when the user hits Enter.
 func TestLaunchCmdForProject_EmptyAgentDefaultsToClaude(t *testing.T) {
 	got := launchCmdForProject(project.Project{Agent: ""})
-	want := agent.Claude{}.LaunchCmd(false)
+	want := agent.Claude{}.LaunchCmd(false) + " || zsh || bash || sh"
 	if got != want {
 		t.Errorf("empty agent = %q, want %q (claude back-compat)", got, want)
 	}
@@ -77,7 +77,7 @@ func TestLaunchCmdForProjectPath_HonorsSidecar(t *testing.T) {
 				t.Fatal(err)
 			}
 			got := launchCmdForProjectPath(dir)
-			want := a.LaunchCmd(false)
+			want := a.LaunchCmd(false) + " || zsh || bash || sh"
 			if got != want {
 				t.Errorf("launchCmdForProjectPath(sidecar=%q) = %q, want %q",
 					a.ID(), got, want)
@@ -93,7 +93,7 @@ func TestLaunchCmdForProjectPath_HonorsSidecar(t *testing.T) {
 func TestLaunchCmdForProjectPath_MissingSidecarFallsBackToClaude(t *testing.T) {
 	dir := t.TempDir()
 	got := launchCmdForProjectPath(dir)
-	want := agent.Claude{}.LaunchCmd(false)
+	want := agent.Claude{}.LaunchCmd(false) + " || zsh || bash || sh"
 	if got != want {
 		t.Errorf("missing sidecar = %q, want %q", got, want)
 	}
