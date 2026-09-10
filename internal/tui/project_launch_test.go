@@ -10,27 +10,29 @@ import (
 	"github.com/skzv/ccmux/internal/project"
 )
 
-// These tests pin the TUI's project-launch resolution against the
-// "everything launches claude" bug. Two helpers — launchCmdForProject
-// (Project in hand) and launchCmdForProjectPath (path on disk) — both
-// feed every project-attach call site, and both must agree on what
-// command the project's sidecar maps to. A future change that
-// hardcodes "claude" in either spot is caught by the source-grep
-// audit in internal/agent/no_hardcode_audit_test.go; these tests
-// pin the positive behavior so a refactor that moves the resolution
-// elsewhere doesn't silently regress.
+// These tests pin the TUI's project-launch resolution against two
+// bugs: "everything launches claude" and "a new session resumes an
+// old conversation". Two helpers — launchCmdForProject (Project in
+// hand) and launchCmdForProjectPath (path on disk) — feed every
+// create-session call site on the Projects screen, and both must
+// agree on what command the project's sidecar maps to. A future
+// change that hardcodes "claude" in either spot is caught by the
+// source-grep audit in internal/agent/no_hardcode_audit_test.go;
+// these tests pin the positive behavior so a refactor that moves the
+// resolution elsewhere doesn't silently regress.
 
 // TestLaunchCmdForProject_PerAgent — every supported agent ID on a
-// project.Project resolves to the agent's own LaunchCmd(true). The
-// `true` is load-bearing: project attaches resume the existing
-// conversation, and a regression that passed `false` would silently
-// start fresh chats every time a user hit Enter on Projects.
+// project.Project resolves to a fresh launch with a shell fallback. The
+// `false` matters: both callers create a session the user asked for
+// as new, and `--continue` would resume whatever conversation the
+// agent last had in that directory instead. Resuming a specific past
+// conversation is its own menu row (resumeConversationCmd).
 func TestLaunchCmdForProject_PerAgent(t *testing.T) {
 	for _, a := range agent.All() {
 		t.Run(string(a.ID()), func(t *testing.T) {
 			p := project.Project{Agent: a.ID()}
 			got := launchCmdForProject(p)
-			want := a.LaunchCmd(true)
+			want := a.LaunchCmd(false) + " || zsh || bash || sh"
 			if got != want {
 				t.Errorf("launchCmdForProject(Agent=%q) = %q, want %q",
 					a.ID(), got, want)
@@ -39,18 +41,9 @@ func TestLaunchCmdForProject_PerAgent(t *testing.T) {
 				t.Errorf("launchCmdForProject(Agent=%q) = %q, expected to start with binary %q",
 					a.ID(), got, a.Binary())
 			}
-			switch a.ID() {
-			case agent.IDCursor, agent.IDMuse:
-				if !strings.Contains(got, " resume") {
-					t.Errorf("launchCmdForProject(Agent=%q) = %q, expected resume subcommand (project attach resumes)",
-						a.ID(), got)
-				}
-			default:
-				// claude / codex / antigravity / pi all use --continue.
-				if !strings.Contains(got, "--continue") {
-					t.Errorf("launchCmdForProject(Agent=%q) = %q, expected --continue (project attach resumes)",
-						a.ID(), got)
-				}
+			if strings.Contains(got, "--continue") || strings.Contains(got, " resume") {
+				t.Errorf("launchCmdForProject(Agent=%q) = %q, a new session must not resume a conversation",
+					a.ID(), got)
 			}
 		})
 	}
@@ -63,7 +56,7 @@ func TestLaunchCmdForProject_PerAgent(t *testing.T) {
 // launching claude when the user hits Enter.
 func TestLaunchCmdForProject_EmptyAgentDefaultsToClaude(t *testing.T) {
 	got := launchCmdForProject(project.Project{Agent: ""})
-	want := agent.Claude{}.LaunchCmd(true)
+	want := agent.Claude{}.LaunchCmd(false) + " || zsh || bash || sh"
 	if got != want {
 		t.Errorf("empty agent = %q, want %q (claude back-compat)", got, want)
 	}
@@ -84,7 +77,7 @@ func TestLaunchCmdForProjectPath_HonorsSidecar(t *testing.T) {
 				t.Fatal(err)
 			}
 			got := launchCmdForProjectPath(dir)
-			want := a.LaunchCmd(true)
+			want := a.LaunchCmd(false) + " || zsh || bash || sh"
 			if got != want {
 				t.Errorf("launchCmdForProjectPath(sidecar=%q) = %q, want %q",
 					a.ID(), got, want)
@@ -100,7 +93,7 @@ func TestLaunchCmdForProjectPath_HonorsSidecar(t *testing.T) {
 func TestLaunchCmdForProjectPath_MissingSidecarFallsBackToClaude(t *testing.T) {
 	dir := t.TempDir()
 	got := launchCmdForProjectPath(dir)
-	want := agent.Claude{}.LaunchCmd(true)
+	want := agent.Claude{}.LaunchCmd(false) + " || zsh || bash || sh"
 	if got != want {
 		t.Errorf("missing sidecar = %q, want %q", got, want)
 	}
