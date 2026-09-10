@@ -19,7 +19,7 @@ import (
 type Config struct {
 	Projects      ProjectsConfig      `toml:"projects"`
 	Theme         string              `toml:"theme"`          // catppuccin-mocha (default), dracula, nord, gruvbox, tokyo-night
-	Lang          string              `toml:"lang,omitempty"` // UI language: "en"/"zh"; empty = follow $LANG
+	Lang          string              `toml:"lang,omitempty"` // UI language code; empty = follow LC_ALL, then LANG
 	Editor        string              `toml:"editor"`
 	Sleep         SleepConfig         `toml:"sleep"`
 	Daemon        DaemonConfig        `toml:"daemon"`
@@ -182,6 +182,7 @@ type AgentsConfig struct {
 	Cursor      AgentCommandConfig `toml:"cursor"`
 	Pi          AgentCommandConfig `toml:"pi"`
 	Grok        AgentCommandConfig `toml:"grok"`
+	Muse        AgentCommandConfig `toml:"muse"`
 }
 
 // AgentCommandConfig stores an optional explicit executable path for
@@ -224,6 +225,7 @@ func (c Config) AgentCommands() agent.Commands {
 		Cursor:            strings.TrimSpace(c.Agents.Cursor.Command),
 		Pi:                strings.TrimSpace(c.Agents.Pi.Command),
 		Grok:              strings.TrimSpace(c.Agents.Grok.Command),
+		Muse:              strings.TrimSpace(c.Agents.Muse.Command),
 		ClaudeModel:       strings.TrimSpace(c.Claude.DefaultModel),
 		OpenRouterAgents:  c.OpenRouter.routeAgentSet(),
 		OpenRouterBaseURL: strings.TrimSpace(c.OpenRouter.BaseURL),

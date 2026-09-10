@@ -1,11 +1,14 @@
 package i18n
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"io/fs"
 	"path/filepath"
+	"reflect"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -80,7 +83,7 @@ func collectTRKeys(t *testing.T) []string {
 }
 
 // TestTUILKeysSynced is the i18n invariant: every tr() key referenced by
-// the TUI must have a zh.toml entry. Its failure output doubles as the
+// the TUI must have an entry in every non-English catalog. Its failure output doubles as the
 // machine-readable "which keys still need translating" checklist.
 func TestTUILKeysSynced(t *testing.T) {
 	keys := collectTRKeys(t)
@@ -91,22 +94,54 @@ func TestTUILKeysSynced(t *testing.T) {
 		// enforcing the invariant.
 		t.Skip("no tr() calls in the TUI yet — nothing to sync")
 	}
-	zh := map[string]string{}
-	b, err := localesFS.ReadFile("locales/zh.toml")
-	if err != nil {
-		t.Fatalf("read zh.toml: %v", err)
-	}
-	if _, err := tomlDecode(string(b), &zh); err != nil {
-		t.Fatalf("decode zh.toml: %v", err)
-	}
-	missing := []string{}
-	for _, k := range keys {
-		if _, ok := zh[k]; !ok {
-			missing = append(missing, k)
+	format := regexp.MustCompile(`%(?:\[(\d+)\])?([-+# 0]*(?:\d+|\*)?(?:\.(?:\d+|\*))?)([a-zA-Z%])`)
+	signature := func(value string) []string {
+		next := 1
+		var result []string
+		for _, match := range format.FindAllStringSubmatch(value, -1) {
+			if match[3] == "%" {
+				result = append(result, "literal-percent")
+				continue
+			}
+			if match[1] != "" {
+				next, _ = strconv.Atoi(match[1])
+			}
+			result = append(result, fmt.Sprintf("%d:%s%s", next, match[2], match[3]))
+			next++
 		}
+		sort.Strings(result)
+		return result
 	}
-	if len(missing) > 0 {
-		t.Errorf("tr() keys missing from locales/zh.toml (%d):\n  %s",
-			len(missing), strings.Join(missing, "\n  "))
+	for _, language := range Languages() {
+		if language.Code == LangEn {
+			continue
+		}
+		t.Run(string(language.Code), func(t *testing.T) {
+			table := map[string]string{}
+			b, err := localesFS.ReadFile("locales/" + string(language.Code) + ".toml")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tomlDecode(string(b), &table); err != nil {
+				t.Fatal(err)
+			}
+			for _, key := range keys {
+				value, ok := table[key]
+				if !ok || strings.TrimSpace(value) == "" {
+					t.Errorf("missing translation: %q", key)
+				}
+			}
+			for key, value := range table {
+				if !strings.Contains(key, "\n") && strings.Contains(value, "\n") {
+					t.Errorf("unexpected line break in %q", key)
+				}
+				if strings.Contains(value, "ZXQ") || strings.Contains(value, "[CCMUX") {
+					t.Errorf("translation marker in %q", key)
+				}
+				if !reflect.DeepEqual(signature(key), signature(value)) {
+					t.Errorf("format placeholders differ: %q => %q", key, value)
+				}
+			}
+		})
 	}
 }

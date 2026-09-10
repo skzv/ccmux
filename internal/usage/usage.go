@@ -34,6 +34,7 @@ import (
 	"github.com/skzv/ccmux/internal/agentusage"
 	"github.com/skzv/ccmux/internal/claudeusage"
 	"github.com/skzv/ccmux/internal/codexusage"
+	"github.com/skzv/ccmux/internal/muse"
 )
 
 // AgentSummary is the cross-agent usage roll-up the dashboard's
@@ -47,11 +48,14 @@ type AgentSummary struct {
 	// the install hint.
 	HasData bool
 
-	Window        time.Duration
-	Prompts       int     // user-initiated turns in the window
-	InputTokens   int     // billed input tokens
-	OutputTokens  int     // billed output tokens
-	EstimatedCost float64 // USD at the agent's published API rates
+	CachedInputTokens int
+	ReasoningTokens   int
+	CostAvailable     *bool
+	Window            time.Duration
+	Prompts           int     // user-initiated turns in the window
+	InputTokens       int     // billed input tokens
+	OutputTokens      int     // billed output tokens
+	EstimatedCost     float64 // USD at the agent's published API rates
 }
 
 // TotalTokens returns the input+output sum. Cache tokens (Claude-
@@ -90,6 +94,9 @@ func WalkOthers(window time.Duration) []NamedSummary {
 		return nil
 	}
 	var out []NamedSummary
+	if s := WalkMuse(home, window); s.HasData {
+		out = append(out, NamedSummary{Agent: "muse", Summary: s})
+	}
 	for _, id := range genericWalkAgents {
 		root := agent.ByID(id).TranscriptsRoot(home)
 		s, err := agentusage.Walk(root, window)
@@ -220,4 +227,34 @@ func WalkAntigravity(window time.Duration) (AgentSummary, error) {
 		InputTokens:  0, // unknown — opaque protobuf
 		OutputTokens: 0,
 	}, nil
+}
+
+// WalkMuse uses completion events, never duplicate attribution samples.
+func WalkMuse(home string, window time.Duration) AgentSummary {
+	unavailable := false
+	out := AgentSummary{Window: window, CostAvailable: &unavailable}
+	sessions, err := muse.List(home)
+	if err != nil {
+		return out
+	}
+	cutoff := time.Now().Add(-window)
+	for _, s := range sessions {
+		for _, m := range s.Messages {
+			if m.Role == "user" && (window <= 0 || !m.Time.Before(cutoff)) {
+				out.Prompts++
+				out.HasData = true
+			}
+		}
+		for _, r := range s.Requests {
+			if window > 0 && r.Time.Before(cutoff) {
+				continue
+			}
+			out.HasData = true
+			out.InputTokens += r.Input
+			out.OutputTokens += r.Output
+			out.CachedInputTokens += r.Cached
+			out.ReasoningTokens += r.Reasoning
+		}
+	}
+	return out
 }

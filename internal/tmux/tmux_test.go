@@ -299,3 +299,11 @@ func TestPaneTitle_MissingSessionIsEmpty(t *testing.T) {
 		t.Errorf("missing session should return empty string, got: %q", got)
 	}
 }
+
+func TestSessionAgentsStayScopedToTheirSession(t *testing.T) {
+	sessions := []Session{{Name: "one", Path: "/same/project"}, {Name: "two", Path: "/same/project"}, {Name: "three"}}
+	applySessionAgents(sessions, []byte("one\tmuse\ntwo\tcodex\nthree\t\n"))
+	if sessions[0].Agent != "muse" || sessions[1].Agent != "codex" || sessions[2].Agent != "" {
+		t.Fatal(sessions)
+	}
+}

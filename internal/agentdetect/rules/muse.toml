@@ -1,0 +1,42 @@
+id = "muse"
+
+# Captured from Muse Code 1.0.3 in a native tmux session.
+[[rules]]
+id = "workspace_trust"
+state = "blocked"
+priority = 1000
+region = "bottom_non_empty_lines(16)"
+contains = ["Do you trust this workspace?", "Trust and continue", "Esc quits."]
+
+[[rules]]
+id = "thinking"
+state = "working"
+priority = 900
+region = "bottom_non_empty_lines(8)"
+line_regex = ['^\s*[◇◆] Thinking(?: \([^\r\n]*\))?\s*$']
+
+# The input frame remains visible while working, so explicit activity wins.
+[[rules]]
+id = "input_prompt"
+state = "blocked"
+priority = 100
+region = "bottom_non_empty_lines(3)"
+line_regex = ['^\s*⟩(?: Type @ to search and insert workspace file paths)?\s*$']
+require_idle = true
+
+# Captured from an authenticated account without an active usage plan.
+[[rules]]
+id = "plan_required"
+state = "blocked"
+priority = 850
+region = "bottom_non_empty_lines(8)"
+contains = ["Start building with a monthly plan", "/upgrade (https://accountscenter.meta.com/muse_code/"]
+require_idle = true
+
+[[rules]]
+id = "model_error"
+state = "blocked"
+priority = 800
+region = "bottom_non_empty_lines(8)"
+line_regex = ['^\s*[◇◆] model failed: .+']
+require_idle = true

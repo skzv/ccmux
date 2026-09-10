@@ -122,7 +122,8 @@ func TestCLIChrome_AppliedOnCreate(t *testing.T) {
 		const id = "chrome00-aaaa-bbbb-cccc-dddddddddddd"
 		e.writeClaudeTranscript(id, proj, "chrome resume", "2026-05-19T15:00:00Z")
 
-		_, _, _ = e.ccmux("resume", id)
+		out, stderr, err := e.ccmux("resume", id)
+		t.Logf("resume: %v %s %s", err, out, stderr)
 
 		session := "c-resume-" + id[:8]
 		if !e.hasSession(session) {

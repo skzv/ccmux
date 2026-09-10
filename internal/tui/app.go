@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -227,7 +228,8 @@ func (a App) modalCapturingText() bool {
 		return true
 	}
 	// Per-screen seams.
-	return a.sessionsM.capturesInput() ||
+	return a.conversationsM.capturesInput() ||
+		a.sessionsM.capturesInput() ||
 		a.projectsM.capturesInput() ||
 		a.notes.capturesInput() ||
 		a.agentsM.capturesInput() ||
@@ -705,12 +707,16 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// refresh Sessions so the row shows up immediately on return.
 		// Re-label the overlay now that we know the destination
 		// session name (the resume cmd builds c-resume-<id>).
-		a.attach.label = msg.Project
+		label := ""
+		if msg.Project != "" {
+			label = filepath.Base(msg.Project)
+		}
+		a.attach.label = label
 		if a.attach.label == "" {
 			a.attach.label = msg.Session
 		}
 		return a, tea.Batch(
-			a.localNewSessionAttachCmd(msg.Session, msg.Project),
+			a.localNewSessionAttachCmd(msg.Session, label),
 			a.refreshSessionsCmd(),
 			func() tea.Msg {
 				return toastMsg{
@@ -1283,6 +1289,17 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			var cmd tea.Cmd
 			a.projectsM, cmd = a.projectsM.Update(msg)
+			return a, cmd
+		}
+
+		// Conversation search owns digits, delete/quit keys, and Enter until
+		// committed; typing a query must never launch or delete a conversation.
+		if a.screen == ScreenConversations && a.conversationsM.capturesInput() {
+			if msg.String() == "ctrl+c" {
+				return a, tea.Quit
+			}
+			var cmd tea.Cmd
+			a.conversationsM, cmd = a.conversationsM.Update(msg)
 			return a, cmd
 		}
 
@@ -2804,6 +2821,10 @@ func (a App) resumeConversationCmd(c conversations.Conversation) tea.Cmd {
 		defer cancel()
 		if err := tmux.New(ctx, sessionName, c.Project, cmdline); err != nil {
 			return conversationResumedMsg{Err: fmt.Errorf("tmux new-session: %w", err)}
+		}
+		if err := tmux.SetSessionAgent(ctx, sessionName, string(c.Agent)); err != nil {
+			_ = tmux.Kill(ctx, sessionName)
+			return conversationResumedMsg{Err: err}
 		}
 		return conversationResumedMsg{
 			Session: sessionName,

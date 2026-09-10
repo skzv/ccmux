@@ -21,6 +21,13 @@ set -euo pipefail
 tape="${1:?usage: render.sh <tape.tape>}"
 repo="$(cd "$(dirname "$0")/../.." && pwd)"
 
+# VHS supplies a true-color terminal. Do not inherit an automation shell
+# color-disable preference into public demos (ccmux honors NO_COLOR).
+unset NO_COLOR
+export TERM=xterm-256color
+export COLORTERM=truecolor
+export CLICOLOR=1
+
 command -v vhs >/dev/null 2>&1 || { echo "render: vhs not installed — 'brew install vhs'"; exit 1; }
 [ -x "$repo/bin/ccmux" ] && [ -x "$repo/bin/ccmuxd" ] || { echo "render: build first — 'make build'"; exit 1; }
 
@@ -33,7 +40,12 @@ REAL_HOME="$HOME"
 # output). Defaulting to $TMPDIR on macOS produced 80+-char paths
 # like /private/var/folders/h4/lcrsqwgs4d.../T/ccmux-vhs.XXX which
 # made every public-demo agent screen unreadable.
-root="$(mktemp -d "/tmp/ccmux-vhs.XXXXXX")"
+if [ "${CCMUX_MUSE_DEMO:-}" = "true" ]; then
+  mkdir -p "$REAL_HOME/.cache"
+  root="$(mktemp -d "$REAL_HOME/.cache/ccmux-vhs.XXXXXX")"
+else
+  root="$(mktemp -d "/tmp/ccmux-vhs.XXXXXX")"
+fi
 TMUX_SOCK="$root/tmux.sock"
 
 export HOME="$root/home"
@@ -81,6 +93,13 @@ chmod +x "$root/bin/tmux"
 
 # Shorthand for tmux calls within this script (real binary + socket).
 T() { "$REAL_TMUX" -S "$TMUX_SOCK" "$@"; }
+
+# Muse launch recordings use native Muse sessions and a separate minimal
+# fixture. Keep credentials in Muse's real config, with all session data here.
+if [ "${CCMUX_MUSE_DEMO:-}" = "true" ]; then
+  source "$repo/docs/vhs/muse-demo.sh"
+  exit 0
+fi
 
 # Agent wrappers — restore REAL_HOME before exec'ing each agent so they
 # authenticate against the real keychain/config, while ccmux/ccmuxd keep

@@ -12,8 +12,7 @@ func TestConcurrentLanguageSwitch(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := 0; i < 10000; i++ {
-			SetLanguage("zh")
-			SetLanguage("en")
+			SetLanguage(string(languages[i%len(languages)].Code))
 		}
 	}()
 	go func() {

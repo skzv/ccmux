@@ -33,8 +33,8 @@ func newResumeCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "resume [conversation-id]",
 		Short: "Resume a past agent conversation in a new tmux session",
-		Long: `Resume a past Claude / Codex / Antigravity / Cursor / pi conversation in a
-fresh tmux session running the right agent with the right --resume flag.
+		Long: `Resume a past Claude / Codex / Antigravity / Cursor / pi / Muse Code conversation in a
+fresh tmux session running the right agent with the native resume command.
 
 Forms:
 
@@ -45,7 +45,7 @@ Forms:
   ccmux resume --agent antigravity# most recent Antigravity conversation
   ccmux resume --agent cursor     # most recent Cursor conversation
   ccmux resume --agent pi         # most recent pi conversation
-  ccmux resume --agent grok       # most recent Grok conversation
+  ccmux resume --agent muse       # most recent Muse Code conversation
 
 Use ` + "`ccmux list-conversations`" + ` to discover IDs.`,
 		Args: cobra.MaximumNArgs(1),
@@ -94,7 +94,7 @@ Use ` + "`ccmux list-conversations`" + ` to discover IDs.`,
 				if agentFilter != "" {
 					want, ok := agent.ParseID(agentFilter)
 					if !ok {
-						return fmt.Errorf("unknown agent %q (claude, codex, antigravity, cursor, pi, grok)", agentFilter)
+						return fmt.Errorf("unknown agent %q (claude, codex, antigravity, cursor, pi, grok, muse)", agentFilter)
 					}
 					target = pickMostRecentByAgent(list, want)
 					if target.ID == "" {
@@ -108,7 +108,7 @@ Use ` + "`ccmux list-conversations`" + ` to discover IDs.`,
 			return resumeNow(target)
 		},
 	}
-	cmd.Flags().StringVar(&agentFilter, "agent", "", "restrict to a specific agent (claude / codex / antigravity / cursor / pi / grok)")
+	cmd.Flags().StringVar(&agentFilter, "agent", "", "restrict to a specific agent (claude / codex / antigravity / cursor / pi / grok / muse)")
 	return cmd
 }
 
@@ -166,6 +166,9 @@ func resumeNow(target conversations.Conversation) error {
 			return fmt.Errorf("create tmux session: %w", err)
 		}
 		detachOthers = attachDetachOthers()
+	}
+	if err := tmux.SetSessionAgent(ctx, sessionName, string(target.Agent)); err != nil {
+		return err
 	}
 	// Hand off to tmux attach via exec — replaces the current process
 	// so when the user detaches they return to whatever shell launched

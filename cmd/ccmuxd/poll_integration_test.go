@@ -160,6 +160,13 @@ func TestPollOnce_RefreshesAgentID(t *testing.T) {
 	if got := srv.seen["c-agent"].agentID; got != agent.IDClaude {
 		t.Fatalf("agentID = %q after poll, want refreshed %q", got, agent.IDClaude)
 	}
+	// A resumed Muse thread must keep its own classifier even though the
+	// workspace still defaults to Claude (and may have Claude sessions open).
+	mustTmux(t, "set-option", "-t", "c-agent", "@ccmux_agent", "muse")
+	srv.pollOnce(context.Background(), time.Second)
+	if got := srv.seen["c-agent"].agentID; got != agent.IDMuse {
+		t.Fatalf("explicit resumed agent lost: %q", got)
+	}
 }
 
 // TestPollOnce_CaptureFailureSurfaced pins the fix for the silently
