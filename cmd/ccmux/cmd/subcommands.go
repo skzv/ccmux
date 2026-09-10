@@ -253,6 +253,8 @@ func configuredDoctorCommand(cfg config.Config, id agent.ID) string {
 		return strings.TrimSpace(cfg.Agents.Claude.Command)
 	case agent.IDCodex:
 		return strings.TrimSpace(cfg.Agents.Codex.Command)
+	case agent.IDGemini:
+		return strings.TrimSpace(cfg.Agents.Gemini.Command)
 	case agent.IDAntigravity:
 		return strings.TrimSpace(cfg.Agents.Antigravity.Command)
 	case agent.IDCursor:
@@ -479,6 +481,8 @@ func agentInstallHint(id agent.ID) string {
 		return "https://docs.claude.com/claude-code or `npm i -g @anthropic-ai/claude-code`"
 	case agent.IDCodex:
 		return "`npm i -g @openai/codex` (or see codex docs)"
+	case agent.IDGemini:
+		return "npm i -g @google/gemini-cli"
 	case agent.IDAntigravity:
 		return "`curl -fsSL https://antigravity.google/cli/install.sh | bash` (or see antigravity docs)"
 	case agent.IDCursor:

@@ -67,14 +67,12 @@ func TestBareSessionLaunchCmd_ShellExplicit(t *testing.T) {
 	}
 }
 
-// TestBareSessionLaunchCmd_GeminiAlias — the back-compat alias must
-// still resolve to Antigravity. Removing the alias would silently
-// break any project's saved settings.toml that still says "gemini".
-func TestBareSessionLaunchCmd_GeminiAlias(t *testing.T) {
+// TestBareSessionLaunchCmd_Gemini keeps existing Gemini requests on Gemini.
+func TestBareSessionLaunchCmd_Gemini(t *testing.T) {
 	got := bareSessionLaunchCmd("gemini", "", agent.Commands{})
-	want := agent.Antigravity{}.LaunchCmd(false)
+	want := agent.Gemini{}.LaunchCmd(false)
 	if got != want {
-		t.Errorf("bareSessionLaunchCmd(\"gemini\", \"\", agent.Commands{}) = %q, want %q (antigravity)", got, want)
+		t.Errorf("bareSessionLaunchCmd(\"gemini\", \"\", agent.Commands{}) = %q, want %q (gemini)", got, want)
 	}
 }
 

@@ -35,6 +35,7 @@ func TestInstallHintFor_NamesActualPackage(t *testing.T) {
 		agent.IDClaude:      "@anthropic-ai/claude-code",
 		agent.IDCodex:       "@openai/codex",
 		agent.IDAntigravity: "antigravity.google/cli/install.sh",
+		agent.IDGemini:      "@google/gemini-cli",
 		agent.IDCursor:      "cursor.com/install",
 	}
 	for id, want := range cases {

@@ -34,6 +34,7 @@ import (
 	"github.com/skzv/ccmux/internal/agentusage"
 	"github.com/skzv/ccmux/internal/claudeusage"
 	"github.com/skzv/ccmux/internal/codexusage"
+	"github.com/skzv/ccmux/internal/gemini"
 	"github.com/skzv/ccmux/internal/muse"
 )
 
@@ -94,6 +95,9 @@ func WalkOthers(window time.Duration) []NamedSummary {
 		return nil
 	}
 	var out []NamedSummary
+	if s := WalkGemini(home, window); s.HasData {
+		out = append(out, NamedSummary{Agent: "gemini", Summary: s})
+	}
 	if s := WalkMuse(home, window); s.HasData {
 		out = append(out, NamedSummary{Agent: "muse", Summary: s})
 	}
@@ -254,6 +258,38 @@ func WalkMuse(home string, window time.Duration) AgentSummary {
 			out.OutputTokens += r.Output
 			out.CachedInputTokens += r.Cached
 			out.ReasoningTokens += r.Reasoning
+		}
+	}
+	return out
+}
+
+// WalkGemini totals native per-message counters after JSONL updates and
+// rewinds have been applied. Subscription/API costs cannot be inferred here.
+func WalkGemini(home string, window time.Duration) AgentSummary {
+	unavailable := false
+	out := AgentSummary{Window: window, CostAvailable: &unavailable}
+	sessions, err := gemini.List(home)
+	if err != nil {
+		return out
+	}
+	cutoff := time.Now().Add(-window)
+	for _, s := range sessions {
+		for _, m := range s.Messages {
+			ts, err := time.Parse(time.RFC3339Nano, m.Timestamp)
+			if window > 0 && (err != nil || ts.Before(cutoff)) {
+				continue
+			}
+			if m.Type == "user" {
+				out.Prompts++
+				out.HasData = true
+			}
+			if m.Type == "gemini" && m.Tokens != nil {
+				out.HasData = true
+				out.InputTokens += m.Tokens.Input
+				out.OutputTokens += m.Tokens.Output
+				out.CachedInputTokens += m.Tokens.Cached
+				out.ReasoningTokens += m.Tokens.Thoughts
+			}
 		}
 	}
 	return out

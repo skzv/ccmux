@@ -39,6 +39,7 @@ const (
 	IDPi          ID = "pi"
 	IDGrok        ID = "grok"
 	IDMuse        ID = "muse"
+	IDGemini      ID = "gemini"
 	// Second wave of terminal coding agents. Same strategy-interface
 	// shape as the originals; each reads AGENTS.md for project context
 	// (the cross-agent convention) and resolves by binary name on PATH.
@@ -149,6 +150,7 @@ type Commands struct {
 	Pi          string
 	Grok        string
 	Muse        string
+	Gemini      string
 	ClaudeModel string
 
 	// OpenRouter routing. OpenRouterAgents is the set of agent IDs the
@@ -176,7 +178,7 @@ func (c Commands) RoutesThroughOpenRouter(id ID) bool {
 func All() []Agent {
 	return []Agent{
 		Claude{}, Codex{}, Antigravity{}, Cursor{}, Pi{}, Grok{},
-		OpenCode{}, Kimi{}, Droid{}, Copilot{}, Qoder{}, Kilo{}, Hermes{}, Amp{}, Kiro{}, Muse{},
+		OpenCode{}, Kimi{}, Droid{}, Copilot{}, Qoder{}, Kilo{}, Hermes{}, Amp{}, Kiro{}, Muse{}, Gemini{},
 	}
 }
 
@@ -208,11 +210,9 @@ func ByID(id ID) Agent {
 		return Claude{}
 	case IDCodex:
 		return Codex{}
-	case IDAntigravity, "gemini":
-		// "gemini" alias: projects scaffolded against the Gemini CLI
-		// before the Antigravity rebrand wrote "gemini" into their
-		// sidecar. Map it to Antigravity so those projects keep working
-		// without a migration step.
+	case IDGemini:
+		return Gemini{}
+	case IDAntigravity:
 		return Antigravity{}
 	case IDCursor:
 		return Cursor{}
@@ -255,8 +255,9 @@ func ParseID(s string) (ID, bool) {
 		return IDClaude, true
 	case IDCodex:
 		return IDCodex, true
-	case IDAntigravity, "gemini":
-		// "gemini" alias retained for back-compat — see ByID.
+	case IDGemini:
+		return IDGemini, true
+	case IDAntigravity:
 		return IDAntigravity, true
 	case IDCursor:
 		return IDCursor, true
@@ -448,6 +449,8 @@ func ResumeArgs(id ID, conversationID string, commands Commands) []string {
 		return nil
 	}
 	switch id {
+	case IDGemini:
+		return []string{configuredBinary(IDGemini, "gemini", commands), "--resume", conversationID}
 	case IDMuse:
 		return []string{configuredBinary(IDMuse, "muse", commands), "resume", conversationID}
 	case IDClaude:
@@ -493,6 +496,8 @@ func configuredBinary(id ID, fallback string, commands Commands) string {
 
 func commandOverride(id ID, commands Commands) string {
 	switch id {
+	case IDGemini:
+		return strings.TrimSpace(commands.Gemini)
 	case IDMuse:
 		return strings.TrimSpace(commands.Muse)
 	case IDClaude:
@@ -559,6 +564,8 @@ func launchCmdWithBinary(a Agent, binary string, continueFlag bool, commands Com
 		return prefix + cmd
 	}
 	switch a.ID() {
+	case IDGemini:
+		return prefix + cmd + " --resume || " + cmd + " || zsh || bash || sh"
 	case IDMuse:
 		return prefix + cmd + " resume --last || " + cmd + " || zsh || bash || sh"
 	case IDCursor:

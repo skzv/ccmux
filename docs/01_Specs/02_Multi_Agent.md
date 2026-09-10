@@ -16,8 +16,9 @@ These are locked. Open new specs if you want to revisit.
 
 1. **Agent identity is per-project, switchable.**
    Each project has a default agent stored in `<project>/.ccmux/agent`
-   (one of `claude` / `codex` / `antigravity` / `cursor` / `pi` / `grok`; the legacy `gemini`
-   alias is still accepted for projects scaffolded before the rebrand).
+   (including `claude` / `codex` / `antigravity` / `gemini` / `cursor` / `pi` / `grok`).
+   `gemini` and `antigravity` identify separate CLIs, with separate native settings
+   and transcript roots; they must never alias each other.
    Missing file → claude
    (back-compat). The Projects tab gains a key to switch the agent for
    the selected project (writes the sidecar). The new-project form

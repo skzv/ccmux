@@ -19,7 +19,7 @@ func TestAll_CanonicalOrder(t *testing.T) {
 	got := All()
 	wantIDs := []ID{
 		IDClaude, IDCodex, IDAntigravity, IDCursor, IDPi, IDGrok,
-		IDOpenCode, IDKimi, IDDroid, IDCopilot, IDQoder, IDKilo, IDHermes, IDAmp, IDKiro, IDMuse,
+		IDOpenCode, IDKimi, IDDroid, IDCopilot, IDQoder, IDKilo, IDHermes, IDAmp, IDKiro, IDMuse, IDGemini,
 	}
 	if len(got) != len(wantIDs) {
 		t.Fatalf("All() len = %d, want %d", len(got), len(wantIDs))
@@ -101,7 +101,7 @@ func TestParseID(t *testing.T) {
 		{"  Claude  ", IDClaude, true},
 		{"codex", IDCodex, true},
 		{"antigravity", IDAntigravity, true},
-		{"gemini", IDAntigravity, true}, // back-compat alias
+		{"gemini", IDGemini, true},
 		{"cursor", IDCursor, true},
 		{"pi", IDPi, true},
 		{"PI", IDPi, true},
@@ -136,7 +136,7 @@ func TestByID_KnownAndEmptyFallback(t *testing.T) {
 		{IDClaude, IDClaude},
 		{IDCodex, IDCodex},
 		{IDAntigravity, IDAntigravity},
-		{"gemini", IDAntigravity}, // back-compat alias for projects scaffolded before the rebrand
+		{"gemini", IDGemini},
 		{IDCursor, IDCursor},
 		{IDPi, IDPi},
 		{IDGrok, IDGrok},
@@ -228,6 +228,10 @@ func TestAgent_LaunchCmd_NewVsContinue(t *testing.T) {
 					fresh, a.Binary())
 			}
 			switch a.ID() {
+			case IDGemini:
+				if !strings.Contains(cont, " --resume") {
+					t.Errorf("Gemini must use --resume: %q", cont)
+				}
 			case IDCursor, IDMuse:
 				if !strings.Contains(cont, " resume") {
 					t.Errorf("continue LaunchCmd = %q, expected resume subcommand", cont)

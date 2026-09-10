@@ -343,7 +343,7 @@
 "Daemon" = "Démon"
 "dangerous mode auto-downgrades below the cutoff" = "Le mode dangereux rétrograde automatiquement en dessous du seuil"
 "(default)" = "(défaut)"
-"Default agent for new projects and bare sessions. Enter cycles: claude → codex → antigravity → cursor → shell." = "Agent par défaut pour les nouveaux projets et les sessions nues. Cycles Enter : claude → codex → ​​antigravité → curseur → shell."
+"Default agent for new projects and bare sessions. Enter cycles: claude → codex → antigravity → cursor → gemini → shell." = "Agent par défaut pour les nouveaux projets et les sessions nues. Cycles Enter : claude → codex → ​​antigravité → curseur → shell."
 "details" = "détails"
 "detecting moshi-hook…" = "détection de moshi-hook…"
 "device" = "appareil"
@@ -499,3 +499,5 @@
 "cached input" = "entrée en cache"
 "reasoning tokens" = "tokens de raisonnement"
 "Search projects, previews, or IDs" = "Rechercher projets, aperçus ou identifiants"
+
+"Gemini CLI uses ~/.gemini/settings.json and GEMINI.md. Press e to edit settings; manage authentication in gemini." = "Gemini CLI utilise ~/.gemini/settings.json et GEMINI.md. Appuyez sur e pour modifier les paramètres ; gérez l’authentification dans gemini."

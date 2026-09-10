@@ -118,7 +118,7 @@ func TestApp_WindowSizeReachesAgentsBrowsers(t *testing.T) {
 
 	// Mirror the production math with the production helpers so the
 	// expectation can't drift from the layout chain.
-	header := a2.agentsM.renderSubtabs(isNarrow(160))
+	header := a2.agentsM.renderSubtabs(160)
 	innerW := 160 - 4
 	innerH := a2.screenBodyHeight() - 2 - lipgloss.Height(header) - 1
 	if innerH < 6 {

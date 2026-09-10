@@ -367,6 +367,8 @@ func configuredAgentCommand(cfg config.Config, id agent.ID) string {
 		return strings.TrimSpace(cfg.Agents.Claude.Command)
 	case agent.IDCodex:
 		return strings.TrimSpace(cfg.Agents.Codex.Command)
+	case agent.IDGemini:
+		return strings.TrimSpace(cfg.Agents.Gemini.Command)
 	case agent.IDAntigravity:
 		return strings.TrimSpace(cfg.Agents.Antigravity.Command)
 	case agent.IDCursor:
@@ -389,6 +391,8 @@ func setConfiguredAgentCommand(cfg *config.Config, id agent.ID, command string) 
 		cfg.Agents.Claude.Command = command
 	case agent.IDCodex:
 		cfg.Agents.Codex.Command = command
+	case agent.IDGemini:
+		cfg.Agents.Gemini.Command = command
 	case agent.IDAntigravity:
 		cfg.Agents.Antigravity.Command = command
 	case agent.IDCursor:
@@ -413,6 +417,8 @@ func installHintFor(id agent.ID) string {
 		return "npm i -g @anthropic-ai/claude-code"
 	case agent.IDCodex:
 		return "npm i -g @openai/codex"
+	case agent.IDGemini:
+		return "npm i -g @google/gemini-cli"
 	case agent.IDAntigravity:
 		return "curl -fsSL https://antigravity.google/cli/install.sh | bash"
 	case agent.IDCursor:
@@ -918,7 +924,7 @@ func defaultAgentChoices(ctx context.Context, cfg config.Config) []agent.ID {
 	}
 
 	choices := []agent.ID{agent.IDClaude}
-	for _, id := range []agent.ID{agent.IDCodex, agent.IDAntigravity, agent.IDCursor, agent.IDPi} {
+	for _, id := range []agent.ID{agent.IDCodex, agent.IDAntigravity, agent.IDCursor, agent.IDPi, agent.IDGemini} {
 		if available[id] {
 			choices = append(choices, id)
 		}
@@ -932,6 +938,8 @@ func defaultAgentLabel(id agent.ID) string {
 		return "Claude Code"
 	case agent.IDCodex:
 		return "Codex (OpenAI)"
+	case agent.IDGemini:
+		return "Gemini CLI (Google)"
 	case agent.IDAntigravity:
 		return "Antigravity CLI (Google)"
 	case agent.IDCursor:

@@ -359,7 +359,7 @@ func TestAgents_SubtabRow_UsesAgentAccent(t *testing.T) {
 		t.Run(string(id), func(t *testing.T) {
 			m := newAgents(st, DefaultKeymap())
 			m.active = id
-			row := m.renderSubtabs(false)
+			row := m.renderSubtabs(160)
 
 			// Active sub-tab: colored dot + bold accent label.
 			wantActiveDot := st.AgentAccent(id).Render("•")

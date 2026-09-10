@@ -19,7 +19,7 @@ import (
 //     the original four agents, and the fuzzer failed CI the day it
 //     randomly drew "Kimi" after the roster expanded). Unrecognized
 //     inputs fall back to claude per the back-compat spec. The legacy
-//     "gemini" body is allowed via ParseID's back-compat alias and
+//     "gemini" body is a separate supported agent identity and
 //     resolves to antigravity.
 //
 // We materialize each fuzz input as a real sidecar file under a
@@ -35,7 +35,7 @@ func FuzzReadAgent(f *testing.F) {
 		"codex\n",
 		"  antigravity  ",
 		"ANTIGRAVITY\n\n",
-		"gemini", // back-compat alias
+		"gemini", // independent Gemini CLI
 		"GEMINI\n\n",
 		"cursor",
 		"Kimi", // the roster-expansion agent that caught the stale hardcoded set

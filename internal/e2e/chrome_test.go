@@ -75,7 +75,7 @@ func (e *Env) statusRight(name string) string {
 // daemon already did, only the CLI's three commands did not).
 //
 // The chrome layer is agent-agnostic, so attach is exercised against
-// both a codex and an antigravity (gemini) project to lock in that the
+// codex, antigravity and gemini projects to lock in that the
 // fix is not Claude-specific.
 func TestCLIChrome_AppliedOnCreate(t *testing.T) {
 	// attach onto an existing project, once per non-default agent — the
@@ -86,7 +86,8 @@ func TestCLIChrome_AppliedOnCreate(t *testing.T) {
 		dir   string
 	}{
 		{"attach_codex", "codex", "chrome-codex"},
-		{"attach_gemini", "antigravity", "chrome-gemini"},
+		{"attach_antigravity", "antigravity", "chrome-agy"},
+		{"attach_gemini", "gemini", "chrome-gemini"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newEnv(t)

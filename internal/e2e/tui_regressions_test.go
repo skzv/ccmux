@@ -114,7 +114,7 @@ func TestTUIFlow_AgentsModelPickerSwallowsGlobalKeys(t *testing.T) {
 	// Agents screen (Claude sub-tab is the default), then open the
 	// model picker with "m".
 	d.Send("5")
-	d.WaitFor("(tab / h·l: switch agent)")
+	d.WaitFor("Claude Code Configuration")
 	d.Send("m")
 	d.WaitFor("Pick model")
 
@@ -133,7 +133,7 @@ func TestTUIFlow_AgentsModelPickerSwallowsGlobalKeys(t *testing.T) {
 	// wait times out.)
 	escMark := d.Mark()
 	d.Send(KeyEsc)
-	d.WaitForSince("(tab / h·l: switch agent)", escMark)
+	d.WaitForSince("Claude Code Configuration", escMark)
 
 	d.Quit()
 }

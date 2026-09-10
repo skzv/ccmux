@@ -221,8 +221,8 @@ func editableFields() []editableField {
 		},
 		{
 			label:   "agents.default",
-			hint:    tr("Default agent for new projects and bare sessions. Enter cycles: claude → codex → antigravity → cursor → shell."),
-			options: []string{"claude", "codex", "antigravity", "cursor", "shell"},
+			hint:    tr("Default agent for new projects and bare sessions. Enter cycles: claude → codex → antigravity → cursor → gemini → shell."),
+			options: []string{"claude", "codex", "antigravity", "cursor", "gemini", "shell"},
 			chip:    true,
 			get:     func(c *config.Config) string { return c.Agents.Default },
 			set: func(c *config.Config, raw string) error {
@@ -237,13 +237,11 @@ func editableFields() []editableField {
 					c.Agents.Default = "shell"
 					return nil
 				}
-				// Otherwise must be a known agent ID. ParseID accepts
-				// "gemini" as an alias for antigravity, which we want
-				// (back-compat for users with old configs in flight),
-				// but we normalize to the canonical name on write.
+				// Otherwise normalize a known agent ID. Gemini and
+				// Antigravity remain separate choices.
 				id, ok := agent.ParseID(raw)
 				if !ok {
-					return fmt.Errorf("must be one of: claude, codex, antigravity, cursor, shell")
+					return fmt.Errorf("must be one of: claude, codex, antigravity, cursor, gemini, shell")
 				}
 				c.Agents.Default = string(id)
 				return nil

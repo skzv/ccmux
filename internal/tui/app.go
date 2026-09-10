@@ -2810,6 +2810,9 @@ func (a App) resumeSelectedConversation() tea.Cmd {
 // rationale.
 func (a App) resumeConversationCmd(c conversations.Conversation) tea.Cmd {
 	return func() tea.Msg {
+		if err := c.ValidateResume(); err != nil {
+			return conversationResumedMsg{Err: err}
+		}
 		argv := c.ResumeArgsWithCommands(a.cfg.AgentCommands())
 		if len(argv) == 0 {
 			return conversationResumedMsg{Err: fmt.Errorf("don't know how to resume agent %q", c.Agent)}
