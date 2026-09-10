@@ -20,7 +20,7 @@ The package exports six things callers reach for:
 
 | Symbol | Purpose |
 |---|---|
-| `agent.ID` | Canonical id type. Values: `claude`, `codex`, `antigravity`, `cursor` (`gemini` accepted as a back-compat alias for projects scaffolded before the rebrand). Load-bearing — written verbatim into `.ccmux/agent`. |
+| `agent.ID` | Canonical id type. Values: `claude`, `codex`, `antigravity`, `cursor`, `gemini` (Gemini CLI is independent of Antigravity). Load-bearing — written verbatim into `.ccmux/agent`. |
 | `agent.Agent` | The strategy interface (ID, Binary, LaunchCmd, ConfigRoot, TranscriptsRoot, InitialPrompt, Classify). |
 | `agent.All()` | Canonical-order list of every shipped agent. Order matters: pickers default to first installed. |
 | `agent.ByID(id)` | Unchecked lookup. Empty string → claude (back-compat). Panics on unknown — callers route user input through ParseID first. |
@@ -163,11 +163,13 @@ The shape is intentionally additive. To add, say, `qwen`:
 4. (When the daemon's classifier gets tightened) drop pane-content
    fixtures into `internal/agent/testdata/qwen_*.txt`.
 
-> **Naming note** — the package previously shipped a `Gemini{}` agent
-> backed by the `gemini` CLI; Google rebranded that surface to
-> Antigravity CLI (`agy`) and ccmux follows. The `gemini` literal is
-> still accepted by `ParseID` / `ByID` so projects scaffolded before
-> the rebrand keep working, but new code should write `IDAntigravity`.
+> **Google CLI identities** — `IDGemini` launches `gemini` and `IDAntigravity`
+> launches `agy`. Google continues to support Gemini CLI for Code Assist
+> Standard/Enterprise and paid API users. Existing `gemini` sidecars retain that
+> identity; Antigravity sidecars stay unchanged. `internal/gemini` reads native
+> JSON/JSONL chats, applies message updates/rewinds, and resolves project paths
+> through `.project_root` markers or `~/.gemini/projects.json`. Antigravity’s
+> protobuf conversations remain separate. Settings/credentials are not migrated.
 
 The protocol, sidecar shape, picker UI, doctor flow, and dashboard
 badge all pick it up automatically — there is no other place to

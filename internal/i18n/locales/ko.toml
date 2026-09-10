@@ -343,7 +343,7 @@
 "Daemon" = "데몬"
 "dangerous mode auto-downgrades below the cutoff" = "위험 모드는 컷오프 미만으로 자동 다운그레이드됩니다."
 "(default)" = "(기본값)"
-"Default agent for new projects and bare sessions. Enter cycles: claude → codex → antigravity → cursor → shell." = "새 프로젝트 및 베어 세션을 위한 기본 에이전트입니다. Enter 사이클: 클로드 → 코덱스 → 반중력 → 커서 → 셸."
+"Default agent for new projects and bare sessions. Enter cycles: claude → codex → antigravity → cursor → gemini → shell." = "새 프로젝트 및 베어 세션을 위한 기본 에이전트입니다. Enter 사이클: 클로드 → 코덱스 → 반중력 → 커서 → 셸."
 "details" = "세부정보"
 "detecting moshi-hook…" = "모시훅 감지…"
 "device" = "장치"
@@ -499,3 +499,5 @@
 "cached input" = "캐시된 입력"
 "reasoning tokens" = "추론 토큰"
 "Search projects, previews, or IDs" = "프로젝트, 미리 보기 또는 ID 검색"
+
+"Gemini CLI uses ~/.gemini/settings.json and GEMINI.md. Press e to edit settings; manage authentication in gemini." = "Gemini CLI는 ~/.gemini/settings.json과 GEMINI.md를 사용합니다. e를 눌러 설정을 편집하고, 인증은 gemini에서 관리하세요."

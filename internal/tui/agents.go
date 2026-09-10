@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -74,8 +76,7 @@ func (m *agentsModel) Reload() {
 // wrapping. All four sub-tabs get the size (not just the active one)
 // so switching tabs never lands on a stale 80×20 viewport.
 func (m *agentsModel) SetSize(width, height int) {
-	narrow := isNarrow(width)
-	header := m.renderSubtabs(narrow)
+	header := m.renderSubtabs(width)
 	innerW := width - 4
 	if innerW < 4 {
 		innerW = 4
@@ -123,6 +124,17 @@ func (m agentsModel) Update(msg tea.Msg) (agentsModel, tea.Cmd) {
 	}
 	// Delegate to the active sub-model.
 	switch m.active {
+	case agent.IDGemini:
+		if key, ok := msg.(tea.KeyMsg); ok && key.String() == "e" {
+			return m, func() tea.Msg {
+				home, err := os.UserHomeDir()
+				if err != nil {
+					return nil
+				}
+				return openEditorMsg{Editor: pickEditor(), Path: filepath.Join(agent.Gemini{}.ConfigRoot(home), "settings.json"), Source: "agents"}
+			}
+		}
+		return m, nil
 	case agent.IDClaude:
 		c, cmd := m.claude.Update(msg)
 		m.claude = c
@@ -199,6 +211,8 @@ func (m agentsModel) HelpBarProps(width int) components.HelpBarProps {
 		{Key: "←→", Label: tr("pane"), Priority: 5},
 	}
 	switch m.active {
+	case agent.IDGemini:
+		hints = append(hints, components.KeyHint{Key: "e", Label: tr("edit"), Priority: 4})
 	case agent.IDClaude:
 		hints = append(hints,
 			components.KeyHint{Key: "↑↓", Label: tr("nav"), Priority: 5},
@@ -221,8 +235,7 @@ func (m agentsModel) HelpBarProps(width int) components.HelpBarProps {
 }
 
 func (m agentsModel) View(width, height int) string {
-	narrow := isNarrow(width)
-	header := m.renderSubtabs(narrow)
+	header := m.renderSubtabs(width)
 	// The sub-tab row + the active sub-model's body share one
 	// bordered Pane so the whole Agents surface reads as one
 	// cohesive block. Sub-models render their inner content
@@ -246,6 +259,8 @@ func (m agentsModel) View(width, height int) string {
 	}
 	var body string
 	switch m.active {
+	case agent.IDGemini:
+		body = m.st.Muted.Width(innerW).Render(tr("Gemini CLI uses ~/.gemini/settings.json and GEMINI.md. Press e to edit settings; manage authentication in gemini."))
 	case agent.IDClaude:
 		body = m.claude.ViewBody(innerW, innerH)
 	case agent.IDCodex:
@@ -274,7 +289,7 @@ func (m agentsModel) View(width, height int) string {
 // inactive sub-tabs drop the label to muted so the eye lands on the
 // active one. The dot stays colored on every sub-tab so all four
 // agents remain visually identifiable at a glance.
-func (m agentsModel) renderSubtabs(narrow bool) string {
+func (m agentsModel) renderSubtabs(width int) string {
 	parts := []string{}
 	for _, a := range agentConfigSubtabs() {
 		label := a.DisplayName()
@@ -287,11 +302,15 @@ func (m agentsModel) renderSubtabs(narrow bool) string {
 		}
 	}
 	// The "(tab / h·l: switch agent)" hint is T2 — dropped on narrow.
-	if narrow {
+	if isNarrow(width) {
 		return strings.Join(parts, "\n")
 	}
 	subtabs := strings.Join(parts, "   ")
-	return subtabs + "   " + m.st.Muted.Render(tr("(tab / h·l: switch agent)"))
+	hint := "   " + m.st.Muted.Render(tr("(tab / h·l: switch agent)"))
+	if lipgloss.Width(subtabs+hint) <= width-4 {
+		subtabs += hint
+	}
+	return lipgloss.NewStyle().Width(max(1, width-4)).Render(subtabs)
 }
 
 // agentConfigSubtabs is the fixed set of agents that get a config
@@ -305,7 +324,7 @@ func (m agentsModel) renderSubtabs(narrow bool) string {
 // grows.
 func agentConfigSubtabs() []agent.Agent {
 	return []agent.Agent{
-		agent.Claude{}, agent.Codex{}, agent.Antigravity{}, agent.Cursor{}, agent.Pi{}, agent.Grok{}, agent.Muse{},
+		agent.Claude{}, agent.Codex{}, agent.Antigravity{}, agent.Cursor{}, agent.Pi{}, agent.Grok{}, agent.Muse{}, agent.Gemini{},
 	}
 }
 

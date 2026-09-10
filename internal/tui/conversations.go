@@ -35,6 +35,7 @@ var conversationAgentSections = []conversationAgentSectionDef{
 	{Label: "Agy", Agent: agent.IDAntigravity},
 	{Label: "Pi", Agent: agent.IDPi},
 	{Label: "Muse", Agent: agent.IDMuse},
+	{Label: "Gemini", Agent: agent.IDGemini},
 }
 
 const conversationColumnGap = 3
@@ -689,7 +690,8 @@ func (m conversationsModel) renderLoading(width, height int) string {
 		agent.IDClaude:      "~/.claude/projects",
 		agent.IDCodex:       "~/.codex/sessions",
 		agent.IDCursor:      "~/.cursor/projects",
-		agent.IDAntigravity: "~/.gemini",
+		agent.IDAntigravity: "~/.gemini/antigravity-cli/conversations",
+		agent.IDGemini:      "~/.gemini/tmp",
 		agent.IDPi:          "~/.pi/agent/sessions",
 		agent.IDMuse:        "~/.local/share/muse/sessions (XDG_DATA_HOME)",
 	}

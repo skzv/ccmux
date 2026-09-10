@@ -12,13 +12,13 @@
 //	Codex:        ~/.codex/sessions/<yyyy>/<mm>/<dd>/rollout-<ts>-<uuid>.jsonl
 //	Cursor:       ~/.cursor/projects/<encoded-cwd>/agent-transcripts/<uuid>/<uuid>.jsonl
 //	Antigravity:  ~/.gemini/antigravity-cli/conversations/<uuid>.pb
-//	              ~/.gemini/tmp/<project-hash>/chats/session-*.json
+//	Gemini:       ~/.gemini/tmp/<project>/chats/*.json / *.jsonl
 //
 // Claude, Codex, and Cursor use JSONL. Known fragments for the same logical
 // conversation are merged in memory: Claude parent/subagent files by
 // parent UUID, Codex rollouts by rollout UUID. We parse the first user
 // event to extract a short preview. Antigravity .pb transcripts remain
-// opaque, but Gemini-style JSON chat transcripts can provide preview
+// opaque, but Gemini JSON/JSONL chat transcripts can provide preview
 // and message-count data.
 //
 // Resume contracts (the argv each agent expects):
@@ -44,6 +44,7 @@ import (
 	"time"
 
 	"github.com/skzv/ccmux/internal/agent"
+	"github.com/skzv/ccmux/internal/gemini"
 	"github.com/skzv/ccmux/internal/muse"
 )
 
@@ -142,6 +143,15 @@ func (c Conversation) IsHeadless() bool {
 // Lives on the struct so the TUI's keybind handler doesn't have to
 // know each agent's flag dialect — it just passes the picked
 // Conversation through.
+// ValidateResume prevents unresolved Gemini project hashes from becoming a
+// fabricated cwd (or silently resuming in ccmux's own working directory).
+func (c Conversation) ValidateResume() error {
+	if c.Agent == agent.IDGemini && !filepath.IsAbs(c.Project) {
+		return fmt.Errorf("Gemini project directory is unknown; open this project in Gemini CLI once to register its location")
+	}
+	return nil
+}
+
 func (c Conversation) ResumeArgs() []string {
 	return c.ResumeArgsWithCommands(agent.Commands{})
 }
@@ -151,6 +161,8 @@ func (c Conversation) ResumeArgs() []string {
 // ccmux's setup-time command choice to propagate to resume flows.
 func (c Conversation) ResumeArgsWithCommands(commands agent.Commands) []string {
 	switch c.Agent {
+	case agent.IDGemini:
+		return agent.ResumeArgs(agent.IDGemini, c.ID, commands)
 	case agent.IDMuse:
 		return agent.ResumeArgs(agent.IDMuse, c.ID, commands)
 	case agent.IDClaude:
@@ -191,7 +203,7 @@ type Message struct {
 //   - Codex   — parses JSONL `response_item` events whose payload is a
 //     `message` shape with role "user" or "assistant".
 //   - Cursor  — parses JSONL transcript lines with role + message content.
-//   - Antigravity — parses Gemini-style JSON chat files when present;
+//   - Gemini — parses native JSON and JSONL chat files;
 //     opaque protobuf transcripts return an empty slice and nil error.
 //
 // The function tolerates per-line parse errors (an unknown event shape
@@ -246,9 +258,9 @@ func RecentMessages(c Conversation, limit int) ([]Message, error) {
 			}
 			all = append(all, msgs...)
 		}
-	case agent.IDAntigravity:
-		for _, path := range paths {
-			msgs, err := readAntigravityMessages(path, limit)
+	case agent.IDGemini:
+		for _, path := range []string{c.Path} {
+			msgs, err := readGeminiMessages(path, limit)
 			if err != nil {
 				return nil, err
 			}
@@ -388,11 +400,8 @@ func readCursorMessages(path string, limit int) ([]Message, error) {
 	return all, nil
 }
 
-func readAntigravityMessages(path string, limit int) ([]Message, error) {
-	if !strings.HasSuffix(path, ".json") {
-		return nil, nil
-	}
-	doc, err := readGeminiChat(path)
+func readGeminiMessages(path string, limit int) ([]Message, error) {
+	doc, err := gemini.Read(path)
 	if err != nil {
 		return nil, err
 	}
@@ -402,7 +411,7 @@ func readAntigravityMessages(path string, limit int) ([]Message, error) {
 		if role == "" {
 			continue
 		}
-		body := strings.TrimSpace(msg.Content)
+		body := strings.TrimSpace(msg.Text())
 		if role == "user" {
 			body = cleanPromptText(body)
 		}
@@ -425,7 +434,7 @@ func readAntigravityMessages(path string, limit int) ([]Message, error) {
 // transcript fragments. Used by the detail pane to surface a "thread length"
 // signal without loading the full message bodies. Same per-agent
 // handling as RecentMessages: Claude / Codex / Cursor parse JSONL,
-// Antigravity parses JSON chats and returns 0 for opaque protobuf.
+// Gemini parses native chats; Antigravity returns 0 for opaque protobuf.
 func CountMessages(c Conversation) (int, error) {
 	paths := transcriptPaths(c)
 	if len(paths) == 0 {
@@ -468,9 +477,9 @@ func CountMessages(c Conversation) (int, error) {
 			}
 			total += n
 		}
-	case agent.IDAntigravity:
-		for _, path := range paths {
-			n, err := countAntigravityMessages(path)
+	case agent.IDGemini:
+		for _, path := range []string{c.Path} {
+			n, err := countGeminiMessages(path)
 			if err != nil {
 				return 0, err
 			}
@@ -548,17 +557,14 @@ func countCursorMessages(path string) (int, error) {
 	return n, nil
 }
 
-func countAntigravityMessages(path string) (int, error) {
-	if !strings.HasSuffix(path, ".json") {
-		return 0, nil
-	}
-	doc, err := readGeminiChat(path)
+func countGeminiMessages(path string) (int, error) {
+	doc, err := gemini.Read(path)
 	if err != nil {
 		return 0, err
 	}
 	n := 0
 	for _, msg := range doc.Messages {
-		if geminiMessageRole(msg.Type) != "" && strings.TrimSpace(msg.Content) != "" {
+		if geminiMessageRole(msg.Type) != "" && strings.TrimSpace(msg.Text()) != "" {
 			n++
 		}
 	}
@@ -589,6 +595,12 @@ func Delete(c Conversation) error {
 		return muse.Delete(home, c.ID, c.Path)
 	}
 	for _, path := range paths {
+		if c.Agent == agent.IDGemini {
+			if err := gemini.ValidateDelete(home, c.ID, path); err != nil {
+				return err
+			}
+			continue
+		}
 		if err := guardTranscriptPath(home, c.Agent, path); err != nil {
 			return err
 		}
@@ -624,7 +636,6 @@ func guardTranscriptPath(home string, agentID agent.ID, path string) error {
 	case agent.IDAntigravity:
 		allowed = []transcriptRoot{
 			{root: filepath.Join(home, ".gemini", "antigravity-cli", "conversations"), ext: ".pb"},
-			{root: filepath.Join(home, ".gemini", "tmp"), ext: ".json"},
 		}
 	default:
 		return fmt.Errorf("unknown agent %q — refusing to delete %s", agentID, path)
@@ -697,6 +708,7 @@ func All(opts Options) ([]Conversation, error) {
 		ListCodex,
 		ListCursor,
 		ListAntigravity,
+		ListGemini,
 		ListPi,
 		ListMuse,
 	} {
@@ -1563,25 +1575,9 @@ func countPiMessages(path string) (int, error) {
 	return n, nil
 }
 
-// ListAntigravity walks ~/.gemini/antigravity-cli/conversations/<uuid>.pb.
-// We can't parse protobuf without a schema, but the filename is the
-// UUID and the mtime is a useful "last activity" surrogate. Preview
-// stays empty for these rows. Gemini-style JSON chat files under
-// ~/.gemini/tmp are also listed when present, with full preview and
-// message-count support.
+// ListAntigravity lists only Antigravity's native protobuf transcripts.
 func ListAntigravity(home string) ([]Conversation, error) {
-	var out []Conversation
-	pb, err := listAntigravityPB(home)
-	if err != nil {
-		return nil, err
-	}
-	out = append(out, pb...)
-	jsonChats, err := listGeminiJSONChats(home)
-	if err != nil {
-		return nil, err
-	}
-	out = append(out, jsonChats...)
-	return mergeConversations(out), nil
+	return listAntigravityPB(home)
 }
 
 func listAntigravityPB(home string) ([]Conversation, error) {
@@ -1612,107 +1608,30 @@ func listAntigravityPB(home string) ([]Conversation, error) {
 	return out, nil
 }
 
-func listGeminiJSONChats(home string) ([]Conversation, error) {
-	root := filepath.Join(home, ".gemini", "tmp")
-	var out []Conversation
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			if os.IsNotExist(err) {
-				return nil
-			}
-			return nil
-		}
-		if d.IsDir() {
-			return nil
-		}
-		if !strings.HasPrefix(d.Name(), "session-") || !strings.HasSuffix(d.Name(), ".json") {
-			return nil
-		}
-		if !isGeminiChatPath(root, path) {
-			return nil
-		}
-		c := readGeminiChatConversation(path)
-		if c.ID != "" {
-			out = append(out, c)
-		}
-		return nil
-	})
-	if err != nil && !os.IsNotExist(err) {
-		return nil, fmt.Errorf("walk %s: %w", root, err)
-	}
-	return out, nil
-}
-
-func isGeminiChatPath(root, path string) bool {
-	rel, err := filepath.Rel(root, path)
-	if err != nil || rel == "." {
-		return false
-	}
-	parts := strings.Split(rel, string(filepath.Separator))
-	return len(parts) == 3 && parts[1] == "chats"
-}
-
-type geminiChat struct {
-	SessionID   string          `json:"sessionId"`
-	ProjectHash string          `json:"projectHash"`
-	LastUpdated string          `json:"lastUpdated"`
-	StartTime   string          `json:"startTime"`
-	Messages    []geminiMessage `json:"messages"`
-}
-
-type geminiMessage struct {
-	Type      string `json:"type"`
-	Content   string `json:"content"`
-	Timestamp string `json:"timestamp"`
-}
-
-func readGeminiChat(path string) (geminiChat, error) {
-	var doc geminiChat
-	b, err := os.ReadFile(path)
+// ListGemini preserves Gemini ownership and resolves the native project cwd.
+func ListGemini(home string) ([]Conversation, error) {
+	sessions, err := gemini.List(home)
 	if err != nil {
-		return doc, fmt.Errorf("read %s: %w", path, err)
+		return nil, err
 	}
-	if err := json.Unmarshal(b, &doc); err != nil {
-		return doc, fmt.Errorf("parse %s: %w", path, err)
-	}
-	return doc, nil
-}
-
-func readGeminiChatConversation(path string) Conversation {
-	c := Conversation{
-		Agent: agent.IDAntigravity,
-		Path:  path,
-	}
-	if info, err := os.Stat(path); err == nil {
-		c.LastActivity = info.ModTime()
-	}
-	doc, err := readGeminiChat(path)
-	if err != nil {
-		c.ID = strings.TrimSuffix(filepath.Base(path), ".json")
-		return c
-	}
-	c.ID = doc.SessionID
-	if c.ID == "" {
-		c.ID = strings.TrimSuffix(filepath.Base(path), ".json")
-	}
-	if doc.ProjectHash != "" {
-		c.Project = "project " + shortHash(doc.ProjectHash)
-	}
-	if ts := parseRFC3339(doc.LastUpdated); !ts.IsZero() {
-		c.LastActivity = ts
-	} else if ts := parseRFC3339(doc.StartTime); !ts.IsZero() {
-		c.LastActivity = ts
-	}
-	for _, msg := range doc.Messages {
-		if msg.Type != "user" {
+	out := make([]Conversation, 0, len(sessions))
+	for _, session := range sessions {
+		if session.Kind == "subagent" {
 			continue
 		}
-		c.Preview = truncatedPreview(cleanPromptText(msg.Content))
-		if c.Preview != "" {
-			break
+		c := Conversation{ID: session.ID, Agent: agent.IDGemini, Project: session.Project,
+			LastActivity: session.Updated, Path: session.Path, Paths: session.Paths}
+		for _, msg := range session.Messages {
+			if msg.Type == "user" {
+				c.Preview = truncatedPreview(cleanPromptText(msg.Text()))
+				if c.Preview != "" {
+					break
+				}
+			}
 		}
+		out = append(out, c)
 	}
-	return c
+	return out, nil
 }
 
 func geminiMessageRole(t string) string {

@@ -538,10 +538,8 @@ func TestSettings_AgentsDefault_AcceptsValidIDs(t *testing.T) {
 		{"claude", "claude"},
 		{"codex", "codex"},
 		{"antigravity", "antigravity"},
-		// Back-compat alias from the rebrand: must accept the input
-		// but normalize to the canonical name when storing, otherwise
-		// "gemini" would persist forever in the user's config.
-		{"gemini", "antigravity"},
+		// Gemini remains distinct from Antigravity.
+		{"gemini", "gemini"},
 		{"shell", "shell"},
 		{"  CODEX  ", "codex"},
 		// Empty resets to claude (the default-of-default) — see field
@@ -750,7 +748,7 @@ func TestSettings_AgentsDefault_CyclePicker(t *testing.T) {
 	}
 
 	// Default is claude; Enter cycles forward and wraps back to claude.
-	for _, want := range []string{"codex", "antigravity", "cursor", "shell", "claude"} {
+	for _, want := range []string{"codex", "antigravity", "cursor", "gemini", "shell", "claude"} {
 		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 		if m.editing {
 			t.Fatal("cycle-picker Enter must not open the inline editor")

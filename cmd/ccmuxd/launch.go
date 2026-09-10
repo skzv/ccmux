@@ -30,8 +30,8 @@ func projectLaunchCmd(projectPath string, continueFlag bool, commands agent.Comm
 //  2. daemon's sessions.default_agent config (same rules).
 //  3. $SHELL (or /bin/sh if $SHELL is unset).
 //
-// IDs are normalized via agent.ParseID so the daemon accepts the
-// "gemini" back-compat alias. Exposed for tests so the precedence is
+// IDs are normalized via agent.ParseID, keeping Gemini distinct from
+// Antigravity. Exposed for tests so the precedence is
 // pinned without standing up an http server.
 func bareSessionLaunchCmd(reqAgent, configDefault string, commands agent.Commands) string {
 	if cmd := agentLaunchCmdOrShell(reqAgent, false, commands); cmd != "" {

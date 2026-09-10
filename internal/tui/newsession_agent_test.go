@@ -179,6 +179,7 @@ func TestIndexOfDefaultAgent(t *testing.T) {
 		{ID: agent.IDAntigravity, Label: "Antigravity CLI"},
 		{ID: agent.IDCursor, Label: "Cursor"},
 		{ID: "", Label: "shell (no agent)"},
+		{ID: agent.IDGemini, Label: "Gemini CLI"},
 	}
 	cases := []struct {
 		in   string
@@ -188,7 +189,7 @@ func TestIndexOfDefaultAgent(t *testing.T) {
 		{"claude", 0},          //
 		{"codex", 1},           //
 		{"antigravity", 2},     //
-		{"gemini", 2},          // back-compat alias still routes to antigravity
+		{"gemini", 5},          // distinct Gemini CLI
 		{"cursor", 3},          //
 		{"  Codex  ", 1},       // case-insensitive + trimmed via ParseID
 		{"shell", 4},           // explicit no-agent

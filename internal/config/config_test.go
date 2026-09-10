@@ -84,6 +84,7 @@ func TestSaveLoad_RoundTrip(t *testing.T) {
 	in.Agents.Cursor.Command = "/tmp/cursor-agent"
 	in.Agents.Grok.Command = "/tmp/grok"
 	in.Agents.Muse.Command = "/tmp/Muse Code/muse"
+	in.Agents.Gemini.Command = "/tmp/Gemini CLI/gemini"
 	in.Hosts = []Host{
 		{Name: "mac-mini", Address: "100.64.0.5", User: "skz", Port: 22, Mosh: true},
 		{Name: "laptop", Address: "100.64.0.6", User: "skz"},

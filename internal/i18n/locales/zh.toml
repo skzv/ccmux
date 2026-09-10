@@ -350,7 +350,7 @@
 "Daemon" = "守护进程"
 "dangerous mode auto-downgrades below the cutoff" = "危险模式在低于阈值时自动降级"
 "(default)" = "（默认）"
-"Default agent for new projects and bare sessions. Enter cycles: claude → codex → antigravity → cursor → shell." = "新建项目和裸会话的默认智能体。回车循环：claude → codex → antigravity → cursor → shell。"
+"Default agent for new projects and bare sessions. Enter cycles: claude → codex → antigravity → cursor → gemini → shell." = "新建项目和裸会话的默认智能体。回车循环：claude → codex → antigravity → cursor → gemini → shell。"
 "details" = "详情"
 "detecting moshi-hook…" = "正在检测 moshi-hook…"
 "device" = "设备"
@@ -507,3 +507,5 @@
 "cached input" = "缓存输入"
 "reasoning tokens" = "推理令牌"
 "Search projects, previews, or IDs" = "搜索项目、预览或 ID"
+
+"Gemini CLI uses ~/.gemini/settings.json and GEMINI.md. Press e to edit settings; manage authentication in gemini." = "Gemini CLI 使用 ~/.gemini/settings.json 和 GEMINI.md。按 e 编辑设置；请在 gemini 中管理登录认证。"

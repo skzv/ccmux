@@ -192,6 +192,8 @@ func (s Styles) AgentAccent(id agent.ID) lipgloss.Style {
 		color = s.P.Teal
 	case agent.IDPi:
 		color = s.P.Green
+	case agent.IDGemini:
+		color = s.P.Yellow
 	case agent.IDMuse:
 		color = s.P.Lavender
 	case agent.IDGrok:

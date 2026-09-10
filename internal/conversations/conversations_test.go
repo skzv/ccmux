@@ -515,7 +515,7 @@ func TestListAntigravity_ListsPBFiles(t *testing.T) {
 	}
 }
 
-func TestListAntigravity_ParsesGeminiJSONChats(t *testing.T) {
+func TestListGemini_ParsesGeminiJSONChats(t *testing.T) {
 	home := t.TempDir()
 	path := filepath.Join(home, ".gemini/tmp/abcdef1234567890/chats/session-2026-05-24T10-00-agy.json")
 	writeFile(t, path,
@@ -525,9 +525,9 @@ func TestListAntigravity_ParsesGeminiJSONChats(t *testing.T) {
 			`]}`,
 	)
 
-	got, err := ListAntigravity(home)
+	got, err := ListGemini(home)
 	if err != nil {
-		t.Fatalf("ListAntigravity: %v", err)
+		t.Fatalf("ListGemini: %v", err)
 	}
 	if len(got) != 1 {
 		t.Fatalf("len = %d, want 1", len(got))
@@ -539,8 +539,8 @@ func TestListAntigravity_ParsesGeminiJSONChats(t *testing.T) {
 	if c.Preview != "summarize this repo" {
 		t.Errorf("Preview = %q, want first user message", c.Preview)
 	}
-	if c.Project != "project abcdef123456" {
-		t.Errorf("Project = %q, want short project hash label", c.Project)
+	if c.Project != "" {
+		t.Errorf("Project = %q, want empty cwd for unresolved project", c.Project)
 	}
 	wantLast, _ := time.Parse(time.RFC3339Nano, "2026-05-24T10:02:00Z")
 	if !c.LastActivity.Equal(wantLast) {
@@ -1010,13 +1010,13 @@ func TestDelete_RemovesCursorTranscript(t *testing.T) {
 	}
 }
 
-func TestDelete_RemovesAntigravityJSONChat(t *testing.T) {
+func TestDelete_RemovesGeminiJSONChat(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	path := filepath.Join(home, ".gemini/tmp/abcdef/chats/session-2026-05-24T10-00-agy.json")
-	writeFile(t, path, `{"sessionId":"agy-1","messages":[]}`)
+	writeFile(t, path, `{"sessionId":"agy-1","projectHash":"abcdef","messages":[]}`)
 
-	c := Conversation{ID: "agy-1", Agent: agent.IDAntigravity, Path: path}
+	c := Conversation{ID: "agy-1", Agent: agent.IDGemini, Path: path}
 	if err := Delete(c); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}

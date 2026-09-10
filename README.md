@@ -117,11 +117,36 @@ Headless agent runs (`claude -p`, `codex exec`, SDK invocations) are filtered ou
 <img src="docs/vhs/out/cuj05_pick_agent.gif" alt="ccmux new-project form: cycle Claude / Codex / Antigravity / Cursor with arrow keys, the agent picker writes the per-project choice into .ccmux/agent." width="900" />
 </div>
 
-Pick per project which AI runs it — ccmux works with [Claude Code](https://claude.ai/code), [Codex](https://github.com/openai/codex), [Antigravity CLI](https://antigravity.google/download), [Cursor](https://cursor.com/cli), [pi](https://pi.dev), [Grok](https://x.ai/cli), [Muse Code](https://ccmux.ai/docs/muse-code/), and more, speaking each one's launch and resume dialect. The choice is sticky, stored at `<project>/.ccmux/agent`. The dashboard, daemon state-detection, and dispatch all follow per-project. Press `a` in the Projects tab to switch the selected project's agent (cycles claude → codex → antigravity → cursor → pi → grok).
+Pick per project which AI runs it — ccmux works with [Claude Code](https://claude.ai/code), [Codex](https://github.com/openai/codex), [Antigravity CLI](https://antigravity.google/download), [Gemini CLI](https://geminicli.com/), [Cursor](https://cursor.com/cli), [pi](https://pi.dev), [Grok](https://x.ai/cli), [Muse Code](https://ccmux.ai/docs/muse-code/), and more, speaking each one's launch and resume dialect. The choice is sticky, stored at `<project>/.ccmux/agent`. The dashboard, daemon state-detection, and dispatch all follow per-project. Press `a` in the Projects tab to switch the selected project's agent (cycles claude → codex → antigravity → cursor → pi → grok).
 
 Dashboard rows on non-default agents get a small `[codex]`, `[antigravity]`, `[cursor]`, `[pi]`, or `[grok]` tag so a single glance tells you what's running where.
 
 ---
+
+### Gemini CLI
+
+Gemini CLI and Antigravity CLI are separate agents in ccmux. Gemini remains
+available to Gemini Code Assist Standard/Enterprise customers and paid API users;
+see [Google’s transition announcement](https://developers.googleblog.com/an-important-update-transitioning-gemini-cli-to-antigravity-cli/).
+
+Install with `npm install -g @google/gemini-cli`, sign in through `gemini`, then
+run `ccmux new gemini-demo --agent gemini` or pick Gemini CLI in the project menu.
+Existing `.ccmux/agent` files containing `gemini` launch Gemini again. Projects
+explicitly set to `antigravity` continue to launch `agy`; use the Projects agent
+picker to change them if needed.
+
+ccmux reads Gemini’s JSON/JSONL history, previews, and token usage from
+`~/.gemini/tmp/`. Resume uses `gemini --resume <session-id>` in the project directory
+recorded by Gemini. If an old transcript has no recoverable project location,
+open that project in Gemini CLI once to register it before resuming from ccmux.
+Settings and authentication stay native: press `e` on the Gemini Agents tab to
+edit `~/.gemini/settings.json`, and use `gemini` to sign in. An optional
+command setting selects a specific installation independently of Antigravity:
+
+```toml
+[agents.gemini]
+command = "/absolute/path/to/gemini"
+```
 
 ### Muse Code
 

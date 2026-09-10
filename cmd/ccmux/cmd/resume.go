@@ -141,6 +141,9 @@ func pickMostRecentByAgent(list []conversations.Conversation, id agent.ID) conve
 // in-foreground so the caller's shell hands off cleanly — same pattern
 // the existing `ccmux attach` and `ccmux new` commands use.
 func resumeNow(target conversations.Conversation) error {
+	if err := target.ValidateResume(); err != nil {
+		return err
+	}
 	cfg, _ := config.Load()
 	argv := target.ResumeArgsWithCommands(cfg.AgentCommands())
 	if len(argv) == 0 {

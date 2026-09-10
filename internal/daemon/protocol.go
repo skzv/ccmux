@@ -22,7 +22,7 @@ type SessionState struct {
 	PromptCount int       `json:"prompt_count"` // # of times we've seen a needs-input transition
 	// Agent is the AI agent driving this session, sourced from the
 	// project's .ccmux/agent sidecar. One of "claude" / "codex" /
-	// "antigravity" (or the legacy alias "gemini"). Empty for sessions
+	// "antigravity" / "gemini". Empty for sessions
 	// whose project we couldn't resolve (which the client should treat
 	// as claude for back-compat).
 	Agent string `json:"agent,omitempty"`
@@ -82,7 +82,7 @@ type NewSessionRequest struct {
 	// Agent picks which AI agent to launch. When set, the daemon writes
 	// it to the project's .ccmux/agent sidecar before launching so
 	// subsequent attaches pick the same agent. One of "claude" /
-	// "codex" / "antigravity" (or the legacy alias "gemini").
+	// "codex" / "antigravity" / "gemini".
 	Agent string `json:"agent,omitempty"`
 }
 
@@ -110,8 +110,7 @@ type NewBareSessionRequest struct {
 	// machine is what matters when "any device" is the point.
 	Path string `json:"path,omitempty"`
 	// Agent picks which AI agent the new session launches. One of
-	// "claude" / "codex" / "antigravity" (or the legacy alias
-	// "gemini"), or the explicit "shell" for no agent. Empty falls
+	// "claude" / "codex" / "antigravity" / "gemini", or the explicit "shell" for no agent. Empty falls
 	// back to the daemon's configured sessions.default_agent; if
 	// that's also empty / "shell" the daemon spawns $SHELL.
 	Agent string `json:"agent,omitempty"`
@@ -138,8 +137,7 @@ type NewBareSessionResponse struct {
 type NewProjectRequest struct {
 	Name string `json:"name"`
 	// Agent picks which AI agent the remote daemon launches inside
-	// the new session. One of "claude" / "codex" / "antigravity" (the
-	// legacy alias "gemini" is also accepted); empty (omitted by older
+	// the new session. One of "claude" / "codex" / "antigravity" / "gemini"; empty (omitted by older
 	// clients) defaults to claude on the daemon side for back-compat.
 	Agent string `json:"agent,omitempty"`
 }
