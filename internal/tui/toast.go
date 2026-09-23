@@ -1,9 +1,11 @@
 package tui
 
 import (
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/skzv/ccmux/internal/tui/styles"
 )
@@ -59,12 +61,19 @@ func (t *toastController) Active() bool {
 	return t.current != "" && time.Now().Before(t.until)
 }
 
+// toastMaxLines caps how many lines a wrapped toast message may take,
+// so a long error can't shove the screen body out of the frame. The
+// full text stays in the help overlay's "Recent activity" log.
+const toastMaxLines = 3
+
 // Render returns the styled toast — a rounded-border bubble in the
-// kind's accent color with a glyph prefix (✓ ! ✗ ⓘ). Caller is
-// responsible for line-truncating to the terminal width and placing
-// the bubble in the frame (currently overlaid at the top via
-// app.renderTopToast).
-func (t *toastController) Render(st styles.Styles) string {
+// kind's accent color with a glyph prefix (✓ ! ✗ ⓘ) — at most
+// maxWidth cells wide (maxWidth <= 0: unbounded). A message that
+// doesn't fit wraps inside the bubble (up to toastMaxLines, then an
+// ellipsis): an unbounded bubble wider than the terminal got
+// hard-truncated by Bubble Tea, cutting off the border and the end of
+// the message. The caller places the bubble in the frame.
+func (t *toastController) Render(st styles.Styles, maxWidth int) string {
 	var fg lipgloss.Color
 	var glyph string
 	switch t.kind {
@@ -83,7 +92,32 @@ func (t *toastController) Render(st styles.Styles) string {
 		Foreground(st.P.FG).
 		Padding(st.Spacing.XS, st.Spacing.SM)
 	prefix := lipgloss.NewStyle().Foreground(fg).Bold(true).Render(glyph)
-	return box.Render(prefix + " " + t.current)
+	text := prefix + " " + t.current
+	// Border plus the box's horizontal padding.
+	chrome := 2 + box.GetHorizontalPadding()
+	if maxWidth > 0 && lipgloss.Width(text)+chrome > maxWidth {
+		text = wrapClamped(text, maxWidth-chrome, toastMaxLines)
+	}
+	return box.Render(text)
+}
+
+// wrapClamped word-wraps s to width cells and keeps at most maxLines
+// lines, ending the last kept line with "…" when text was dropped.
+func wrapClamped(s string, width, maxLines int) string {
+	if width < 1 {
+		width = 1
+	}
+	lines := strings.Split(lipgloss.NewStyle().Width(width).Render(s), "\n")
+	if len(lines) <= maxLines {
+		return strings.Join(lines, "\n")
+	}
+	lines = lines[:maxLines]
+	last := strings.TrimRight(lines[maxLines-1], " ")
+	if lipgloss.Width(last) >= width {
+		last = ansi.Truncate(last, width-1, "")
+	}
+	lines[maxLines-1] = last + "…"
+	return strings.Join(lines, "\n")
 }
 
 // Log returns the ring buffer (newest first). Read-only — callers

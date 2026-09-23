@@ -170,11 +170,19 @@ func (a App) renderAttachingOverlay(width, height int) string {
 	if elapsed != "" {
 		rows = append(rows, "", elapsed)
 	}
-	box := lipgloss.NewStyle().
+	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(a.styles.P.Mauve).
-		Padding(a.styles.Spacing.SM, a.styles.Spacing.LG).
-		Render(lipgloss.JoinVertical(lipgloss.Center, rows...))
+		Padding(a.styles.Spacing.SM, a.styles.Spacing.LG)
+	content := lipgloss.JoinVertical(lipgloss.Center, rows...)
+	// On a narrow terminal (a phone) the natural box — hint plus
+	// padding — outgrew the screen and Bubble Tea hard-truncated its
+	// right side. Cap it to the terminal (Width excludes the 2-col
+	// border) and let the text wrap inside.
+	if lipgloss.Width(boxStyle.Render(content)) > width {
+		boxStyle = boxStyle.Width(maxInt(1, width-2)).Align(lipgloss.Center)
+	}
+	box := boxStyle.Render(content)
 
 	return lipgloss.Place(width, height,
 		lipgloss.Center, lipgloss.Center,

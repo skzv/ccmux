@@ -32,6 +32,7 @@ func newHomeApp(t *testing.T, width, height, n int) App {
 		agentsM:        newAgents(st, km),
 		settings:       newSettings(st, km, config.Config{}, "test"),
 		network:        newNetwork(st, km),
+		tour:           newTour(st),
 		matrix:         newMatrix(),
 	}
 	var ss []daemon.SessionState

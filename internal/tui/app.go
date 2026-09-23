@@ -1705,7 +1705,9 @@ func (a App) View() string {
 	conversationsSideToast := a.toasts.Active() &&
 		a.screen == ScreenConversations && !isNarrow(a.width)
 	if a.toasts.Active() && !conversationsSideToast {
-		toastRow = lipgloss.PlaceHorizontal(a.width, lipgloss.Right, a.toasts.Render(a.styles))
+		// Capped to the terminal (less a column each side) so a long
+		// message wraps inside the bubble instead of being truncated.
+		toastRow = lipgloss.PlaceHorizontal(a.width, lipgloss.Right, a.toasts.Render(a.styles, a.width-2))
 		toastH = lipgloss.Height(toastRow)
 	}
 
@@ -1728,7 +1730,9 @@ func (a App) View() string {
 		// banner at the top of the detail pane — closer to the action
 		// that produced the notification.
 		if !isNarrow(a.width) && a.toasts.Active() {
-			a.conversationsM.SetBanner(a.toasts.Render(a.styles))
+			// The banner sits inside the detail pane: half the width,
+			// less the pane's border and padding.
+			a.conversationsM.SetBanner(a.toasts.Render(a.styles, a.width/2-4))
 		} else {
 			a.conversationsM.SetBanner("")
 		}
