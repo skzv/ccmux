@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/skzv/ccmux/internal/conversations"
 	"github.com/skzv/ccmux/internal/tmuxchrome"
 )
 
@@ -126,7 +127,7 @@ func TestCLIChrome_AppliedOnCreate(t *testing.T) {
 		out, stderr, err := e.ccmux("resume", id)
 		t.Logf("resume: %v %s %s", err, out, stderr)
 
-		session := "c-resume-" + id[:8]
+		session := conversations.ResumeSessionName(id)
 		if !e.hasSession(session) {
 			t.Fatalf("`ccmux resume` did not create session %q", session)
 		}

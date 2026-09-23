@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/skzv/ccmux/internal/agent"
+	"github.com/skzv/ccmux/internal/conversations"
 )
 
 func TestGeminiResumeUsesNativeIDAndProject(t *testing.T) {
@@ -25,7 +26,7 @@ func TestGeminiResumeUsesNativeIDAndProject(t *testing.T) {
 		t.Fatal(list)
 	}
 	_, _, _ = e.ccmux("resume", id) // final attach has no tty, as in other CLI tests
-	session := "c-resume-" + id[:8]
+	session := conversations.ResumeSessionName(id)
 	if !e.hasSession(session) {
 		t.Fatal("Gemini resume session was not created")
 	}

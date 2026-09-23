@@ -115,9 +115,8 @@ func TestConversationsModel_SetList_ClampsOnShrinkage(t *testing.T) {
 }
 
 // TestConversationsModel_Filtered_SubstringProject pins the filter
-// semantics: case-insensitive substring on Project. A drill-down from
-// the Projects tab passes the full absolute path; partial-substring
-// behavior also lets `:filter foo` (future) do the right thing.
+// semantics: case-insensitive path match on Project. A drill-down from
+// the Projects tab passes the full absolute path (the only producer).
 func TestConversationsModel_Filtered_SubstringProject(t *testing.T) {
 	m := newConversations(styles.Default(), DefaultKeymap())
 	m.SetList(fakeConversations())
@@ -134,8 +133,8 @@ func TestConversationsModel_Filtered_SubstringProject(t *testing.T) {
 		}
 	}
 
-	// Case-insensitive: AUTH-REDESIGN should match.
-	m.SetProjectFilter("AUTH-REDESIGN")
+	// Case-insensitive: the upper-cased path should match.
+	m.SetProjectFilter("/USERS/SKZ/PROJECTS/AUTH-REDESIGN")
 	if got := len(m.filtered()); got != 2 {
 		t.Errorf("uppercase filter len = %d, want 2", got)
 	}
@@ -144,6 +143,36 @@ func TestConversationsModel_Filtered_SubstringProject(t *testing.T) {
 	m.SetProjectFilter("")
 	if got := len(m.filtered()); got != 3 {
 		t.Errorf("empty filter len = %d, want 3", got)
+	}
+}
+
+// TestConversationsModel_Filtered_SiblingPrefixExcluded — regression:
+// the filter was a substring match, so drilling into ~/Projects/ccmux
+// also listed ~/Projects/ccmux-website conversations. Only the project
+// itself and directories nested under it may match.
+func TestConversationsModel_Filtered_SiblingPrefixExcluded(t *testing.T) {
+	now := time.Now()
+	m := newConversations(styles.Default(), DefaultKeymap())
+	m.SetList([]conversations.Conversation{
+		{ID: "own", Agent: agent.IDClaude, Project: "/Users/skz/Projects/ccmux", LastActivity: now},
+		{ID: "nested", Agent: agent.IDClaude, Project: "/Users/skz/Projects/ccmux/internal/tui", LastActivity: now.Add(-time.Minute)},
+		{ID: "sibling", Agent: agent.IDClaude, Project: "/Users/skz/Projects/ccmux-website", LastActivity: now.Add(-2 * time.Minute)},
+		{ID: "parent", Agent: agent.IDClaude, Project: "/Users/skz/Projects", LastActivity: now.Add(-3 * time.Minute)},
+	})
+
+	m.SetProjectFilter("/Users/skz/Projects/ccmux")
+	var got []string
+	for _, c := range m.filtered() {
+		got = append(got, c.ID)
+	}
+	if strings.Join(got, ",") != "own,nested" {
+		t.Errorf("filtered IDs = %v, want [own nested] (sibling ccmux-website and parent must be excluded)", got)
+	}
+
+	// A trailing slash on the filter must not change the result.
+	m.SetProjectFilter("/Users/skz/Projects/ccmux/")
+	if n := len(m.filtered()); n != 2 {
+		t.Errorf("trailing-slash filter matched %d rows, want 2", n)
 	}
 }
 

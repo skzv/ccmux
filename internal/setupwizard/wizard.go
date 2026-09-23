@@ -295,6 +295,14 @@ func configureAgentCommands(ctx context.Context, out io.Writer, cfg *config.Conf
 }
 
 func configureAgentCommand(ctx context.Context, out io.Writer, cfg *config.Config, a agent.Agent) (bool, error) {
+	// Agents without an [agents.<id>] command field can't be pinned:
+	// "selecting" a command for them changed nothing, yet reported a
+	// change (so the wizard claimed it wrote the selection) and, with
+	// nothing saved, prompted again on every run. They keep resolving
+	// their binary on PATH.
+	if agentCommandField(cfg, a.ID()) == nil {
+		return false, nil
+	}
 	candidates := setupAgentCandidates(ctx, a)
 	agentCommand, shouldPrompt := defaultAgentCommandSelection(configuredAgentCommand(*cfg, a.ID()), candidates)
 	if configuredAgentCommand(*cfg, a.ID()) != "" {
@@ -375,48 +383,44 @@ func defaultAgentCommandSelection(current string, candidates []string) (selectio
 	}
 }
 
-func configuredAgentCommand(cfg config.Config, id agent.ID) string {
+// agentCommandField returns the [agents.<id>] command setting for id,
+// or nil when config.toml has no command field for that agent (the
+// second-wave agents: opencode, kimi, droid, copilot, …). The single
+// switch keeps configuredAgentCommand / setConfiguredAgentCommand /
+// configureAgentCommand agreeing on which agents can be pinned.
+func agentCommandField(cfg *config.Config, id agent.ID) *config.AgentCommandConfig {
 	switch id {
 	case agent.IDClaude:
-		return strings.TrimSpace(cfg.Agents.Claude.Command)
+		return &cfg.Agents.Claude
 	case agent.IDCodex:
-		return strings.TrimSpace(cfg.Agents.Codex.Command)
+		return &cfg.Agents.Codex
 	case agent.IDGemini:
-		return strings.TrimSpace(cfg.Agents.Gemini.Command)
+		return &cfg.Agents.Gemini
 	case agent.IDAntigravity:
-		return strings.TrimSpace(cfg.Agents.Antigravity.Command)
+		return &cfg.Agents.Antigravity
 	case agent.IDCursor:
-		return strings.TrimSpace(cfg.Agents.Cursor.Command)
+		return &cfg.Agents.Cursor
 	case agent.IDPi:
-		return strings.TrimSpace(cfg.Agents.Pi.Command)
+		return &cfg.Agents.Pi
 	case agent.IDMuse:
-		return strings.TrimSpace(cfg.Agents.Muse.Command)
+		return &cfg.Agents.Muse
 	case agent.IDGrok:
-		return strings.TrimSpace(cfg.Agents.Grok.Command)
+		return &cfg.Agents.Grok
 	default:
-		return ""
+		return nil
 	}
 }
 
+func configuredAgentCommand(cfg config.Config, id agent.ID) string {
+	if f := agentCommandField(&cfg, id); f != nil {
+		return strings.TrimSpace(f.Command)
+	}
+	return ""
+}
+
 func setConfiguredAgentCommand(cfg *config.Config, id agent.ID, command string) {
-	command = strings.TrimSpace(command)
-	switch id {
-	case agent.IDClaude:
-		cfg.Agents.Claude.Command = command
-	case agent.IDCodex:
-		cfg.Agents.Codex.Command = command
-	case agent.IDGemini:
-		cfg.Agents.Gemini.Command = command
-	case agent.IDAntigravity:
-		cfg.Agents.Antigravity.Command = command
-	case agent.IDCursor:
-		cfg.Agents.Cursor.Command = command
-	case agent.IDPi:
-		cfg.Agents.Pi.Command = command
-	case agent.IDMuse:
-		cfg.Agents.Muse.Command = command
-	case agent.IDGrok:
-		cfg.Agents.Grok.Command = command
+	if f := agentCommandField(cfg, id); f != nil {
+		f.Command = strings.TrimSpace(command)
 	}
 }
 
@@ -845,6 +849,7 @@ func stepConfig(ctx context.Context, out io.Writer) error {
 		fmt.Fprintf(out, "  detected Claude plan: %s\n", stEmphasis.Render(detectedTier))
 	}
 	claudeTier := cfg.Subscription.TierFor("claude")
+	onDiskTier := claudeTier
 	if (claudeTier == "" || claudeTier == "api") && detectedTier != "" && detectedTier != "api" {
 		cfg.Subscription.SetTierFor("claude", detectedTier)
 		claudeTier = detectedTier
@@ -865,11 +870,7 @@ func stepConfig(ctx context.Context, out io.Writer) error {
 	// Build the default-agent picker dynamically so users don't get
 	// offered agents ccmux cannot launch. PATH-installed agents count,
 	// and so do executable command paths already pinned in config.
-	agentOpts := []huh.Option[string]{}
-	for _, id := range defaultAgentChoices(ctx, cfg) {
-		agentOpts = append(agentOpts, huh.NewOption(defaultAgentLabel(id), string(id)))
-	}
-	agentOpts = append(agentOpts, huh.NewOption("shell (no agent — opt out)", "shell"))
+	agentOpts := defaultAgentOptions(defaultAgentChoices(ctx, cfg), defaultAgent)
 
 	// Interactive only — in --yes mode keep the pre-seeded defaults above.
 	if !assumeYes(ctx) {
@@ -912,7 +913,7 @@ func stepConfig(ctx context.Context, out io.Writer) error {
 
 	cfg.Projects.Root = strings.TrimSpace(root)
 	cfg.Agents.Default = strings.TrimSpace(defaultAgent)
-	cfg.Subscription.SetTierFor("claude", strings.TrimSpace(tier))
+	cfg.Subscription.SetTierFor("claude", claudeTierToSave(onDiskTier, detectedTier, tier))
 	cfg.Daemon.ListenTailnet = listenTailnet
 	cfg.Update.AutoCheck = autoCheckUpdates
 	if err := config.Save(cfg); err != nil {
@@ -926,6 +927,41 @@ func stepConfig(ctx context.Context, out io.Writer) error {
 		fmt.Fprintln(out, stMuted.Render("  ccmuxd will pick this up on next restart — `ccmux update` to apply now."))
 	}
 	return nil
+}
+
+// claudeTierToSave decides what the wizard writes for the Claude tier.
+// The TUI shows the auto-detected plan only while the tier is unset, and
+// treats an explicit "api" as the user's choice. So "api" is saved only
+// when it is one: the config already said api, or a paid plan was
+// detected and the user picked api over it. With nothing on disk and
+// nothing detected, the picker's api default is left unset — pinning it
+// would hide a plan detected later (e.g. after `claude login`).
+func claudeTierToSave(onDisk, detected, chosen string) string {
+	chosen = strings.TrimSpace(chosen)
+	if chosen == "api" && onDisk == "" && (detected == "" || detected == "api") {
+		return ""
+	}
+	return chosen
+}
+
+// defaultAgentOptions builds the "Default agent" picker: the launchable
+// choices, the configured current value, then the shell opt-out. The
+// current value is always offered because huh's Select rewrites a bound
+// value that isn't among its options to the first option — so an
+// interactive re-run silently reset agents.default to claude whenever
+// the configured agent wasn't detected this time or isn't in the
+// picker's list (grok, muse, opencode, …).
+func defaultAgentOptions(choices []agent.ID, current string) []huh.Option[string] {
+	opts := make([]huh.Option[string], 0, len(choices)+2)
+	seen := map[string]bool{}
+	for _, id := range choices {
+		opts = append(opts, huh.NewOption(defaultAgentLabel(id), string(id)))
+		seen[string(id)] = true
+	}
+	if current = strings.TrimSpace(current); current != "" && current != "shell" && !seen[current] {
+		opts = append(opts, huh.NewOption(defaultAgentLabel(agent.ID(current))+" (current)", current))
+	}
+	return append(opts, huh.NewOption("shell (no agent — opt out)", "shell"))
 }
 
 func defaultAgentChoices(ctx context.Context, cfg config.Config) []agent.ID {

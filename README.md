@@ -338,7 +338,7 @@ bell = true                          # ring local terminal BEL on needs_input
 ### 🔌 MCP server
 
 - `ccmux-mcp` ships alongside ccmux in the same install — a Model Context Protocol server agents can plug into to see and act on every session
-- Wire it up in `~/.claude/settings.json` (or any MCP-aware client): `{"mcpServers": {"ccmux": {"command": "ccmux-mcp"}}}`
+- Wire it into Claude Code with `ccmux mcp register` (also offered by `ccmux setup`), or by hand: `claude mcp add --scope user ccmux -- ccmux-mcp`. Other MCP-aware clients: point a stdio server at the `ccmux-mcp` binary
 - Read-only by default: `list_sessions`, `read_pane`, `list_projects`, `list_conversations`, `get_usage`, `list_machines`, notes ones, daemon health
 - `--allow-mutate` exposes `spawn_session`, `send_keys`, `kill_session` — opt-in, hidden from `tools/list` until the flag is on
 - `CCMUX_HOST=mini.tail-xxxxx.ts.net:7474 ccmux-mcp` points it at a tailnet peer's daemon — an agent on the laptop can drive sessions on the Mac mini

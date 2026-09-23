@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -78,7 +79,7 @@ type conversationsModel struct {
 	sectionCursors []int
 
 	// projectFilter narrows the rendered list to conversations whose
-	// Project matches this string (substring match). Empty = no
+	// Project is this path or lies under it. Empty = no
 	// filter (the global view). Set by the App when the user enters
 	// the screen via the Projects-tab `c` keybind.
 	projectFilter string
@@ -238,8 +239,8 @@ func (m *conversationsModel) SetLoading(b bool) {
 	m.loading = b
 }
 
-// SetProjectFilter narrows the list to conversations whose Project
-// contains the given substring. Pass "" to clear. The selected
+// SetProjectFilter narrows the list to conversations whose Project is
+// the given path or nested under it. Pass "" to clear. The selected
 // conversation is preserved by ID when it remains visible; otherwise
 // the cursor clamps inside the focused section.
 func (m *conversationsModel) SetProjectFilter(filter string) {
@@ -300,17 +301,32 @@ func (m conversationsModel) Selected() *conversations.Conversation {
 }
 
 // filtered returns the slice of conversations matching the current
-// projectFilter. Empty filter returns the full list. Filter match is
-// case-insensitive substring on the Project field.
+// projectFilter. Empty filter returns the full list. See
+// projectPathMatches for the match rule.
 func (m conversationsModel) filtered() []conversations.Conversation {
-	needle := strings.ToLower(m.projectFilter)
 	var out []conversations.Conversation
 	for _, c := range m.list {
-		if strings.Contains(strings.ToLower(c.Project), needle) && conversations.MatchesQuery(c, m.search.Value()) {
+		if projectPathMatches(c.Project, m.projectFilter) && conversations.MatchesQuery(c, m.search.Value()) {
 			out = append(out, c)
 		}
 	}
 	return out
+}
+
+// projectPathMatches reports whether a conversation's project path
+// belongs to the filtered project: the project directory itself or a
+// directory nested inside it. A plain substring match used to let
+// ~/Projects/ccmux also list every ~/Projects/ccmux-website
+// conversation. Case-insensitive (as the old filter was — the same
+// macOS path often differs only by case between sources) and tolerant
+// of a trailing slash on either side. An empty filter matches all.
+func projectPathMatches(path, filter string) bool {
+	if filter == "" {
+		return true
+	}
+	p := strings.ToLower(strings.TrimRight(filepath.ToSlash(path), "/"))
+	f := strings.ToLower(strings.TrimRight(filepath.ToSlash(filter), "/"))
+	return p == f || strings.HasPrefix(p, f+"/")
 }
 
 func (m conversationsModel) capturesInput() bool { return m.searchActive }

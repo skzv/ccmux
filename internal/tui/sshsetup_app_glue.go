@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -69,8 +70,11 @@ func sshShellExec(target sshsetup.Target) tea.Cmd {
 // key); a config-save failure is recoverable next time the user
 // runs the wizard.
 //
-// The added rows reuse the target's address + port; the only
-// difference is the user. Host names are derived from
+// The added rows reuse the target's address + SSH port; the only
+// difference is the user. The wizard's port is the remote sshd port,
+// so it goes in SSHPort — config.Host.Port is the ccmuxd HTTP port
+// and stays 0 (default 7474). Writing 22 there made every added row
+// dial ccmuxd on :22. Host names are derived from
 // "<user>@<short-name>" via networkHostShortName so they read
 // reasonably in `ccmux host list`.
 func persistWizardAdded(a App, target sshsetup.Target, addedUsers []string) App {
@@ -90,7 +94,7 @@ func persistWizardAdded(a App, target sshsetup.Target, addedUsers []string) App 
 				Name:    name,
 				Address: target.Host,
 				User:    u,
-				Port:    target.Port,
+				SSHPort: target.Port,
 				Mosh:    true,
 			})
 		}
@@ -106,6 +110,94 @@ func persistWizardAdded(a App, target sshsetup.Target, addedUsers []string) App 
 	}
 	a.adoptConfig(saved)
 	return a
+}
+
+// persistWizardCorrection saves a username / SSH port the user fixed
+// on the wizard's Username step back to the configured host the wizard
+// ran for. Without it the key got installed for the corrected account
+// but hosts.toml kept the old user (or port), so the Network row still
+// showed it and the next attach failed the same way. original is the
+// target the wizard opened with, final the one it completed with.
+//
+// The host is matched by address + effective SSH port + the original
+// user; a host with no configured user (the wizard then guessed the
+// local $USER) matches only when no row names the user explicitly.
+// Discovered tailnet peers have no config row, so nothing is written
+// for them. Like persistWizardAdded, a save failure is logged, not
+// surfaced — the key install already succeeded.
+func persistWizardCorrection(a App, original, final sshsetup.Target) App {
+	userChanged := final.User != "" && final.User != original.User
+	finalPort := sshPortOr22(final.Port)
+	if original.Host == "" || (!userChanged && finalPort == sshPortOr22(original.Port)) {
+		return a
+	}
+	saved, err := config.Update(func(c *config.Config) error {
+		changed := false
+		for _, i := range wizardHostMatches(c.Hosts, original) {
+			h := &c.Hosts[i]
+			if userChanged && h.User != final.User {
+				h.User = final.User
+				changed = true
+			}
+			if h.EffectiveSSHPort() != finalPort {
+				h.SSHPort = finalPort
+				if finalPort == 22 {
+					h.SSHPort = 0 // the default; keep hosts.toml tidy
+				}
+				changed = true
+			}
+		}
+		if !changed {
+			return errNoWizardCorrection // abort: nothing to write
+		}
+		return nil
+	})
+	if err != nil {
+		if !errors.Is(err, errNoWizardCorrection) {
+			if dbg := debugLogger(); dbg != nil {
+				dbg.Printf("persist wizard user/port correction: %v", err)
+			}
+		}
+		return a
+	}
+	a.adoptConfig(saved)
+	return a
+}
+
+// errNoWizardCorrection aborts persistWizardCorrection's config.Update
+// without a write when no configured host needed changing (e.g. the
+// wizard ran for a discovered peer with no hosts.toml row).
+var errNoWizardCorrection = errors.New("no configured host to correct")
+
+// wizardHostMatches returns the indexes of the configured hosts the
+// wizard target `t` was built from: same address and effective SSH
+// port, and the same user — falling back to user-less rows (whose
+// wizard user was the local-$USER guess) only when no row names t.User.
+func wizardHostMatches(hosts []config.Host, t sshsetup.Target) []int {
+	var exact, userless []int
+	for i, h := range hosts {
+		if !strings.EqualFold(h.Address, t.Host) || h.EffectiveSSHPort() != sshPortOr22(t.Port) {
+			continue
+		}
+		switch h.User {
+		case t.User:
+			exact = append(exact, i)
+		case "":
+			userless = append(userless, i)
+		}
+	}
+	if len(exact) > 0 {
+		return exact
+	}
+	return userless
+}
+
+// sshPortOr22 normalizes an unset (0) SSH port to the openssh default.
+func sshPortOr22(p int) int {
+	if p == 0 {
+		return 22
+	}
+	return p
 }
 
 // networkHostShortName returns the leading dotted-label of a host

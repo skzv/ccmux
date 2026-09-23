@@ -393,11 +393,16 @@ type configReloadMsg struct{}
 
 // notesSearchResultMsg carries the result set from a Vault.Search
 // invocation back to the Notes screen. Query echoes the user's
-// input so the rendering can re-print it as a header.
+// input so the rendering can re-print it as a header. Host + Path
+// identify the project the search ran against, so a result that lands
+// after the user switched project (or device) is dropped instead of
+// showing — and letting Enter open — the old project's files.
 type notesSearchResultMsg struct {
 	Query string
 	Hits  []notes.SearchHit
 	Err   string
+	Host  string
+	Path  string
 }
 
 // usageTickMsg fires periodically to refresh the dashboard's usage panel.
@@ -524,6 +529,11 @@ type conversationResumedMsg struct {
 	// Agent is the agent the conversation belongs to, for toast
 	// wording and the post-resume attach.
 	Agent string
+
+	// Existing is true when the conversation's resume session was
+	// already running (resumed earlier), so the App attaches to it
+	// like any existing session instead of as a freshly created one.
+	Existing bool
 
 	// Err is non-nil when the resume couldn't be started (agent
 	// binary missing, tmux call failed, etc.).

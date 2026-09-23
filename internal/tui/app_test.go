@@ -785,13 +785,13 @@ func TestNew_DoesNotBlockOnProbes(t *testing.T) {
 // the dashboard config.
 func TestTierDetectedMsg_AdoptsDetectedTier(t *testing.T) {
 	cfg := config.Config{}
-	cfg.Subscription.Tier = "api" // default-empty marker
+	cfg.Subscription.Tier = "" // unset (config.Defaults no longer writes "api")
 	a := New(cfg, "test")
 
 	next, _ := a.Update(tierDetectedMsg{Tier: "max20x"})
 	got := next.(App)
 	if got.cfg.Subscription.Tier != "max20x" {
-		t.Errorf("tier = %q, want max20x (detected tier adopted over the api default)",
+		t.Errorf("tier = %q, want max20x (detected tier adopted over an unset tier)",
 			got.cfg.Subscription.Tier)
 	}
 }

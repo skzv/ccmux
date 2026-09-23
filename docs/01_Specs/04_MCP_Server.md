@@ -10,36 +10,40 @@ This is the differentiator: nobody else can do it, because nobody else has both 
 
 ## Wire-up
 
-Claude Code (`~/.claude/settings.json`):
+Claude Code, as a user-scope MCP server:
 
-```jsonc
-{
-  "mcpServers": {
-    "ccmux": { "command": "ccmux-mcp" }
-  }
-}
+```bash
+claude mcp add --scope user ccmux -- ccmux-mcp
 ```
 
 Read-only by default. To expose the mutating tools, pass `--allow-mutate`:
 
+```bash
+claude mcp add --scope user ccmux -- ccmux-mcp --allow-mutate
+```
+
+Claude Code stores user-scope servers in the top-level `mcpServers` object of `~/.claude.json` (`$CLAUDE_CONFIG_DIR/.claude.json` when that is set):
+
 ```jsonc
 {
   "mcpServers": {
-    "ccmux": { "command": "ccmux-mcp", "args": ["--allow-mutate"] }
+    "ccmux": { "type": "stdio", "command": "ccmux-mcp", "args": ["--allow-mutate"] }
   }
 }
 ```
 
-Codex, Cursor, and any other MCP-aware client follow the same shape — point at the `ccmux-mcp` binary, optionally pass `--allow-mutate`.
+An `mcpServers` key in `~/.claude/settings.json` is **not** read by Claude Code — older ccmux versions registered there, which silently did nothing; current ones remove that stale entry.
+
+Codex, Cursor, and any other MCP-aware client follow the same shape — point a stdio server at the `ccmux-mcp` binary, optionally pass `--allow-mutate`.
 
 ### Setup helpers
 
-Don't want to hand-edit `settings.json`? Two paths do it for you:
+Two paths register it for you:
 
-- **Setup wizard.** `ccmux setup` now includes a "ccmux-mcp registration (Claude Code)" step that detects Claude Code on PATH and offers to register the entry — with a follow-up prompt for `--allow-mutate`. Idempotent; re-running detects the existing registration and reports the mode.
-- **CLI.** `ccmux mcp register [--allow-mutate]` does the same thing without the wizard chrome. `ccmux mcp status` reports whether ccmux is registered and in which mode.
+- **Setup wizard.** `ccmux setup` includes a "ccmux-mcp registration (Claude Code)" step that detects Claude Code and offers to register the entry — with a follow-up prompt for `--allow-mutate`. Idempotent; re-running detects the existing registration and reports the mode.
+- **CLI.** `ccmux mcp register [--allow-mutate]` does the same thing without the wizard chrome (re-running with the other mode switches it). `ccmux mcp status` reports whether ccmux is registered in `~/.claude.json` and in which mode.
 
-Both write a timestamped backup to `~/.claude/backups/` before mutating, preserve any other `mcpServers` entries you already have, and round-trip unknown JSON keys verbatim via the `internal/claudeconfig` round-trip discipline.
+Both run `claude mcp add-json --scope user ccmux '<entry>'` when the `claude` CLI is on PATH. Without it they edit `~/.claude.json` directly: a timestamped backup goes to `~/.claude/backups/` first, other `mcpServers` entries and every other key are preserved verbatim, and the file is replaced atomically.
 
 ## Target a remote daemon
 

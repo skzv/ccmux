@@ -28,6 +28,12 @@ type conversationPreviewOverlay struct {
 	conversation conversations.Conversation
 	messages     []conversations.Message
 	loadErr      string
+	// loaded flips once the load for the armed conversation returns.
+	// It — not a nil messages slice — is the "still loading" signal:
+	// conversations.RecentMessages legitimately returns nil for an
+	// empty transcript or an Antigravity (opaque protobuf) one, and
+	// keying off nil left those stuck on "(loading…)" forever.
+	loaded bool
 }
 
 // Open arms the overlay against a specific conversation. The caller is
@@ -38,6 +44,7 @@ func (o *conversationPreviewOverlay) Open(c conversations.Conversation) {
 	o.conversation = c
 	o.messages = nil
 	o.loadErr = ""
+	o.loaded = false
 }
 
 // Close dismisses the overlay and drops the cached messages so the
@@ -47,6 +54,7 @@ func (o *conversationPreviewOverlay) Close() {
 	o.conversation = conversations.Conversation{}
 	o.messages = nil
 	o.loadErr = ""
+	o.loaded = false
 }
 
 // IsOpen reports whether the overlay is currently visible.
@@ -67,6 +75,7 @@ func (o *conversationPreviewOverlay) SetMessages(id string, msgs []conversations
 	}
 	o.messages = msgs
 	o.loadErr = ""
+	o.loaded = true
 }
 
 // SetLoadErr records a transcript-read failure so the overlay can
@@ -77,6 +86,7 @@ func (o *conversationPreviewOverlay) SetLoadErr(id, err string) {
 	}
 	o.loadErr = err
 	o.messages = nil
+	o.loaded = true
 }
 
 // View renders the overlay centered inside the app frame. Returns the
@@ -129,7 +139,7 @@ func (o conversationPreviewOverlay) renderBody(st styles.Styles, overlayW int) s
 	if o.loadErr != "" {
 		return st.StatusError.Render("⚠ " + o.loadErr)
 	}
-	if o.messages == nil {
+	if !o.loaded {
 		return st.Muted.Render(tr("(loading recent messages…)"))
 	}
 	if len(o.messages) == 0 {

@@ -198,12 +198,17 @@ func (m *notesModel) SetProject(p *project.Project) tea.Cmd {
 		m.previewRel = ""
 		m.preview.SetContent("")
 		m.loading = false
+		m.clearSearch()
 		return nil
 	}
 	if m.project != nil && m.project.Path == p.Path && projectHost(*m.project) == projectHost(*p) {
 		return nil
 	}
 	m.project = p
+	// Search hits belong to the project they were run against. Keeping
+	// them across a switch left project A's results on screen while
+	// project B was selected — and Enter opened A's file.
+	m.clearSearch()
 	// Keep the active device in sync with the project the App handed us
 	// (e.g. opening a remote project from the Projects screen switches
 	// the Notes device to that host). The toggle can still move it.
@@ -236,12 +241,41 @@ func (m *notesModel) SetSize(w, h int) {
 	}
 	m.termWidth = w
 	m.termHeight = h
+	// Shrinking below the split-layout width hides the preview; don't
+	// leave keyboard focus stranded on a pane that isn't drawn.
+	if !m.previewShown() {
+		m.focus = focusList
+	}
 	pw, ph := m.previewPaneSize()
 	m.preview.Width = pw
 	m.preview.Height = ph
 	if m.previewSrc != "" {
 		m.preview.SetContent(m.renderPreviewContent(pw))
 	}
+}
+
+// notesPreviewMinWidth is the terminal width at which View switches
+// from the list-only layout to the list + preview split.
+const notesPreviewMinWidth = 100
+
+// previewShown reports whether View renders the preview pane at the
+// current terminal width. Below notesPreviewMinWidth (phone widths) the
+// screen is list-only, so focus must never move to the invisible
+// preview: j/k would scroll it while the list looked frozen. A zero
+// width means no WindowSizeMsg has arrived yet; treat that as shown
+// (the pre-size default layout).
+func (m notesModel) previewShown() bool {
+	return m.termWidth == 0 || m.termWidth >= notesPreviewMinWidth
+}
+
+// clearSearch drops the query box and any result set, returning the
+// list to the file tree.
+func (m *notesModel) clearSearch() {
+	m.searching = false
+	m.searchInput.Blur()
+	m.searchInput.SetValue("")
+	m.searchResults = nil
+	m.searchQuery = ""
 }
 
 // previewPaneSize returns (viewportWidth, viewportHeight) for the
@@ -585,7 +619,9 @@ func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
 			return m, nil
 		}
 		leftW := m.termWidth / 3
-		if msg.X < leftW {
+		if msg.X < leftW || !m.previewShown() {
+			// List-only layout (phone width): the whole screen is
+			// the list, so every wheel event scrolls it.
 			rowCount := m.listLen()
 			if rowCount == 0 {
 				return m, nil
@@ -645,6 +681,12 @@ func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
 			return m, nil
 		}
 		delete(m.entriesCache, m.cacheKey(m.project))
+		// The note under the cursor may have just been edited ($EDITOR
+		// returned, or `r`). Forget the cached body so the refresh after
+		// the reload re-reads it — refreshPreview skips the fetch when
+		// the selection is unchanged and a body is already held.
+		m.previewRel = ""
+		m.previewSrc = ""
 		m.loading = true
 		return m, tea.Batch(m.loadEntriesCmd(*m.project), m.loadingSpinner.Tick)
 	case notesEntriesLoadedMsg:
@@ -687,6 +729,12 @@ func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
 		m.preview.GotoTop()
 		return m, nil
 	case notesSearchResultMsg:
+		// Drop results for a project (or device) the user has since
+		// switched away from — they'd list, and Enter would open, the
+		// old project's files.
+		if m.project == nil || msg.Path != m.project.Path || msg.Host != projectHost(*m.project) {
+			return m, nil
+		}
 		if msg.Err != "" {
 			m.deviceErr = msg.Err
 			return m, nil
@@ -776,8 +824,9 @@ func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
 			// Toggle which pane receives navigation keys. List focus
 			// → preview focus → list focus. While the preview is
 			// focused, j/k/arrows scroll the document; while the list
-			// is focused, they change the selected file.
-			if m.focus == focusList {
+			// is focused, they change the selected file. At phone
+			// width there is no preview pane to focus.
+			if m.focus == focusList && m.previewShown() {
 				m.focus = focusPreview
 			} else {
 				m.focus = focusList
@@ -794,7 +843,9 @@ func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
 			// doesn't swallow it.
 			if m.focus == focusList {
 				if m.hasActiveSearch() {
-					m.focus = focusPreview
+					if m.previewShown() {
+						m.focus = focusPreview
+					}
 					return m, nil
 				}
 				return m, m.handleRight()
@@ -1041,7 +1092,9 @@ func (m notesModel) visibleRows() []noteRow {
 func (m *notesModel) handleRight() tea.Cmd {
 	r, ok := m.selectedRow()
 	if !ok {
-		m.focus = focusPreview
+		if m.previewShown() {
+			m.focus = focusPreview
+		}
 		return nil
 	}
 	if r.kind == rowFolder {
@@ -1058,7 +1111,9 @@ func (m *notesModel) handleRight() tea.Cmd {
 		}
 		return nil
 	}
-	m.focus = focusPreview
+	if m.previewShown() {
+		m.focus = focusPreview
+	}
 	return nil
 }
 
@@ -1144,13 +1199,13 @@ func (m notesModel) runSearch(query string) tea.Cmd {
 		return nil
 	}
 	label := projectHost(*m.project)
+	path := m.project.Path
 	if label == localDeviceLabel {
-		root := m.project.Path
 		return func() tea.Msg {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
-			hits, _ := notes.Open(root).Search(ctx, query, 100)
-			return notesSearchResultMsg{Query: query, Hits: hits}
+			hits, _ := notes.Open(path).Search(ctx, query, 100)
+			return notesSearchResultMsg{Query: query, Hits: hits, Host: label, Path: path}
 		}
 	}
 	// Remote search hits the daemon's /v1/notes/search endpoint.
@@ -1158,7 +1213,7 @@ func (m notesModel) runSearch(query string) tea.Cmd {
 	if !ok {
 		host := label
 		return func() tea.Msg {
-			return notesSearchResultMsg{Query: query, Err: "device " + host + " is unreachable"}
+			return notesSearchResultMsg{Query: query, Err: "device " + host + " is unreachable", Host: host, Path: path}
 		}
 	}
 	name := m.project.Name
@@ -1167,9 +1222,9 @@ func (m notesModel) runSearch(query string) tea.Cmd {
 		defer cancel()
 		dhits, err := daemon.RemoteClient(addr).SearchNotes(ctx, name, query)
 		if err != nil {
-			return notesSearchResultMsg{Query: query, Err: err.Error()}
+			return notesSearchResultMsg{Query: query, Err: err.Error(), Host: label, Path: path}
 		}
-		return notesSearchResultMsg{Query: query, Hits: searchHitsFromDaemon(dhits)}
+		return notesSearchResultMsg{Query: query, Hits: searchHitsFromDaemon(dhits), Host: label, Path: path}
 	}
 }
 
@@ -1233,7 +1288,7 @@ func (m notesModel) View(width, height int) string {
 	// than collapse to list-only. Zoomed README GIFs (~116 cols)
 	// in particular need this — the previous isNarrow(120) cutoff
 	// hid the preview in every demo.
-	if width < 100 {
+	if width < notesPreviewMinWidth {
 		return m.renderListOnly(width, height)
 	}
 	leftW := width / 3

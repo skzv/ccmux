@@ -149,29 +149,19 @@ func resumeNow(target conversations.Conversation) error {
 	if len(argv) == 0 {
 		return fmt.Errorf("unknown agent %q — cannot resume", target.Agent)
 	}
-	shortID := target.ID
-	if len(shortID) > 8 {
-		shortID = shortID[:8]
-	}
-	sessionName := "c-resume-" + shortID
 	// Quote-free join is safe — agent argv elements are well-known
 	// flags + a UUID; no shell metacharacters. zsh fallback keeps the
 	// pane alive if the agent binary went missing between list + resume.
 	cmdline := joinArgs(argv) + " || zsh"
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	detachOthers := false
-	if err := tmux.New(ctx, sessionName, target.Project, cmdline); err != nil {
-		// If the session already exists (e.g., the user already
-		// resumed this ID earlier in the day), tmux.New errors. Treat
-		// that as "attach to the existing one" rather than failing.
-		if has, _ := tmux.Has(ctx, sessionName); !has {
-			return fmt.Errorf("create tmux session: %w", err)
-		}
-		detachOthers = attachDetachOthers()
-	}
-	if err := tmux.SetSessionAgent(ctx, sessionName, string(target.Agent)); err != nil {
+	sessionName, existed, err := ensureResumeSession(ctx, target, cmdline)
+	if err != nil {
 		return err
+	}
+	detachOthers := false
+	if existed {
+		detachOthers = attachDetachOthers()
 	}
 	// Hand off to tmux attach via exec — replaces the current process
 	// so when the user detaches they return to whatever shell launched
@@ -183,6 +173,34 @@ func resumeNow(target conversations.Conversation) error {
 	}
 	return attachWithChrome(sessionName, label, detachOthers)
 }
+
+// ensureResumeSession creates the tmux session that resumes target —
+// named by conversations.ResumeSessionName, the same helper the TUI
+// uses — or, when that session already exists (the conversation was
+// resumed earlier and is still running), reports existed=true so the
+// caller attaches to it instead of failing.
+func ensureResumeSession(ctx context.Context, target conversations.Conversation, cmdline string) (name string, existed bool, err error) {
+	name = conversations.ResumeSessionName(target.ID)
+	if err := resumeTmuxNew(ctx, name, target.Project, cmdline); err != nil {
+		if has, _ := resumeTmuxHas(ctx, name); !has {
+			return "", false, fmt.Errorf("create tmux session: %w", err)
+		}
+		existed = true
+	}
+	if err := resumeTmuxSetAgent(ctx, name, string(target.Agent)); err != nil {
+		return "", false, err
+	}
+	return name, existed, nil
+}
+
+// The tmux calls ensureResumeSession makes — package-level seams so
+// tests can drive the create / already-exists paths without a tmux
+// server.
+var (
+	resumeTmuxNew      = tmux.New
+	resumeTmuxHas      = tmux.Has
+	resumeTmuxSetAgent = tmux.SetSessionAgent
+)
 
 // joinArgs glues an argv slice into a shell command, quoting each
 // element so configured executable paths with spaces stay one token.
