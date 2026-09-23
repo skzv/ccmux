@@ -106,6 +106,13 @@ func TmuxClipboardCommands() [][]string {
 		{"tmux", "set", "-g", "mode-style", "bg=#cba6f7,fg=#1e1e2e"},
 		{"tmux", "bind-key", "-T", "copy-mode-vi", "MouseDragEnd1Pane",
 			"send-keys", "-X", "copy-pipe-no-clear", "ccmux clipboard-pipe"},
+		// Same binding for the emacs copy-mode table. tmux uses
+		// `mode-keys emacs` unless $EDITOR/$VISUAL contains "vi" —
+		// which includes the daemon's launchd environment — so binding
+		// only copy-mode-vi left most users on tmux's default
+		// copy-pipe-and-cancel with no local-clipboard fallback.
+		{"tmux", "bind-key", "-T", "copy-mode", "MouseDragEnd1Pane",
+			"send-keys", "-X", "copy-pipe-no-clear", "ccmux clipboard-pipe"},
 	}
 }
 
@@ -276,6 +283,7 @@ set -g mode-style bg=#cba6f7,fg=#1e1e2e
 # clipboard. Safe to drop the trailing argument if you only ever use
 # this tmux from one machine — the OSC 52 path still works on its own.
 bind-key -T copy-mode-vi MouseDragEnd1Pane send-keys -X copy-pipe-no-clear "ccmux clipboard-pipe"
+bind-key -T copy-mode MouseDragEnd1Pane send-keys -X copy-pipe-no-clear "ccmux clipboard-pipe"
 
 # Keyboard yank still cancels copy-mode so you can resume typing
 # without an extra Escape.

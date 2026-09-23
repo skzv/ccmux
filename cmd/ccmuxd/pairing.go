@@ -174,16 +174,28 @@ func (s *server) handleTestPush(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no device registered for this key", http.StatusNotFound)
 		return
 	}
-	if !s.apnsSender.Enabled() {
-		log.Printf("ccmuxd: test push requested but APNs disabled")
-		w.WriteHeader(http.StatusNoContent)
-		return
+	const (
+		testTitle = "ccmux test push"
+		testBody  = "If you see this, push notifications are working."
+	)
+	// Route by the device's gateway, as real pushes do. Sending an
+	// Android (FCM) token to APNs came back BadDeviceToken, which the
+	// dead-token cleanup then treated as "uninstalled" and deleted the
+	// phone's registration.
+	switch reg.ResolvedProvider() {
+	case daemon.ProviderFCM:
+		if !s.fcmSender.Enabled() {
+			log.Printf("ccmuxd: test push requested but FCM disabled")
+			break
+		}
+		s.sendFCMAsync("test-push", reg.Token, fcm.Notification{Title: testTitle, Body: testBody, SessionID: "ccmux-test"})
+	default:
+		if !s.apnsSender.Enabled() {
+			log.Printf("ccmuxd: test push requested but APNs disabled")
+			break
+		}
+		s.sendAPNsAsync("test-push", reg.Token, reg.Environment, apns.Notification{Title: testTitle, Body: testBody, SessionID: "ccmux-test"})
 	}
-	s.sendAPNsAsync("test-push", reg.Token, reg.Environment, apns.Notification{
-		Title:     "ccmux test push",
-		Body:      "If you see this, push notifications are working.",
-		SessionID: "ccmux-test",
-	})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -380,11 +392,18 @@ func appendAuthorizedKey(pubKey string) error {
 	if err := os.MkdirAll(filepath.Dir(authKeys), 0o700); err != nil {
 		return err
 	}
+	line := strings.TrimSpace(pubKey) + "\n"
+	// A hand-edited file may end without a newline; appending straight
+	// on would glue the new key onto the last key's comment, so pairing
+	// "succeeds" but the phone's key is never actually authorized.
+	if existing, err := os.ReadFile(authKeys); err == nil && len(existing) > 0 && existing[len(existing)-1] != '\n' {
+		line = "\n" + line
+	}
 	f, err := os.OpenFile(authKeys, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
-	if _, err := f.WriteString(strings.TrimSpace(pubKey) + "\n"); err != nil {
+	if _, err := f.WriteString(line); err != nil {
 		_ = f.Close()
 		return err
 	}

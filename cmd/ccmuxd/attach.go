@@ -13,6 +13,7 @@ import (
 	"github.com/creack/pty"
 
 	"github.com/skzv/ccmux/internal/clipboard"
+	"github.com/skzv/ccmux/internal/tmux"
 )
 
 // attachPingInterval is how often the daemon sends a websocket ping to
@@ -57,7 +58,7 @@ func (s *server) handleAttach(w http.ResponseWriter, r *http.Request, name strin
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "tmux", "attach-session", "-t", "="+name)
+	cmd := exec.CommandContext(ctx, "tmux", tmux.AttachArgs(name, false)...)
 	// RemoteClientEnv tells `ccmux clipboard-pipe` this tmux client
 	// is a phone, so a selection copied there isn't piped into this
 	// machine's clipboard.

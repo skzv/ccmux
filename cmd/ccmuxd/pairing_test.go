@@ -356,3 +356,30 @@ func TestHandlePairToken_RefusesWhileTailnetDown(t *testing.T) {
 		t.Errorf("status = %d, want 503", rec.Code)
 	}
 }
+
+// TestAppendAuthorizedKey_FileWithoutTrailingNewline — the new key must
+// land on its own line even when the existing file's last line has no
+// newline (hand-edited, `echo -n`), or ssh never sees it.
+func TestAppendAuthorizedKey_FileWithoutTrailingNewline(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	p := filepath.Join(home, ".ssh", "authorized_keys")
+	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	laptop := testEd25519AuthorizedKey(t)
+	if err := os.WriteFile(p, []byte(laptop+" laptop@home"), 0o600); err != nil { // no "\n"
+		t.Fatal(err)
+	}
+	phone := testEd25519AuthorizedKey(t)
+	if err := appendAuthorizedKey(phone); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{laptop, phone} {
+		ok, err := authorizedKeyPresent(key)
+		if err != nil || !ok {
+			got, _ := os.ReadFile(p)
+			t.Errorf("key not recognised after append (ok=%v err=%v):\n%s", ok, err, got)
+		}
+	}
+}

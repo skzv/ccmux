@@ -360,6 +360,10 @@ func spawnBareSessionCmd(submit newBareSessionSubmitMsg) tea.Cmd {
 				Until: time.Now().Add(5 * time.Second),
 			}
 		}
+		// Tag what runs there so ccmuxd classifies it with the right
+		// rules — untagged, a bare shell was judged as Claude and its
+		// prompt showed as "error". Best effort: the session exists.
+		_ = tmux.SetSessionAgent(ctx, name, bareSessionAgentTag(submit.Agent))
 		return bareSessionReadyMsg{Session: name}
 	}
 }
@@ -394,6 +398,17 @@ func remoteStartedFromBareSubmit(submit newBareSessionSubmitMsg, session string)
 // agent picker selection.
 func launchCmdForBareSession(id agent.ID) string {
 	return launchCmdForBareSessionWithCommands(id, agent.Commands{})
+}
+
+// bareSessionAgentTag is the @ccmux_agent tag for a bare session started
+// with the given agent choice: the agent's ID, or tmux.ShellAgentTag
+// for a plain shell (the same fallback launchCmdForBareSessionWithCommands
+// uses).
+func bareSessionAgentTag(id agent.ID) string {
+	if parsed, ok := agent.ParseID(string(id)); ok {
+		return string(parsed)
+	}
+	return tmux.ShellAgentTag
 }
 
 func launchCmdForBareSessionWithCommands(id agent.ID, commands agent.Commands) string {

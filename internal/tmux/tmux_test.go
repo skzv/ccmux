@@ -253,8 +253,8 @@ func TestListFormatStaysAlignedWithParser(t *testing.T) {
 // -d in exclusive mode leaves the window stuck at smallest-client.
 func TestAttachArgs_MirrorVsExclusive(t *testing.T) {
 	mirror := AttachArgs("c-foo", false)
-	if got := strings.Join(mirror, " "); got != "attach-session -t =c-foo" {
-		t.Errorf("mirror AttachArgs = %q, want 'attach-session -t =c-foo' (no -d)", got)
+	if got := strings.Join(mirror, " "); got != "attach-session -t =c-foo:" {
+		t.Errorf("mirror AttachArgs = %q, want 'attach-session -t =c-foo:' (no -d)", got)
 	}
 	for _, a := range mirror {
 		if a == "-d" {
@@ -263,8 +263,8 @@ func TestAttachArgs_MirrorVsExclusive(t *testing.T) {
 	}
 
 	exclusive := AttachArgs("c-foo", true)
-	if got := strings.Join(exclusive, " "); got != "attach-session -d -t =c-foo" {
-		t.Errorf("exclusive AttachArgs = %q, want 'attach-session -d -t =c-foo'", got)
+	if got := strings.Join(exclusive, " "); got != "attach-session -d -t =c-foo:" {
+		t.Errorf("exclusive AttachArgs = %q, want 'attach-session -d -t =c-foo:'", got)
 	}
 }
 
@@ -275,8 +275,8 @@ func TestAttachArgs_MirrorVsExclusive(t *testing.T) {
 func TestAttachArgs_SessionNameWithSpecials(t *testing.T) {
 	for _, name := range []string{"c-foo", "c-a.b.c", "c-resume-3dc0131a"} {
 		got := AttachArgs(name, false)
-		if got[len(got)-1] != "="+name {
-			t.Errorf("AttachArgs(%q): last arg = %q, want =<name> verbatim", name, got[len(got)-1])
+		if got[len(got)-1] != "="+name+":" {
+			t.Errorf("AttachArgs(%q): last arg = %q, want =<name>: verbatim", name, got[len(got)-1])
 		}
 	}
 }

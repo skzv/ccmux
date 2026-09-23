@@ -167,8 +167,8 @@ func TestSuggestTmuxConf_HasKeyDirectives(t *testing.T) {
 // any of the three regresses the bug we just shipped a fix for.
 func TestTmuxClipboardCommands_AppliesAllThreeFixes(t *testing.T) {
 	cmds := TmuxClipboardCommands()
-	if len(cmds) != 3 {
-		t.Fatalf("len = %d, want 3 (set-clipboard, mode-style, MouseDragEnd1Pane)", len(cmds))
+	if len(cmds) != 4 {
+		t.Fatalf("len = %d, want 4 (set-clipboard, mode-style, MouseDragEnd1Pane for vi + emacs)", len(cmds))
 	}
 
 	// Each row is an argv. First element is always "tmux".
@@ -229,6 +229,12 @@ func TestTmuxClipboardCommands_AppliesAllThreeFixes(t *testing.T) {
 	// a flag and the dispatch silently breaks.
 	if got := cmds[2][len(cmds[2])-1]; got != "ccmux clipboard-pipe" {
 		t.Errorf("last arg = %q, want %q", got, "ccmux clipboard-pipe")
+	}
+	// 4. The same binding in the emacs table — tmux's default
+	// mode-keys unless $EDITOR mentions vi, so without it most users
+	// never get the local-clipboard fallback.
+	if got := join(cmds[3]); got != strings.Replace(mouseBinding, "copy-mode-vi", "copy-mode", 1) {
+		t.Errorf("cmds[3] should mirror the vi binding in the copy-mode table, got: %q", got)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 
 	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/project"
+	"github.com/skzv/ccmux/internal/tmux"
 )
 
 // projectLaunchCmd resolves the launch command for a project's tmux
@@ -41,6 +42,22 @@ func bareSessionLaunchCmd(reqAgent, configDefault string, commands agent.Command
 		return cmd
 	}
 	return shellLaunchCmd()
+}
+
+// bareSessionAgentTag is the @ccmux_agent tag for a bare session,
+// resolved with the same precedence as bareSessionLaunchCmd: the
+// requested agent, then the configured default, then a plain shell.
+func bareSessionAgentTag(reqAgent, configDefault string) string {
+	for _, s := range []string{reqAgent, configDefault} {
+		trimmed := strings.TrimSpace(s)
+		if strings.EqualFold(trimmed, tmux.ShellAgentTag) {
+			return tmux.ShellAgentTag
+		}
+		if id, ok := agent.ParseID(trimmed); ok {
+			return string(id)
+		}
+	}
+	return tmux.ShellAgentTag
 }
 
 // agentLaunchCmdOrShell decodes a single agent-id-or-"shell" string.
