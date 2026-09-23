@@ -54,11 +54,11 @@ func buildTools(s *Server) map[string]Tool {
 			Handler:     wrap(s.handleListSessions),
 		},
 		"read_pane": {
-			Description: "Return the last N lines of a session's active tmux pane (default 40, max 500). Lets you inspect a session's current screen content without attaching. Useful for 'what is this session doing right now?'",
+			Description: "Return the last N lines of a session's active tmux pane (default 24, max 500). Lets you inspect a session's current screen content without attaching. Useful for 'what is this session doing right now?'",
 			InputSchema: object(map[string]any{
 				"name": stringSchema("tmux session name (from list_sessions[].name)", true),
 				"lines": numberSchema(
-					"how many trailing lines to capture (default 40, max 500)",
+					"how many trailing lines to capture (default 24, max 500)",
 					false,
 				),
 			}, []string{"name"}),

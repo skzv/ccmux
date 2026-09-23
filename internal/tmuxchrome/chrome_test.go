@@ -408,3 +408,20 @@ func TestDetectedPrefix_CachesErrorFallback(t *testing.T) {
 		t.Errorf("3 failing calls within TTL ran %d execs, want 1", execs)
 	}
 }
+
+// TestOptions_EscapesFormatInLabel: the project label is a directory
+// name, so a hostile one must not become a tmux `#(shell)` format.
+func TestOptions_EscapesFormatInLabel(t *testing.T) {
+	opts := Options("c-x", "x#(touch /tmp/pwned)#{pane_pid}", false, false, "Ctrl-b")
+	for _, kv := range opts {
+		if kv[0] != "status-left" && kv[0] != "set-titles-string" {
+			continue
+		}
+		if strings.Contains(kv[1], "x#(touch") || strings.Contains(kv[1], ")#{pane_pid}") {
+			t.Errorf("%s leaves the label's format unescaped: %q", kv[0], kv[1])
+		}
+		if !strings.Contains(kv[1], "x##(touch /tmp/pwned)##{pane_pid}") {
+			t.Errorf("%s: want escaped label, got %q", kv[0], kv[1])
+		}
+	}
+}

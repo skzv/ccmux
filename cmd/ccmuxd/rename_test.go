@@ -36,7 +36,7 @@ func TestHandleRename_RejectsInvalidNames(t *testing.T) {
 			if rec.Code != http.StatusBadRequest {
 				t.Errorf("rename to %q: status = %d, want 400; body=%s", newName, rec.Code, rec.Body)
 			}
-			if !strings.Contains(rec.Body.String(), "/, \\, or :") {
+			if !strings.Contains(rec.Body.String(), badSessionNameMsg) {
 				t.Errorf("rename to %q: body should explain the rule; got %q", newName, rec.Body)
 			}
 		})

@@ -221,7 +221,7 @@ func run() error {
 		if addr, err := tailscaleAddr(ctx, cfg.Daemon.TailnetPort); err == nil {
 			tailnetMux := http.NewServeMux()
 			srv.routes(tailnetMux)
-			tailnetSrv := newHTTPServer(tailnetMux)
+			tailnetSrv := newHTTPServer(rejectBrowserRequests(tailnetMux))
 			tailnetSrv.Addr = addr
 			go func() {
 				log.Printf("ccmuxd: tailnet listening on %s", addr)
@@ -577,7 +577,7 @@ func (s *server) createSession(w http.ResponseWriter, r *http.Request) {
 	var session string
 	if name := strings.TrimSpace(req.Name); name != "" {
 		if badSessionName(name) {
-			http.Error(w, "name must not contain /, \\, or :", http.StatusBadRequest)
+			http.Error(w, badSessionNameMsg, http.StatusBadRequest)
 			return
 		}
 		session = name
@@ -665,7 +665,7 @@ func (s *server) createBareSession(w http.ResponseWriter, r *http.Request) {
 	// Reject obviously-bad names — the same rule createProject uses,
 	// for the same reason (we'll pass it to tmux as -s).
 	if badSessionName(name) {
-		http.Error(w, "name must not contain /, \\, or :", http.StatusBadRequest)
+		http.Error(w, badSessionNameMsg, http.StatusBadRequest)
 		return
 	}
 
@@ -719,14 +719,36 @@ func (s *server) applyChrome(ctx context.Context, session, projectLabel string) 
 	_ = tmuxchrome.Apply(ctx, session, projectLabel, moshiReachable, false)
 }
 
+// maxPreviewLines caps /preview's ?lines= so a caller can't make every
+// request capture the full scrollback.
+const maxPreviewLines = 500
+
+// maxUsageWindow caps /v1/usage's ?window=. Every call walks every
+// transcript touched inside the window, so an unbounded value
+// (window=876000h) turns each request into a full-history scan.
+const maxUsageWindow = 31 * 24 * time.Hour
+
+// parseUsageWindow reads /v1/usage's ?window=: 5h when absent or
+// invalid, clamped to maxUsageWindow.
+func parseUsageWindow(q string) time.Duration {
+	if d, err := time.ParseDuration(q); err == nil && d > 0 {
+		return min(d, maxUsageWindow)
+	}
+	return 5 * time.Hour
+}
+
 // badSessionName reports whether a session name contains a character
 // that tmux would interpret as a target qualifier — `:` selects a
-// window/pane, `/` and `\` are path separators. Centralizes the rule
-// the create/rename/bare handlers share so every name that reaches a
-// tmux `-t` argument is validated the same way.
+// window/pane, `.` separates window from pane (tmux also rewrites it
+// to `_` in new session names, so the name we'd report back wouldn't
+// exist), `/` and `\` are path separators. Centralizes the rule the
+// create/rename/bare handlers share so every name that reaches a tmux
+// `-t` argument is validated the same way.
 func badSessionName(name string) bool {
-	return strings.ContainsAny(name, "/\\:")
+	return strings.ContainsAny(name, "/\\:.")
 }
+
+const badSessionNameMsg = "name must not contain /, \\, :, or ."
 
 func (s *server) handleSessionsItem(w http.ResponseWriter, r *http.Request) {
 	// /v1/sessions/<name>[/<subaction>]
@@ -744,7 +766,7 @@ func (s *server) handleSessionsItem(w http.ResponseWriter, r *http.Request) {
 	// create/rename handlers already reject these, but the item
 	// handlers didn't).
 	if badSessionName(name) {
-		http.Error(w, "name must not contain /, \\, or :", http.StatusBadRequest)
+		http.Error(w, badSessionNameMsg, http.StatusBadRequest)
 		return
 	}
 	if len(parts) == 1 {
@@ -799,7 +821,7 @@ func (s *server) handleRename(w http.ResponseWriter, r *http.Request, name strin
 	// `name:window.pane` as a target spec, so a rename to "victim:0"
 	// would let later send-keys land in an unrelated tmux session.
 	if badSessionName(req.Name) {
-		http.Error(w, "name must not contain /, \\, or :", http.StatusBadRequest)
+		http.Error(w, badSessionNameMsg, http.StatusBadRequest)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
@@ -973,8 +995,11 @@ func (s *server) handlePreview(w http.ResponseWriter, r *http.Request, name stri
 	lines := 24
 	if q := r.URL.Query().Get("lines"); q != "" {
 		var n int
-		if _, err := fmt.Sscanf(q, "%d", &n); err == nil && n > 0 && n <= 200 {
-			lines = n
+		if _, err := fmt.Sscanf(q, "%d", &n); err == nil && n > 0 {
+			// Clamp rather than ignore: a caller asking for more than
+			// the cap (ccmux-mcp advertises 500) should get the cap,
+			// not a silent fall-back to the 24-line default.
+			lines = min(n, maxPreviewLines)
 		}
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
@@ -1060,12 +1085,7 @@ func (s *server) handleUsage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	window := 5 * time.Hour
-	if q := r.URL.Query().Get("window"); q != "" {
-		if d, err := time.ParseDuration(q); err == nil && d > 0 {
-			window = d
-		}
-	}
+	window := parseUsageWindow(r.URL.Query().Get("window"))
 	// Each walker is cheap and IO-bound; run them concurrently so a
 	// slow disk doesn't serialize the reads. OpenRouter is a network
 	// call, so it especially benefits from running alongside the rest.

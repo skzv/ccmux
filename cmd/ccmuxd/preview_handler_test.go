@@ -73,3 +73,34 @@ func TestListSessions_SurfacesListFailure(t *testing.T) {
 		t.Errorf("body should carry the underlying error; got %q", rec.Body)
 	}
 }
+
+// TestHandlePreview_ClampsLines — an over-cap ?lines= gets the cap, not
+// a silent fall-back to the 24-line default (ccmux-mcp forwards up to
+// 500 and used to receive 24).
+func TestHandlePreview_ClampsLines(t *testing.T) {
+	for _, tc := range []struct {
+		q    string
+		want int
+	}{
+		{"", 24},
+		{"300", 300},
+		{"500", maxPreviewLines},
+		{"100000", maxPreviewLines},
+		{"-3", 24},
+	} {
+		var got int
+		s := &server{cfg: config.Config{}}
+		s.capture = func(ctx context.Context, name string, lines int) (string, error) {
+			got = lines
+			return "ok", nil
+		}
+		target := "/v1/sessions/x/preview"
+		if tc.q != "" {
+			target += "?lines=" + tc.q
+		}
+		s.handlePreview(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, target, nil), "x")
+		if got != tc.want {
+			t.Errorf("lines=%q: captured %d, want %d", tc.q, got, tc.want)
+		}
+	}
+}

@@ -3,6 +3,7 @@ package remoteattach
 import (
 	"os/exec"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -59,15 +60,16 @@ func TestRunArgv_PicksBinary(t *testing.T) {
 	if mosh.Args[0] != "mosh" {
 		t.Errorf("useMosh=true should use mosh; got %v", mosh.Args)
 	}
-	// Both interpose `--` before the argv so the remote shell parses
-	// the remaining tokens as a single command.
+	// Both interpose `--` right after the target so nothing in the
+	// remote argv is read as an ssh/mosh flag.
 	for _, c := range []string{"ssh", "mosh"} {
 		var cmd = ssh
 		if c == "mosh" {
 			cmd = mosh
 		}
-		if cmd.Args[2] != "--" {
-			t.Errorf("%s argv should have -- at index 2; got %v", c, cmd.Args)
+		i := slices.Index(cmd.Args, "alice@mini")
+		if i < 0 || i+1 >= len(cmd.Args) || cmd.Args[i+1] != "--" {
+			t.Errorf("%s argv should have -- right after the target; got %v", c, cmd.Args)
 		}
 	}
 }
@@ -154,5 +156,20 @@ func TestRunArgv_PortPerBinary(t *testing.T) {
 		if !sawSep {
 			t.Errorf("missing -- separator: %v", cmd.Args)
 		}
+	}
+}
+
+// TestRunArgv_SSHQuotesArgv — ssh re-parses the joined command in the
+// remote shell, so every element must arrive as one quoted word and
+// shell metacharacters must stay inert.
+func TestRunArgv_SSHQuotesArgv(t *testing.T) {
+	cmd := RunArgv("mini", false, 0, []string{"tmux", "attach-session", "-t", "=c-a b$(touch x)'q"})
+	last := cmd.Args[len(cmd.Args)-1]
+	want := `'tmux' 'attach-session' '-t' '=c-a b$(touch x)'\''q'`
+	if last != want {
+		t.Errorf("remote command = %q, want %q", last, want)
+	}
+	if cmd.Args[1] != "-t" {
+		t.Errorf("ssh attach needs -t for a remote tty; got %v", cmd.Args)
 	}
 }

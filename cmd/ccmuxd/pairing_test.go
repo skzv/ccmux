@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -259,5 +260,84 @@ func TestRoutes_PairTokenIsLocalOnly(t *testing.T) {
 	tailnetMux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/pair", bytes.NewReader([]byte("{}"))))
 	if rec.Code == http.StatusNotFound {
 		t.Error("tailnet /v1/pair is unexpectedly missing")
+	}
+}
+
+// TestHandleRegisterDevice_RequiresPairedKey — a tailnet peer that never
+// paired must not be able to bind a push token (or flood the store with
+// made-up keys); a paired key can.
+func TestHandleRegisterDevice_RequiresPairedKey(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	store, err := daemon.OpenDeviceStore(filepath.Join(home, "devices.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := pairTestServer()
+	s.devices = store
+
+	register := func(pub string) int {
+		body, _ := json.Marshal(daemon.RegisterDeviceRequest{PublicKey: pub, Token: "tok", Provider: daemon.ProviderFCM})
+		rec := httptest.NewRecorder()
+		s.handleRegisterDevice(rec, httptest.NewRequest(http.MethodPost, "/v1/devices", bytes.NewReader(body)))
+		return rec.Code
+	}
+
+	stranger := testEd25519AuthorizedKey(t)
+	if code := register(stranger); code != http.StatusForbidden {
+		t.Fatalf("unpaired key: status = %d, want 403", code)
+	}
+	if len(store.All()) != 0 {
+		t.Fatalf("unpaired key was stored: %v", store.All())
+	}
+
+	paired := testEd25519AuthorizedKey(t)
+	if err := appendAuthorizedKey(paired); err != nil {
+		t.Fatal(err)
+	}
+	// Clients may send the key with a comment the stored line lacks.
+	if code := register(paired + " phone@ios"); code != http.StatusNoContent {
+		t.Fatalf("paired key: status = %d, want 204", code)
+	}
+}
+
+// TestAppendAuthorizedKey_Dedupes — re-pairing the same phone must not
+// grow authorized_keys by a line each time.
+func TestAppendAuthorizedKey_Dedupes(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	key := testEd25519AuthorizedKey(t)
+	for range 3 {
+		if err := appendAuthorizedKey(key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := os.ReadFile(filepath.Join(home, ".ssh", "authorized_keys"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(string(got), key); n != 1 {
+		t.Errorf("key appears %d times, want 1:\n%s", n, got)
+	}
+}
+
+// TestHandlePairToken_EscapesQuery — the ssh user is free text from
+// config; `&` or spaces in it must not corrupt the deep link's query.
+func TestHandlePairToken_EscapesQuery(t *testing.T) {
+	s := pairTestServer()
+	s.cfg.Daemon.SSHUser = "a&token=forged b"
+	rec := httptest.NewRecorder()
+	s.handlePairToken(rec, httptest.NewRequest(http.MethodPost, "/v1/pair-token", nil))
+	var resp daemon.PairTokenResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	u, err := url.Parse(resp.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := u.Query()
+	if q.Get("user") != "a&token=forged b" || q.Get("token") != resp.Token {
+		t.Errorf("query not escaped: %q", resp.URL)
 	}
 }
