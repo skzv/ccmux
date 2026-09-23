@@ -277,8 +277,8 @@ func probeDiscoveredHosts(tailnetPort int, seen map[string]bool) ([]hostStatus, 
 			defer cancel()
 			if ss, e := daemon.RemoteClient(d.Address).Sessions(ctx); e == nil {
 				st.Sessions = len(ss)
-				for i := range ss {
-					ss[i].Host = d.Name
+				for j := range ss {
+					ss[j].Host = d.Name
 				}
 				per[i] = ss
 			} else {
