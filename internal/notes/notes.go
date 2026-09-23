@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/skzv/ccmux/internal/termsafe"
 )
 
 // Vault is the markdown tree for one project — rooted at the project
@@ -105,16 +107,30 @@ func (v Vault) List() ([]Entry, error) {
 	return out, nil
 }
 
-// Read returns the bytes of the file at `rel` (a slash-separated path
-// relative to the project root). Wraps the canonical filesystem error;
+// Read returns the content of the file at `rel` (a slash-separated
+// path relative to the project root), made safe to display: terminal
+// control sequences and control characters other than newline and tab
+// are stripped (termsafe), so a note from a cloned repository can't,
+// say, rewrite the clipboard with OSC 52 just by being previewed. CRLF
+// line endings come back as LF. Wraps the canonical filesystem error;
 // a path that escapes the project returns ErrOutsideVault.
 func (v Vault) Read(rel string) ([]byte, error) {
 	cleaned, err := CleanRel(rel)
 	if err != nil {
 		return nil, err
 	}
-	return os.ReadFile(filepath.Join(v.Root, filepath.FromSlash(cleaned)))
+	data, err := os.ReadFile(filepath.Join(v.Root, filepath.FromSlash(cleaned)))
+	if err != nil {
+		return nil, err
+	}
+	return termsafe.Bytes(data), nil
 }
+
+// prunedDirs are the dependency and build-output directory names the
+// vault walk skips (hidden directories are skipped too). searchRipgrep
+// turns the same list into rg globs so search sees exactly the files
+// List shows.
+var prunedDirs = []string{"node_modules", "vendor", "dist", "build", "target", "__pycache__"}
 
 // skipDir reports whether a directory should be pruned from the vault
 // walk. Hidden directories (.git, .obsidian, .ccmux) plus the usual
@@ -124,9 +140,10 @@ func skipDir(name string) bool {
 	if strings.HasPrefix(name, ".") {
 		return true
 	}
-	switch name {
-	case "node_modules", "vendor", "dist", "build", "target", "__pycache__":
-		return true
+	for _, p := range prunedDirs {
+		if name == p {
+			return true
+		}
 	}
 	return false
 }
@@ -146,14 +163,16 @@ func dirOf(rel string) string {
 // cleaned-up filename. The H1 lookup is memoized per `(absPath,
 // mtime)` so the list doesn't re-read every file on every render.
 // `absPath` and `mod` may be zero for callers that only have a
-// relative path; in that case the filename fallback is used.
+// relative path; in that case the filename fallback is used. Either
+// way the label is display-safe (no terminal control sequences — a
+// filename can carry them too).
 func displayFor(rel, absPath string, mod time.Time) string {
 	if absPath != "" {
 		if h1 := cachedH1(absPath, mod); h1 != "" {
 			return h1
 		}
 	}
-	return filenameLabel(rel)
+	return termsafe.String(filenameLabel(rel))
 }
 
 // sortPrefixRx matches the "NN_" ordering prefix on note filenames.
@@ -177,9 +196,10 @@ func filenameLabel(rel string) string {
 const h1ScanBytes = 4 * 1024
 
 // h1HeadingRE matches an ATX-style H1: a line starting with exactly
-// one '#', a space, then heading text. Optional trailing '#' closers
-// (per CommonMark) are stripped by the caller.
-var h1HeadingRE = regexp.MustCompile(`^#\s+(.+?)\s*#*\s*$`)
+// one '#', whitespace, then heading text. An optional closing sequence
+// of '#'s is dropped only when whitespace precedes it, per CommonMark —
+// "# Learning C#" keeps its '#', "# Title ##" loses the closers.
+var h1HeadingRE = regexp.MustCompile(`^#\s+(.+?)(?:\s+#+)?\s*$`)
 
 // h1CacheEntry is one row in the H1 memo: the discovered heading
 // text (empty when none was found in the scan window) keyed by file
@@ -256,7 +276,7 @@ func extractH1(path string) string {
 			continue
 		}
 		if m := h1HeadingRE.FindStringSubmatch(trimmed); m != nil {
-			return strings.TrimSpace(m[1])
+			return strings.TrimSpace(termsafe.String(m[1]))
 		}
 		// First non-empty, non-frontmatter line that isn't an H1 —
 		// stop looking; this isn't a "title at top" doc.

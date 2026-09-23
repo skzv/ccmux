@@ -38,6 +38,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -46,6 +48,7 @@ import (
 	"github.com/skzv/ccmux/internal/gemini"
 	"github.com/skzv/ccmux/internal/jsonl"
 	"github.com/skzv/ccmux/internal/muse"
+	"github.com/skzv/ccmux/internal/termsafe"
 )
 
 // Conversation is one past agent session as found on disk. Stable
@@ -95,8 +98,10 @@ type Conversation struct {
 	//   Claude (sourced from the `entrypoint` field on the first user
 	//   event):
 	//     "cli"        — interactive `claude` session.
-	//     "sdk-cli"    — headless / SDK (`claude -p`, the SDK,
-	//                    automation wrappers).
+	//     "sdk-cli"    — headless / SDK (`claude -p`, automation
+	//                    wrappers); "sdk-ts" / "sdk-py" for the
+	//                    TypeScript / Python Agent SDKs. Every "sdk-*"
+	//                    value is headless.
 	//
 	//   Codex (sourced from `payload.originator` on the first
 	//   `session_meta` event):
@@ -113,15 +118,24 @@ type Conversation struct {
 	// Drives the default "hide automation noise" filter on the
 	// conversations list. See Options.ExcludeHeadless and IsHeadless.
 	Entrypoint string
+
+	// Subagent marks a transcript an agent spawned on its own rather
+	// than one the user started: Codex guardian reviews and
+	// thread_spawn children, whose session_meta carries
+	// payload.source = {"subagent": …} next to an ordinary
+	// originator. IsHeadless treats these as headless.
+	Subagent bool `json:",omitempty"`
 }
 
 // IsHeadless reports whether this conversation was a headless agent
-// invocation (`claude -p`, the SDK, `codex exec`, …) rather than an
-// interactive terminal session. The mapping is per-agent because each
-// agent uses a different tag:
+// invocation (`claude -p`, the SDK, `codex exec`, …) or an
+// agent-spawned subagent run rather than an interactive terminal
+// session. The mapping is per-agent because each agent uses a
+// different tag:
 //
-//   - Claude    → entrypoint == "sdk-cli"
-//   - Codex     → originator == "codex_exec"
+//   - Claude    → entrypoint starts with "sdk-" (sdk-cli, sdk-ts, sdk-py)
+//   - Codex     → originator == "codex_exec", or a subagent rollout
+//     (guardian review, thread_spawn)
 //   - Antigravity → never (known transcript formats carry no signal)
 //
 // Adding a new headless mode to an existing agent only needs an extra
@@ -129,9 +143,9 @@ type Conversation struct {
 func (c Conversation) IsHeadless() bool {
 	switch c.Agent {
 	case agent.IDClaude:
-		return c.Entrypoint == "sdk-cli"
+		return strings.HasPrefix(c.Entrypoint, "sdk-")
 	case agent.IDCodex:
-		return c.Entrypoint == "codex_exec"
+		return c.Subagent || c.Entrypoint == "codex_exec"
 	}
 	return false
 }
@@ -144,10 +158,17 @@ func (c Conversation) IsHeadless() bool {
 // know each agent's flag dialect — it just passes the picked
 // Conversation through.
 // ValidateResume prevents unresolved Gemini project hashes from becoming a
-// fabricated cwd (or silently resuming in ccmux's own working directory).
+// fabricated cwd (or silently resuming in ccmux's own working directory),
+// and refuses a Cursor project directory that doesn't exist — tmux
+// would quietly start the session in $HOME instead.
 func (c Conversation) ValidateResume() error {
 	if c.Agent == agent.IDGemini && !filepath.IsAbs(c.Project) {
 		return fmt.Errorf("Gemini project directory is unknown; open this project in Gemini CLI once to register its location")
+	}
+	if c.Agent == agent.IDCursor {
+		if info, err := os.Stat(c.Project); err != nil || !info.IsDir() {
+			return fmt.Errorf("Cursor project directory %q not found on disk; can't resume there", c.Project)
+		}
 	}
 	return nil
 }
@@ -224,7 +245,7 @@ func RecentMessages(c Conversation, limit int) ([]Message, error) {
 			return nil, err
 		}
 		for _, m := range s.Messages {
-			all = append(all, Message{Role: m.Role, Content: m.Content, Timestamp: m.Time})
+			all = append(all, Message{Role: m.Role, Content: termsafe.String(m.Content), Timestamp: m.Time})
 		}
 	case agent.IDClaude:
 		for _, path := range paths {
@@ -334,14 +355,8 @@ func readCodexMessages(path string, limit int) ([]Message, error) {
 		if err := json.Unmarshal(sc.Bytes(), &ev); err != nil {
 			continue
 		}
-		role, body := ev.MessageContent()
-		if role != "user" && role != "assistant" {
-			continue
-		}
-		if role == "user" {
-			body = cleanPromptText(body)
-		}
-		if body == "" {
+		role, body, ok := codexVisibleBody(ev)
+		if !ok {
 			continue
 		}
 		all = append(all, Message{
@@ -369,14 +384,8 @@ func readCursorMessages(path string, limit int) ([]Message, error) {
 		if err := json.Unmarshal(sc.Bytes(), &ev); err != nil {
 			continue
 		}
-		if ev.Role != "user" && ev.Role != "assistant" {
-			continue
-		}
-		body := strings.TrimSpace(ev.MessageContent())
-		if ev.Role == "user" {
-			body = cleanPromptText(body)
-		}
-		if body == "" {
+		body, ok := visibleTurn(ev.Role, ev.MessageContent())
+		if !ok {
 			continue
 		}
 		all = append(all, Message{
@@ -399,14 +408,8 @@ func readGeminiMessages(path string, limit int) ([]Message, error) {
 	all := make([]Message, 0, len(doc.Messages))
 	for _, msg := range doc.Messages {
 		role := geminiMessageRole(msg.Type)
-		if role == "" {
-			continue
-		}
-		body := strings.TrimSpace(msg.Text())
-		if role == "user" {
-			body = cleanPromptText(body)
-		}
-		if body == "" {
+		body, ok := visibleTurn(role, msg.Text())
+		if !ok {
 			continue
 		}
 		all = append(all, Message{
@@ -484,18 +487,51 @@ func CountMessages(c Conversation) (int, error) {
 
 // claudeVisibleBody returns the text a Claude transcript event shows as
 // a conversation message, and false for events that aren't one
-// (tool-result-only user turns, empty blocks, non-message events).
-// Shared by readClaudeMessages and countClaudeMessages so the thread
-// length always matches what the preview lists.
+// (tool-result-only user turns, empty blocks, non-message events,
+// Claude Code's own isMeta / compact-summary records, and slash-command
+// bookkeeping that cleanPromptText reduces to nothing). Shared by
+// readClaudeMessages and countClaudeMessages so the thread length
+// always matches what the preview lists.
 func claudeVisibleBody(ev claudeEvent) (string, bool) {
-	if ev.Type != "user" && ev.Type != "assistant" {
+	if ev.synthetic() {
 		return "", false
 	}
-	body := strings.TrimSpace(ev.MessageContent())
-	if ev.Type == "user" {
+	return visibleTurn(ev.Type, ev.MessageContent())
+}
+
+// visibleTurn is the rule every agent's transcript reader and message
+// counter share, so a conversation's message count always equals what
+// the transcript modal lists: only user and assistant turns, user text
+// cleaned of injected context (environment_context, AGENTS.md bundles,
+// command wrappers), and a turn with nothing left is not a message.
+func visibleTurn(role, body string) (string, bool) {
+	if role != "user" && role != "assistant" {
+		return "", false
+	}
+	// Transcript text is untrusted: an escape sequence in a prompt or a
+	// model reply must not reach the terminal that renders it.
+	body = strings.TrimSpace(termsafe.String(body))
+	if role == "user" {
 		body = cleanPromptText(body)
 	}
 	return body, body != ""
+}
+
+// codexVisibleBody is visibleTurn for a Codex rollout event.
+func codexVisibleBody(ev codexEvent) (role, body string, ok bool) {
+	role, body = ev.MessageContent()
+	body, ok = visibleTurn(role, body)
+	return role, body, ok
+}
+
+// piVisibleBody is visibleTurn for a pi session line.
+func piVisibleBody(ev piEvent) (role, body string, ok bool) {
+	if ev.Type != "message" || ev.Message == nil {
+		return "", "", false
+	}
+	role = ev.Message.Role
+	body, ok = visibleTurn(role, ev.Message.content())
+	return role, body, ok
 }
 
 func countClaudeMessages(path string) (int, error) {
@@ -531,8 +567,7 @@ func countCodexMessages(path string) (int, error) {
 		if err := json.Unmarshal(sc.Bytes(), &ev); err != nil {
 			continue
 		}
-		role, body := ev.MessageContent()
-		if (role == "user" || role == "assistant") && strings.TrimSpace(body) != "" {
+		if _, _, ok := codexVisibleBody(ev); ok {
 			n++
 		}
 	}
@@ -552,7 +587,7 @@ func countCursorMessages(path string) (int, error) {
 		if err := json.Unmarshal(sc.Bytes(), &ev); err != nil {
 			continue
 		}
-		if (ev.Role == "user" || ev.Role == "assistant") && strings.TrimSpace(ev.MessageContent()) != "" {
+		if _, ok := visibleTurn(ev.Role, ev.MessageContent()); ok {
 			n++
 		}
 	}
@@ -566,7 +601,7 @@ func countGeminiMessages(path string) (int, error) {
 	}
 	n := 0
 	for _, msg := range doc.Messages {
-		if geminiMessageRole(msg.Type) != "" && strings.TrimSpace(msg.Text()) != "" {
+		if _, ok := visibleTurn(geminiMessageRole(msg.Type), msg.Text()); ok {
 			n++
 		}
 	}
@@ -928,7 +963,7 @@ func readClaudeTranscript(path, project string) Conversation {
 			if ev.Cwd != "" && cwdFromTranscript == "" {
 				cwdFromTranscript = ev.Cwd
 			}
-			if c.Preview == "" {
+			if c.Preview == "" && !ev.synthetic() {
 				c.Preview = truncatedPreview(ev.MessageContent())
 			}
 			// First user event with an entrypoint wins. Claude tags
@@ -971,10 +1006,24 @@ type claudeEvent struct {
 	// project directory name (which is a lossy encoding of the path).
 	Cwd string `json:"cwd"`
 	// Entrypoint is Claude's launch-mode tag, present on user events.
-	// "cli" for interactive sessions, "sdk-cli" for headless / SDK
+	// "cli" for interactive sessions, "sdk-*" for headless / SDK
 	// runs (`claude -p`, the SDK, automation wrappers). Drives the
 	// default "hide automation noise" filter — see Conversation.IsHeadless.
 	Entrypoint string `json:"entrypoint"`
+	// IsMeta marks user events Claude Code writes itself — the
+	// "Caveat: The messages below were generated by the user while
+	// running local commands" record before a slash command, pasted
+	// image notes, skill bodies. Never shown as a conversation turn.
+	IsMeta bool `json:"isMeta"`
+	// IsCompactSummary marks the summary Claude Code injects as a user
+	// event after /compact. Also not something the user typed.
+	IsCompactSummary bool `json:"isCompactSummary"`
+}
+
+// synthetic reports whether the event was written by Claude Code
+// rather than typed by the user or produced by the model.
+func (e claudeEvent) synthetic() bool {
+	return e.IsMeta || e.IsCompactSummary
 }
 
 // MessageContent extracts the user-visible text from the embedded
@@ -1153,6 +1202,9 @@ func readCodexTranscript(path string) Conversation {
 		if ev.Type == "session_meta" && c.Entrypoint == "" && meta.Originator != "" {
 			c.Entrypoint = meta.Originator
 		}
+		if ev.Type == "session_meta" && meta.isSubagent() {
+			c.Subagent = true
+		}
 		if ev.Cwd != "" && c.Project == "" {
 			c.Project = ev.Cwd
 		}
@@ -1192,6 +1244,23 @@ type codexEventPayload struct {
 	// on Conversation.Entrypoint and drives IsHeadless.
 	Originator string `json:"originator"`
 	Cwd        string `json:"cwd"`
+	// Source is where the session came from: a string ("cli",
+	// "vscode", "exec") for user-started sessions, or an object
+	// {"subagent": {"other": "guardian"} | {"thread_spawn": …}} for
+	// runs Codex spawned itself.
+	Source json.RawMessage `json:"source"`
+}
+
+// isSubagent reports whether payload.source is the {"subagent": …}
+// object Codex writes for guardian reviews and spawned threads.
+func (p codexEventPayload) isSubagent() bool {
+	var src struct {
+		Subagent json.RawMessage `json:"subagent"`
+	}
+	if len(p.Source) == 0 || p.Source[0] != '{' || json.Unmarshal(p.Source, &src) != nil {
+		return false
+	}
+	return len(src.Subagent) > 0 && string(src.Subagent) != "null"
 }
 
 func (e codexEvent) Metadata() codexEventPayload {
@@ -1244,10 +1313,25 @@ func (e codexEvent) MessageContent() (string, string) {
 }
 
 // ListCursor walks ~/.cursor/projects/<encoded-cwd>/agent-transcripts/<uuid>/<uuid>.jsonl.
-// Cursor's JSONL carries role + message content. The project label is
-// derived from Cursor's encoded project directory.
+// Cursor's JSONL carries role + message content. The project directory
+// is recovered from Cursor's encoded project directory name by probing
+// the filesystem (resolveCursorProject); when nothing on disk matches,
+// Project holds a best-effort label and ValidateResume refuses to
+// resume there.
 func ListCursor(home string) ([]Conversation, error) {
 	root := filepath.Join(home, ".cursor", "projects")
+	resolved := map[string]string{} // encoded dir name → project
+	cursorProject := func(encoded string) string {
+		if p, ok := resolved[encoded]; ok {
+			return p
+		}
+		p, err := resolveCursorProject(encoded)
+		if err != nil {
+			p = decodeCursorProject(encoded)
+		}
+		resolved[encoded] = p
+		return p
+	}
 	var out []Conversation
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -1262,11 +1346,11 @@ func ListCursor(home string) ([]Conversation, error) {
 		if !strings.HasSuffix(d.Name(), ".jsonl") {
 			return nil
 		}
-		project, id, ok := cursorConversationPath(root, path)
+		encoded, id, ok := cursorConversationPath(root, path)
 		if !ok {
 			return nil
 		}
-		c := readCursorTranscript(path, project)
+		c := readCursorTranscript(path, cursorProject(encoded))
 		c.ID = id
 		if c.ID != "" {
 			out = append(out, c)
@@ -1279,7 +1363,9 @@ func ListCursor(home string) ([]Conversation, error) {
 	return mergeConversations(out), nil
 }
 
-func cursorConversationPath(root, path string) (project, id string, ok bool) {
+// cursorConversationPath splits a transcript path under root into the
+// encoded project directory name and the conversation id.
+func cursorConversationPath(root, path string) (encodedProject, id string, ok bool) {
 	rel, err := filepath.Rel(root, path)
 	if err != nil || rel == "." {
 		return "", "", false
@@ -1292,9 +1378,88 @@ func cursorConversationPath(root, path string) (project, id string, ok bool) {
 	if id == "" || parts[2] != id {
 		return "", "", false
 	}
-	return decodeCursorProject(parts[0]), id, true
+	return parts[0], id, true
 }
 
+// resolveCursorProject maps Cursor's encoded project directory name
+// back to the directory on disk. Cursor writes /Users/me/Projects/my-app
+// as "Users-me-Projects-my-app": every separator (and other punctuation)
+// becomes '-', so a naive decode turns my-app into my/app — and tmux,
+// asked to start in a directory that doesn't exist, silently falls back
+// to $HOME. Instead, starting at the filesystem root (or a Windows drive
+// root), each step descends into the directory entry whose own encoded
+// name matches the next piece of the string, backtracking on dead ends.
+// Returns an error when no existing directory matches.
+func resolveCursorProject(encoded string) (string, error) {
+	enc := strings.TrimPrefix(strings.TrimSpace(encoded), "-")
+	if enc == "" {
+		return "", fmt.Errorf("empty Cursor project name")
+	}
+	root, rest := string(filepath.Separator), enc
+	if runtime.GOOS == "windows" && len(enc) >= 2 && enc[1] == '-' && isASCIILetter(enc[0]) {
+		root, rest = strings.ToUpper(enc[:1])+`:\`, enc[2:]
+	}
+	if p, ok := resolveEncodedPath(root, encodePathSegment(rest)); ok {
+		return p, nil
+	}
+	return "", fmt.Errorf("no directory on disk matches Cursor project %q", encoded)
+}
+
+// resolveEncodedPath finds the directory under dir whose path, encoded
+// segment by segment and joined with '-', equals rest (already passed
+// through encodePathSegment).
+func resolveEncodedPath(dir, rest string) (string, bool) {
+	if rest == "" {
+		return dir, true
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", false
+	}
+	type candidate struct{ name, enc string }
+	var cands []candidate
+	for _, e := range entries {
+		enc := encodePathSegment(e.Name())
+		if enc == "" || (rest != enc && !strings.HasPrefix(rest, enc+"-")) {
+			continue
+		}
+		cands = append(cands, candidate{e.Name(), enc})
+	}
+	// Longest match first: "my-app" before "my" when both exist.
+	sort.Slice(cands, func(i, j int) bool { return len(cands[i].enc) > len(cands[j].enc) })
+	for _, c := range cands {
+		next := filepath.Join(dir, c.name)
+		if info, err := os.Stat(next); err != nil || !info.IsDir() { // follows symlinks
+			continue
+		}
+		if p, ok := resolveEncodedPath(next, strings.TrimPrefix(rest[len(c.enc):], "-")); ok {
+			return p, true
+		}
+	}
+	return "", false
+}
+
+// encodePathSegment lowercases s and turns every character that isn't
+// an ASCII letter or digit into '-', so a path name compares equal to
+// Cursor's encoding whichever punctuation Cursor chose to keep.
+func encodePathSegment(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('-')
+		}
+	}
+	return b.String()
+}
+
+func isASCIILetter(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+}
+
+// decodeCursorProject is the naive decode ('-' → '/'), used only as a
+// display label when resolveCursorProject finds nothing on disk.
 func decodeCursorProject(encoded string) string {
 	encoded = strings.TrimSpace(encoded)
 	if encoded == "" {
@@ -1548,18 +1713,8 @@ func readPiMessages(path string, limit int) ([]Message, error) {
 		if err := json.Unmarshal(sc.Bytes(), &ev); err != nil {
 			continue
 		}
-		if ev.Type != "message" || ev.Message == nil {
-			continue
-		}
-		role := ev.Message.Role
-		if role != "user" && role != "assistant" {
-			continue
-		}
-		body := strings.TrimSpace(ev.Message.content())
-		if role == "user" {
-			body = cleanPromptText(body)
-		}
-		if body == "" {
+		role, body, ok := piVisibleBody(ev)
+		if !ok {
 			continue
 		}
 		all = append(all, Message{Role: role, Content: body, Timestamp: ev.eventTime()})
@@ -1570,7 +1725,8 @@ func readPiMessages(path string, limit int) ([]Message, error) {
 	return all, nil
 }
 
-// countPiMessages counts user + assistant turns in a pi session file.
+// countPiMessages counts the user + assistant turns readPiMessages
+// would list.
 func countPiMessages(path string) (int, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -1584,8 +1740,7 @@ func countPiMessages(path string) (int, error) {
 		if err := json.Unmarshal(sc.Bytes(), &ev); err != nil {
 			continue
 		}
-		if ev.Type == "message" && ev.Message != nil &&
-			(ev.Message.Role == "user" || ev.Message.Role == "assistant") {
+		if _, _, ok := piVisibleBody(ev); ok {
 			n++
 		}
 	}
@@ -1711,6 +1866,9 @@ func mergeConversation(dst *Conversation, src Conversation) {
 			dst.Entrypoint = src.Entrypoint
 		}
 	}
+	// Like the entrypoint rule: one interactive fragment makes the
+	// logical conversation interactive.
+	dst.Subagent = dst.Subagent && src.Subagent
 	if src.LastActivity.After(dst.LastActivity) {
 		dst.LastActivity = src.LastActivity
 	}
@@ -1769,14 +1927,21 @@ func compactTranscriptPaths(primary string, paths []string) []string {
 
 // cleanPromptText strips synthetic CLI noise from a raw user-message
 // body so the conversation preview reflects what the user actually
-// typed, not the wrappers each agent injects around it. Two passes:
+// typed, not the wrappers each agent injects around it:
 //
+//   - Strip terminal control sequences (termsafe) — transcript text is
+//     untrusted and ends up on the user's terminal.
 //   - Drop "pure-noise" blocks entirely (open tag + content + close).
 //     environment_context / user_instructions are state dumps the CLI
 //     prepends to every session; surfacing them as a "first prompt"
 //     would just show cwd / shell info.
 //   - Drop leading Codex AGENTS.md instruction bundles that are
 //     persisted as user input before the real prompt.
+//   - Drop Claude Code's slash-command bookkeeping: <command-name>,
+//     <command-message> and every <local-command-*> block (caveat,
+//     stdout, stderr). A <command-args> body survives only when it is
+//     a prompt (`/plan build the scroller`), not a single-word option
+//     (`/model fable`) — see dropCommandBlocks.
 //   - For everything else, remove XML-style tag delimiters but keep
 //     the inner content. system-reminder, command-message, etc. carry
 //     user-meaningful text once the angle brackets are gone.
@@ -1788,7 +1953,7 @@ func compactTranscriptPaths(primary string, paths []string) []string {
 // treat that as "skip this message" and continue scanning the
 // transcript for the next eligible user turn.
 func cleanPromptText(s string) string {
-	s = strings.TrimSpace(s)
+	s = strings.TrimSpace(termsafe.String(s))
 	if s == "" {
 		return ""
 	}
@@ -1799,7 +1964,7 @@ func cleanPromptText(s string) string {
 	for _, tag := range []string{"environment_context", "user_instructions"} {
 		s = removeXMLBlock(s, tag)
 	}
-	s = strings.TrimSpace(s)
+	s = strings.TrimSpace(dropCommandBlocks(s))
 	if s == "" {
 		return ""
 	}
@@ -1821,6 +1986,49 @@ func removeLeadingAgentsInstructions(s string) string {
 	return strings.TrimSpace(s[end+len(closeTag):])
 }
 
+// dropCommandBlocks removes the records Claude Code writes around a
+// slash command — `<command-name>/model</command-name>
+// <command-message>model</command-message> <command-args>…</command-args>`
+// plus `<local-command-caveat>`, `<local-command-stdout>` and
+// `<local-command-stderr>` blocks — none of which the user typed as a
+// prompt. The <command-args> body is what followed the command: kept
+// when it has more than one word (`/plan build the scroller` sends that
+// text to the model), dropped when it is a lone option like `fable` or
+// `high` (`/model fable`, `/effort high`).
+func dropCommandBlocks(s string) string {
+	for _, prefix := range []string{"<local-command-", "<command-"} {
+		from := 0
+		for {
+			i := strings.Index(s[from:], prefix)
+			if i < 0 {
+				break
+			}
+			i += from
+			j := strings.IndexByte(s[i:], '>')
+			if j < 0 {
+				break
+			}
+			name := s[i+1 : i+j]
+			closeTag := "</" + name + ">"
+			k := strings.Index(s[i+j+1:], closeTag)
+			if k < 0 || !isCommandName(name) {
+				from = i + 1
+				continue
+			}
+			body := s[i+j+1 : i+j+1+k]
+			rest := s[i+j+1+k+len(closeTag):]
+			if name == "command-args" && len(strings.Fields(body)) > 1 {
+				s = s[:i] + body + rest
+				from = i + len(body)
+				continue
+			}
+			s = s[:i] + rest
+			from = i
+		}
+	}
+	return s
+}
+
 // removeXMLBlock removes every <tag>…</tag> occurrence (including the
 // body) from s. Used to drop pure-noise CLI wrappers like
 // <environment_context>cwd=…</environment_context>.
@@ -1840,28 +2048,46 @@ func removeXMLBlock(s, tag string) string {
 	}
 }
 
-// stripXMLTags removes every <...> tag delimiter from s while keeping
-// the inner text. Naive scan — not an XML parser. Good enough for the
-// agent-injected wrappers we care about (system-reminder,
-// command-message, command-name, …).
+// xmlTagRE matches one well-formed tag: <name>, </name>, <name/>, or
+// <name attr="…">. A bare '<' or '>' ("a < b", "<- in R") never
+// matches, so ordinary prose survives.
+var xmlTagRE = regexp.MustCompile(`</?[A-Za-z][A-Za-z0-9_-]*(?:\s[^<>]*)?/?>`)
+
+// stripXMLTags removes the agent-injected wrapper tags (system-reminder,
+// command-args, environment_context, …) from s while keeping the inner
+// text. Only well-formed tags are touched, and an opening tag glued to
+// the word before it with a name that can't be a wrapper (no '-') is a
+// type parameter — Vec<String>, Promise<void>, Array<TArg> — and stays.
+// Not an XML parser.
 func stripXMLTags(s string) string {
-	var b strings.Builder
-	depth := 0
-	for _, r := range s {
-		switch r {
-		case '<':
-			depth++
-		case '>':
-			if depth > 0 {
-				depth--
-			}
-		default:
-			if depth == 0 {
-				b.WriteRune(r)
-			}
-		}
+	locs := xmlTagRE.FindAllStringIndex(s, -1)
+	if len(locs) == 0 {
+		return s
 	}
+	var b strings.Builder
+	prev := 0
+	for _, loc := range locs {
+		if isTypeParameter(s, loc[0], loc[1]) {
+			continue
+		}
+		b.WriteString(s[prev:loc[0]])
+		prev = loc[1]
+	}
+	b.WriteString(s[prev:])
 	return b.String()
+}
+
+// isTypeParameter reports whether the tag at s[start:end] reads as a
+// generic type argument rather than a wrapper tag: an opening (not
+// closing or self-closing) tag directly after an identifier character,
+// whose name has no '-'.
+func isTypeParameter(s string, start, end int) bool {
+	if start == 0 || s[start+1] == '/' || strings.HasSuffix(s[start:end], "/>") {
+		return false
+	}
+	c := s[start-1]
+	glued := c == '_' || (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+	return glued && !strings.Contains(s[start:end], "-")
 }
 
 func stripLeadingSkillInvocation(s string) string {

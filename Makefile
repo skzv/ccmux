@@ -178,7 +178,8 @@ FUZZ_TARGETS := \
 	./internal/tmux:FuzzSessionNameForPath \
 	./internal/tui:FuzzRenderSessionLine_DegenerateInputs \
 	./internal/tui:FuzzDialTarget \
-	./internal/jsonl:FuzzScanner
+	./internal/jsonl:FuzzScanner \
+	./internal/termsafe:FuzzString
 
 fuzz: check-go
 	@for pair in $(FUZZ_TARGETS); do \
