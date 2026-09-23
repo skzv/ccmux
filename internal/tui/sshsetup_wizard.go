@@ -111,6 +111,18 @@ type sshWizardModel struct {
 	// local key resolution — also a seam so the test doesn't have
 	// to manage a real ~/.ssh.
 	keyFn func() (sshsetup.LocalKey, error)
+
+	// attempt numbers the async operation (probe / install /
+	// enumerate) the wizard is currently waiting on. Every result
+	// message echoes the attempt it was started under; a result whose
+	// attempt no longer matches — the user cancelled, re-opened the
+	// wizard, or a newer op superseded it — is dropped instead of
+	// yanking a closed wizard back onto the screen.
+	attempt int
+	// cancelOp cancels the in-flight operation's context (nil when
+	// idle). Close/Open call it so Esc really stops a 60s install
+	// rather than leaving it running in the background.
+	cancelOp context.CancelFunc
 }
 
 // newSSHWizard constructs a closed wizard ready for Open. The
@@ -144,6 +156,9 @@ func newSSHWizard(st styles.Styles) *sshWizardModel {
 // target + an optional resume payload. The parent app holds the
 // payload and acts on it when wizardCompletedMsg arrives.
 func (m *sshWizardModel) Open(target sshsetup.Target, resume any) tea.Cmd {
+	// Anything still running from a previous opening belongs to a
+	// different run of the wizard — stop it and orphan its result.
+	m.abandonOp()
 	m.step = sshWizardConfirm
 	m.target = target
 	m.stages = nil
@@ -179,8 +194,33 @@ func (m *sshWizardModel) Active() bool {
 func (m *sshWizardModel) Step() sshWizardStep { return m.step }
 
 // Close forces the wizard back to the closed state without emitting
-// any messages. Use Cancel() to also tell the parent "user bailed".
-func (m *sshWizardModel) Close() { m.step = sshWizardClosed }
+// any messages, cancelling any in-flight probe / install / enumerate
+// so its late result can't reopen the wizard. Use emitCancel() to
+// also tell the parent "user bailed".
+func (m *sshWizardModel) Close() {
+	m.abandonOp()
+	m.step = sshWizardClosed
+}
+
+// beginOp starts a new async operation: it cancels whatever was in
+// flight, bumps the attempt counter, and returns the new op's context
+// plus the attempt id its result message must echo.
+func (m *sshWizardModel) beginOp() (context.Context, int) {
+	m.abandonOp()
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancelOp = cancel
+	return ctx, m.attempt
+}
+
+// abandonOp cancels the in-flight operation (if any) and invalidates
+// its attempt id so the result is dropped when it lands.
+func (m *sshWizardModel) abandonOp() {
+	if m.cancelOp != nil {
+		m.cancelOp()
+		m.cancelOp = nil
+	}
+	m.attempt++
+}
 
 // wizardProgressMsg is what Install's Progress callback delivers
 // into the Bubble Tea loop. We buffer through a small channel so
@@ -188,15 +228,23 @@ func (m *sshWizardModel) Close() { m.step = sshWizardClosed }
 type wizardProgressMsg struct{ stage, detail string }
 
 // wizardInstallDoneMsg fires when the install goroutine returns.
-type wizardInstallDoneMsg struct{ err error }
+// attempt is the wizard attempt the install was started under.
+type wizardInstallDoneMsg struct {
+	err     error
+	attempt int
+}
 
 // wizardProbeDoneMsg carries the result of the post-username re-probe.
-type wizardProbeDoneMsg struct{ result sshsetup.ProbeResult }
+type wizardProbeDoneMsg struct {
+	result  sshsetup.ProbeResult
+	attempt int
+}
 
 // wizardEnumerateDoneMsg fires when EnumerateUsers returns.
 type wizardEnumerateDoneMsg struct {
-	users []string
-	err   error
+	users   []string
+	err     error
+	attempt int
 }
 
 // wizardCompletedMsg bubbles up when the user finishes (or chooses
@@ -224,9 +272,17 @@ func (m *sshWizardModel) Update(msg tea.Msg) (*sshWizardModel, tea.Cmd) {
 	case tea.KeyMsg:
 		return m.updateKey(msg)
 	case wizardProgressMsg:
+		if m.step != sshWizardRunning {
+			return m, nil
+		}
 		m.stages = append(m.stages, fmt.Sprintf("%s: %s", msg.stage, msg.detail))
 		return m, nil
 	case wizardInstallDoneMsg:
+		// A stale install (cancelled, or from an earlier opening)
+		// must not move a closed or re-opened wizard.
+		if msg.attempt != m.attempt || m.step != sshWizardRunning {
+			return m, nil
+		}
 		if msg.err == nil {
 			return m, m.startEnumerate()
 		}
@@ -250,6 +306,11 @@ func (m *sshWizardModel) Update(msg tea.Msg) (*sshWizardModel, tea.Cmd) {
 		m.err = msg.err.Error()
 		return m, nil
 	case wizardEnumerateDoneMsg:
+		// Enumerate runs from Running (after an install) or Probing
+		// (key auth already worked); anywhere else it's stale.
+		if msg.attempt != m.attempt || (m.step != sshWizardRunning && m.step != sshWizardProbing) {
+			return m, nil
+		}
 		if msg.err != nil || len(msg.users) == 0 {
 			// Skip the enumerate screen entirely if nothing to
 			// show — the install succeeded so we're done.
@@ -261,6 +322,9 @@ func (m *sshWizardModel) Update(msg tea.Msg) (*sshWizardModel, tea.Cmd) {
 		m.step = sshWizardEnumerate
 		return m, nil
 	case wizardProbeDoneMsg:
+		if msg.attempt != m.attempt || m.step != sshWizardProbing {
+			return m, nil
+		}
 		return m.afterProbe(msg.result)
 	}
 	return m, nil
@@ -320,10 +384,11 @@ func (m *sshWizardModel) startProbe() tea.Cmd {
 		probeFn = sshsetup.Probe
 	}
 	target := m.target
+	opCtx, attempt := m.beginOp()
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		ctx, cancel := context.WithTimeout(opCtx, 8*time.Second)
 		defer cancel()
-		return wizardProbeDoneMsg{result: probeFn(ctx, target)}
+		return wizardProbeDoneMsg{result: probeFn(ctx, target), attempt: attempt}
 	}
 }
 
@@ -520,19 +585,20 @@ func (m *sshWizardModel) startInstall(password string) tea.Cmd {
 		keyFn = sshsetup.EnsureLocalKey
 	}
 	target := m.target
+	opCtx, attempt := m.beginOp()
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		ctx, cancel := context.WithTimeout(opCtx, 60*time.Second)
 		defer cancel()
 		key, err := keyFn()
 		if err != nil {
-			return wizardInstallDoneMsg{err: fmt.Errorf("local key: %w", err)}
+			return wizardInstallDoneMsg{err: fmt.Errorf("local key: %w", err), attempt: attempt}
 		}
 		// Buffer Progress events through a non-blocking sink: we
 		// don't have the Program's Send here in unit tests, and
 		// the wizard is robust to a missing progress stream. The
 		// streaming-stages live test is in the integration test.
 		err = installFn(ctx, target, password, key, nil)
-		return wizardInstallDoneMsg{err: err}
+		return wizardInstallDoneMsg{err: err, attempt: attempt}
 	}
 }
 
@@ -549,17 +615,18 @@ func (m *sshWizardModel) startEnumerate() tea.Cmd {
 		keyFn = sshsetup.EnsureLocalKey
 	}
 	target := m.target
+	opCtx, attempt := m.beginOp()
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(opCtx, 10*time.Second)
 		defer cancel()
 		key, err := keyFn()
 		if err != nil {
 			// Enumerate failures aren't fatal — the install
 			// already succeeded.
-			return wizardEnumerateDoneMsg{users: nil, err: err}
+			return wizardEnumerateDoneMsg{users: nil, err: err, attempt: attempt}
 		}
 		users, err := enumerateFn(ctx, target, key)
-		return wizardEnumerateDoneMsg{users: users, err: err}
+		return wizardEnumerateDoneMsg{users: users, err: err, attempt: attempt}
 	}
 }
 
