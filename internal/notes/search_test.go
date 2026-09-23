@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -218,12 +219,21 @@ func TestSearch_BackendQueryBehavior(t *testing.T) {
 	}
 }
 
-func TestSearch_OversizedLineReturnsError(t *testing.T) {
+// TestSearch_OversizedLineSkipped — regression: a single line over the
+// 4 MiB scanner cap (a minified blob, a pasted data URI) used to fail
+// the whole search with bufio.ErrTooLong — in the fallback for any note
+// in the vault, in the rg path for any match on such a line. Now just
+// that line is skipped: the other hits come back with correct line
+// numbers, and other files are still searched.
+func TestSearch_OversizedLineSkipped(t *testing.T) {
 	for _, backend := range []string{"fallback", "ripgrep"} {
 		t.Run(backend, func(t *testing.T) {
 			v := Vault{Root: t.TempDir()}
-			body := "match\n" + strings.Repeat("x", 1<<22) + "match\n"
-			if err := os.WriteFile(filepath.Join(v.Root, "note.md"), []byte(body), 0o600); err != nil {
+			body := "match one\n" + strings.Repeat("x", 5<<20) + "match\n" + "match three\n"
+			if err := os.WriteFile(filepath.Join(v.Root, "a.md"), []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(v.Root, "b.md"), []byte("other match\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			search := v.searchFallback
@@ -233,10 +243,23 @@ func TestSearch_OversizedLineReturnsError(t *testing.T) {
 				}
 				search = v.searchRipgrep
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			if hits, err := search(ctx, "match", 100); err == nil || errors.Is(err, context.DeadlineExceeded) {
-				t.Fatalf("expected scanner error, got hits=%d err=%v", len(hits), err)
+			hits, err := search(ctx, "match", 100)
+			if err != nil {
+				t.Fatalf("search: %v", err)
+			}
+			got := map[string]bool{}
+			for _, h := range hits {
+				got[h.Rel+":"+h.Snippet+":"+strconv.Itoa(h.LineNum)] = true
+			}
+			for _, want := range []string{"a.md:match one:1", "a.md:match three:3", "b.md:other match:1"} {
+				if !got[want] {
+					t.Errorf("missing hit %s; got %v", want, got)
+				}
+			}
+			if len(hits) != 3 {
+				t.Errorf("got %d hits, want 3 (the oversized line is skipped)", len(hits))
 			}
 		})
 	}

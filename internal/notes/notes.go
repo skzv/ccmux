@@ -116,6 +116,12 @@ func (v Vault) Read(rel string) ([]byte, error) {
 	return os.ReadFile(filepath.Join(v.Root, filepath.FromSlash(cleaned)))
 }
 
+// prunedDirs are the dependency and build-output directory names the
+// vault walk skips (hidden directories are skipped too). searchRipgrep
+// turns the same list into rg globs so search sees exactly the files
+// List shows.
+var prunedDirs = []string{"node_modules", "vendor", "dist", "build", "target", "__pycache__"}
+
 // skipDir reports whether a directory should be pruned from the vault
 // walk. Hidden directories (.git, .obsidian, .ccmux) plus the usual
 // dependency and build-output trees hold vendored markdown that would
@@ -124,9 +130,10 @@ func skipDir(name string) bool {
 	if strings.HasPrefix(name, ".") {
 		return true
 	}
-	switch name {
-	case "node_modules", "vendor", "dist", "build", "target", "__pycache__":
-		return true
+	for _, p := range prunedDirs {
+		if name == p {
+			return true
+		}
 	}
 	return false
 }

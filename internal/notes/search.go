@@ -1,7 +1,6 @@
 package notes
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -12,6 +11,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/skzv/ccmux/internal/jsonl"
 )
 
 // SearchHit is one match returned by Vault.Search.
@@ -23,9 +24,10 @@ type SearchHit struct {
 }
 
 // Search runs a case-insensitive literal search across every markdown file
-// under the vault root. Uses `rg --json` when ripgrep is on PATH —
-// faster, gitignore-aware, and respects file types — and falls back
-// to a pure-Go scanner otherwise so search works on every install.
+// under the vault root — the same file set List returns. Uses
+// `rg --json` when ripgrep is on PATH and falls back to a pure-Go
+// scanner otherwise (or when rg fails outright) so search works on
+// every install.
 //
 // `limit` caps the number of hits returned (0 → default 100) so a
 // pathological query against a huge docs tree doesn't lock the TUI.
@@ -49,16 +51,37 @@ func (v Vault) Search(ctx context.Context, query string, limit int) ([]SearchHit
 	return v.searchFallback(ctx, query, limit)
 }
 
+// maxSearchLineBytes caps one line of input: a note line in the
+// fallback, one rg JSON record in the ripgrep path. Longer lines are
+// skipped (a single minified blob must not fail the whole search).
+const maxSearchLineBytes = 4 << 20
+
+// ripgrepArgs builds the rg invocation. The file set mirrors List:
+// every *.md (any case) under the root, hidden files included, hidden
+// and prunedDirs directories excluded, and no .gitignore / .ignore /
+// global-ignore filtering — List shows gitignored notes, so search must
+// find them. --no-config keeps a user's RIPGREP_CONFIG_PATH from
+// changing any of that.
+func ripgrepArgs(query, root string) []string {
+	args := []string{
+		"--json", "--no-config", "--no-ignore", "--hidden",
+		"--iglob", "*.md", "--glob", "!.*/",
+	}
+	for _, d := range prunedDirs {
+		args = append(args, "--glob", "!"+d+"/")
+	}
+	return append(args,
+		"--fixed-strings", "--ignore-case", "--max-count", "5",
+		"--", query, root,
+	)
+}
+
 // searchRipgrep streams JSON-lines output, stopping the process once
 // enough hits have arrived. max-count also caps hits per file.
 func (v Vault) searchRipgrep(ctx context.Context, query string, limit int) ([]SearchHit, error) {
 	searchCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	cmd := exec.CommandContext(searchCtx, "rg",
-		"--json", "--type", "md", "--fixed-strings", "--ignore-case",
-		"--max-count", "5",
-		"--", query, v.Root,
-	)
+	cmd := exec.CommandContext(searchCtx, "rg", ripgrepArgs(query, v.Root)...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.StdoutPipe()
@@ -73,8 +96,10 @@ func (v Vault) searchRipgrep(ctx context.Context, query string, limit int) ([]Se
 	}
 
 	var hits []SearchHit
-	sc := bufio.NewScanner(out)
-	sc.Buffer(make([]byte, 1<<16), 1<<22)
+	// jsonl.Scanner skips a record longer than the cap (a match on a
+	// multi-MiB line) instead of failing the whole read the way
+	// bufio.Scanner's ErrTooLong did.
+	sc := jsonl.NewScanner(out, maxSearchLineBytes)
 	for len(hits) < limit && sc.Scan() {
 		var rec struct {
 			Type string `json:"type"`
@@ -112,10 +137,22 @@ func (v Vault) searchRipgrep(ctx context.Context, query string, limit int) ([]Se
 		return hits, nil
 	}
 	if waitErr != nil {
-		// rg exits 1 when there are no matches — that's not a real error.
 		var exitErr *exec.ExitError
-		if errors.As(waitErr, &exitErr) && exitErr.ExitCode() == 1 {
-			return nil, nil
+		if errors.As(waitErr, &exitErr) {
+			switch exitErr.ExitCode() {
+			case 1: // no matches — not an error
+				return nil, nil
+			case 2:
+				// rg exits 2 when any path errored (an unreadable
+				// subdirectory, a file vanishing mid-walk) even though
+				// it searched — and matched — everything else. Those
+				// hits are real; keep them. With none, rg may have
+				// failed outright, so let the fallback answer.
+				if len(hits) > 0 {
+					return hits, nil
+				}
+				return v.searchFallback(ctx, query, limit)
+			}
 		}
 		return nil, fmt.Errorf("rg: %w (%s)", waitErr, strings.TrimSpace(stderr.String()))
 	}
@@ -125,7 +162,9 @@ func (v Vault) searchRipgrep(ctx context.Context, query string, limit int) ([]Se
 // searchFallback is the no-ripgrep path: walk every .md file under
 // the root, scan each line for the query (case-insensitive substring
 // match), build the same SearchHit list. Bounded so it stays usable
-// on a vault with thousands of files.
+// on a vault with thousands of files. Unreadable directories and files
+// are skipped, as are lines over maxSearchLineBytes — one bad file
+// never fails the search.
 func (v Vault) searchFallback(ctx context.Context, query string, limit int) ([]SearchHit, error) {
 	needle := strings.ToLower(query)
 	var hits []SearchHit
@@ -153,24 +192,22 @@ func (v Vault) searchFallback(ctx context.Context, query string, limit int) ([]S
 			return nil
 		}
 		defer f.Close()
-		sc := bufio.NewScanner(f)
-		sc.Buffer(make([]byte, 1<<16), 1<<22)
-		perFile := 0
-		for ln := 1; perFile < 5 && len(hits) < limit; ln++ {
+		sc := jsonl.NewScanner(f, maxSearchLineBytes)
+		perFile, read := 0, 0
+		for perFile < 5 && len(hits) < limit {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
 			if !sc.Scan() {
 				break
 			}
+			read++
 			line := sc.Text()
 			if strings.Contains(strings.ToLower(line), needle) {
-				hits = append(hits, hitFor(v.Root, path, ln, line))
+				// Skipped (oversized) lines still occupy a line number.
+				hits = append(hits, hitFor(v.Root, path, read+sc.Skipped(), line))
 				perFile++
 			}
-		}
-		if err := sc.Err(); err != nil {
-			return fmt.Errorf("scan note %q: %w", path, err)
 		}
 		if len(hits) >= limit {
 			return filepath.SkipAll
