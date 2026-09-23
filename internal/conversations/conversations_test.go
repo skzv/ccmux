@@ -880,9 +880,11 @@ func TestCleanPromptText_StripsTagsAndNoiseBlocks(t *testing.T) {
 			"please update AGENTS.md with this workflow",
 		},
 		{
-			"command_message_keeps_inner",
+			// Slash-command bookkeeping is dropped, not unwrapped: the
+			// command name is not part of the user's prompt text.
+			"command_name_block_dropped_keeps_following_text",
 			"<command-name>commit</command-name> save the file",
-			"commit save the file",
+			"save the file",
 		},
 		{
 			"drops_matching_skill_header_and_slash_command",
