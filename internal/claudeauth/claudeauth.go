@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/config"
 )
 
@@ -118,7 +119,9 @@ func Get(ctx context.Context) (Status, error) {
 // fetch shells out to `claude auth status` and parses its JSON output.
 func fetch(ctx context.Context) (Status, error) {
 	cfg, _ := config.Load()
-	bin := strings.TrimSpace(cfg.Agents.Claude.Command)
+	// Expand a configured `~/…` path: exec never goes through a shell,
+	// so the literal tilde would fail to resolve.
+	bin := agent.ExpandHome(strings.TrimSpace(cfg.Agents.Claude.Command))
 	if bin == "" {
 		var err error
 		bin, err = exec.LookPath("claude")

@@ -190,7 +190,8 @@ type AgentsConfig struct {
 
 // AgentCommandConfig stores an optional explicit executable path for
 // an agent. Empty Command preserves the existing "resolve binary on
-// PATH" behavior.
+// PATH" behavior. A leading `~/` is expanded to the home directory
+// (agent.ExpandHome) wherever the command is resolved.
 type AgentCommandConfig struct {
 	Command string `toml:"command,omitempty"`
 }
