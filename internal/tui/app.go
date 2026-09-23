@@ -561,8 +561,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, cmd
 
 	case wizardCompletedMsg:
-		// Wizard finished successfully. Persist any user@host pairs
-		// the user selected on the enumerate step first.
+		// Wizard finished successfully. Save a corrected user / SSH
+		// port back to the host it ran for, then persist any
+		// user@host pairs the user selected on the enumerate step.
+		a = persistWizardCorrection(a, msg.original, msg.target)
 		if len(msg.added) > 0 {
 			a = persistWizardAdded(a, msg.target, msg.added)
 		}

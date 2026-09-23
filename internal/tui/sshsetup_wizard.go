@@ -98,6 +98,11 @@ type sshWizardModel struct {
 	// action to perform after the wizard closes successfully. We
 	// pass it through opaquely — the wizard doesn't care.
 	resumeOnDone any
+	// origTarget is the target the wizard was opened with, before
+	// any username / port correction on the Username step. The App
+	// uses it to find the configured host the wizard ran for, so a
+	// corrected user or SSH port can be saved back to that host.
+	origTarget sshsetup.Target
 	// install seam — lets tests inject a fake installer that
 	// drives the model without touching the network. Production
 	// uses nil, which routes through sshsetup.InstallKeyViaPassword.
@@ -167,6 +172,7 @@ func (m *sshWizardModel) Open(target sshsetup.Target, resume any) tea.Cmd {
 	m.selected = map[string]bool{}
 	m.cursor = 0
 	m.resumeOnDone = resume
+	m.origTarget = target
 	m.passwd.Reset()
 	// Pre-fill the username field with whatever the caller resolved
 	// — explicit, parsed, or local-fallback. The user just hits
@@ -252,8 +258,11 @@ type wizardEnumerateDoneMsg struct {
 // caller stashed via Open.
 type wizardCompletedMsg struct {
 	target sshsetup.Target
-	added  []string // user names accepted from the enumerate step
-	resume any
+	// original is the target the wizard was opened with; target
+	// carries the user / port the user confirmed (possibly corrected).
+	original sshsetup.Target
+	added    []string // user names accepted from the enumerate step
+	resume   any
 }
 
 // wizardCancelledMsg fires when the user Esc-bails out of the
@@ -653,6 +662,7 @@ func (m *sshWizardModel) emitCancel() tea.Cmd {
 func (m *sshWizardModel) emitCompleted() tea.Cmd {
 	resume := m.resumeOnDone
 	target := m.target
+	original := m.origTarget
 	var added []string
 	for _, u := range m.others {
 		if m.selected[u] {
@@ -661,7 +671,7 @@ func (m *sshWizardModel) emitCompleted() tea.Cmd {
 	}
 	m.Close()
 	return func() tea.Msg {
-		return wizardCompletedMsg{target: target, added: added, resume: resume}
+		return wizardCompletedMsg{target: target, original: original, added: added, resume: resume}
 	}
 }
 
