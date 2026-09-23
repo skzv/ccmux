@@ -442,8 +442,11 @@ func (m sessionsModel) View(width, height int, narrow bool) string {
 	// to a condensed form on a phone.
 	detail := m.renderDetail(width, narrow)
 	listH := height - lipgloss.Height(detail)
-	if listH < 3 {
-		listH = 3
+	if listH < m.listMinHeight() {
+		// Not enough room for both: the list is what this screen is
+		// for, so it keeps the space. (The old floor of 3 made list +
+		// detail taller than `height`, pushing the tiles below off.)
+		return m.renderList(width, height)
 	}
 	return lipgloss.JoinVertical(lipgloss.Left,
 		m.renderList(width, listH),
@@ -538,16 +541,43 @@ func (m sessionsModel) renderList(width, height int) string {
 		return m.st.Pane.Width(width - 2).Height(height - 2).Render(body)
 	}
 	rowInner := inner - 2
+	// Window the rows around the cursor. Pane.Height is only a minimum,
+	// so rendering every row grew the pane past `height`: the Usage /
+	// Devices tiles below it were clipped off the screen, and with a
+	// long list the selected row itself fell off the bottom. The pane
+	// holds height-2 lines inside its border: the header, a spacer, and
+	// the rows — the spacer goes first when even that doesn't fit.
+	head := []string{header, ""}
+	budget := height - 2 - len(head)
+	if budget < 1 {
+		head = head[:1]
+		budget = maxInt(1, height-2-len(head))
+	}
+	start, end := windowAroundCursor(m.cursor, len(m.sessions), budget)
 	list := components.List(m.st, components.ListProps[daemon.SessionState]{
-		Items: m.sessions,
+		Items: m.sessions[start:end],
 		Render: func(s daemon.SessionState) components.ListItem {
 			return components.ListItem{Primary: renderSessionLine(m.st, s, rowInner)}
 		},
-		Cursor: m.cursor,
+		Cursor: m.cursor - start,
 		Width:  inner,
 	})
-	body := lipgloss.JoinVertical(lipgloss.Left, header, "", list)
+	body := lipgloss.JoinVertical(lipgloss.Left, append(head, list)...)
 	return m.st.PaneFocused.Width(width - 2).Height(height - 2).Render(body)
+}
+
+// sessionsMinVisibleRows is how many session rows the narrow layout
+// guarantees before it gives up the detail pane for list space.
+const sessionsMinVisibleRows = 3
+
+// listMinHeight is the smallest list pane (border included) worth
+// keeping the detail pane for: the header, spacer, and up to
+// sessionsMinVisibleRows rows — or the whole empty-state hint.
+func (m sessionsModel) listMinHeight() int {
+	if len(m.sessions) == 0 {
+		return 7 // border + header, spacer, "No sessions yet.", spacer, hint
+	}
+	return 4 + minInt(len(m.sessions), sessionsMinVisibleRows)
 }
 
 // renderDetail draws the Sessions detail pane for the selected row.

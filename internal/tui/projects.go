@@ -385,7 +385,7 @@ func switchAgentCmd(p project.Project) tea.Cmd {
 func (m projectsModel) View(width, height int) string {
 	if m.menu != nil {
 		menuW := minInt(80, width-4)
-		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, m.menu.View(menuW))
+		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, m.menu.View(menuW, height))
 	}
 	if m.form != nil {
 		// Show form centered with project list dimmed behind it.
