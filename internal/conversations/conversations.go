@@ -346,14 +346,8 @@ func readCodexMessages(path string, limit int) ([]Message, error) {
 		if err := json.Unmarshal(sc.Bytes(), &ev); err != nil {
 			continue
 		}
-		role, body := ev.MessageContent()
-		if role != "user" && role != "assistant" {
-			continue
-		}
-		if role == "user" {
-			body = cleanPromptText(body)
-		}
-		if body == "" {
+		role, body, ok := codexVisibleBody(ev)
+		if !ok {
 			continue
 		}
 		all = append(all, Message{
@@ -381,14 +375,8 @@ func readCursorMessages(path string, limit int) ([]Message, error) {
 		if err := json.Unmarshal(sc.Bytes(), &ev); err != nil {
 			continue
 		}
-		if ev.Role != "user" && ev.Role != "assistant" {
-			continue
-		}
-		body := strings.TrimSpace(ev.MessageContent())
-		if ev.Role == "user" {
-			body = cleanPromptText(body)
-		}
-		if body == "" {
+		body, ok := visibleTurn(ev.Role, ev.MessageContent())
+		if !ok {
 			continue
 		}
 		all = append(all, Message{
@@ -411,14 +399,8 @@ func readGeminiMessages(path string, limit int) ([]Message, error) {
 	all := make([]Message, 0, len(doc.Messages))
 	for _, msg := range doc.Messages {
 		role := geminiMessageRole(msg.Type)
-		if role == "" {
-			continue
-		}
-		body := strings.TrimSpace(msg.Text())
-		if role == "user" {
-			body = cleanPromptText(body)
-		}
-		if body == "" {
+		body, ok := visibleTurn(role, msg.Text())
+		if !ok {
 			continue
 		}
 		all = append(all, Message{
@@ -502,14 +484,43 @@ func CountMessages(c Conversation) (int, error) {
 // readClaudeMessages and countClaudeMessages so the thread length
 // always matches what the preview lists.
 func claudeVisibleBody(ev claudeEvent) (string, bool) {
-	if (ev.Type != "user" && ev.Type != "assistant") || ev.synthetic() {
+	if ev.synthetic() {
 		return "", false
 	}
-	body := strings.TrimSpace(ev.MessageContent())
-	if ev.Type == "user" {
+	return visibleTurn(ev.Type, ev.MessageContent())
+}
+
+// visibleTurn is the rule every agent's transcript reader and message
+// counter share, so a conversation's message count always equals what
+// the transcript modal lists: only user and assistant turns, user text
+// cleaned of injected context (environment_context, AGENTS.md bundles,
+// command wrappers), and a turn with nothing left is not a message.
+func visibleTurn(role, body string) (string, bool) {
+	if role != "user" && role != "assistant" {
+		return "", false
+	}
+	body = strings.TrimSpace(body)
+	if role == "user" {
 		body = cleanPromptText(body)
 	}
 	return body, body != ""
+}
+
+// codexVisibleBody is visibleTurn for a Codex rollout event.
+func codexVisibleBody(ev codexEvent) (role, body string, ok bool) {
+	role, body = ev.MessageContent()
+	body, ok = visibleTurn(role, body)
+	return role, body, ok
+}
+
+// piVisibleBody is visibleTurn for a pi session line.
+func piVisibleBody(ev piEvent) (role, body string, ok bool) {
+	if ev.Type != "message" || ev.Message == nil {
+		return "", "", false
+	}
+	role = ev.Message.Role
+	body, ok = visibleTurn(role, ev.Message.content())
+	return role, body, ok
 }
 
 func countClaudeMessages(path string) (int, error) {
@@ -545,8 +556,7 @@ func countCodexMessages(path string) (int, error) {
 		if err := json.Unmarshal(sc.Bytes(), &ev); err != nil {
 			continue
 		}
-		role, body := ev.MessageContent()
-		if (role == "user" || role == "assistant") && strings.TrimSpace(body) != "" {
+		if _, _, ok := codexVisibleBody(ev); ok {
 			n++
 		}
 	}
@@ -566,7 +576,7 @@ func countCursorMessages(path string) (int, error) {
 		if err := json.Unmarshal(sc.Bytes(), &ev); err != nil {
 			continue
 		}
-		if (ev.Role == "user" || ev.Role == "assistant") && strings.TrimSpace(ev.MessageContent()) != "" {
+		if _, ok := visibleTurn(ev.Role, ev.MessageContent()); ok {
 			n++
 		}
 	}
@@ -580,7 +590,7 @@ func countGeminiMessages(path string) (int, error) {
 	}
 	n := 0
 	for _, msg := range doc.Messages {
-		if geminiMessageRole(msg.Type) != "" && strings.TrimSpace(msg.Text()) != "" {
+		if _, ok := visibleTurn(geminiMessageRole(msg.Type), msg.Text()); ok {
 			n++
 		}
 	}
@@ -1596,18 +1606,8 @@ func readPiMessages(path string, limit int) ([]Message, error) {
 		if err := json.Unmarshal(sc.Bytes(), &ev); err != nil {
 			continue
 		}
-		if ev.Type != "message" || ev.Message == nil {
-			continue
-		}
-		role := ev.Message.Role
-		if role != "user" && role != "assistant" {
-			continue
-		}
-		body := strings.TrimSpace(ev.Message.content())
-		if role == "user" {
-			body = cleanPromptText(body)
-		}
-		if body == "" {
+		role, body, ok := piVisibleBody(ev)
+		if !ok {
 			continue
 		}
 		all = append(all, Message{Role: role, Content: body, Timestamp: ev.eventTime()})
@@ -1618,7 +1618,8 @@ func readPiMessages(path string, limit int) ([]Message, error) {
 	return all, nil
 }
 
-// countPiMessages counts user + assistant turns in a pi session file.
+// countPiMessages counts the user + assistant turns readPiMessages
+// would list.
 func countPiMessages(path string) (int, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -1632,8 +1633,7 @@ func countPiMessages(path string) (int, error) {
 		if err := json.Unmarshal(sc.Bytes(), &ev); err != nil {
 			continue
 		}
-		if ev.Type == "message" && ev.Message != nil &&
-			(ev.Message.Role == "user" || ev.Message.Role == "assistant") {
+		if _, _, ok := piVisibleBody(ev); ok {
 			n++
 		}
 	}
