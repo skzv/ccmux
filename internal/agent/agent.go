@@ -156,9 +156,11 @@ type Commands struct {
 	// OpenRouter routing. OpenRouterAgents is the set of agent IDs the
 	// user opted into routing through OpenRouter (config [openrouter]
 	// route_agents); OpenRouterBaseURL overrides the default API root.
-	// When an agent is in the set, LaunchCmd injects OPENAI_BASE_URL +
-	// OPENAI_API_KEY (the latter via the shell's OPENROUTER_API_KEY, so
-	// no literal secret lands in the command).
+	// When an agent is in the set, LaunchCmd and ResumeArgs inject
+	// OPENAI_BASE_URL + OPENAI_API_KEY (the latter via the shell's
+	// OPENROUTER_API_KEY, so no literal secret lands in the command),
+	// and refuse to start the agent when OPENROUTER_API_KEY is unset
+	// (see openRouterScript).
 	OpenRouterAgents  map[ID]bool
 	OpenRouterBaseURL string
 }
@@ -416,9 +418,10 @@ func ExecutableCandidates(bin, pathEnv string) []string {
 	return out
 }
 
-// Executable reports whether path names an executable file.
+// Executable reports whether path names an executable file. A leading
+// `~/` is expanded first, the same as a configured agent command.
 func Executable(path string) bool {
-	info, err := os.Stat(path)
+	info, err := os.Stat(ExpandHome(path))
 	return err == nil && !info.IsDir() && info.Mode()&0o111 != 0
 }
 
@@ -439,12 +442,44 @@ func LaunchCmd(id ID, continueFlag bool, commands Commands) string {
 // ResumeArgs resolves the argv vector for resuming one specific
 // conversation with optional configured command substitution.
 //
-// For Claude specifically, when commands.ClaudeModel is non-empty
-// the argv is wrapped in `sh -c 'export ANTHROPIC_MODEL=…; claude
-// --resume …'` so the pinned model applies on resume too — the bare
-// argv form can't carry an env var. Other agents pass through
-// unchanged; their model selection lives in their own config files.
+// The bare argv form can't carry an env var, so when the launch needs
+// one the argv is wrapped in `sh -c '…'`:
+//
+//   - Claude with commands.ClaudeModel set: `export ANTHROPIC_MODEL=…;
+//     claude --resume …`, so the pinned model applies on resume too.
+//   - An agent routed through OpenRouter: the same guarded exports
+//     LaunchCmd uses (see openRouterScript), so resuming a routed
+//     conversation doesn't silently bypass OpenRouter.
+//
+// Everything else passes through as plain argv.
 func ResumeArgs(id ID, conversationID string, commands Commands) []string {
+	argv := resumeArgv(id, conversationID, commands)
+	if argv == nil {
+		return nil
+	}
+	env := envPrefix(id, commands)
+	routed := commands.RoutesThroughOpenRouter(id)
+	if env == "" && !routed {
+		return argv
+	}
+	// Build a shell-quoted equivalent of the argv. shellQuote handles
+	// the unlikely case of weird characters in the binary path or
+	// conversation ID (the latter is typically a UUID but UUIDs aren't
+	// always what callers send).
+	quoted := make([]string, len(argv))
+	for i, a := range argv {
+		quoted[i] = shellQuote(a)
+	}
+	line := env + strings.Join(quoted, " ")
+	if routed {
+		line = openRouterScript(id, commands, line)
+	}
+	return []string{"sh", "-c", line}
+}
+
+// resumeArgv is the per-agent argv for resuming one conversation,
+// before any env wrapping.
+func resumeArgv(id ID, conversationID string, commands Commands) []string {
 	if conversationID == "" {
 		return nil
 	}
@@ -454,21 +489,7 @@ func ResumeArgs(id ID, conversationID string, commands Commands) []string {
 	case IDMuse:
 		return []string{configuredBinary(IDMuse, "muse", commands), "resume", conversationID}
 	case IDClaude:
-		argv := []string{configuredBinary(IDClaude, "claude", commands), "--resume", conversationID}
-		if model := strings.TrimSpace(commands.ClaudeModel); model != "" {
-			// Build a shell-quoted equivalent of the argv, prefixed
-			// with the export. shellQuote handles the unlikely case
-			// of weird characters in the binary path or conversation
-			// ID (the latter is typically a UUID but UUIDs aren't
-			// always what callers send).
-			quoted := make([]string, len(argv))
-			for i, a := range argv {
-				quoted[i] = shellQuote(a)
-			}
-			line := "export ANTHROPIC_MODEL=" + shellQuote(model) + "; " + strings.Join(quoted, " ")
-			return []string{"sh", "-c", line}
-		}
-		return argv
+		return []string{configuredBinary(IDClaude, "claude", commands), "--resume", conversationID}
 	case IDCodex:
 		return []string{configuredBinary(IDCodex, "codex", commands), "resume", conversationID}
 	case IDAntigravity:
@@ -494,7 +515,31 @@ func configuredBinary(id ID, fallback string, commands Commands) string {
 	return fallback
 }
 
+// commandOverride returns the user-configured executable for an agent,
+// with a leading `~/` expanded against the home directory. No shell
+// ever expands the tilde for us: LaunchCmd single-quotes the token,
+// ResumeArgs hands it to tmux as argv, and commandAvailable stats it —
+// so a configured `~/.local/bin/claude` used to fail everywhere.
 func commandOverride(id ID, commands Commands) string {
+	return ExpandHome(rawCommandOverride(id, commands))
+}
+
+// ExpandHome expands a leading `~` or `~/` in a configured path to the
+// current user's home directory. Anything else — including `~user/…`,
+// which would need a passwd lookup — is returned unchanged, as is the
+// input when the home directory can't be determined.
+func ExpandHome(path string) string {
+	if path != "~" && !strings.HasPrefix(path, "~/") && !strings.HasPrefix(path, "~"+string(os.PathSeparator)) {
+		return path
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return path
+	}
+	return filepath.Join(home, path[1:])
+}
+
+func rawCommandOverride(id ID, commands Commands) string {
 	switch id {
 	case IDGemini:
 		return strings.TrimSpace(commands.Gemini)
@@ -529,50 +574,99 @@ func commandOverride(id ID, commands Commands) string {
 }
 
 func launchCmdWithBinary(a Agent, binary string, continueFlag bool, commands Commands) string {
-	cmd := shellQuote(binary)
-	// Pin ANTHROPIC_MODEL for Claude only; other agents read their
-	// model selection from their own config files. Use `export` (not
-	// a per-command FOO=bar prefix) so the value persists across the
-	// `claude || claude || zsh` fallback chain — a per-command prefix
-	// would only apply to the first invocation, leaving the user's
-	// retry shell or the bare shell fallback running un-pinned.
-	prefix := ""
-	if a.ID() == IDClaude {
-		if model := strings.TrimSpace(commands.ClaudeModel); model != "" {
-			prefix = "export ANTHROPIC_MODEL=" + shellQuote(model) + "; "
-		}
-	}
-	// OpenRouter routing: for agents the user opted into (config
-	// [openrouter] route_agents), point the agent's OpenAI-compatible
-	// client at OpenRouter. Only makes sense for agents that honor
-	// OPENAI_BASE_URL / OPENAI_API_KEY (codex, opencode, kilo, …);
-	// the config is the opt-in, so ccmux doesn't guess.
-	//
-	// The key is read from the shell's OPENROUTER_API_KEY at launch
-	// rather than embedded literally — a literal key in the command
-	// string would surface in `ps` and in ccmux's own pane captures.
-	// The user sets OPENROUTER_API_KEY once in their shell profile.
+	line := envPrefix(a.ID(), commands) + launchChain(a.ID(), shellQuote(binary), continueFlag)
 	if commands.RoutesThroughOpenRouter(a.ID()) {
-		base := strings.TrimSpace(commands.OpenRouterBaseURL)
-		if base == "" {
-			base = "https://openrouter.ai/api/v1"
-		}
-		prefix += "export OPENAI_BASE_URL=" + shellQuote(base) + "; " +
-			`export OPENAI_API_KEY="${OPENROUTER_API_KEY:-$OPENAI_API_KEY}"; `
+		// Run under sh whatever the user's tmux default-shell is: the
+		// guard and exports are POSIX syntax that fish can't parse.
+		return "sh -c " + shellQuote(openRouterScript(a.ID(), commands, line))
 	}
+	return line
+}
+
+// launchChain is the agent's own start command: bare for a new
+// session, or its "resume the latest conversation in this cwd" dialect
+// followed by a fresh start and the zsh → bash → sh fallback so the
+// pane stays alive when the agent itself can't run.
+func launchChain(id ID, cmd string, continueFlag bool) string {
 	if !continueFlag {
-		return prefix + cmd
+		return cmd
 	}
-	switch a.ID() {
+	fallback := " || " + cmd + " || zsh || bash || sh"
+	switch id {
 	case IDGemini:
-		return prefix + cmd + " --resume || " + cmd + " || zsh || bash || sh"
+		return cmd + " --resume" + fallback
 	case IDMuse:
-		return prefix + cmd + " resume --last || " + cmd + " || zsh || bash || sh"
+		return cmd + " resume --last" + fallback
 	case IDCursor:
-		return prefix + cmd + " resume || " + cmd + " || zsh || bash || sh"
+		return cmd + " resume" + fallback
+	case IDCodex:
+		// `codex --continue` is rejected ("unexpected argument");
+		// the latest session is `codex resume --last`.
+		return cmd + " resume --last" + fallback
+	case IDAmp:
+		// `amp --continue` is an unknown option; threads are
+		// continued via the threads subcommand.
+		return cmd + " threads continue --last" + fallback
+	case IDDroid:
+		// `droid --continue` silently starts a fresh session; droid
+		// resumes with `-r, --resume [id]`, `--last` picking the newest.
+		return cmd + " --resume --last" + fallback
 	}
-	// claude / codex / antigravity / pi all take `--continue`.
-	return prefix + cmd + " --continue || " + cmd + " || zsh || bash || sh"
+	// claude / antigravity / pi / grok and the rest take `--continue`.
+	return cmd + " --continue" + fallback
+}
+
+// envPrefix pins ANTHROPIC_MODEL for Claude only; other agents read
+// their model selection from their own config files. Use `export` (not
+// a per-command FOO=bar prefix) so the value persists across the
+// `claude || claude || zsh` fallback chain — a per-command prefix
+// would only apply to the first invocation, leaving the user's retry
+// shell or the bare shell fallback running un-pinned.
+func envPrefix(id ID, commands Commands) string {
+	if id != IDClaude {
+		return ""
+	}
+	if model := strings.TrimSpace(commands.ClaudeModel); model != "" {
+		return "export ANTHROPIC_MODEL=" + shellQuote(model) + "; "
+	}
+	return ""
+}
+
+// openRouterScript wraps a launch line for an agent the user opted into
+// OpenRouter routing (config [openrouter] route_agents): it points the
+// agent's OpenAI-compatible client at OpenRouter. Only makes sense for
+// agents that honor OPENAI_BASE_URL / OPENAI_API_KEY (codex, opencode,
+// kilo, …); the config is the opt-in, so ccmux doesn't guess.
+//
+// The key is read from the shell's OPENROUTER_API_KEY at launch rather
+// than embedded literally — a literal key in the command string would
+// surface in `ps` and in ccmux's own pane captures. The user sets
+// OPENROUTER_API_KEY once in their shell profile.
+//
+// When OPENROUTER_API_KEY is unset or empty the script refuses to
+// start the agent: it prints why, waits for Enter so the message stays
+// readable in the pane, and exits non-zero. It never falls back to
+// OPENAI_API_KEY — that would ship the user's OpenAI credential to
+// openrouter.ai (or whatever base_url is configured) — and it never
+// starts the agent un-routed, which would silently bill a different
+// provider than the one the user chose.
+//
+// The result is POSIX sh; callers run it via `sh -c`.
+func openRouterScript(id ID, commands Commands, line string) string {
+	base := strings.TrimSpace(commands.OpenRouterBaseURL)
+	if base == "" {
+		base = "https://openrouter.ai/api/v1"
+	}
+	msg := "ccmux: OPENROUTER_API_KEY is not set, so " + string(id) +
+		" was not started. It is configured to route through OpenRouter" +
+		" ([openrouter] route_agents); set OPENROUTER_API_KEY in your shell" +
+		" profile, or remove " + string(id) + " from route_agents."
+	return `if [ -z "${OPENROUTER_API_KEY:-}" ]; then ` +
+		"echo " + shellQuote(msg) + " >&2; " +
+		"echo 'Press Enter to close.' >&2; read -r _; exit 1; fi; " +
+		"export OPENAI_BASE_URL=" + shellQuote(base) + "; " +
+		`export OPENAI_API_KEY="$OPENROUTER_API_KEY"; ` +
+		line
 }
 
 // ShellQuote quotes one shell token using POSIX single-quote rules.

@@ -9,12 +9,16 @@ region = "osc_title"
 regex = ['^[\x{2800}-\x{28FF}]']
 
 # Approval gate: Kiro asks the user to grant a single permission or
-# trust the tool when an action "requires approval".
+# trust the tool when an action "requires approval". Scoped to the
+# bottom of the pane and idle-gated: the phrase in scrollback, or on
+# screen while the agent is visibly working, must not pin needs_input
+# over the working marker and fire a bell.
 [[rules]]
 id = "body_requires_approval"
 state = "blocked"
 priority = 900
-region = "whole_recent"
+region = "bottom_non_empty_lines(8)"
+require_idle = true
 any = [
   { contains = ["requires approval"] },
   { contains = ["yes, single permission"] },

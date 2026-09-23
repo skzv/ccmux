@@ -13,6 +13,7 @@ package project
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	"github.com/skzv/ccmux/internal/agent"
+	"github.com/skzv/ccmux/internal/tmux"
 )
 
 // agentSidecarRelPath is where each project's chosen agent is stored.
@@ -52,35 +54,12 @@ type Project struct {
 }
 
 // SessionName returns the ccmux tmux session name for this project.
-// Stays in lock-step with tmux.SessionNameForPath so the two paths
-// (project-list "session name" column + scaffold's tmux.New call)
-// can never disagree about a project's session name.
+// Shares tmux.SessionNameForPath's implementation so the two paths
+// (project-list "session name" column + scaffold's tmux.New call) can
+// never disagree about a project's session name — a copy of the
+// sanitizer here would silently drift from the tmux one.
 func (p Project) SessionName() string {
-	return "c-" + sanitizeForSessionName(p.Name)
-}
-
-// sanitizeForSessionName mirrors internal/tmux.sanitizeSessionName.
-// Duplicated rather than imported to avoid a project→tmux dep cycle.
-// The two implementations are pinned to the same output by
-// TestSessionName_MatchesTmuxSanitizer (cross-package check).
-func sanitizeForSessionName(name string) string {
-	if name == "" {
-		return ""
-	}
-	out := make([]byte, 0, len(name))
-	for i := 0; i < len(name); i++ {
-		b := name[i]
-		switch {
-		case b >= 'a' && b <= 'z',
-			b >= 'A' && b <= 'Z',
-			b >= '0' && b <= '9',
-			b == '_', b == '-':
-			out = append(out, b)
-		default:
-			out = append(out, '_')
-		}
-	}
-	return string(out)
+	return tmux.SessionNameForBase(p.Name)
 }
 
 // Discover walks `root` one level deep and returns every directory that
@@ -99,10 +78,23 @@ func Discover(root string) ([]Project, error) {
 	}
 	out := make([]Project, 0, len(entries))
 	for _, e := range entries {
-		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+		if strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
 		p := filepath.Join(root, e.Name())
+		if !e.IsDir() {
+			// DirEntry describes a symlink itself, so IsDir is false
+			// even when it points at a directory — a project symlinked
+			// into the root (e.g. from an external drive or another
+			// checkout) was skipped. Follow links; keep only those that
+			// resolve to a directory.
+			if e.Type()&fs.ModeSymlink == 0 {
+				continue
+			}
+			if fi, err := os.Stat(p); err != nil || !fi.IsDir() {
+				continue
+			}
+		}
 		proj, ok := inspect(p)
 		if ok {
 			out = append(out, proj)
@@ -172,6 +164,13 @@ func ReadAgent(projectPath string) agent.ID {
 		return id
 	}
 	return agent.IDClaude
+}
+
+// AgentSidecarPath is the file SetAgent writes and ReadAgent reads for
+// projectPath. Exposed so a caller can tell "no agent recorded yet"
+// apart from "Claude recorded" — ReadAgent answers Claude for both.
+func AgentSidecarPath(projectPath string) string {
+	return filepath.Join(projectPath, agentSidecarRelPath)
 }
 
 // SetAgent writes the project's agent choice to its sidecar. Creates

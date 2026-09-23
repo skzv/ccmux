@@ -123,10 +123,12 @@ func (projectInfoOverlay) View(st styles.Styles, p project.Project, sessions []d
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, modal)
 }
 
-// countSessionsForProject counts live sessions whose name starts with
-// the project's canonical session name. We do a prefix match (not
-// equality) so the dashboard's multi-session-per-project convention
-// (e.g. `c-ccmux`, `c-ccmux-2`) all contribute.
+// countSessionsForProject counts live sessions that belong to the
+// project: its canonical session name, plus the numbered siblings
+// uniqueSessionName mints for additional sessions (`c-ccmux-2`,
+// `c-ccmux-3`, …). Only a purely numeric suffix counts — a bare prefix
+// match credited project `api` with `c-api-server`, another project's
+// session.
 func countSessionsForProject(p project.Project, sessions []daemon.SessionState) int {
 	name := p.SessionName()
 	host := projectHost(p)
@@ -139,11 +141,26 @@ func countSessionsForProject(p project.Project, sessions []daemon.SessionState) 
 		if sHost != host {
 			continue
 		}
-		if s.Name == name || strings.HasPrefix(s.Name, name+"-") {
+		if s.Name == name || isNumberedSibling(s.Name, name) {
 			n++
 		}
 	}
 	return n
+}
+
+// isNumberedSibling reports whether session is base + "-" + digits,
+// the shape uniqueSessionName gives a project's extra sessions.
+func isNumberedSibling(session, base string) bool {
+	suffix, ok := strings.CutPrefix(session, base+"-")
+	if !ok || suffix == "" {
+		return false
+	}
+	for _, r := range suffix {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // readAgentSidecar returns the raw contents of `<project>/.ccmux/agent`

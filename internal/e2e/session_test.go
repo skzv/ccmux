@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -84,17 +85,24 @@ func TestSessionLifecycle(t *testing.T) {
 // rewrites dots, it targets the wrong session and the kill fails.
 func TestSessionKill_NameSanitization(t *testing.T) {
 	e := newEnv(t)
-	// SessionNameForPath turns "my proj" into "c-my_proj".
-	if want := tmux.SessionNameForPath("/x/my proj"); want != "c-my_proj" {
-		t.Fatalf("precondition: SessionNameForPath = %q, want c-my_proj", want)
+	// SessionNameForPath turns "my proj" into "c-my_proj-<tag>": the
+	// space becomes '_' and the lossy rewrite gets a tag so it can't
+	// collide with a project literally named "my_proj".
+	session := tmux.SessionNameForPath("/x/my proj")
+	if !strings.HasPrefix(session, "c-my_proj-") {
+		t.Fatalf("precondition: SessionNameForPath = %q, want c-my_proj-<tag>", session)
 	}
-	e.newTmuxSession("c-my_proj", e.Home)
+	e.newTmuxSession(session, e.Home)
+	e.newTmuxSession("c-my_proj", e.Home) // project "my_proj" — must survive
 
 	if _, stderr, err := e.ccmux("kill", "my proj"); err != nil {
 		t.Fatalf(`ccmux kill "my proj": %v\nstderr: %s`, err, stderr)
 	}
-	if e.hasSession("c-my_proj") {
-		t.Error("c-my_proj still present — `ccmux kill` used the wrong sanitizer")
+	if e.hasSession(session) {
+		t.Errorf("%s still present — `ccmux kill` used the wrong sanitizer", session)
+	}
+	if !e.hasSession("c-my_proj") {
+		t.Error(`ccmux kill "my proj" killed project my_proj's session`)
 	}
 }
 

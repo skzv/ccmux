@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/skzv/ccmux/internal/agent"
+	"github.com/skzv/ccmux/internal/tmux"
 )
 
 // mkdir is a tiny test helper that creates a directory and t.Fatals on
@@ -33,20 +34,43 @@ func writeFile(t *testing.T, path, content string) {
 func TestSessionName(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"foo", "c-foo"},
-		{"foo.bar", "c-foo_bar"},
-		{"a.b.c", "c-a_b_c"},
 		{"no-dots-here", "c-no-dots-here"},
-		// Broader sanitization — matches the fuzz-driven update to
-		// tmux.SessionNameForPath. Any character outside
-		// [a-zA-Z0-9_-] becomes `_`.
-		{"with:colon", "c-with_colon"},
-		{"with space", "c-with_space"},
-		{"with/slash", "c-with_slash"},
+		{"my_app", "c-my_app"},
+		// Any character outside [a-zA-Z0-9_-] becomes `_`, and a
+		// rewritten name carries a stable tag of the original so it
+		// can't share a session with another project.
+		{"foo.bar", "c-foo_bar-sjscm"},
+		{"a.b.c", "c-a_b_c-bzngv"},
+		{"my.app", "c-my_app-ipltv"},
+		{"with:colon", "c-with_colon-uogqt"},
+		{"with space", "c-with_space-pamny"},
+		{"with/slash", "c-with_slash-jvlud"},
+		{"日本", "c-______-noabt"},
+		{"中文", "c-______-zqxmn"},
 	}
 	for _, tc := range cases {
 		p := Project{Name: tc.in}
 		if got := p.SessionName(); got != tc.want {
 			t.Errorf("SessionName(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestSessionName_MatchesTmuxSessionNameForPath — the project list and
+// every tmux.New call site (scaffold, CLI, daemon) must agree on a
+// project's session name; a separate sanitizer copy here used to be the
+// source of truth for one and not the other.
+func TestSessionName_MatchesTmuxSessionNameForPath(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"foo", "my.app", "my_app", "日本", "with space"} {
+		dir := filepath.Join(root, name)
+		mkdir(t, dir)
+		p, ok := Lookup(dir)
+		if !ok {
+			t.Fatalf("Lookup(%q) failed", dir)
+		}
+		if got, want := p.SessionName(), tmux.SessionNameForPath(dir); got != want {
+			t.Errorf("%q: Project.SessionName = %q, tmux.SessionNameForPath = %q", name, got, want)
 		}
 	}
 }
@@ -149,6 +173,53 @@ func TestDiscover_SkipsHiddenAndNonDirs(t *testing.T) {
 		if names[i] != n {
 			t.Errorf("Discover[%d] = %q, want %q (full: %v)", i, names[i], n, names)
 		}
+	}
+}
+
+// TestDiscover_FollowsDirectorySymlinks — DirEntry.IsDir is false for a
+// symlink, so a project symlinked into the root (checkout on another
+// volume, shared worktree) never showed up. Links resolving to a
+// directory are projects; links to files, dangling links and hidden
+// links are not.
+func TestDiscover_FollowsDirectorySymlinks(t *testing.T) {
+	root := t.TempDir()
+	elsewhere := t.TempDir()
+	target := filepath.Join(elsewhere, "real-project")
+	mkdir(t, filepath.Join(target, ".git"))
+	writeFile(t, filepath.Join(elsewhere, "file.txt"), "not a dir")
+	mkdir(t, filepath.Join(root, "plain"))
+	links := map[string]string{
+		"linked":     target,
+		"file-link":  filepath.Join(elsewhere, "file.txt"),
+		"dangling":   filepath.Join(elsewhere, "gone"),
+		".hidden-ln": target,
+	}
+	for name, dest := range links {
+		if err := os.Symlink(dest, filepath.Join(root, name)); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+	}
+
+	got, err := Discover(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]Project{}
+	for _, p := range got {
+		byName[p.Name] = p
+	}
+	if len(byName) != 2 {
+		t.Errorf("Discover returned %d projects %v, want plain + linked", len(got), got)
+	}
+	linked, ok := byName["linked"]
+	if !ok {
+		t.Fatalf("symlinked project missing from %v", got)
+	}
+	if want := filepath.Join(root, "linked"); linked.Path != want {
+		t.Errorf("linked.Path = %q, want the path under the root %q", linked.Path, want)
+	}
+	if !linked.HasGit {
+		t.Error("linked project's markers weren't read through the link")
 	}
 }
 

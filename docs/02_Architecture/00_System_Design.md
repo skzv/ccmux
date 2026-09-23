@@ -255,7 +255,9 @@ The rule used to require one of those markers, which left worktrees without `CLA
 
 ## tmux Naming Convention
 
-Compatibility with the existing `cc()` zsh function: session name is `c-<basename-with-dots-as-underscores>`. ccmux honors this and creates sessions with the same prefix so the old aliases continue to work during transition.
+Compatibility with the existing `cc()` zsh function: session name is `c-<basename>`. ccmux honors this and creates sessions with the same prefix so the old aliases continue to work during transition.
+
+A basename outside `[a-zA-Z0-9_-]` has every other byte rewritten to `_` (dots, spaces, `:`, non-ASCII), and because that rewrite is lossy the name also gets a five-letter tag of the original basename: `my.app` → `c-my_app-ipltv`, so it can't share a session with a project literally named `my_app` (→ `c-my_app`). Names already in the safe alphabet are unchanged. `tmux.SessionNameForPath` is the single implementation; `project.Project.SessionName` delegates to it.
 
 Future: drop the prefix and use full path as session name (`/Users/skz/Projects/foo` → `c..Users.skz.Projects.foo`)? Decision deferred to v0.2 after user feedback.
 

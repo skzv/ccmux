@@ -60,6 +60,43 @@ func TestBundledRuleFiles_Valid(t *testing.T) {
 	}
 }
 
+// TestBundledRules_WholePaneBlockedRulesAreIdleGated — a blocked rule
+// scanning the whole capture (all 60 lines, scrollback included) with
+// no idle gate lets benign scrollback text ("requires approval",
+// "Permission required", "invoke tool") pin needs_input and ring the
+// bell instantly — at priority 900 it even beats the agent's own
+// working footer while the agent is visibly busy. Such a rule must
+// carry require_idle (and should really be scoped to the footer).
+func TestBundledRules_WholePaneBlockedRulesAreIdleGated(t *testing.T) {
+	entries, err := ruleFS.ReadDir("rules")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".toml") {
+			continue
+		}
+		data, err := ruleFS.ReadFile(path.Join("rules", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var rf ruleFile
+		if _, err := toml.Decode(string(data), &rf); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		for _, r := range rf.Rules {
+			if parseState(r.State) != StateNeedsInput || r.RequireIdle {
+				continue
+			}
+			if region := strings.TrimSpace(r.Region); region == "whole_recent" || region == "" {
+				t.Errorf("%s: blocked rule %q scans the whole pane (region %q) without require_idle",
+					name, r.ID, r.Region)
+			}
+		}
+	}
+}
+
 func checkRegexes(t *testing.T, ruleID string, m MatchSpec) {
 	t.Helper()
 	for _, src := range append(append([]string{}, m.Regex...), m.LineRegex...) {

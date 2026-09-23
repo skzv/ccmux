@@ -1,0 +1,10 @@
+dev@mbp ~/Projects/demo % claude --continue
+node:internal/modules/cjs/loader:1228
+  throw err;
+  ^
+
+Error: Cannot find module '/usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js'
+    at Module._resolveFilename (node:internal/modules/cjs/loader:1225:15)
+
+Node.js v22.22.3
+dev@mbp ~/Projects/demo % 

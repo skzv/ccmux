@@ -19,11 +19,10 @@ func (Amp) ID() ID              { return IDAmp }
 func (Amp) DisplayName() string { return "Amp" }
 func (Amp) Binary() string      { return "amp" }
 
+// LaunchCmd resumes with `amp threads continue --last` (amp has no
+// --continue option). See launchChain.
 func (Amp) LaunchCmd(continueFlag bool) string {
-	if continueFlag {
-		return "amp --continue || amp || zsh || bash || sh"
-	}
-	return "amp"
+	return launchCmdWithBinary(Amp{}, "amp", continueFlag, Commands{})
 }
 
 func (Amp) ConfigRoot(home string) string      { return filepath.Join(home, ".config", "amp") }

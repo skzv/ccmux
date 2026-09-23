@@ -1,6 +1,9 @@
 package claude
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -108,6 +111,65 @@ func TestLooksLikeShellPrompt(t *testing.T) {
 	for _, tc := range cases {
 		if got := looksLikeShellPrompt(tc.line); got != tc.want {
 			t.Errorf("looksLikeShellPrompt(%q) = %v, want %v", tc.line, got, tc.want)
+		}
+	}
+}
+
+// TestClassify_ClaudeCodeV2InputBox — Claude Code v2 draws its input
+// box as a `❯` line between two `────` rules with a footer below, no
+// rounded corners; the tail-line-only heuristic never recognised it, so
+// a waiting v2 session idled out as "idle" instead of needs_input. The
+// fixture is a real 2.1.281 capture shared with internal/agent.
+func TestClassify_ClaudeCodeV2InputBox(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "agent", "testdata", "panes", "claude_v2_idle.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pane := string(b)
+	if got := Classify(pane, time.Now().Add(-10*time.Minute), 3*time.Second); got != StateNeedsInput {
+		t.Errorf("quiet v2 input box = %v, want needs_input", got)
+	}
+	if got := Classify(pane, time.Now(), 3*time.Second); got != StateActive {
+		t.Errorf("fresh v2 input box = %v, want active (idle gate)", got)
+	}
+}
+
+// TestClassify_PercentFooterIsNotAShell — Claude's own footer or a
+// statusline can end in `%`; with Claude chrome on screen that tail is
+// not a crashed-to-shell prompt.
+func TestClassify_PercentFooterIsNotAShell(t *testing.T) {
+	rule := strings.Repeat("─", 80)
+	for _, pane := range []string{
+		"done\n" + rule + "\n❯ \n" + rule + "\n  ⏵⏵ auto mode on (shift+tab to cycle)    Context left until auto-compact: 7%",
+		"done\n" + rule + "\n❯ \n" + rule + "\n  ? for shortcuts\n  opus · ~/Projects/ccmux · ctx 42%",
+		claudeFrame + "\n  ? for shortcuts   Context left until auto-compact: 7%",
+	} {
+		for _, lastChange := range []time.Time{time.Now(), time.Now().Add(-10 * time.Minute)} {
+			if got := Classify(pane, lastChange, 3*time.Second); got == StateError {
+				t.Errorf("Classify(%q) = error; a %% footer under Claude chrome is not a shell prompt", pane)
+			}
+		}
+	}
+	shell := "Error: Cannot find module 'cli.js'\n\nNode.js v22.22.3\nuser@host ~ % "
+	if got := Classify(shell, time.Now(), 3*time.Second); got != StateError {
+		t.Errorf("real zsh prompt = %v, want error", got)
+	}
+}
+
+func TestLooksLikeClaudeV2Dialog(t *testing.T) {
+	cases := []struct {
+		lines []string
+		want  bool
+	}{
+		{[]string{" Do you want to proceed?", " ❯ 1. Yes", "   2. No"}, true},
+		{[]string{" Edit file", "   1. Yes", " ❯ 2. Yes, allow all edits", "   3. No"}, true},
+		{[]string{" ❯ No, exit", "   Yes, I trust this folder", " Enter to confirm · Esc to cancel"}, true},
+		{[]string{"1. a numbered list", "2. in plain output"}, false},
+		{[]string{"press Esc to cancel the build"}, false},
+	}
+	for _, tc := range cases {
+		if got := looksLikeClaudeV2Dialog(tc.lines); got != tc.want {
+			t.Errorf("looksLikeClaudeV2Dialog(%q) = %v, want %v", tc.lines, got, tc.want)
 		}
 	}
 }
