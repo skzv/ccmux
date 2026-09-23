@@ -34,9 +34,14 @@ import (
 // state per test. Tests pass `t.Cleanup` so Close runs after PASS or
 // FAIL.
 type testServer struct {
-	addr             string
-	listener         net.Listener
-	hostKey          ssh.Signer
+	addr     string
+	listener net.Listener
+	hostKey  ssh.Signer
+	// extraHostKeys are offered alongside hostKey — a stock sshd has
+	// ed25519 + ecdsa (+ rsa) host keys, and which one the handshake
+	// negotiates depends on the client's HostKeyAlgorithms order. Set
+	// only before the listener starts (newTestServerWithHostKeys).
+	extraHostKeys    []ssh.Signer
 	password         string
 	authorizedKeys   map[string]bool // wire-marshaled key → trust
 	authorizedKeysMu sync.Mutex
@@ -67,7 +72,15 @@ type sessionLog struct {
 
 func newTestServer(t *testing.T) *testServer {
 	t.Helper()
+	return newTestServerWithHostKeys(t)
+}
+
+// newTestServerWithHostKeys is newTestServer with additional host keys
+// offered after the default ed25519 one.
+func newTestServerWithHostKeys(t *testing.T, extra ...ssh.Signer) *testServer {
+	t.Helper()
 	s := &testServer{
+		extraHostKeys:  extra,
 		password:       "hunter2",
 		authorizedKeys: map[string]bool{},
 		uname:          "Linux",
@@ -200,6 +213,9 @@ func (s *testServer) handle(t *testing.T, nc net.Conn) {
 		},
 	}
 	cfg.AddHostKey(s.hostKey)
+	for _, k := range s.extraHostKeys {
+		cfg.AddHostKey(k)
+	}
 	sc, chans, reqs, err := ssh.NewServerConn(nc, cfg)
 	if err != nil {
 		// Failed handshake — normal for the auth-fail path.

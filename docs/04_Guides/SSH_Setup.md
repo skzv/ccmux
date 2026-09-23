@@ -42,7 +42,7 @@ ccmux host setup-ssh --skip-enumerate mini
 
 ## What the wizard does, step by step
 
-1. **Probe.** Non-interactive `ssh -o BatchMode=yes -o IdentitiesOnly=yes` checks whether key auth already works. If it does, the wizard exits with a one-line "nothing to do". If TCP refuses on port 22, you get a specific hint ("On macOS: System Settings → General → Sharing → Remote Login") instead of a generic error.
+1. **Probe.** Non-interactive `ssh -o BatchMode=yes` checks whether key auth already works — with your `~/.ssh/config` and ssh-agent keys (1Password, Secretive, …), exactly like the real attach. If it does, the wizard exits with a one-line "nothing to do". If TCP refuses on port 22, you get a specific hint ("On macOS: System Settings → General → Sharing → Remote Login") instead of a generic error.
 2. **Local key.** Reuses `~/.ssh/id_ed25519` (preferred) or `~/.ssh/id_rsa`. Only if neither exists does it generate a fresh passphrase-less `id_ed25519`. No passphrase keeps future attaches zero-prompt; the file is `chmod 600`.
 3. **Password prompt.** Masked textinput, never logged, scrubbed after use.
 4. **Install.** Connects with `golang.org/x/crypto/ssh` directly (not the system `ssh` binary), appends the public key to remote `~/.ssh/authorized_keys` with idempotent grep-based dedup, fixes perms (`chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys`).
@@ -51,7 +51,7 @@ ccmux host setup-ssh --skip-enumerate mini
 
 ## Trust-on-first-use for host keys
 
-The first time you connect to a new host, ccmux writes its host key to `~/.ssh/known_hosts` automatically — same behavior as `ssh -o StrictHostKeyChecking=accept-new`.
+The first time you connect to a new host, ccmux writes its host key to `~/.ssh/known_hosts` automatically — same behavior as `ssh -o StrictHostKeyChecking=accept-new`. Like the `ssh` client, ccmux asks the host for the key types already recorded for it (ed25519 first on a new host), so the key the probe recorded is the one that gets verified.
 
 A SUBSEQUENT mismatch (the host's key changed) is a hard failure. The wizard refuses to proceed and surfaces "⚠ host key changed for X — possible MITM. Investigate before re-adding." You can resolve this manually by removing the matching line from `~/.ssh/known_hosts` after confirming the change is expected (host reinstalled, etc.).
 

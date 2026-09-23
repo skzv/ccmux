@@ -132,6 +132,27 @@ func TestProbe_TopLevel_ReturnsUnknownOnMissingHost(t *testing.T) {
 	}
 }
 
+// TestProbeSSHArgs_AllowsAgentIdentities — the probe must authenticate
+// the way the real ssh/mosh attach does. IdentitiesOnly=yes hid every
+// ssh-agent-only key (1Password, Secretive, hardware tokens), so users
+// whose attach works were told "key not installed". The rest of the
+// probe contract (never prompt, TOFU new hosts, right port/user) stays.
+func TestProbeSSHArgs_AllowsAgentIdentities(t *testing.T) {
+	args := probeSSHArgs(Target{User: "alice", Host: "mini", Port: 2222})
+	joined := strings.Join(args, " ")
+	if strings.Contains(joined, "IdentitiesOnly") {
+		t.Errorf("probe args must not restrict identities (agent keys count): %q", joined)
+	}
+	for _, want := range []string{"-o BatchMode=yes", "-o StrictHostKeyChecking=accept-new", "-p 2222", "alice@mini exit"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("probe args missing %q: %q", want, joined)
+		}
+	}
+	if got := strings.Join(probeSSHArgs(Target{Host: "mini"}), " "); !strings.Contains(got, "-p 22 mini exit") {
+		t.Errorf("default port/user args = %q, want -p 22 and a bare host", got)
+	}
+}
+
 // closedPort returns a "host:port" that has just been closed, so any
 // dial against it gets ECONNREFUSED. The dial happens AFTER the
 // listener is closed, but the port stays in TIME_WAIT briefly — we

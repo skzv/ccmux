@@ -3,6 +3,7 @@ package sshsetup
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"net"
@@ -73,7 +74,7 @@ func (in *installer) Install(ctx context.Context, t Target, password string, key
 	}
 
 	p.report("hostkey", "resolving known_hosts callback")
-	hkCB, err := tofuHostKeyCallback()
+	hk, err := tofuHostKeyConfig(t.Addr())
 	if err != nil {
 		return fmt.Errorf("known_hosts: %w", err)
 	}
@@ -83,10 +84,11 @@ func (in *installer) Install(ctx context.Context, t Target, password string, key
 
 	p.report("connect", fmt.Sprintf("dialing %s with password auth", t.Addr()))
 	pwClient, err := in.dial(cctx, t.Addr(), &ssh.ClientConfig{
-		User:            user,
-		Auth:            []ssh.AuthMethod{ssh.Password(password)},
-		HostKeyCallback: hkCB,
-		Timeout:         10 * time.Second,
+		User:              user,
+		Auth:              []ssh.AuthMethod{ssh.Password(password)},
+		HostKeyCallback:   hk.callback,
+		HostKeyAlgorithms: hk.algorithms,
+		Timeout:           10 * time.Second,
 	})
 	if err != nil {
 		return classifyConnectErr(err)
@@ -109,23 +111,24 @@ func (in *installer) Install(ctx context.Context, t Target, password string, key
 	}
 	// Rebuild the host-key callback for the validation hop. knownhosts.New
 	// reads known_hosts ONCE into an in-memory db at construction, so the
-	// callback from the password hop (hkCB) still believes this host is
+	// callback from the password hop (hk) still believes this host is
 	// unknown — even though the password hop's TOFU just appended its key
-	// to disk. Reusing hkCB here makes the validation hop re-run TOFU
+	// to disk. Reusing hk here makes the validation hop re-run TOFU
 	// (accept-and-append) instead of VERIFYING against the recorded key,
 	// which defeats the whole point of the second connection: a MITM
 	// presenting key A on the password hop and key B on the validation
 	// hop would be accepted on both. A fresh callback reads the now-
 	// updated file and flags a mismatch.
-	hkCBValidate, err := tofuHostKeyCallback()
+	hkValidate, err := tofuHostKeyConfig(t.Addr())
 	if err != nil {
 		return fmt.Errorf("known_hosts (validate): %w", err)
 	}
 	keyClient, err := in.dial(cctx, t.Addr(), &ssh.ClientConfig{
-		User:            user,
-		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
-		HostKeyCallback: hkCBValidate,
-		Timeout:         10 * time.Second,
+		User:              user,
+		Auth:              []ssh.AuthMethod{ssh.PublicKeys(signer)},
+		HostKeyCallback:   hkValidate.callback,
+		HostKeyAlgorithms: hkValidate.algorithms,
+		Timeout:           10 * time.Second,
 	})
 	if err != nil {
 		return fmt.Errorf("validation: key-auth failed: %w", err)
@@ -206,17 +209,18 @@ func (en *enumerator) Enumerate(ctx context.Context, t Target, key LocalKey) ([]
 	if err != nil {
 		return nil, err
 	}
-	hkCB, err := tofuHostKeyCallback()
+	hk, err := tofuHostKeyConfig(t.Addr())
 	if err != nil {
 		return nil, err
 	}
 	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	client, err := en.dial(cctx, t.Addr(), &ssh.ClientConfig{
-		User:            user,
-		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
-		HostKeyCallback: hkCB,
-		Timeout:         8 * time.Second,
+		User:              user,
+		Auth:              []ssh.AuthMethod{ssh.PublicKeys(signer)},
+		HostKeyCallback:   hk.callback,
+		HostKeyAlgorithms: hk.algorithms,
+		Timeout:           8 * time.Second,
 	})
 	if err != nil {
 		return nil, err
@@ -309,7 +313,7 @@ func parseEtcPasswd(s string) string {
 // string from x/crypto/ssh and wrap it with a sentinel so callers
 // (CLI + TUI) can show "wrong password?" instead of the raw error.
 //
-// Host-key mismatch is a special case: tofuHostKeyCallback already
+// Host-key mismatch is a special case: tofuCallback already
 // returns ErrHostKeyMismatch unwrapped, and ssh.Dial threads it
 // through as the connection error. We DON'T re-wrap here because
 // that produced the double-printed "sshsetup: host key mismatch:
@@ -442,49 +446,166 @@ func dialFilteredTCP(ctx context.Context, addr string, timeout time.Duration) (n
 	return nil, lastErr
 }
 
-// tofuHostKeyCallback returns a HostKeyCallback that:
-//   - reads ~/.ssh/known_hosts on every call,
-//   - on a missing entry: appends the new host key and ACCEPTS the
-//     connection (TOFU — same behavior as the openssh client with
-//     StrictHostKeyChecking=accept-new),
-//   - on a mismatched entry: returns ErrHostKeyMismatch unwrapped, so
-//     ssh.NewClientConn surfaces it as a real failure.
-func tofuHostKeyCallback() (ssh.HostKeyCallback, error) {
+// hostKeyConfig is the host-key half of an ssh.ClientConfig: the TOFU
+// callback plus the HostKeyAlgorithms preference that goes with it.
+// The two must travel together — see hostKeyAlgorithms for why the
+// callback alone produced false "possible MITM" reports.
+type hostKeyConfig struct {
+	callback   ssh.HostKeyCallback
+	algorithms []string
+}
+
+// tofuHostKeyConfig loads ~/.ssh/known_hosts and returns the host-key
+// policy for dialing addr ("host:port", exactly as passed to the dial):
+//   - callback: accept a recorded key, TOFU-record an unknown host
+//     (same as openssh's StrictHostKeyChecking=accept-new), refuse a
+//     changed key with ErrHostKeyMismatch — see tofuCallback.
+//   - algorithms: the key types already recorded for addr first, so
+//     the server presents a key the callback can actually verify.
+//
+// known_hosts is read once, here — build a fresh config per dial.
+func tofuHostKeyConfig(addr string) (hostKeyConfig, error) {
+	khPath, knownCB, err := loadKnownHosts()
+	if err != nil {
+		return hostKeyConfig{}, err
+	}
+	return hostKeyConfig{
+		callback:   tofuCallback(khPath, knownCB),
+		algorithms: hostKeyAlgorithms(recordedHostKeyTypes(knownCB, addr)),
+	}, nil
+}
+
+// loadKnownHosts returns ~/.ssh/known_hosts' path and a knownhosts
+// callback over its current contents. On a fresh ~/.ssh it creates an
+// empty known_hosts first so knownhosts.New doesn't fail.
+func loadKnownHosts() (string, ssh.HostKeyCallback, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	sshDir := filepath.Join(home, ".ssh")
 	if err := os.MkdirAll(sshDir, 0o700); err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	khPath := filepath.Join(sshDir, "known_hosts")
 	if !fileExists(khPath) {
-		// Create an empty known_hosts so knownhosts.New doesn't
-		// fail on a fresh ~/.ssh. The first call appends to it.
 		if err := os.WriteFile(khPath, nil, 0o644); err != nil {
-			return nil, err
+			return "", nil, err
 		}
 	}
 	knownCB, err := knownhosts.New(khPath)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
+	return khPath, knownCB, nil
+}
+
+// tofuCallback wraps a knownhosts callback with trust-on-first-use.
+// Errors are returned unwrapped so ssh.NewClientConn surfaces them as
+// the connection failure:
+//   - no entry for the host: append the presented key and ACCEPT;
+//   - an entry of the SAME key type with different material: refuse
+//     with ErrHostKeyMismatch (a changed key — never auto-remediate);
+//   - entries exist, but none of the presented key's type: refuse with
+//     ErrHostKeyTypeNotRecorded. Nothing we pinned was contradicted,
+//     so this must not be reported as a possible MITM — but silently
+//     TOFU-adding a second key for an already-pinned host isn't safe
+//     either. hostKeyAlgorithms makes this case rare: it only happens
+//     when the server offers none of the recorded types.
+func tofuCallback(khPath string, knownCB ssh.HostKeyCallback) ssh.HostKeyCallback {
 	return func(hostname string, remote net.Addr, key ssh.PublicKey) error {
 		err := knownCB(hostname, remote, key)
 		if err == nil {
 			return nil
 		}
-		// knownhosts returns a *KeyError; .Want == nil means "no
-		// entry for this host" (first contact, TOFU-add it) while
-		// non-empty .Want means a recorded entry exists but
-		// differs (a real mismatch — refuse).
 		var keErr *knownhosts.KeyError
-		if errors.As(err, &keErr) && len(keErr.Want) == 0 {
+		if !errors.As(err, &keErr) {
+			// Revoked key or an unparseable address — refuse.
+			return ErrHostKeyMismatch
+		}
+		if len(keErr.Want) == 0 {
 			return appendKnownHost(khPath, hostname, key)
 		}
-		return ErrHostKeyMismatch
-	}, nil
+		recorded := make([]string, 0, len(keErr.Want))
+		for _, w := range keErr.Want {
+			if w.Key.Type() == key.Type() {
+				return ErrHostKeyMismatch
+			}
+			recorded = append(recorded, w.Key.Type())
+		}
+		return fmt.Errorf("%w: %s presented a %s key, but ~/.ssh/known_hosts only has %s for it; connect once with plain `ssh` to verify and record the new key, then retry",
+			ErrHostKeyTypeNotRecorded, hostname, key.Type(), strings.Join(recorded, ", "))
+	}
+}
+
+// ErrHostKeyTypeNotRecorded is returned when known_hosts pins keys for
+// a host but none of the type the host presented. Distinct from
+// ErrHostKeyMismatch: nothing we recorded was contradicted.
+var ErrHostKeyTypeNotRecorded = errors.New("sshsetup: host key type not recorded")
+
+// hostKeyPreference is the order we ask servers for host-key types in
+// when known_hosts has nothing for the host: OpenSSH's order (ed25519
+// first), minus certificates (we verify plain known_hosts keys) and
+// DSA (removed from OpenSSH). x/crypto's own default puts ECDSA first
+// and ed25519 LAST — the opposite of the openssh client.
+var hostKeyPreference = []string{
+	ssh.KeyAlgoED25519,
+	ssh.KeyAlgoECDSA256, ssh.KeyAlgoECDSA384, ssh.KeyAlgoECDSA521,
+	ssh.KeyAlgoRSASHA512, ssh.KeyAlgoRSASHA256, ssh.KeyAlgoRSA,
+}
+
+// hostKeyAlgorithms orders hostKeyPreference so the algorithms for the
+// key types already recorded for this host come first — what openssh
+// itself does before a handshake (order_hostkeyalgs).
+//
+// Why it matters: Probe runs openssh with StrictHostKeyChecking=
+// accept-new, which records ONE key — the ed25519 one, openssh's
+// preference. With x/crypto's default order the install hop then
+// negotiated ECDSA against the same stock sshd, knownhosts saw a known
+// host presenting an unrecorded key type, and every first-time setup
+// failed with "host key mismatch / possible MITM". Asking for the
+// recorded types first makes the server present the key we pinned.
+func hostKeyAlgorithms(recordedTypes []string) []string {
+	recorded := map[string]bool{}
+	for _, typ := range recordedTypes {
+		if typ == ssh.KeyAlgoRSA {
+			// An ssh-rsa key verifies under any RSA signature algorithm.
+			recorded[ssh.KeyAlgoRSASHA512] = true
+			recorded[ssh.KeyAlgoRSASHA256] = true
+		}
+		recorded[typ] = true
+	}
+	first := make([]string, 0, len(hostKeyPreference))
+	var rest []string
+	for _, algo := range hostKeyPreference {
+		if recorded[algo] {
+			first = append(first, algo)
+		} else {
+			rest = append(rest, algo)
+		}
+	}
+	return append(first, rest...)
+}
+
+// recordedHostKeyTypes returns the key types known_hosts holds for addr,
+// with host patterns, [host]:port and hashed entries all resolved by
+// knownhosts itself. It asks the callback about a placeholder key no
+// real host has; the resulting KeyError lists every recorded key for
+// the address in Want. Nil when nothing is recorded.
+func recordedHostKeyTypes(knownCB ssh.HostKeyCallback, addr string) []string {
+	placeholder, err := ssh.NewPublicKey(ed25519.PublicKey(make([]byte, ed25519.PublicKeySize)))
+	if err != nil {
+		return nil
+	}
+	var keErr *knownhosts.KeyError
+	if !errors.As(knownCB(addr, &net.TCPAddr{IP: net.IPv4zero}, placeholder), &keErr) {
+		return nil
+	}
+	types := make([]string, 0, len(keErr.Want))
+	for _, w := range keErr.Want {
+		types = append(types, w.Key.Type())
+	}
+	return types
 }
 
 // appendKnownHost writes a single `<hostname> <key-type> <base64>`

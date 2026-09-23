@@ -141,32 +141,11 @@ func (defaultProber) Probe(ctx context.Context, t Target) ProbeResult {
 	cctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
 
-	user := t.User
-	host := t.Host
-	target := host
-	if user != "" {
-		target = user + "@" + host
-	}
 	port := t.Port
 	if port == 0 {
 		port = 22
 	}
-
-	args := []string{
-		"-o", "BatchMode=yes",
-		"-o", "ConnectTimeout=3",
-		"-o", "StrictHostKeyChecking=accept-new",
-		// IdentitiesOnly=yes makes ssh ignore ssh-agent identities
-		// and use only the explicit IdentityFile entries (default
-		// ~/.ssh/id_ed25519, etc.). Without it, an agent with
-		// MaxAuthTries-worth of irrelevant keys can exhaust auth
-		// before the user's actual key is offered — which surfaces
-		// as ProbeAuthFailed even though the right key is on disk.
-		"-o", "IdentitiesOnly=yes",
-		"-p", fmt.Sprintf("%d", port),
-		target, "exit",
-	}
-	cmd := exec.CommandContext(cctx, "ssh", args...)
+	cmd := exec.CommandContext(cctx, "ssh", probeSSHArgs(t)...)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		return ProbeOK
@@ -181,6 +160,37 @@ func (defaultProber) Probe(ctx context.Context, t Target) ProbeResult {
 		return ProbeTimeout
 	}
 	return ProbeUnknown
+}
+
+// probeSSHArgs builds the probe's `ssh` argv (minus "ssh"). The probe
+// answers "will `ssh`/`mosh` to this host work without a password?",
+// so it must authenticate exactly the way the real attach does — with
+// the user's ssh_config and ssh-agent identities.
+//
+// It used to pass IdentitiesOnly=yes (to dodge MaxAuthTries exhaustion
+// by an agent full of unrelated keys). That hid every agent-only key —
+// 1Password, Secretive, a hardware token — so users whose attach works
+// fine were told "key not installed" and pushed into password setup.
+// The attach itself doesn't set IdentitiesOnly, so an agent that
+// exhausts MaxAuthTries breaks the attach too; the probe reporting it
+// is accurate, and a per-host `IdentitiesOnly yes` + IdentityFile in
+// ~/.ssh/config still applies to both.
+func probeSSHArgs(t Target) []string {
+	target := t.Host
+	if t.User != "" {
+		target = t.User + "@" + t.Host
+	}
+	port := t.Port
+	if port == 0 {
+		port = 22
+	}
+	return []string{
+		"-o", "BatchMode=yes",
+		"-o", "ConnectTimeout=3",
+		"-o", "StrictHostKeyChecking=accept-new",
+		"-p", fmt.Sprintf("%d", port),
+		target, "exit",
+	}
 }
 
 // classifyProbeStderr is the pure-function half of the probe. Lifted

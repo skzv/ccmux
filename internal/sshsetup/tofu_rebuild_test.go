@@ -40,10 +40,11 @@ func TestTOFU_FreshCallbackCatchesMismatchStaleMisses(t *testing.T) {
 	addr := &net.TCPAddr{IP: net.ParseIP("100.64.0.5"), Port: 22}
 
 	// Password hop: first contact TOFU-accepts keyA and appends it.
-	cb1, err := tofuHostKeyCallback()
+	hk1, err := tofuHostKeyConfig(host)
 	if err != nil {
 		t.Fatal(err)
 	}
+	cb1 := hk1.callback
 	if err := cb1(host, addr, keyA); err != nil {
 		t.Fatalf("first contact should TOFU-accept keyA: %v", err)
 	}
@@ -57,10 +58,11 @@ func TestTOFU_FreshCallbackCatchesMismatchStaleMisses(t *testing.T) {
 
 	// Validation hop with the FIX: a fresh callback re-reads the updated
 	// known_hosts and REJECTS the mismatched key.
-	cb2, err := tofuHostKeyCallback()
+	hk2, err := tofuHostKeyConfig(host)
 	if err != nil {
 		t.Fatal(err)
 	}
+	cb2 := hk2.callback
 	if err := cb2(host, addr, keyB); err == nil {
 		t.Error("fresh callback must reject a mismatched host key, got nil (would TOFU re-add)")
 	}
