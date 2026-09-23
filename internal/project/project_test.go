@@ -176,6 +176,53 @@ func TestDiscover_SkipsHiddenAndNonDirs(t *testing.T) {
 	}
 }
 
+// TestDiscover_FollowsDirectorySymlinks — DirEntry.IsDir is false for a
+// symlink, so a project symlinked into the root (checkout on another
+// volume, shared worktree) never showed up. Links resolving to a
+// directory are projects; links to files, dangling links and hidden
+// links are not.
+func TestDiscover_FollowsDirectorySymlinks(t *testing.T) {
+	root := t.TempDir()
+	elsewhere := t.TempDir()
+	target := filepath.Join(elsewhere, "real-project")
+	mkdir(t, filepath.Join(target, ".git"))
+	writeFile(t, filepath.Join(elsewhere, "file.txt"), "not a dir")
+	mkdir(t, filepath.Join(root, "plain"))
+	links := map[string]string{
+		"linked":     target,
+		"file-link":  filepath.Join(elsewhere, "file.txt"),
+		"dangling":   filepath.Join(elsewhere, "gone"),
+		".hidden-ln": target,
+	}
+	for name, dest := range links {
+		if err := os.Symlink(dest, filepath.Join(root, name)); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+	}
+
+	got, err := Discover(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]Project{}
+	for _, p := range got {
+		byName[p.Name] = p
+	}
+	if len(byName) != 2 {
+		t.Errorf("Discover returned %d projects %v, want plain + linked", len(got), got)
+	}
+	linked, ok := byName["linked"]
+	if !ok {
+		t.Fatalf("symlinked project missing from %v", got)
+	}
+	if want := filepath.Join(root, "linked"); linked.Path != want {
+		t.Errorf("linked.Path = %q, want the path under the root %q", linked.Path, want)
+	}
+	if !linked.HasGit {
+		t.Error("linked project's markers weren't read through the link")
+	}
+}
+
 func TestDiscover_MissingRootReturnsNil(t *testing.T) {
 	got, err := Discover(filepath.Join(t.TempDir(), "does-not-exist"))
 	if err != nil {

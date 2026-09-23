@@ -1,6 +1,8 @@
 package scaffold
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -86,6 +88,114 @@ func TestPrepareDir_Idempotent(t *testing.T) {
 	}
 	if body, _ := os.ReadFile(marker); string(body) != "mine" {
 		t.Errorf("PrepareDir disturbed an existing file: %q", body)
+	}
+}
+
+// TestPrepareDir_KeepsExistingProjectsAgent — `ccmux new <existing>
+// --agent X` rewrote the project's .ccmux/agent sidecar, silently and
+// permanently switching the project's agent. An existing sidecar is
+// left alone; a directory with none yet gets the chosen agent.
+func TestPrepareDir_KeepsExistingProjectsAgent(t *testing.T) {
+	hermeticHome(t)
+	target := filepath.Join(t.TempDir(), "p")
+	if err := project.SetAgent(target, agent.IDCodex); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PrepareDir(Options{Name: "p", Dir: target, Agent: agent.IDClaude}); err != nil {
+		t.Fatal(err)
+	}
+	if got := project.ReadAgent(target); got != agent.IDCodex {
+		t.Errorf("existing codex project switched to %q", got)
+	}
+
+	// Existing directory, no recorded agent yet: the choice is recorded.
+	bare := filepath.Join(t.TempDir(), "existing-repo")
+	if err := os.MkdirAll(bare, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PrepareDir(Options{Name: "existing-repo", Dir: bare, Agent: agent.IDCodex}); err != nil {
+		t.Fatal(err)
+	}
+	if got := project.ReadAgent(bare); got != agent.IDCodex {
+		t.Errorf("unrecorded dir: ReadAgent = %q, want codex", got)
+	}
+}
+
+// fakeTmux swaps StartSession's tmux calls for the duration of a test.
+func fakeTmux(t *testing.T, newErr error) *[]string {
+	t.Helper()
+	var tagged []string
+	origNew, origTag := newSession, setSessionAgent
+	t.Cleanup(func() { newSession, setSessionAgent = origNew, origTag })
+	newSession = func(context.Context, string, string, string) error { return newErr }
+	setSessionAgent = func(_ context.Context, session, id string) error {
+		tagged = append(tagged, session+"="+id)
+		return nil
+	}
+	return &tagged
+}
+
+// TestStartSession_FailedStartLeavesAgentUnchanged — a sidecar recorded
+// for this start is rolled back when the tmux session can't be created,
+// so a failed `ccmux new` doesn't re-assign the project's agent.
+func TestStartSession_FailedStartLeavesAgentUnchanged(t *testing.T) {
+	hermeticHome(t)
+	fakeTmux(t, errors.New("tmux: server exited"))
+	dir := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := StartSession(context.Background(), Options{Name: "repo", Dir: dir, Agent: agent.IDCodex}); err == nil {
+		t.Fatal("StartSession succeeded with a failing tmux")
+	}
+	if _, err := os.Stat(project.AgentSidecarPath(dir)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("sidecar left behind after a failed start (err=%v); ReadAgent = %q", err, project.ReadAgent(dir))
+	}
+
+	// A pre-existing choice survives a failed start untouched.
+	if err := project.SetAgent(dir, agent.IDKimi); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := StartSession(context.Background(), Options{Name: "repo", Dir: dir, Agent: agent.IDCodex}); err == nil {
+		t.Fatal("StartSession succeeded with a failing tmux")
+	}
+	if got := project.ReadAgent(dir); got != agent.IDKimi {
+		t.Errorf("ReadAgent after failed start = %q, want kimi", got)
+	}
+}
+
+// TestStartSession_TagsSessionWhenAgentDiffersFromProject — the project
+// keeps its recorded agent, so a session started with a different one
+// is pinned to what it runs (tmux @ccmux_agent) for the daemon's
+// classifier. A session running the project's own agent isn't tagged.
+func TestStartSession_TagsSessionWhenAgentDiffersFromProject(t *testing.T) {
+	hermeticHome(t)
+	tagged := fakeTmux(t, nil)
+	dir := filepath.Join(t.TempDir(), "proj")
+	if err := project.SetAgent(dir, agent.IDCodex); err != nil {
+		t.Fatal(err)
+	}
+	session, err := StartSession(context.Background(), Options{Name: "proj", Dir: dir, Agent: agent.IDClaude})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := project.ReadAgent(dir); got != agent.IDCodex {
+		t.Errorf("project agent switched to %q", got)
+	}
+	if want := []string{session + "=claude"}; len(*tagged) != 1 || (*tagged)[0] != want[0] {
+		t.Errorf("session tags = %v, want %v", *tagged, want)
+	}
+
+	*tagged = nil
+	fresh := filepath.Join(t.TempDir(), "fresh")
+	if _, err := StartSession(context.Background(), Options{Name: "fresh", Dir: fresh, Agent: agent.IDCodex}); err != nil {
+		t.Fatal(err)
+	}
+	if got := project.ReadAgent(fresh); got != agent.IDCodex {
+		t.Errorf("new project ReadAgent = %q, want codex", got)
+	}
+	if len(*tagged) != 0 {
+		t.Errorf("session running the project's own agent was tagged: %v", *tagged)
 	}
 }
 

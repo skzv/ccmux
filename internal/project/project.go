@@ -13,6 +13,7 @@ package project
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -77,10 +78,23 @@ func Discover(root string) ([]Project, error) {
 	}
 	out := make([]Project, 0, len(entries))
 	for _, e := range entries {
-		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+		if strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
 		p := filepath.Join(root, e.Name())
+		if !e.IsDir() {
+			// DirEntry describes a symlink itself, so IsDir is false
+			// even when it points at a directory — a project symlinked
+			// into the root (e.g. from an external drive or another
+			// checkout) was skipped. Follow links; keep only those that
+			// resolve to a directory.
+			if e.Type()&fs.ModeSymlink == 0 {
+				continue
+			}
+			if fi, err := os.Stat(p); err != nil || !fi.IsDir() {
+				continue
+			}
+		}
 		proj, ok := inspect(p)
 		if ok {
 			out = append(out, proj)
@@ -150,6 +164,13 @@ func ReadAgent(projectPath string) agent.ID {
 		return id
 	}
 	return agent.IDClaude
+}
+
+// AgentSidecarPath is the file SetAgent writes and ReadAgent reads for
+// projectPath. Exposed so a caller can tell "no agent recorded yet"
+// apart from "Claude recorded" — ReadAgent answers Claude for both.
+func AgentSidecarPath(projectPath string) string {
+	return filepath.Join(projectPath, agentSidecarRelPath)
 }
 
 // SetAgent writes the project's agent choice to its sidecar. Creates
