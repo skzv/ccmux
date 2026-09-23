@@ -48,6 +48,7 @@ import (
 	"github.com/skzv/ccmux/internal/gemini"
 	"github.com/skzv/ccmux/internal/jsonl"
 	"github.com/skzv/ccmux/internal/muse"
+	"github.com/skzv/ccmux/internal/termsafe"
 )
 
 // Conversation is one past agent session as found on disk. Stable
@@ -244,7 +245,7 @@ func RecentMessages(c Conversation, limit int) ([]Message, error) {
 			return nil, err
 		}
 		for _, m := range s.Messages {
-			all = append(all, Message{Role: m.Role, Content: m.Content, Timestamp: m.Time})
+			all = append(all, Message{Role: m.Role, Content: termsafe.String(m.Content), Timestamp: m.Time})
 		}
 	case agent.IDClaude:
 		for _, path := range paths {
@@ -507,7 +508,9 @@ func visibleTurn(role, body string) (string, bool) {
 	if role != "user" && role != "assistant" {
 		return "", false
 	}
-	body = strings.TrimSpace(body)
+	// Transcript text is untrusted: an escape sequence in a prompt or a
+	// model reply must not reach the terminal that renders it.
+	body = strings.TrimSpace(termsafe.String(body))
 	if role == "user" {
 		body = cleanPromptText(body)
 	}
@@ -1924,8 +1927,10 @@ func compactTranscriptPaths(primary string, paths []string) []string {
 
 // cleanPromptText strips synthetic CLI noise from a raw user-message
 // body so the conversation preview reflects what the user actually
-// typed, not the wrappers each agent injects around it. Two passes:
+// typed, not the wrappers each agent injects around it:
 //
+//   - Strip terminal control sequences (termsafe) — transcript text is
+//     untrusted and ends up on the user's terminal.
 //   - Drop "pure-noise" blocks entirely (open tag + content + close).
 //     environment_context / user_instructions are state dumps the CLI
 //     prepends to every session; surfacing them as a "first prompt"
@@ -1948,7 +1953,7 @@ func compactTranscriptPaths(primary string, paths []string) []string {
 // treat that as "skip this message" and continue scanning the
 // transcript for the next eligible user turn.
 func cleanPromptText(s string) string {
-	s = strings.TrimSpace(s)
+	s = strings.TrimSpace(termsafe.String(s))
 	if s == "" {
 		return ""
 	}

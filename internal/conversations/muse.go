@@ -5,6 +5,7 @@ import (
 
 	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/muse"
+	"github.com/skzv/ccmux/internal/termsafe"
 )
 
 func ListMuse(home string) ([]Conversation, error) {
@@ -21,7 +22,7 @@ func ListMuse(home string) ([]Conversation, error) {
 				break
 			}
 		}
-		preview = strings.Join(strings.Fields(preview), " ")
+		preview = strings.Join(strings.Fields(termsafe.String(preview)), " ")
 		runes := []rune(preview)
 		if len(runes) > 100 {
 			preview = string(runes[:100]) + "…"
