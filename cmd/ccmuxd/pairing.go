@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"errors"
-	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -54,8 +56,12 @@ func (s *server) handlePairToken(w http.ResponseWriter, r *http.Request) {
 	if sshUser == "" {
 		sshUser, _ = os.LookupEnv("USER")
 	}
-	pairURL := fmt.Sprintf("ccmux://pair?host=%s&user=%s&port=%d&token=%s",
-		pairHost, sshUser, s.cfg.Daemon.TailnetPort, token)
+	q := url.Values{}
+	q.Set("host", pairHost)
+	q.Set("user", sshUser)
+	q.Set("port", strconv.Itoa(s.cfg.Daemon.TailnetPort))
+	q.Set("token", token)
+	pairURL := "ccmux://pair?" + q.Encode()
 	writeJSON(w, daemon.PairTokenResponse{Token: token, URL: pairURL})
 }
 
@@ -114,6 +120,18 @@ func (s *server) handleRegisterDevice(w http.ResponseWriter, r *http.Request) {
 	var req daemon.RegisterDeviceRequest
 	if err := decodeJSONBody(w, r, &req); err != nil {
 		http.Error(w, "decode: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	// Only a key that completed pairing may bind a push token. Without
+	// this any tailnet peer could register unlimited made-up keys and
+	// make every notification fan out to (and queue behind) its junk.
+	paired, err := authorizedKeyPresent(req.PublicKey)
+	if err != nil {
+		http.Error(w, "read authorized_keys: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !paired {
+		http.Error(w, "public key is not paired with this host", http.StatusForbidden)
 		return
 	}
 	if err := s.devices.RegisterWithProvider(req.PublicKey, req.Token, req.Provider, req.Env); err != nil {
@@ -280,22 +298,74 @@ func validatePairKey(s string) (string, error) {
 	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(pub))), nil
 }
 
-func appendAuthorizedKey(pubKey string) error {
+func authorizedKeysPath() (string, error) {
 	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".ssh", "authorized_keys"), nil
+}
+
+// authorizedKeyPresent reports whether pubKey (any authorized_keys-style
+// encoding; comments and options are ignored) is already a line in
+// ~/.ssh/authorized_keys. A missing file means "not paired", not an
+// error.
+func authorizedKeyPresent(pubKey string) (bool, error) {
+	want, _, _, _, err := ssh.ParseAuthorizedKey([]byte(pubKey))
+	if err != nil {
+		return false, nil
+	}
+	path, err := authorizedKeysPath()
+	if err != nil {
+		return false, err
+	}
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	for len(data) > 0 {
+		var got ssh.PublicKey
+		got, _, _, data, err = ssh.ParseAuthorizedKey(data)
+		if err != nil {
+			// ParseAuthorizedKey skips unparseable lines itself and only
+			// errors once nothing parseable remains.
+			return false, nil
+		}
+		if bytes.Equal(got.Marshal(), want.Marshal()) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// appendAuthorizedKey adds pubKey to ~/.ssh/authorized_keys unless the
+// same key is already there, so re-pairing a phone doesn't pile up
+// duplicate lines.
+func appendAuthorizedKey(pubKey string) error {
+	present, err := authorizedKeyPresent(pubKey)
 	if err != nil {
 		return err
 	}
-	sshDir := filepath.Join(home, ".ssh")
-	if err := os.MkdirAll(sshDir, 0o700); err != nil {
+	if present {
+		return nil
+	}
+	authKeys, err := authorizedKeysPath()
+	if err != nil {
 		return err
 	}
-	authKeys := filepath.Join(sshDir, "authorized_keys")
+	if err := os.MkdirAll(filepath.Dir(authKeys), 0o700); err != nil {
+		return err
+	}
 	f, err := os.OpenFile(authKeys, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	key := strings.TrimSpace(pubKey) + "\n"
-	_, err = f.WriteString(key)
-	return err
+	if _, err := f.WriteString(strings.TrimSpace(pubKey) + "\n"); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
 }

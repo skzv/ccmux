@@ -322,11 +322,14 @@ func SendText(ctx context.Context, name, text string) error {
 //
 // detachOthers=true appends -d ("exclusive" mode — kick other clients);
 // false omits it ("mirror" mode — other clients stay attached).
+//
+// The target is exact-matched: a bare `-t c-foo` falls back to prefix
+// matching, so attaching to a just-killed c-foo would land in c-foo-app.
 func AttachArgs(name string, detachOthers bool) []string {
 	if detachOthers {
-		return []string{"attach-session", "-d", "-t", name}
+		return []string{"attach-session", "-d", "-t", exactSession(name)}
 	}
-	return []string{"attach-session", "-t", name}
+	return []string{"attach-session", "-t", exactSession(name)}
 }
 
 // AttachCmd builds the *exec.Cmd that, when passed to tea.ExecProcess,
@@ -342,7 +345,7 @@ func AttachCmd(name string, detachOthers bool) *exec.Cmd {
 // ccmux runs inside a tmux session itself, attach-session is refused
 // — switch-client is the correct verb.
 func SwitchClientCmd(name string) *exec.Cmd {
-	return exec.Command("tmux", "switch-client", "-t", name)
+	return exec.Command("tmux", "switch-client", "-t", exactSession(name))
 }
 
 // Attach replaces the current process with `tmux attach -t name`.

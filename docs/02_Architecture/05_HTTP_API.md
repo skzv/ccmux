@@ -55,6 +55,13 @@ notes / conversations / usage.
 > Secure this with **Tailscale ACLs**, not app-level auth. Treat anything
 > that can route to the daemon's tailnet IP as fully trusted.
 
+**Browsers are refused.** The tailnet listener returns `403` for any request
+carrying an `Origin` or `Sec-Fetch-*` header. Native clients (CLI/TUI,
+`ccmux-mcp`, the iOS and Android apps) send neither; browsers always do. This
+keeps a web page open on a tailnet device from driving the API (e.g. a
+cross-origin `POST …/send-keys`, which needs no CORS preflight) or reading it
+via DNS rebinding. Don't build a browser client against this API.
+
 Two endpoints have per-request validation, and they exist **only to
 bootstrap device trust + push** — not to protect the API:
 
@@ -172,7 +179,7 @@ Enter). Passed through to `tmux send-keys`.
 #### `GET /v1/sessions/{name}/preview`
 Last N lines of the active pane as plain text (ANSI stripped). A lightweight
 "peek" without opening the attach socket.
-- **Query:** `?lines=N` (`1..200`, default `24`).
+- **Query:** `?lines=N` (default `24`; values above `500` are clamped to `500`).
 - **Response `200`:** `PreviewResponse`. `404` if the session doesn't exist.
 
 #### `GET /v1/sessions/{name}/attach` — WebSocket
@@ -187,8 +194,7 @@ client gives a full terminal **without** ssh/mosh.
 - Initial PTY size is `80x24` until the first resize frame.
 - The server pings every 25s with a 10s deadline; answer pongs or expect a
   teardown.
-- **`InsecureSkipVerify` is set** (no `Origin` check) — again, the tailnet is
-  the trust boundary and native clients send no `Origin`.
+- A request with an `Origin` header is refused (native clients send none).
 - Closing the socket only **detaches**; the tmux session keeps running.
 
 > For an interactive terminal, prefer this over polling `/preview`.
@@ -222,7 +228,8 @@ daemon's home dir, most-recent first. Headless/SDK runs excluded.
 
 #### `GET /v1/usage`
 Per-agent token + cost activity over a rolling window.
-- **Query:** `?window=<Go duration>` e.g. `2h`, `24h`, `30m` (default `5h`).
+- **Query:** `?window=<Go duration>` e.g. `2h`, `24h`, `30m` (default `5h`,
+  clamped to `744h` / 31 days).
 - **Response `200`:** `AgentUsage`. Best-effort per agent; `estimated_cost`
   is USD at published API rates.
 
@@ -344,7 +351,8 @@ Redeem a pairing token: install the device's SSH public key into
 Register/refresh a push token on an already-paired host (after the user
 grants notifications, or the OS rotates the token).
 - **Request:** `RegisterDeviceRequest`.
-- **Response:** `204`.
+- **Response:** `204`. `403` if `public_key` isn't in the host's
+  `~/.ssh/authorized_keys` (i.e. the device never paired).
 - The device is identified by the SSH `public_key` it paired with (stored
   only as a SHA-256 hash). `provider` ∈ `apns` (default) | `fcm`; APNs
   requires `env` ∈ `development | production`, FCM requires empty `env`.
@@ -532,7 +540,7 @@ type RegisterDeviceRequest struct {
 The daemon enforces these (and `400`s on violation); validate before sending
 for a better UX:
 
-- **tmux session names** must not contain `/`, `\`, or `:` (a tmux
+- **tmux session names** must not contain `/`, `\`, `:`, or `.` (a tmux
   target-spec injection guard).
 - **project names** for `POST /v1/projects` must be a single non-hidden path
   segment — no `/`, `\`, no leading `.`.

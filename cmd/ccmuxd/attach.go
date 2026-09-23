@@ -39,11 +39,11 @@ const attachPingDeadline = 10 * time.Second
 // Killing the spawned `tmux attach` process only detaches that client;
 // the tmux session itself keeps running.
 func (s *server) handleAttach(w http.ResponseWriter, r *http.Request, name string) {
-	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		// The tailnet is the trust boundary, as for the rest of the
-		// API — and a native client sends no Origin header anyway.
-		InsecureSkipVerify: true,
-	})
+	// Default AcceptOptions: a request with no Origin (every native
+	// client) is accepted, and a browser's cross-origin upgrade is
+	// refused. The tailnet listener also drops browser requests
+	// outright (rejectBrowserRequests); this is the second layer.
+	conn, err := websocket.Accept(w, r, nil)
 	if err != nil {
 		return // Accept already wrote the error response
 	}

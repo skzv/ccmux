@@ -8,6 +8,7 @@ package remoteattach
 
 import (
 	"os/exec"
+	"strings"
 )
 
 // defaultPort reports whether a configured SSH port means "just use
@@ -102,10 +103,26 @@ func Mosh(target, remoteCmd string, port int) *exec.Cmd {
 // explicit-host attach builds tmux.AttachArgs and wants to run that).
 // Picks ssh or mosh based on `useMosh`, and the matching port syntax
 // for whichever it picked.
+//
+// mosh execs the argv after `--` directly, so it passes through as-is.
+// ssh does not: it joins everything after the target with spaces and
+// hands that one string to the remote login shell, which re-parses it.
+// So for ssh each element is shell-quoted first — otherwise a session
+// name with a space splits in two and `$(…)` in one runs remotely —
+// and -t is added so the remote `tmux attach` gets a terminal.
 func RunArgv(target string, useMosh bool, port int, argv []string) *exec.Cmd {
-	bin, flags := "ssh", sshPortFlags(port)
 	if useMosh {
-		bin, flags = "mosh", moshSSHFlags(port)
+		return exec.Command("mosh", append(append(moshSSHFlags(port), target, "--"), argv...)...)
 	}
-	return exec.Command(bin, append(append(flags, target, "--"), argv...)...)
+	quoted := make([]string, len(argv))
+	for i, a := range argv {
+		quoted[i] = shellQuote(a)
+	}
+	args := append(append([]string{"-t"}, sshPortFlags(port)...), target, "--", strings.Join(quoted, " "))
+	return exec.Command("ssh", args...)
+}
+
+// shellQuote single-quotes s for a POSIX shell.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
