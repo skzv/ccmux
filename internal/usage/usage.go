@@ -1,8 +1,9 @@
 // Package usage is the per-agent token-usage walker layer:
 //
-//   - Claude: delegates to internal/claudeusage.Walk (the rich walker;
-//     the dashboard's main Claude panel also uses that package
-//     directly for its 5h-window quota bar + per-project drill-down).
+//   - Claude: delegates to internal/claudeusage.WalkRolling (the rich
+//     walker; the dashboard's main Claude panel uses that package's
+//     Walk directly for its 5h session-block quota bar + per-project
+//     drill-down).
 //   - Codex: internal/codexusage. Antigravity, Gemini, Muse: their own
 //     walkers below. The remaining agents go through the generic
 //     JSONL walker in internal/agentusage (WalkOthers).
@@ -15,7 +16,7 @@
 //
 // Why a separate type from claudeusage.Aggregate: Claude's
 // transcript shape carries cache-create/cache-read tokens and
-// rolling-window quota semantics that don't map to Codex/Antigravity's
+// session-block quota semantics that don't map to Codex/Antigravity's
 // pricing model. AgentSummary keeps only the fields that mean the
 // same thing across every agent: prompts, input/output tokens, and
 // an API-rates cost estimate.
@@ -119,12 +120,12 @@ func WalkOthers(window time.Duration) []NamedSummary {
 }
 
 // WalkClaude returns the cross-agent summary for Claude Code by
-// delegating to the existing claudeusage walker. This is the only
-// path that returns real data today; the rich Claude panel in the
-// dashboard uses claudeusage.Aggregate directly, this function is
-// here so the "all three agents" rendering loop has a uniform API.
+// delegating to the claudeusage walker. Like every other agent's
+// summary it covers the plain rolling window [now-window, now]
+// (claudeusage.WalkRolling); the rich Claude panel in the dashboard
+// reads the subscription session block through claudeusage.Walk.
 func WalkClaude(window time.Duration) (AgentSummary, error) {
-	agg, err := claudeusage.Walk(window)
+	agg, err := claudeusage.WalkRolling(window)
 	if err != nil || agg == nil {
 		return AgentSummary{}, err
 	}

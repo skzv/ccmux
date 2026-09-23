@@ -1,8 +1,8 @@
 // Package claudeusage aggregates token usage and message counts from
 // Claude Code's transcript JSONL files under ~/.claude/projects/. No API
 // calls, no auth — pure local parse. We use this to power the dashboard
-// usage panel, per-project breakdowns, and the subscription "5-hour
-// rolling window" indicator (Pro / Max plan reset model).
+// usage panel, per-project breakdowns, and the subscription 5-hour
+// session-block indicator (Pro / Max plan reset model; see Walk).
 package claudeusage
 
 import (
@@ -47,23 +47,32 @@ func (t Tokens) Total() int {
 	return t.Input + t.Output + t.CacheCreation + t.CacheRead
 }
 
-// Aggregate is one rolled-up result from Walk().
+// Aggregate is one rolled-up result from Walk() (the active session
+// block) or WalkRolling() (a plain rolling window). Every count and
+// token total covers the same span: [WindowStart, WindowEnd].
 type Aggregate struct {
-	Window      time.Duration // size of the window this aggregate covers
-	WindowStart time.Time     // earliest message timestamp considered
-	WindowEnd   time.Time     // latest message timestamp (or "now")
-	Messages    int           // total assistant API responses with usage data
-	UserPrompts int           // distinct user-initiated turns (filters out
-	// tool-result follow-ups, which JSONL also
-	// records with type="user"). This is what
-	// Anthropic's per-window quota counts toward.
-	Total     Tokens
-	ByModel   map[string]*Tokens
-	ByProject map[string]*Tokens
+	Window time.Duration // block length (Walk) or window size (WalkRolling)
+	// WindowStart is where the counted span begins: the active block's
+	// hour-floored start for Walk (now, i.e. an empty span, when no
+	// block is active), now-window for WalkRolling.
+	WindowStart time.Time
+	WindowEnd   time.Time // "now" at walk time
+	Messages    int       // total assistant API responses with usage data
+	// UserPrompts counts prompts the human sent — tool-result
+	// follow-ups, harness-injected records (slash-command caveats and
+	// stdout, image notes, compact summaries, task notifications,
+	// interrupt markers) and subagent transcripts excluded. This is
+	// what Anthropic's per-block quota counts toward.
+	UserPrompts int
+	Total       Tokens
+	ByModel     map[string]*Tokens
+	ByProject   map[string]*Tokens
 	// FirstMessageInWindow is the timestamp of the earliest assistant
-	// message that still falls inside the window — used to compute the
-	// "next reset at" time for Pro/Max subscription windows.
+	// message inside the counted span.
 	FirstMessageInWindow time.Time
+	// BlockStart is the active session block's start (Walk only); zero
+	// from WalkRolling or when no block is active.
+	BlockStart time.Time
 }
 
 // ProjectTotal is one row in the per-project breakdown returned by
@@ -90,13 +99,17 @@ func (a *Aggregate) TopProjects(n int) []ProjectTotal {
 	return out
 }
 
-// ResetAt estimates when the next 5-hour subscription window opens. For
-// Pro/Max plans the window starts at the first message after the
-// previous window ended; we approximate by taking the oldest message
-// still in the window + the window duration.
+// ResetAt reports when the active session block ends and the quota
+// resets: BlockStart + window. Aggregates without a block (hand-built,
+// or from WalkRolling) fall back to the oldest message + window, a
+// rough estimate at best.
 //
-// Returns the zero time if no messages fall in the window.
+// Returns the zero time when there is no active block — the next
+// message starts a fresh one.
 func (a *Aggregate) ResetAt(window time.Duration) time.Time {
+	if !a.BlockStart.IsZero() {
+		return a.BlockStart.Add(window)
+	}
 	if a.FirstMessageInWindow.IsZero() {
 		return time.Time{}
 	}
@@ -217,33 +230,91 @@ func familyVersion(m, family string) float64 {
 	return 0
 }
 
-// Walk scans every .jsonl under ~/.claude/projects/ and returns a single
-// aggregate covering messages whose `timestamp` falls inside the requested
-// window (now - duration ≤ ts ≤ now). Walk is safe to call concurrently
-// with itself, but is not designed for high frequency — Bubble Tea
-// dashboards should poll it every 5-10 seconds at most.
-func Walk(window time.Duration) (*Aggregate, error) {
+// SessionBlock is the length of Anthropic's subscription usage block —
+// the "5-hour limit" on Pro/Max plans.
+const SessionBlock = 5 * time.Hour
+
+// Walk returns usage for the currently active session block of length
+// `block` (SessionBlock for Claude subscriptions). This is what the
+// dashboard's quota bar and "resets in" line read.
+//
+// Anthropic's limit is NOT a rolling [now-5h, now] window. A block
+// starts at the first message after the previous block ended and lasts
+// `block`; everything sent inside it counts against it. Blocks are
+// computed the way ccusage (`ccusage blocks`) computes them, so the two
+// readouts on the dashboard agree:
+//
+//   - assistant API responses are sorted by timestamp;
+//   - the first one opens a block whose start is floored to the UTC hour;
+//   - a response more than `block` after the current block's start
+//     opens the next block (again floored to the hour);
+//   - the last block is active while now < start+block and the most
+//     recent response is less than `block` old.
+//
+// Every Aggregate field — token totals, ByModel, ByProject, Messages and
+// UserPrompts — covers only the active block: responses from its first
+// response onward, and the user prompts those responses answered. When
+// no block is active (idle for a while, or the last block ran out) the
+// aggregate is empty and ResetAt is zero: the next message opens a new
+// block.
+//
+// Blocks are chained from activity in the last 2×block. Under
+// continuous use longer than that, the chain's phase can differ from
+// one computed over the full history (ccusage reads everything); a
+// ≥block idle gap anywhere in the lookback, which any break of that
+// length provides, makes the result exact.
+//
+// Walk is safe to call concurrently with itself, but is not designed
+// for high frequency — Bubble Tea dashboards should poll it every 5-10
+// seconds at most.
+func Walk(block time.Duration) (*Aggregate, error) {
+	return walk(time.Now(), block, true)
+}
+
+// WalkRolling aggregates every message whose timestamp falls inside the
+// plain rolling window [now-window, now] — no session-block semantics,
+// so BlockStart stays zero. Used by the cross-agent usage summary
+// (internal/usage), which reports every agent over the same window.
+func WalkRolling(window time.Duration) (*Aggregate, error) {
+	return walk(time.Now(), window, false)
+}
+
+// fileEvents is one transcript's scan result tagged with its project.
+type fileEvents struct {
+	proj   string
+	events []usageEvent
+}
+
+func walk(now time.Time, d time.Duration, block bool) (*Aggregate, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, err
 	}
 	root := filepath.Join(home, ".claude", "projects")
+	agg := &Aggregate{
+		Window:      d,
+		WindowStart: now.Add(-d),
+		WindowEnd:   now,
+		ByModel:     map[string]*Tokens{},
+		ByProject:   map[string]*Tokens{},
+	}
 	if _, err := os.Stat(root); err != nil {
 		if os.IsNotExist(err) {
-			return &Aggregate{Window: window, ByModel: map[string]*Tokens{}, ByProject: map[string]*Tokens{}}, nil
+			if block {
+				agg.WindowStart = now
+			}
+			return agg, nil
 		}
 		return nil, err
 	}
 
-	now := time.Now()
-	cutoff := now.Add(-window)
-	agg := &Aggregate{
-		Window:      window,
-		WindowEnd:   now,
-		ByModel:     map[string]*Tokens{},
-		ByProject:   map[string]*Tokens{},
-		WindowStart: cutoff,
+	// A block can have started up to one block-length ago, and finding
+	// where it started needs the block before it too.
+	lookback := d
+	if block {
+		lookback = 2 * d
 	}
+	cutoff := now.Add(-lookback)
 
 	type fileTask struct {
 		path string
@@ -277,7 +348,7 @@ func Walk(window time.Duration) (*Aggregate, error) {
 			}
 			projCache[encoded] = proj
 		}
-		// Skip files whose mtime is older than the window — saves IO
+		// Skip files whose mtime is older than the lookback — saves IO
 		// when the user has a huge transcript history.
 		if info, _ := d.Info(); info != nil && info.ModTime().Before(cutoff) {
 			return nil
@@ -288,68 +359,158 @@ func Walk(window time.Duration) (*Aggregate, error) {
 		return nil, err
 	}
 
-	// Process files in parallel; merge under a mutex.
-	var mu sync.Mutex
+	// Scan files in parallel; results are merged once all are in,
+	// because the block boundaries depend on every file's timestamps.
+	results := make([]fileEvents, len(tasks))
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, 8)
-	for _, t := range tasks {
+	for i, t := range tasks {
 		wg.Add(1)
 		sem <- struct{}{}
-		go func(task fileTask) {
+		go func(i int, task fileTask) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			r := scanFile(task.path, cutoff, now)
-			if r.assistantCount == 0 && r.userPrompts == 0 {
-				return
-			}
-			mu.Lock()
-			defer mu.Unlock()
-			agg.Total.Add(r.total)
-			agg.Messages += r.assistantCount
-			agg.UserPrompts += r.userPrompts
-			proj := agg.ByProject[task.proj]
-			if proj == nil {
-				proj = &Tokens{}
-				agg.ByProject[task.proj] = proj
-			}
-			proj.Add(r.total)
-			for model, t := range r.byModel {
-				mt := agg.ByModel[model]
-				if mt == nil {
-					mt = &Tokens{}
-					agg.ByModel[model] = mt
-				}
-				mt.Add(*t)
-			}
-			if agg.FirstMessageInWindow.IsZero() || (!r.firstMsg.IsZero() && r.firstMsg.Before(agg.FirstMessageInWindow)) {
-				agg.FirstMessageInWindow = r.firstMsg
-			}
-		}(t)
+			results[i] = fileEvents{proj: task.proj, events: scanFile(task.path, cutoff, now).events}
+		}(i, t)
 	}
 	wg.Wait()
 
+	from := cutoff
+	if block {
+		var responses []time.Time
+		for _, fe := range results {
+			for _, ev := range fe.events {
+				if !ev.prompt {
+					responses = append(responses, ev.ts)
+				}
+			}
+		}
+		start, first, ok := activeBlock(responses, d, now)
+		if !ok {
+			agg.WindowStart = now
+			return agg, nil
+		}
+		agg.BlockStart = start
+		agg.WindowStart = start
+		from = first
+	}
+
+	for _, fe := range results {
+		var r scanResult
+		r.tally(fe.events, from)
+		if r.assistantCount == 0 && r.userPrompts == 0 {
+			continue
+		}
+		agg.Total.Add(r.total)
+		agg.Messages += r.assistantCount
+		agg.UserPrompts += r.userPrompts
+		proj := agg.ByProject[fe.proj]
+		if proj == nil {
+			proj = &Tokens{}
+			agg.ByProject[fe.proj] = proj
+		}
+		proj.Add(r.total)
+		for model, t := range r.byModel {
+			mt := agg.ByModel[model]
+			if mt == nil {
+				mt = &Tokens{}
+				agg.ByModel[model] = mt
+			}
+			mt.Add(*t)
+		}
+		if !r.firstMsg.IsZero() && (agg.FirstMessageInWindow.IsZero() || r.firstMsg.Before(agg.FirstMessageInWindow)) {
+			agg.FirstMessageInWindow = r.firstMsg
+		}
+	}
 	return agg, nil
+}
+
+// activeBlock chains `responses` into session blocks of length `block`
+// the way ccusage does (see Walk) and reports the block active at
+// `now`: its hour-floored start, and the timestamp of its first
+// response — the membership boundary, since a response in
+// [start, first) belongs to the previous block. ok is false when no
+// block is active.
+func activeBlock(responses []time.Time, block time.Duration, now time.Time) (start, first time.Time, ok bool) {
+	if len(responses) == 0 {
+		return time.Time{}, time.Time{}, false
+	}
+	sort.Slice(responses, func(i, j int) bool { return responses[i].Before(responses[j]) })
+	for i, ts := range responses {
+		if i == 0 || ts.Sub(start) > block {
+			// Truncate rounds down relative to the zero time, which is
+			// UTC-hour aligned — ccusage's floorToHour.
+			start, first = ts.Truncate(time.Hour), ts
+		}
+	}
+	last := responses[len(responses)-1]
+	if now.Sub(last) >= block || !now.Before(start.Add(block)) {
+		return time.Time{}, time.Time{}, false
+	}
+	return start, first, true
+}
+
+// usageEvent is one countable record from a transcript.
+type usageEvent struct {
+	ts     time.Time
+	prompt bool // a user prompt; otherwise an assistant API response
+	tokens Tokens
+	model  string
 }
 
 // scanResult bundles everything one transcript scan produces.
 type scanResult struct {
+	events         []usageEvent
 	total          Tokens
 	byModel        map[string]*Tokens
 	firstMsg       time.Time
 	assistantCount int // assistant messages with usage (drives token totals)
-	userPrompts    int // type:"user" messages whose content is real text,
-	// not tool_result blocks — Anthropic quota counter
+	userPrompts    int // prompts the human sent (see promptKindOf) —
+	// the Anthropic quota counter
+}
+
+// tally (re)computes the summary fields over the events at or after
+// `from`.
+func (r *scanResult) tally(events []usageEvent, from time.Time) {
+	r.total, r.byModel, r.firstMsg = Tokens{}, map[string]*Tokens{}, time.Time{}
+	r.assistantCount, r.userPrompts = 0, 0
+	for _, ev := range events {
+		if ev.ts.Before(from) {
+			continue
+		}
+		if ev.prompt {
+			r.userPrompts++
+			continue
+		}
+		r.total.Add(ev.tokens)
+		r.assistantCount++
+		if mb := r.byModel[ev.model]; mb != nil {
+			mb.Add(ev.tokens)
+		} else {
+			tc := ev.tokens
+			r.byModel[ev.model] = &tc
+		}
+		if r.firstMsg.IsZero() || ev.ts.Before(r.firstMsg) {
+			r.firstMsg = ev.ts
+		}
+	}
 }
 
 // scanFile parses one JSONL and returns the per-file scan result over
 // `cutoff..now`. Two distinct things are counted:
 //
 //   - assistant messages with a `usage` block → token totals + Aggregate.Messages
-//   - type:"user" messages whose content is a fresh user prompt (string
-//     content, OR an array with at least one {type:"text"} block) →
-//     Aggregate.UserPrompts. We deliberately exclude tool_result follow-
-//     ups, attachment events, and the like, because those don't count
-//     toward Anthropic's per-window quota.
+//   - prompts the human actually sent → Aggregate.UserPrompts. Tool-result
+//     follow-ups, harness-injected records (isMeta caveats and image
+//     notes, compact summaries, slash-command stdout, task
+//     notifications, interrupt markers) and subagent/sidechain
+//     transcripts are not prompts; see promptKindOf.
+//
+// A prompt is stamped with the timestamp of the first assistant
+// response after it (falling back to its own), so it lands in the same
+// session block as the API call it triggered. A slash-command record
+// counts as a prompt only when the model answers it: `/plan do X`
+// sends a turn, `/model` does not.
 //
 // Built to tolerate large lines (cached system prompts can push JSONL
 // lines well above the default 64KB Scanner buffer). A line beyond the
@@ -368,15 +529,20 @@ type scanResult struct {
 // retries stay within one transcript, so a per-file set is sufficient.
 // Lines missing either id are counted unconditionally (fail open — we'd
 // rather slightly over-count than silently drop usage).
-func scanFile(path string, cutoff, now time.Time) scanResult {
-	r := scanResult{byModel: map[string]*Tokens{}}
+func scanFile(path string, cutoff, now time.Time) (r scanResult) {
+	defer func() { r.tally(r.events, time.Time{}) }()
 	f, err := os.Open(path)
 	if err != nil {
 		return r
 	}
 	defer f.Close()
+	// Subagent transcripts: the "user" turns there are the parent
+	// agent's instructions and tool results, never the human.
+	subagent := strings.Contains(filepath.ToSlash(path), "/subagents/")
 	seenUsage := map[string]struct{}{}
 	maxTS := now.Add(futureSkewTolerance)
+	pendingPrompt := -1 // index in r.events of a prompt awaiting its response
+	pendingCmd := false // a slash command awaiting a response
 	forEachLine(f, maxScanLineBytes, func(line []byte) {
 		// Two cheap byte-level pre-filters: only json-decode lines that
 		// might be assistant-usage or user-prompt records.
@@ -387,10 +553,13 @@ func scanFile(path string, cutoff, now time.Time) scanResult {
 		}
 
 		var m struct {
-			Type      string `json:"type"`
-			Timestamp string `json:"timestamp"`
-			RequestID string `json:"requestId"`
-			Message   struct {
+			Type             string `json:"type"`
+			Timestamp        string `json:"timestamp"`
+			RequestID        string `json:"requestId"`
+			IsMeta           bool   `json:"isMeta"`
+			IsCompactSummary bool   `json:"isCompactSummary"`
+			IsSidechain      bool   `json:"isSidechain"`
+			Message          struct {
 				ID      string          `json:"id"`
 				Role    string          `json:"role"`
 				Model   string          `json:"model"`
@@ -414,34 +583,48 @@ func scanFile(path string, cutoff, now time.Time) scanResult {
 			return
 		}
 
-		// Assistant API response with usage — counted once per
-		// (message.id, requestId) pair; see the function comment.
-		if m.Message.Usage != nil && !alreadyCounted(seenUsage, m.Message.ID, m.RequestID) {
-			t := Tokens{
-				Input:         m.Message.Usage.Input,
-				Output:        m.Message.Usage.Output,
-				CacheCreation: m.Message.Usage.CacheCreation,
-				CacheRead:     m.Message.Usage.CacheRead,
+		if m.Message.Usage != nil {
+			// The first response after a prompt is the API call it
+			// triggered — sidechain calls belong to a subagent.
+			if !m.IsSidechain {
+				if pendingPrompt >= 0 {
+					if ts.After(r.events[pendingPrompt].ts) {
+						r.events[pendingPrompt].ts = ts
+					}
+					pendingPrompt = -1
+				}
+				if pendingCmd {
+					r.events = append(r.events, usageEvent{ts: ts, prompt: true})
+					pendingCmd = false
+				}
 			}
-			if cb := m.Message.Usage.CacheBreakout; cb != nil {
-				t.CacheCreation1h = cb.OneHour
-			}
-			r.total.Add(t)
-			r.assistantCount++
-			if mb := r.byModel[m.Message.Model]; mb != nil {
-				mb.Add(t)
-			} else {
-				tc := t
-				r.byModel[m.Message.Model] = &tc
-			}
-			if r.firstMsg.IsZero() || ts.Before(r.firstMsg) {
-				r.firstMsg = ts
+			// Assistant API response with usage — counted once per
+			// (message.id, requestId) pair; see the function comment.
+			if !alreadyCounted(seenUsage, m.Message.ID, m.RequestID) {
+				t := Tokens{
+					Input:         m.Message.Usage.Input,
+					Output:        m.Message.Usage.Output,
+					CacheCreation: m.Message.Usage.CacheCreation,
+					CacheRead:     m.Message.Usage.CacheRead,
+				}
+				if cb := m.Message.Usage.CacheBreakout; cb != nil {
+					t.CacheCreation1h = cb.OneHour
+				}
+				r.events = append(r.events, usageEvent{ts: ts, tokens: t, model: m.Message.Model})
 			}
 		}
 
-		// User prompt (filters out tool_result follow-ups).
-		if m.Type == "user" && isFreshUserPrompt(m.Message.Content) {
-			r.userPrompts++
+		if m.Type != "user" || subagent || m.IsMeta || m.IsCompactSummary || m.IsSidechain {
+			return
+		}
+		switch promptKindOf(m.Message.Content) {
+		case humanPrompt:
+			r.events = append(r.events, usageEvent{ts: ts, prompt: true})
+			pendingPrompt, pendingCmd = len(r.events)-1, false
+		case commandPrompt:
+			pendingCmd = true
+		case turnBoundary:
+			pendingCmd = false
 		}
 	})
 	return r
@@ -483,6 +666,68 @@ func alreadyCounted(seen map[string]struct{}, msgID, requestID string) bool {
 	}
 	seen[key] = struct{}{}
 	return false
+}
+
+// promptKind classifies a type:"user" transcript record for the quota
+// counter. Records flagged isMeta / isCompactSummary / isSidechain, and
+// everything in a subagent transcript, are filtered out before this.
+type promptKind int
+
+const (
+	// notPrompt: harness-written text that neither counts nor affects
+	// a pending slash command — slash-command stdout and caveats,
+	// bash-mode echoes, "[Request interrupted by user]" markers.
+	notPrompt promptKind = iota
+	// humanPrompt: something the user typed and sent to the model.
+	humanPrompt
+	// commandPrompt: a slash-command record. It counts only when the
+	// model answers it (`/plan do X` sends a turn; `/model` does not).
+	commandPrompt
+	// turnBoundary: a record that starts a model turn the human did not
+	// type (tool results, background-task notifications). It cancels a
+	// pending slash command so that turn's response isn't credited to it.
+	turnBoundary
+)
+
+// promptKindOf classifies a user record by its message content.
+func promptKindOf(raw json.RawMessage) promptKind {
+	if !isFreshUserPrompt(raw) {
+		return turnBoundary // tool_result follow-up
+	}
+	text := strings.TrimSpace(leadingText(raw))
+	switch {
+	case strings.HasPrefix(text, "<command-name>"), strings.HasPrefix(text, "<command-message>"):
+		return commandPrompt
+	case strings.HasPrefix(text, "<task-notification>"):
+		return turnBoundary
+	case strings.HasPrefix(text, "<command-"),
+		strings.HasPrefix(text, "<local-command-"),
+		strings.HasPrefix(text, "<bash-"),
+		strings.HasPrefix(text, "[Request interrupted"):
+		return notPrompt
+	}
+	return humanPrompt
+}
+
+// leadingText returns a message content's string form, or the text of
+// its first {type:"text"} block; "" for anything else.
+func leadingText(raw json.RawMessage) string {
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+	var parts []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(raw, &parts); err == nil {
+		for _, p := range parts {
+			if p.Type == "text" {
+				return p.Text
+			}
+		}
+	}
+	return ""
 }
 
 // isFreshUserPrompt returns true when a JSONL "user" record's content
