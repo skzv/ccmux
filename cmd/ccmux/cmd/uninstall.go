@@ -34,7 +34,7 @@ import (
 // What we DO remove:
 //
 //   - Running ccmuxd process (SIGTERM via pkill)
-//   - $HOME/.local/bin/ccmux and ccmuxd
+//   - $HOME/.local/bin/ccmux, ccmuxd and ccmux-mcp
 //   - $HOME/.local/state/ccmux/* (sockets, logs, pid)
 //   - $HOME/.local/share/ccmux/* (snapshots, daemon db)
 //   - $HOME/.config/ccmux/* (config.toml) — unless --keep-config
@@ -114,7 +114,9 @@ func buildUninstallPlan(keepConfig, keepChrome bool) (*uninstallPlan, error) {
 	}
 
 	binDir := filepath.Join(home, ".local", "bin")
-	for _, bin := range []string{"ccmux", "ccmuxd"} {
+	// Every binary `make install` / the installer puts in ~/.local/bin.
+	// ccmux-mcp used to be missing here and was left behind.
+	for _, bin := range []string{"ccmux", "ccmuxd", "ccmux-mcp"} {
 		full := filepath.Join(binDir, bin)
 		if _, err := os.Stat(full); err == nil {
 			p.paths = append(p.paths, full)

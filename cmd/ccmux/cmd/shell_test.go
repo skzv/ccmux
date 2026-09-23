@@ -44,6 +44,7 @@ func TestShellQuote(t *testing.T) {
 }
 
 func TestShellAttachCommandsOmitDetachFlag(t *testing.T) {
+	t.Setenv("TMUX", "") // standalone attach; the nested case has its own test
 	local := shellAttachCmd("c-foo")
 	if got := strings.Join(local.Args, " "); got != "tmux attach-session -t =c-foo:" {
 		t.Errorf("local shell attach args = %q, want mirror attach without -d", got)

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"text/tabwriter"
 	"time"
 
@@ -35,10 +34,11 @@ func newProjectCmd() *cobra.Command {
 
 func runProjectCmd(name string) error {
 	cfg, _ := config.Load()
-	root := cfg.Projects.Root
-	if root == "" {
-		home, _ := os.UserHomeDir()
-		root = filepath.Join(home, "Projects")
+	// Same root as `new`/`attach`: --projects wins, and a configured
+	// "~/code" is expanded (the old inline fallback didn't).
+	root, err := cliProjectsRoot(cfg)
+	if err != nil {
+		return err
 	}
 	projects, err := project.Discover(root)
 	if err != nil {

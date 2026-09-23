@@ -471,7 +471,7 @@ ccmux uninstall --dry-run  # preview only
 What gets removed:
 
 - Running `ccmuxd` (SIGTERM)
-- `~/.local/bin/ccmux` and `~/.local/bin/ccmuxd`
+- `~/.local/bin/ccmux`, `~/.local/bin/ccmuxd` and `~/.local/bin/ccmux-mcp`
 - `~/.local/state/ccmux/` (socket, logs)
 - `~/.local/share/ccmux/` (snapshots, daemon db)
 - `~/.config/ccmux/` (unless `--keep-config`)

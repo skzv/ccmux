@@ -251,7 +251,11 @@ func TestToolsListOrderedAlphabetically(t *testing.T) {
 }
 
 // TestToolsCallUnknownTool — calling tools/call with a name we don't
-// know must return -32601 (method not found), not crash.
+// know must return -32602 (invalid params), not crash. The MCP spec's
+// tools error-handling example uses -32602 for "Unknown tool": the
+// method (tools/call) exists; its `name` param is what's invalid. We
+// used to answer -32601 (method not found), which clients read as
+// "this server doesn't implement tools/call at all".
 func TestToolsCallUnknownTool(t *testing.T) {
 	srv := newTestServer(false, nil)
 	resp := runOnce(t, srv, map[string]any{
@@ -260,8 +264,11 @@ func TestToolsCallUnknownTool(t *testing.T) {
 		"method":  "tools/call",
 		"params":  map[string]any{"name": "ghost", "arguments": map[string]any{}},
 	})
-	if resp.Error == nil || resp.Error.Code != errMethodNotFound {
-		t.Errorf("expected -32601 method not found, got %+v", resp.Error)
+	if resp.Error == nil || resp.Error.Code != errInvalidParams {
+		t.Errorf("expected -32602 invalid params, got %+v", resp.Error)
+	}
+	if resp.Error != nil && !strings.Contains(resp.Error.Message, "ghost") {
+		t.Errorf("error should name the unknown tool: %q", resp.Error.Message)
 	}
 }
 

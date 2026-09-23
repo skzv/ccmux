@@ -128,7 +128,13 @@ Request:
 }
 ```
 
-Result: one `content` block of type `text` whose body is the JSON-encoded tool output (pretty-printed). Tool-execution failures are returned as `isError: true` on the result, NOT as a JSON-RPC error — agents distinguish "I called the wrong tool" (`error.code = -32601 / -32602`) from "the tool ran but failed" (`result.isError = true`).
+`arguments` is optional: a missing or `null` value is treated as `{}`.
+
+Result: one `content` block of type `text` whose body is the JSON-encoded tool output (pretty-printed). Tool-execution failures are returned as `isError: true` on the result, NOT as a JSON-RPC error — agents distinguish "I called the wrong tool or passed bad arguments" (`error.code = -32602`, per the MCP spec — including an unknown or `--allow-mutate`-gated tool name) from "the tool ran but failed" (`result.isError = true`).
+
+### Batches
+
+A line holding a JSON array is a JSON-RPC 2.0 batch (protocol 2025-03-26 requires servers to accept them). The reply is one array frame with a response per request, in order; notifications get none, an all-notification batch gets no reply, and `[]` gets a single `-32600` error.
 
 ## Testing
 

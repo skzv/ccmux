@@ -2,6 +2,9 @@ package cmd
 
 import (
 	"fmt"
+	"math"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -24,7 +27,7 @@ func newListConversationsCmd() *cobra.Command {
 	var (
 		query           string
 		limit           int
-		since           time.Duration
+		since           sinceFlag
 		jsonOut         bool
 		includeHeadless bool
 	)
@@ -64,7 +67,7 @@ Default ordering is most-recent first.`,
 			list, err := conversations.All(conversations.Options{
 				Query:           query,
 				Limit:           limit,
-				Since:           since,
+				Since:           time.Duration(since),
 				ExcludeHeadless: !showHeadless,
 			})
 			if err != nil {
@@ -79,10 +82,55 @@ Default ordering is most-recent first.`,
 	}
 	cmd.Flags().StringVar(&query, "query", "", "search project paths, previews, or conversation IDs")
 	cmd.Flags().IntVar(&limit, "limit", 0, "cap the output to N rows (default: no limit)")
-	cmd.Flags().DurationVar(&since, "since", 0, "only conversations active within this duration (e.g. 24h, 7d)")
+	cmd.Flags().Var(&since, "since", "only conversations active within this duration (e.g. 24h, 7d, 1d12h)")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit one JSON object per conversation on stdout (for scripting)")
 	cmd.Flags().BoolVar(&includeHeadless, "include-headless", false, "include headless runs (claude -p / SDK, codex exec); hidden by default")
 	return cmd
+}
+
+// sinceFlag is --since: a time.Duration that also accepts a day unit.
+// The help text has always said "e.g. 24h, 7d", but a plain
+// DurationVar rejected 7d — time.ParseDuration has no `d`.
+type sinceFlag time.Duration
+
+func (s *sinceFlag) String() string { return time.Duration(*s).String() }
+func (s *sinceFlag) Type() string   { return "duration" }
+func (s *sinceFlag) Set(v string) error {
+	d, err := parseSince(v)
+	if err != nil {
+		return err
+	}
+	*s = sinceFlag(d)
+	return nil
+}
+
+// parseSince parses a non-negative duration with an optional leading
+// day count: "7d", "1.5d", "1d12h", or anything time.ParseDuration
+// takes ("24h", "90m"). No Go duration unit contains a 'd', so the
+// first 'd' can only be the day unit.
+func parseSince(v string) (time.Duration, error) {
+	s := strings.TrimSpace(v)
+	bad := fmt.Errorf("invalid duration %q: want e.g. 24h, 7d or 1d12h", v)
+	if s == "" {
+		return 0, bad
+	}
+	var total time.Duration
+	if i := strings.IndexByte(s, 'd'); i >= 0 {
+		days, err := strconv.ParseFloat(s[:i], 64)
+		if err != nil || days < 0 || math.IsInf(days, 0) || days > math.MaxInt64/float64(24*time.Hour) {
+			return 0, bad
+		}
+		total = time.Duration(days * float64(24*time.Hour))
+		s = s[i+1:]
+	}
+	if s != "" {
+		d, err := time.ParseDuration(s)
+		if err != nil || d < 0 || d > math.MaxInt64-total {
+			return 0, bad
+		}
+		total += d
+	}
+	return total, nil
 }
 
 // printConversationsTable renders a compact table to stdout. Width

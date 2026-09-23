@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/skzv/ccmux/internal/config"
+	"github.com/skzv/ccmux/internal/project"
 	"github.com/skzv/ccmux/internal/setupwizard"
 	"github.com/skzv/ccmux/internal/tui"
 )
@@ -30,6 +31,28 @@ func Execute(version string) error {
 
 var projectsRootFlag string
 var expandNotesFlag bool
+
+// cliProjectsRoot is the projects root CLI subcommands (`new`,
+// `attach`, `project`) work under: the global --projects override when
+// given — validated like the TUI's per-run override, which must be an
+// existing directory — else config's projects.root, else ~/Projects.
+// --projects is a persistent flag, so every subcommand accepts it; the
+// ones that touch the projects root must honor it rather than silently
+// using the configured root.
+func cliProjectsRoot(cfg config.Config) (string, error) {
+	if projectsRootFlag == "" {
+		return project.ResolveRoot(cfg.Projects.Root), nil
+	}
+	root := project.ResolveRoot(projectsRootFlag)
+	fi, err := os.Stat(root)
+	if err != nil {
+		return "", fmt.Errorf("--projects %s: %w", root, err)
+	}
+	if !fi.IsDir() {
+		return "", fmt.Errorf("--projects %s is not a directory", root)
+	}
+	return root, nil
+}
 
 var rootCmd = &cobra.Command{
 	Use:   "ccmux [projects-dir]",
