@@ -42,6 +42,28 @@ func TestIntegration_DottedSessionNames(t *testing.T) {
 	if err := New(ctx, "api.v2", os.TempDir(), "sleep 300"); err != nil {
 		t.Fatal(err)
 	}
+	// Older tmux (e.g. 3.4, Ubuntu 24.04) stores "api.v2" as "api_v2",
+	// so a dotted session can't exist there — which is also why the
+	// daemon refuses dotted names. Only a tmux that keeps the dot can
+	// exercise the targets; anywhere else, skip rather than pass
+	// vacuously. Decided from list-sessions, not Has, so a Has broken
+	// by target parsing still fails below.
+	sessions, err := List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored := ""
+	for _, s := range sessions {
+		if s.Name == "api.v2" || s.Name == "api_v2" {
+			stored = s.Name
+		}
+	}
+	if stored == "api_v2" {
+		t.Skip("this tmux rewrites '.' to '_' in session names; dotted targets can't occur")
+	}
+	if stored != "api.v2" {
+		t.Fatalf("session not listed after New (sessions: %+v)", sessions)
+	}
 	if ok, err := Has(ctx, "api.v2"); err != nil || !ok {
 		t.Fatalf("Has(api.v2) = %v, %v; want true", ok, err)
 	}
