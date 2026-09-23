@@ -115,7 +115,7 @@ func TestBuildUninstallPlan_RemovesEveryInstalledBinary(t *testing.T) {
 // should be nested with care").
 func TestShellAttachCmd_InsideTmuxSwitchesClient(t *testing.T) {
 	t.Setenv("TMUX", "/tmp/tmux-1000/default,4242,0")
-	if got := strings.Join(shellAttachCmd("c-foo").Args, " "); got != "tmux switch-client -t =c-foo" {
+	if got := strings.Join(shellAttachCmd("c-foo").Args, " "); got != "tmux switch-client -t "+exactTarget("c-foo") {
 		t.Errorf("inside tmux, shell attach = %q, want a switch-client", got)
 	}
 }

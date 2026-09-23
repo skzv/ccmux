@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/skzv/ccmux/internal/tmux"
 )
 
 // Unit tests for the helpers behind the CLI fixes; the end-to-end
@@ -53,11 +55,11 @@ func TestResolveKillTarget(t *testing.T) {
 		live []string
 		want string
 	}{
-		{"c-foo", []string{"c-c-foo"}, "c-c-foo"},        // project literally named c-foo
-		{"c-foo", []string{"c-foo", "c-c-foo"}, "c-foo"}, // a live session name wins
-		{"work", []string{"work"}, "work"},               // bare (unprefixed) session
-		{"web", []string{"c-web"}, "c-web"},              // project name
-		{"my.app", []string{"c-my_app"}, "c-my_app"},     // sanitized like attach
+		{"c-foo", []string{"c-c-foo"}, "c-c-foo"},                                                  // project literally named c-foo
+		{"c-foo", []string{"c-foo", "c-c-foo"}, "c-foo"},                                           // a live session name wins
+		{"work", []string{"work"}, "work"},                                                         // bare (unprefixed) session
+		{"web", []string{"c-web"}, "c-web"},                                                        // project name
+		{"my.app", []string{tmux.SessionNameForPath("my.app")}, tmux.SessionNameForPath("my.app")}, // sanitized like attach
 	}
 	for _, tc := range cases {
 		got, err := resolveKillTarget(context.Background(), tc.arg, sessionsHas(tc.live...))
@@ -136,10 +138,10 @@ func TestTmuxAttachCmd_Selection(t *testing.T) {
 		nested, detach bool
 		want           string
 	}{
-		{false, false, "tmux attach-session -t =c-x"},
-		{false, true, "tmux attach-session -d -t =c-x"},
-		{true, false, "tmux switch-client -t =c-x"},
-		{true, true, "tmux switch-client -t =c-x"}, // -d is meaningless for a switch
+		{false, false, "tmux attach-session -t " + exactTarget("c-x")},
+		{false, true, "tmux attach-session -d -t " + exactTarget("c-x")},
+		{true, false, "tmux switch-client -t " + exactTarget("c-x")},
+		{true, true, "tmux switch-client -t " + exactTarget("c-x")}, // -d is meaningless for a switch
 	}
 	for _, tc := range cases {
 		if got := strings.Join(tmuxAttachCmd("c-x", tc.detach, tc.nested).Args, " "); got != tc.want {

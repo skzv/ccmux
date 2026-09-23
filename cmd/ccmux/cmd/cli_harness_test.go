@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/skzv/ccmux/internal/tmux"
 )
 
 // The CLI harness runs the real cobra tree in a child process (the test
@@ -31,15 +33,16 @@ import (
 // in os.Exit.
 
 // fakeTmux logs its argv and emulates just enough of tmux:
-// has-session succeeds only for names in $FAKE_TMUX_SESSIONS, and
-// list-sessions exits 1 ("no server running"). Everything else succeeds
-// silently.
+// has-session succeeds only for names in $FAKE_TMUX_SESSIONS (as an
+// exact target, "=name" or "=name:"), and list-sessions exits 1 ("no
+// server running"). Everything else succeeds silently.
 const fakeTmux = `printf '%s|' "$@" >> "$FAKE_TMUX_LOG"
 printf '\n' >> "$FAKE_TMUX_LOG"
 case "$1" in
 has-session)
   for s in $FAKE_TMUX_SESSIONS; do
     [ "$3" = "=$s" ] && exit 0
+    [ "$3" = "=$s:" ] && exit 0
   done
   exit 1 ;;
 list-sessions) exit 1 ;;
@@ -160,6 +163,15 @@ func (e *cliEnv) run(dir string, args ...string) cliResult {
 		e.t.Fatalf("run ccmux %v: %v", args, err)
 	}
 	return res
+}
+
+// exactTarget is the exact-match tmux target the tmux package builds
+// for a session name ("=name", or "=name:" which also resolves dotted
+// names). Derived from tmux.AttachArgs so these tests follow the
+// package instead of pinning one spelling.
+func exactTarget(name string) string {
+	args := tmux.AttachArgs(name, false)
+	return args[len(args)-1]
 }
 
 // tmuxCalls returns every fake-tmux invocation so far, e.g.

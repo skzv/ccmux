@@ -46,7 +46,7 @@ func TestAttach_BareNameResolvesUnderProjectsRoot(t *testing.T) {
 	if !hasCall(news, "-s", "c-auth-redesign", "-c", proj) {
 		t.Errorf("session must start in %s; tmux calls:\n%s", proj, strings.Join(e.tmuxCalls(), "\n"))
 	}
-	if !hasCall(e.tmuxCallsWith("attach-session"), "=c-auth-redesign") {
+	if !hasCall(e.tmuxCallsWith("attach-session"), exactTarget("c-auth-redesign")) {
 		t.Errorf("expected an attach to c-auth-redesign; tmux calls:\n%s", strings.Join(e.tmuxCalls(), "\n"))
 	}
 }
@@ -118,7 +118,7 @@ func TestAttach_InsideTmuxSwitchesClient(t *testing.T) {
 	if res.code != 0 {
 		t.Fatalf("attach exit %d\nstderr: %s", res.code, res.stderr)
 	}
-	if !hasCall(e.tmuxCallsWith("switch-client"), "-t", "=c-web") {
+	if !hasCall(e.tmuxCallsWith("switch-client"), "-t", exactTarget("c-web")) {
 		t.Errorf("inside tmux, attach must switch-client to =c-web; tmux calls:\n%s", strings.Join(e.tmuxCalls(), "\n"))
 	}
 	if got := e.tmuxCallsWith("attach-session"); len(got) != 0 {
@@ -136,7 +136,7 @@ func TestAttach_OutsideTmuxAttaches(t *testing.T) {
 	if res.code != 0 {
 		t.Fatalf("attach exit %d\nstderr: %s", res.code, res.stderr)
 	}
-	if !hasCall(e.tmuxCallsWith("attach-session"), "-t", "=c-web") {
+	if !hasCall(e.tmuxCallsWith("attach-session"), "-t", exactTarget("c-web")) {
 		t.Errorf("outside tmux, attach must attach-session; tmux calls:\n%s", strings.Join(e.tmuxCalls(), "\n"))
 	}
 	if got := e.tmuxCallsWith("switch-client"); len(got) != 0 {
@@ -214,11 +214,11 @@ func TestKill_ResolvesExistingSessionBeforeProject(t *testing.T) {
 		arg      string
 		want     string
 	}{
-		{"project named c-foo, only its session exists", "c-c-foo", "c-foo", "=c-c-foo"},
-		{"project named c-foo, other sessions exist", "c-c-foo c-bar", "c-foo", "=c-c-foo"},
-		{"existing session name wins", "c-foo c-c-foo", "c-foo", "=c-foo"},
-		{"bare session name", "work", "work", "=work"},
-		{"plain project name", "c-web", "web", "=c-web"},
+		{"project named c-foo, only its session exists", "c-c-foo", "c-foo", "c-c-foo"},
+		{"project named c-foo, other sessions exist", "c-c-foo c-bar", "c-foo", "c-c-foo"},
+		{"existing session name wins", "c-foo c-c-foo", "c-foo", "c-foo"},
+		{"bare session name", "work", "work", "work"},
+		{"plain project name", "c-web", "web", "c-web"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -229,8 +229,8 @@ func TestKill_ResolvesExistingSessionBeforeProject(t *testing.T) {
 				t.Fatalf("kill exit %d\nstderr: %s", res.code, res.stderr)
 			}
 			kills := e.tmuxCallsWith("kill-session")
-			if len(kills) != 1 || !hasCall(kills, "-t", tc.want) {
-				t.Errorf("kill %s (sessions %q): kill-session calls = %v, want exactly -t %s", tc.arg, tc.sessions, kills, tc.want)
+			if len(kills) != 1 || !hasCall(kills, "-t", exactTarget(tc.want)) {
+				t.Errorf("kill %s (sessions %q): kill-session calls = %v, want exactly -t %s", tc.arg, tc.sessions, kills, exactTarget(tc.want))
 			}
 		})
 	}
