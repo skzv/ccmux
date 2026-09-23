@@ -153,7 +153,7 @@ test-e2e: check-go build
 	gomodcache="$$(go env GOMODCACHE)"; \
 	gocache="$$(go env GOCACHE)"; \
 	trap 'env -u TMUX HOME="$$tmp" TMUX_TMPDIR="$$tmp" tmux kill-server >/dev/null 2>&1 || true; rm -rf "$$tmp"' EXIT INT TERM; \
-	env -u TMUX HOME="$$tmp" TMUX_TMPDIR="$$tmp" GOMODCACHE="$$gomodcache" GOCACHE="$$gocache" go test -tags integration -timeout 180s ./internal/e2e/ ./cmd/ccmuxd/
+	env -u TMUX HOME="$$tmp" TMUX_TMPDIR="$$tmp" GOMODCACHE="$$gomodcache" GOCACHE="$$gocache" go test -tags integration -timeout 180s ./internal/e2e/ ./cmd/ccmuxd/ ./internal/tmux/
 
 # Native Go fuzzer pass — one round-trip over every FuzzXxx target.
 #

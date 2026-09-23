@@ -313,6 +313,12 @@ grouping in pickers.
 Stream of session lifecycle/state events; subscribe to live-update a view.
 - **Response `200`:** `text/event-stream`. Each `data:` frame is a JSON
   `SessionEvent`; `kind` ∈ `created | killed | state_change | needs_input`.
+- `killed` is sent for every session that disappears, however it ended
+  (this API, a `tmux kill` from the TUI/CLI, the agent exiting). A rename
+  arrives as `killed` for the old name followed by `created` for the new.
+- A session the daemon first sees without having watched it being created
+  (after a daemon restart, or renamed directly in tmux) gets one
+  `state_change` with its current state and never triggers a bell or push.
 - Heartbeats: `: connected` on open, `: ping` comment every 20s — comment
   lines (leading `:`) are ignorable.
 - If the per-subscriber buffer (256) overflows you get an

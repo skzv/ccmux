@@ -111,34 +111,6 @@ func run() error {
 	}
 
 	srv := newServer(cfg)
-	srv.startSleepManager()
-	// Make sure any system-wide override (very_dangerous mode) is
-	// reverted on every clean exit path. SIGKILL won't run defers; for
-	// that case the launchd/systemd job re-runs the daemon, and
-	// startSleepManager reverts the override the dead daemon left on.
-	defer srv.sleeper.Stop()
-
-	// Best-effort: tell tmux to forward selections as OSC 52 so
-	// cross-device clipboard works through SSH. Fails silently when
-	// the tmux server isn't up yet — it'll be retried on first
-	// SetActive() poll. Honestly this is fine to do unconditionally:
-	// `set -s set-clipboard on` is idempotent and harmless on
-	// terminals that ignore OSC 52.
-	{
-		cctx, ccancel := context.WithTimeout(context.Background(), 2*time.Second)
-		_ = clipboard.EnableTmuxClipboard(cctx)
-		ccancel()
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// Poll loop.
-	go srv.pollLoop(ctx)
-	// Background model-catalog refresh. Separate goroutine so it
-	// can't stall the high-frequency poll loop on a slow API call.
-	go srv.modelRefreshLoop(ctx)
-
 	// Unix socket listener.
 	sockPath, err := daemon.SocketPath()
 	if err != nil {
@@ -203,6 +175,20 @@ func run() error {
 	}
 	bindGuard.release()
 
+	// Only now that this process owns the socket do its side effects
+	// start. A second ccmuxd that loses the race above must exit
+	// without touching anything: it used to revert the live daemon's
+	// very_dangerous sleep override, ring bells and send duplicate
+	// pushes from its own poll tick before yielding.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stopBackground := startBackground(srv, ctx)
+	// Make sure any system-wide override (very_dangerous mode) is
+	// reverted on every clean exit path. SIGKILL won't run defers; for
+	// that case the launchd/systemd job re-runs the daemon, and
+	// startSleepManager reverts the override the dead daemon left on.
+	defer stopBackground()
+
 	// Unix-socket mux: full surface (tailnet-safe routes + local-only).
 	mux := http.NewServeMux()
 	srv.routes(mux)
@@ -242,6 +228,30 @@ func run() error {
 	}
 	_ = httpSrv.Shutdown(shutCtx)
 	return nil
+}
+
+// startBackground starts everything with a side effect outside this
+// process — the sleep manager (which may revert a stale system sleep
+// override), the tmux clipboard setup, the poll loop (bells, pushes)
+// and the model refresh — and returns the matching teardown. run()
+// calls it only after binding the socket; a seam so tests can prove a
+// daemon that loses the bind race never gets here.
+var startBackground = func(srv *server, ctx context.Context) (stop func()) {
+	srv.startSleepManager()
+
+	// Best-effort: tell tmux to forward selections as OSC 52 so
+	// cross-device clipboard works through SSH. Fails silently when
+	// the tmux server isn't up yet. `set -s set-clipboard on` is
+	// idempotent and harmless on terminals that ignore OSC 52.
+	cctx, ccancel := context.WithTimeout(ctx, 2*time.Second)
+	srv.clipboardApplied = srv.enableClipboard(cctx) == nil
+	ccancel()
+
+	go srv.pollLoop(ctx)
+	// Background model-catalog refresh. Separate goroutine so it
+	// can't stall the high-frequency poll loop on a slow API call.
+	go srv.modelRefreshLoop(ctx)
+	return srv.sleeper.Stop
 }
 
 // tailnetRetryInterval is how often serveTailnet retries when Tailscale
@@ -288,6 +298,19 @@ func (s *server) serveTailnet(ctx context.Context, srv *http.Server, addrFor fun
 	}
 }
 
+// apnsPusher / fcmPusher are the parts of *apns.Sender / *fcm.Sender the
+// daemon uses — interfaces so tests can observe which gateway a push
+// goes to.
+type apnsPusher interface {
+	Enabled() bool
+	Send(ctx context.Context, deviceToken, environment string, n apns.Notification) error
+}
+
+type fcmPusher interface {
+	Enabled() bool
+	Send(deviceToken string, n fcm.Notification) error
+}
+
 // tracked is the per-session daemon state held across poll iterations.
 type tracked struct {
 	last        string    // last captured pane content (for change detection)
@@ -312,6 +335,14 @@ type tracked struct {
 	// the daemon just discovered don't immediately scream for
 	// attention until they actually do something.
 	seen bool
+	// baseline marks a session the daemon is seeing for the first time
+	// although it wasn't just created: it existed before this daemon
+	// started (restart, upgrade, crash respawn) or appeared under a new
+	// name (a rename done straight through tmux). Its first
+	// classification is recorded as the starting state, not treated as
+	// a transition — otherwise every restart re-rang the bell and
+	// re-sent a push for every session.
+	baseline bool
 	// touched is stamped by IPC handlers that move this entry while a
 	// poll tick may be in flight (rename). Phase 3's GC skips entries
 	// touched after the tick's Phase-1 live-set snapshot, so a rename
@@ -333,13 +364,22 @@ type server struct {
 	// tailnetLive is true while the tailnet HTTP listener is serving.
 	tailnetLive atomic.Bool
 
+	// enableClipboard applies ccmux's tmux clipboard options/bindings
+	// (clipboard.EnableTmuxClipboard; a seam for tests). They live in
+	// the tmux *server*, so they are lost whenever that server exits;
+	// clipboardApplied tracks whether the current server has them, and
+	// the poll loop re-applies them when a server (re)appears. Touched
+	// only from startBackground and the poll goroutine.
+	enableClipboard  func(context.Context) error
+	clipboardApplied bool
+
 	// devices tracks paired iPhones (and Android phones once the FCM
 	// path is fully wired) for push routing. apnsSender / fcmSender
 	// are gateway clients; all three fields stay non-nil even when
 	// push is disabled, so handlers can call them unconditionally.
 	devices    *daemon.DeviceStore
-	apnsSender *apns.Sender
-	fcmSender  *fcm.Sender
+	apnsSender apnsPusher
+	fcmSender  fcmPusher
 	// apnsSlots caps the number of concurrent APNs sends so a slow
 	// HTTP/2 handshake can't accumulate goroutines on every poll tick.
 	// Defaults to 16 — enough headroom for a small fleet of paired
@@ -451,24 +491,25 @@ func newServer(cfg config.Config) *server {
 	models := claudemodels.New(modelCache, os.Getenv("ANTHROPIC_API_KEY"))
 
 	return &server{
-		cfg:        cfg,
-		seen:       map[string]*tracked{},
-		startedAt:  time.Now(),
-		list:       tmux.List,
-		capture:    tmux.CapturePane,
-		pollBudget: 10 * time.Second,
-		paneTitle:  tmux.PaneTitle,
-		bell:       notificationBell(cfg.Notifications),
-		readAgent:  project.ReadAgent,
-		tokens:     daemon.NewTokenStore(),
-		events:     daemon.NewEventBus(),
-		sshUser:    sshUser,
-		devices:    devices,
-		apnsSender: sender,
-		fcmSender:  fcmSender,
-		apnsSlots:  make(chan struct{}, 16),
-		fcmSlots:   make(chan struct{}, 16),
-		models:     models,
+		cfg:             cfg,
+		seen:            map[string]*tracked{},
+		startedAt:       time.Now(),
+		enableClipboard: clipboard.EnableTmuxClipboard,
+		list:            tmux.List,
+		capture:         tmux.CapturePane,
+		pollBudget:      10 * time.Second,
+		paneTitle:       tmux.PaneTitle,
+		bell:            notificationBell(cfg.Notifications),
+		readAgent:       project.ReadAgent,
+		tokens:          daemon.NewTokenStore(),
+		events:          daemon.NewEventBus(),
+		sshUser:         sshUser,
+		devices:         devices,
+		apnsSender:      sender,
+		fcmSender:       fcmSender,
+		apnsSlots:       make(chan struct{}, 16),
+		fcmSlots:        make(chan struct{}, 16),
+		models:          models,
 	}
 }
 
@@ -579,7 +620,7 @@ func (s *server) listSessions(w http.ResponseWriter, r *http.Request) {
 		// reading the sidecar on the fly. Fast — single os.ReadFile.
 		agentID := t.agentID
 		if agentID == "" {
-			agentID = s.projectAgent(ts.Path)
+			agentID = s.sessionAgent(ts)
 		}
 		out = append(out, daemon.SessionState{
 			Name: ts.Name, Host: "local", Path: ts.Path,
@@ -632,22 +673,26 @@ func (s *server) createSession(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	// Caller-supplied agent persists to .ccmux/agent so the launch
-	// command (read via project.ReadAgent) and future attaches all
-	// pick the same one. Invalid agent strings are ignored — the
-	// sidecar then keeps its current value (or stays unset → Claude).
-	if a := strings.TrimSpace(req.Agent); a != "" {
-		if id, ok := agent.ParseID(a); ok {
-			_ = project.SetAgent(path, id)
-		}
-	}
-
 	has, herr := tmux.Has(ctx, session)
 	if herr != nil {
 		http.Error(w, "tmux has-session: "+herr.Error(), http.StatusInternalServerError)
 		return
 	}
 	if !has {
+		// Caller-supplied agent persists to .ccmux/agent so the launch
+		// command (read via project.ReadAgent) and future attaches all
+		// pick the same one. Invalid agent strings are ignored — the
+		// sidecar then keeps its current value (or stays unset →
+		// Claude). Only when starting a session: rewriting it for one
+		// that is already running would make the poll loop judge that
+		// running agent by another agent's rules.
+		if a := strings.TrimSpace(req.Agent); a != "" {
+			if id, ok := agent.ParseID(a); ok {
+				if err := project.SetAgent(path, id); err != nil {
+					log.Printf("ccmuxd: set agent for %s: %v", path, err)
+				}
+			}
+		}
 		// Launch the agent recorded in the project's sidecar (or the
 		// one the request explicitly named). This used to hardcode
 		// "claude --continue || claude || zsh" regardless, which
@@ -729,6 +774,12 @@ func (s *server) createBareSession(w http.ResponseWriter, r *http.Request) {
 		if err := tmux.New(ctx, name, path, launch); err != nil {
 			http.Error(w, "tmux new-session: "+err.Error(), http.StatusInternalServerError)
 			return
+		}
+		// Tag what actually runs there. A bare session has no project
+		// sidecar, so without the tag the poll loop assumed Claude —
+		// a plain shell prompt then read as "Claude crashed" (error).
+		if err := tmux.SetSessionAgent(ctx, name, bareSessionAgentTag(req.Agent, s.cfg.Agents.Default)); err != nil {
+			log.Printf("ccmuxd: tag bare session %s: %v", name, err)
 		}
 	}
 	// Chrome the new session so when the client ssh-attaches it
@@ -875,6 +926,11 @@ func (s *server) handleRename(w http.ResponseWriter, r *http.Request, name strin
 		return
 	}
 	s.renameTracked(name, req.Name)
+	// There is no "renamed" event kind (the mobile apps decode a fixed
+	// set), so report a rename as the old name going away and the new
+	// one appearing.
+	s.events.Publish(daemon.SessionEvent{At: time.Now(), Kind: "killed", Session: daemon.SessionState{Name: name, Host: "local"}})
+	s.events.Publish(daemon.SessionEvent{At: time.Now(), Kind: "created", Session: daemon.SessionState{Name: req.Name, Host: "local"}})
 	writeJSON(w, daemon.SessionState{Name: req.Name, Host: "local"})
 }
 

@@ -13,7 +13,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/daemon"
+	"github.com/skzv/ccmux/internal/project"
 )
 
 // TestCreateSession_NameOverride covers the mobile UX where the user
@@ -197,4 +199,54 @@ func sessionExists(t *testing.T, name string) bool {
 	t.Helper()
 	err := exec.Command("tmux", "has-session", "-t", "="+name).Run()
 	return err == nil
+}
+
+// TestCreateSession_ExistingSessionKeepsItsAgent — asking for a
+// different agent on a project whose session is already running must
+// not rewrite the project's agent: the poll loop would then judge the
+// running agent with the other agent's rules.
+func TestCreateSession_ExistingSessionKeepsItsAgent(t *testing.T) {
+	dir := pollSandbox(t)
+	projDir := filepath.Join(dir, "proj")
+	if err := os.MkdirAll(projDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := project.SetAgent(projDir, agent.IDClaude); err != nil {
+		t.Fatal(err)
+	}
+	mustTmux(t, "new-session", "-d", "-s", "c-proj", "-c", projDir, "sleep 300")
+
+	srv := newServer(testDaemonCfg(dir))
+	mux := http.NewServeMux()
+	srv.routes(mux)
+	httpSrv := httptest.NewServer(mux)
+	defer httpSrv.Close()
+
+	body, _ := json.Marshal(daemon.NewSessionRequest{Project: "proj", Agent: "codex"})
+	if resp := mustPost(t, httpSrv, "/v1/sessions", body); resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+	if got := project.ReadAgent(projDir); got != agent.IDClaude {
+		t.Errorf("running session's project agent rewritten to %q", got)
+	}
+}
+
+// TestCreateBareSession_TagsShell — a bare shell session is tagged so
+// the poll loop doesn't classify it as Claude.
+func TestCreateBareSession_TagsShell(t *testing.T) {
+	dir := pollSandbox(t)
+	srv := newServer(testDaemonCfg(dir))
+	mux := http.NewServeMux()
+	srv.routes(mux)
+	httpSrv := httptest.NewServer(mux)
+	defer httpSrv.Close()
+
+	body, _ := json.Marshal(daemon.NewBareSessionRequest{Name: "c-shell-t", Path: dir, Agent: "shell"})
+	if resp := mustPost(t, httpSrv, "/v1/sessions/bare", body); resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+	out, err := exec.Command("tmux", "show-options", "-v", "-t", "=c-shell-t:", "@ccmux_agent").CombinedOutput()
+	if err != nil || strings.TrimSpace(string(out)) != "shell" {
+		t.Errorf("@ccmux_agent = %q (err %v), want shell", out, err)
+	}
 }

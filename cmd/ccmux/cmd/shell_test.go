@@ -45,7 +45,7 @@ func TestShellQuote(t *testing.T) {
 
 func TestShellAttachCommandsOmitDetachFlag(t *testing.T) {
 	local := shellAttachCmd("c-foo")
-	if got := strings.Join(local.Args, " "); got != "tmux attach-session -t =c-foo" {
+	if got := strings.Join(local.Args, " "); got != "tmux attach-session -t =c-foo:" {
 		t.Errorf("local shell attach args = %q, want mirror attach without -d", got)
 	}
 
@@ -77,6 +77,21 @@ func TestNewCmdAgent(t *testing.T) {
 	for _, a := range agent.All() {
 		if !strings.Contains(err.Error(), string(a.ID())) {
 			t.Errorf("error %q doesn't list agent %q", err, a.ID())
+		}
+	}
+}
+
+// TestValidSessionName — `ccmux rename` accepts exactly what the daemon
+// and the tmux wrappers handle identically on every tmux version.
+func TestValidSessionName(t *testing.T) {
+	for _, ok := range []string{"c-foo", "my_app", "c-resume-3dc0131a", "A1"} {
+		if !validSessionName.MatchString(ok) {
+			t.Errorf("rejected %q", ok)
+		}
+	}
+	for _, bad := range []string{"", "api.v2", "-x", "a:b", "a/b", "a b"} {
+		if validSessionName.MatchString(bad) {
+			t.Errorf("accepted %q", bad)
 		}
 	}
 }

@@ -69,20 +69,25 @@ func withLocale(env []string) []string {
 	return append(env, "LC_ALL=C.UTF-8")
 }
 
-// exactSession wraps a session name as a tmux target-session that
-// requires an exact match. Without the "=" prefix tmux falls back to
-// prefix and fnmatch matching, so `has-session -t c-foo` silently
-// matches an existing `c-foo-app`. Every caller below targets one
-// specific session by its full name, so prefix matching is never
-// what we want.
-func exactSession(name string) string { return "=" + name }
+// exactSession wraps a session name as a tmux target that requires an
+// exact match. Without the "=" prefix tmux falls back to prefix and
+// fnmatch matching, so `has-session -t c-foo` silently matches an
+// existing `c-foo-app`. Every caller below targets one specific
+// session by its full name, so prefix matching is never what we want.
+//
+// The trailing ":" makes tmux read the whole thing as the session part
+// of session:window.pane. Without it a name containing "." is split —
+// `-t =api.v2` means session "api", pane "v2" — so dotted session
+// names (tmux allows them) could be created but never found, killed
+// or attached. The same form works for target-session and
+// target-pane arguments.
+func exactSession(name string) string { return "=" + name + ":" }
 
 // exactPane targets a session's active pane with an exact session
-// match. capture-pane / send-keys / resize-window take a target-PANE,
-// not a target-session, and a bare "=name" is rejected for those —
-// the trailing ":" makes tmux parse it as session:window.pane with
-// the session component exact-matched.
-func exactPane(name string) string { return "=" + name + ":" }
+// match (capture-pane / send-keys / display-message take a
+// target-pane). Same string as exactSession; kept as a separate name
+// so call sites say which kind of target they pass.
+func exactPane(name string) string { return exactSession(name) }
 
 // Session is the static metadata about a tmux session.
 type Session struct {
@@ -200,7 +205,8 @@ func Kill(ctx context.Context, name string) error {
 
 // Rename renames a session.
 func Rename(ctx context.Context, oldName, newName string) error {
-	cmd := command(ctx, "tmux", "rename-session", "-t", exactSession(oldName), newName)
+	// "--" so a new name starting with "-" is a name, not a flag.
+	cmd := command(ctx, "tmux", "rename-session", "-t", exactSession(oldName), "--", newName)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("tmux rename-session: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
@@ -259,7 +265,10 @@ func PaneTitle(ctx context.Context, name string) (string, error) {
 
 // SendKeys sends a literal key sequence to the named session.
 func SendKeys(ctx context.Context, name, keys string) error {
-	cmd := command(ctx, "tmux", "send-keys", "-t", exactPane(name), keys)
+	// "--" ends tmux's option parsing: without it text such as
+	// "- fix the bug", "-1" or "--help" failed as an unknown flag, and
+	// "-R" silently reset the pane instead of being typed.
+	cmd := command(ctx, "tmux", "send-keys", "-t", exactPane(name), "--", keys)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("tmux send-keys: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
@@ -307,7 +316,7 @@ func clientTTYs(raw []byte) []string {
 // typed as characters instead of being interpreted as the Enter key.
 // Call SendKeys(ctx, name, "Enter") separately to submit.
 func SendText(ctx context.Context, name, text string) error {
-	cmd := command(ctx, "tmux", "send-keys", "-t", exactPane(name), "-l", text)
+	cmd := command(ctx, "tmux", "send-keys", "-t", exactPane(name), "-l", "--", text)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("tmux send-keys -l: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
@@ -439,6 +448,11 @@ func atoi(s string) int {
 	}
 	return n
 }
+
+// ShellAgentTag is the @ccmux_agent value for a session running a plain
+// shell rather than a coding agent. Such sessions are never classified
+// with an agent's rules.
+const ShellAgentTag = "shell"
 
 // SetSessionAgent pins a resumed conversation's agent without changing the
 // workspace's default agent or other sessions running in that workspace.
