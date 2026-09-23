@@ -866,11 +866,7 @@ func stepConfig(ctx context.Context, out io.Writer) error {
 	// Build the default-agent picker dynamically so users don't get
 	// offered agents ccmux cannot launch. PATH-installed agents count,
 	// and so do executable command paths already pinned in config.
-	agentOpts := []huh.Option[string]{}
-	for _, id := range defaultAgentChoices(ctx, cfg) {
-		agentOpts = append(agentOpts, huh.NewOption(defaultAgentLabel(id), string(id)))
-	}
-	agentOpts = append(agentOpts, huh.NewOption("shell (no agent — opt out)", "shell"))
+	agentOpts := defaultAgentOptions(defaultAgentChoices(ctx, cfg), defaultAgent)
 
 	// Interactive only — in --yes mode keep the pre-seeded defaults above.
 	if !assumeYes(ctx) {
@@ -942,6 +938,26 @@ func claudeTierToSave(onDisk, detected, chosen string) string {
 		return ""
 	}
 	return chosen
+}
+
+// defaultAgentOptions builds the "Default agent" picker: the launchable
+// choices, the configured current value, then the shell opt-out. The
+// current value is always offered because huh's Select rewrites a bound
+// value that isn't among its options to the first option — so an
+// interactive re-run silently reset agents.default to claude whenever
+// the configured agent wasn't detected this time or isn't in the
+// picker's list (grok, muse, opencode, …).
+func defaultAgentOptions(choices []agent.ID, current string) []huh.Option[string] {
+	opts := make([]huh.Option[string], 0, len(choices)+2)
+	seen := map[string]bool{}
+	for _, id := range choices {
+		opts = append(opts, huh.NewOption(defaultAgentLabel(id), string(id)))
+		seen[string(id)] = true
+	}
+	if current = strings.TrimSpace(current); current != "" && current != "shell" && !seen[current] {
+		opts = append(opts, huh.NewOption(defaultAgentLabel(agent.ID(current))+" (current)", current))
+	}
+	return append(opts, huh.NewOption("shell (no agent — opt out)", "shell"))
 }
 
 func defaultAgentChoices(ctx context.Context, cfg config.Config) []agent.ID {
