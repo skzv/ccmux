@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -113,8 +114,8 @@ func run() error {
 	srv.startSleepManager()
 	// Make sure any system-wide override (very_dangerous mode) is
 	// reverted on every clean exit path. SIGKILL won't run defers; for
-	// that case the launchd/systemd job re-runs the daemon, which calls
-	// Stop() on startup (Stop is idempotent and clears any stale state).
+	// that case the launchd/systemd job re-runs the daemon, and
+	// startSleepManager reverts the override the dead daemon left on.
 	defer srv.sleeper.Stop()
 
 	// Best-effort: tell tmux to forward selections as OSC 52 so
@@ -217,21 +218,13 @@ func run() error {
 	// Optional tailnet listener. Its mux is *separate* and intentionally
 	// excludes localOnlyRoutes — a tailnet peer must not be able to mint
 	// pair tokens for itself.
+	tailnetCtx, stopTailnet := context.WithCancel(ctx)
+	var tailnetSrv *http.Server
 	if cfg.Daemon.ListenTailnet {
-		if addr, err := tailscaleAddr(ctx, cfg.Daemon.TailnetPort); err == nil {
-			tailnetMux := http.NewServeMux()
-			srv.routes(tailnetMux)
-			tailnetSrv := newHTTPServer(rejectBrowserRequests(tailnetMux))
-			tailnetSrv.Addr = addr
-			go func() {
-				log.Printf("ccmuxd: tailnet listening on %s", addr)
-				if err := tailnetSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-					log.Printf("ccmuxd: tailnet serve: %v", err)
-				}
-			}()
-		} else {
-			log.Printf("ccmuxd: tailnet listener disabled: %v", err)
-		}
+		tailnetMux := http.NewServeMux()
+		srv.routes(tailnetMux)
+		tailnetSrv = newHTTPServer(rejectBrowserRequests(tailnetMux))
+		go srv.serveTailnet(tailnetCtx, tailnetSrv, tailscaleAddr, tailnetRetryInterval)
 	}
 
 	log.Printf("ccmuxd: %s ready (socket %s)", version, sockPath)
@@ -241,10 +234,58 @@ func run() error {
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
 	log.Println("ccmuxd: shutting down")
+	stopTailnet()
 	shutCtx, shutCancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer shutCancel()
+	if tailnetSrv != nil {
+		_ = tailnetSrv.Shutdown(shutCtx)
+	}
 	_ = httpSrv.Shutdown(shutCtx)
 	return nil
+}
+
+// tailnetRetryInterval is how often serveTailnet retries when Tailscale
+// isn't up (or the bind fails).
+const tailnetRetryInterval = 30 * time.Second
+
+// serveTailnet binds srv to this machine's tailnet address and serves
+// until ctx is cancelled. At login the daemon often starts before
+// Tailscale has an IP; a one-shot bind left the listener off until the
+// next daemon restart, while pairing kept handing out URLs for it. So
+// a failed lookup or bind is retried every `retry`, and a serve error
+// (e.g. the tailnet IP went away) goes back to looking up the address.
+// s.tailnetLive tracks whether the listener is up right now.
+func (s *server) serveTailnet(ctx context.Context, srv *http.Server, addrFor func(context.Context, int) (string, error), retry time.Duration) {
+	port := s.cfg.Daemon.TailnetPort
+	loggedDown := false
+	for {
+		addr, err := addrFor(ctx, port)
+		var ln net.Listener
+		if err == nil {
+			ln, err = (&net.ListenConfig{}).Listen(ctx, "tcp", addr)
+		}
+		if err != nil {
+			if !loggedDown {
+				log.Printf("ccmuxd: tailnet listener not up yet (retrying every %s): %v", retry, err)
+				loggedDown = true
+			}
+		} else {
+			loggedDown = false
+			log.Printf("ccmuxd: tailnet listening on %s", addr)
+			s.tailnetLive.Store(true)
+			err = srv.Serve(ln)
+			s.tailnetLive.Store(false)
+			if errors.Is(err, http.ErrServerClosed) {
+				return
+			}
+			log.Printf("ccmuxd: tailnet serve: %v", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(retry):
+		}
+	}
 }
 
 // tracked is the per-session daemon state held across poll iterations.
@@ -288,6 +329,9 @@ type server struct {
 	tokens  *daemon.TokenStore
 	events  *daemon.EventBus
 	sshUser string
+
+	// tailnetLive is true while the tailnet HTTP listener is serving.
+	tailnetLive atomic.Bool
 
 	// devices tracks paired iPhones (and Android phones once the FCM
 	// path is fully wired) for push routing. apnsSender / fcmSender

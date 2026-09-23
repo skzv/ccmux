@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -177,7 +178,9 @@ func runUninstall(plan *uninstallPlan) error {
 	uninstallServiceStep(daemonservice.Uninstall, report)
 
 	// Stop the daemon (in case it was started manually).
-	if err := exec.Command("pkill", "-TERM", "-x", "ccmuxd").Run(); err == nil {
+	pkillCtx, cancelPkill := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelPkill()
+	if err := exec.CommandContext(pkillCtx, "pkill", "-TERM", "-U", strconv.Itoa(os.Getuid()), "-x", "ccmuxd").Run(); err == nil {
 		report("stopped ccmuxd", nil)
 		time.Sleep(300 * time.Millisecond)
 	} else {

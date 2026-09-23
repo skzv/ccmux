@@ -22,7 +22,7 @@ func probeLinux(s *Status, home string) {
 	}
 	// `systemctl --user is-enabled ccmuxd` exits 0 on enabled, non-zero
 	// otherwise. We don't care about the text.
-	if err := exec.Command("systemctl", "--user", "is-enabled", "ccmuxd").Run(); err == nil {
+	if err := runCmd("systemctl", "--user", "is-enabled", "ccmuxd"); err == nil {
 		s.ServiceEnabled = true
 	}
 }
@@ -48,11 +48,11 @@ func installLinux() (Status, error) {
 	if err := os.WriteFile(s.ServicePath, []byte(body), 0o644); err != nil {
 		return s, err
 	}
-	if out, err := exec.Command("systemctl", "--user", "daemon-reload").CombinedOutput(); err != nil {
+	if out, err := combinedCmd("systemctl", "--user", "daemon-reload"); err != nil {
 		return s, fmt.Errorf("systemctl daemon-reload: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
 	// `enable --now` enables boot-time activation AND starts the unit.
-	if out, err := exec.Command("systemctl", "--user", "enable", "--now", "ccmuxd").CombinedOutput(); err != nil {
+	if out, err := combinedCmd("systemctl", "--user", "enable", "--now", "ccmuxd"); err != nil {
 		return s, fmt.Errorf("systemctl enable --now: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
 	return Probe(), nil
@@ -64,14 +64,14 @@ func installLinux() (Status, error) {
 func restartLinux() (Status, error) {
 	s := Probe()
 	if !hasSystemdUser() {
-		_ = exec.Command("pkill", "-TERM", "-x", "ccmuxd").Run()
+		_ = runCmd("pkill", "-TERM", "-U", uid(), "-x", "ccmuxd")
 		return Probe(), errors.New("systemd-user not available; sent SIGTERM and bailed — restart ccmuxd by hand")
 	}
 	if !s.ServiceEnabled {
-		_ = exec.Command("pkill", "-TERM", "-x", "ccmuxd").Run()
+		_ = runCmd("pkill", "-TERM", "-U", uid(), "-x", "ccmuxd")
 		return Probe(), errors.New("ccmuxd not registered with systemd-user; run `ccmux daemon install` first")
 	}
-	if out, err := exec.Command("systemctl", "--user", "restart", "ccmuxd").CombinedOutput(); err != nil {
+	if out, err := combinedCmd("systemctl", "--user", "restart", "ccmuxd"); err != nil {
 		return s, fmt.Errorf("systemctl restart: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
 	return Probe(), nil
@@ -85,7 +85,7 @@ func uninstallLinux() (Status, error) {
 	unitPath := filepath.Join(home, ".config", "systemd", "user", "ccmuxd.service")
 	if hasSystemdUser() {
 		// `disable --now` stops the unit AND removes the boot symlink.
-		_ = exec.Command("systemctl", "--user", "disable", "--now", "ccmuxd").Run()
+		_ = runCmd("systemctl", "--user", "disable", "--now", "ccmuxd")
 	}
 	if _, err := os.Stat(unitPath); err == nil {
 		if err := removePathQuiet(unitPath); err != nil {
@@ -93,11 +93,11 @@ func uninstallLinux() (Status, error) {
 		}
 		// Reload so systemd forgets the unit immediately.
 		if hasSystemdUser() {
-			_ = exec.Command("systemctl", "--user", "daemon-reload").Run()
+			_ = runCmd("systemctl", "--user", "daemon-reload")
 		}
 	}
 	// In case the daemon was started manually outside systemd.
-	_ = exec.Command("pkill", "-TERM", "-x", "ccmuxd").Run()
+	_ = runCmd("pkill", "-TERM", "-U", uid(), "-x", "ccmuxd")
 	return Probe(), nil
 }
 
@@ -112,5 +112,5 @@ func hasSystemdUser() bool {
 	}
 	// `is-system-running` doesn't exist for --user; use `show-environment`
 	// which is cheap and returns 0 when the user manager is reachable.
-	return exec.Command("systemctl", "--user", "show-environment").Run() == nil
+	return runCmd("systemctl", "--user", "show-environment") == nil
 }

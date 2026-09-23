@@ -13,6 +13,7 @@
 package daemonservice
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -20,6 +21,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/skzv/ccmux/internal/agent"
 )
@@ -56,7 +58,7 @@ func Probe() Status {
 	case "linux":
 		probeLinux(&s, home)
 	}
-	if err := exec.Command("pgrep", "-x", "ccmuxd").Run(); err == nil {
+	if err := runCmd("pgrep", "-U", uid(), "-x", "ccmuxd"); err == nil {
 		s.Running = true
 	}
 	return s
@@ -85,7 +87,7 @@ func Uninstall() (Status, error) {
 		return uninstallLinux()
 	}
 	// Best-effort kill on other platforms.
-	_ = exec.Command("pkill", "-TERM", "-x", "ccmuxd").Run()
+	_ = runCmd("pkill", "-TERM", "-U", uid(), "-x", "ccmuxd")
 	return Probe(), nil
 }
 
@@ -101,7 +103,7 @@ func Restart() (Status, error) {
 	case "linux":
 		return restartLinux()
 	}
-	_ = exec.Command("pkill", "-TERM", "-x", "ccmuxd").Run()
+	_ = runCmd("pkill", "-TERM", "-U", uid(), "-x", "ccmuxd")
 	return Probe(), fmt.Errorf("restart not supported on %s", runtime.GOOS)
 }
 
@@ -259,4 +261,27 @@ func removePathQuiet(path string) error {
 		return err
 	}
 	return nil
+}
+
+// commandTimeout bounds each service-manager call (launchctl,
+// systemctl, pgrep, pkill) so a wedged one can't hang
+// `ccmux daemon install` or the TUI's status probe forever.
+const commandTimeout = 30 * time.Second
+
+func runCmd(name string, args ...string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
+	defer cancel()
+	return exec.CommandContext(ctx, name, args...).Run()
+}
+
+func outputCmd(name string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
+	defer cancel()
+	return exec.CommandContext(ctx, name, args...).Output()
+}
+
+func combinedCmd(name string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
+	defer cancel()
+	return exec.CommandContext(ctx, name, args...).CombinedOutput()
 }

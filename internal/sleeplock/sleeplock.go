@@ -94,8 +94,9 @@ type Manager struct {
 	effective Mode // what we're actually running (may downgrade)
 	cutoff    int  // LowBatteryCutoff %; 0 disables monitor
 
-	holder      *exec.Cmd // the running caffeinate / systemd-inhibit
-	overrideOn  bool      // we've issued the very_dangerous system override
+	holder      *exec.Cmd     // the running caffeinate / systemd-inhibit
+	holderDone  chan struct{} // closed once holder has exited and been reaped
+	overrideOn  bool          // we've issued the very_dangerous system override
 	stopMonitor chan struct{}
 	monitorWG   sync.WaitGroup
 
@@ -153,7 +154,16 @@ func (m *Manager) SetActive(active bool) {
 // engageLocked is the on-transition path. Caller holds m.mu.
 func (m *Manager) engageLocked() {
 	if m.holder != nil {
-		return // already engaged
+		select {
+		case <-m.holderDone:
+			// The holder died on its own (killed externally, crashed).
+			// Forget it and start a fresh one below; without this the
+			// lock would stay silently disengaged for the daemon's
+			// whole lifetime while reporting itself active.
+			m.holder, m.holderDone = nil, nil
+		default:
+			return // already engaged
+		}
 	}
 	mode := m.requested
 	if mode == ModeOff {
@@ -162,7 +172,7 @@ func (m *Manager) engageLocked() {
 	// Try the system override first when very_dangerous; if sudo is not
 	// passwordless we silently degrade to dangerous so the user at
 	// least gets idle-sleep protection.
-	if mode == ModeVeryDangerous {
+	if mode == ModeVeryDangerous && !m.overrideOn {
 		if err := m.runOverride(context.Background(), true); err == nil {
 			m.overrideOn = true
 		} else {
@@ -179,14 +189,13 @@ func (m *Manager) engageLocked() {
 		m.effective = ModeOff
 		return
 	}
-	if err := cmd.Start(); err != nil {
+	if err := m.startHolderLocked(cmd); err != nil {
 		// Same stranded-override risk on a Start() failure right after a
 		// successful sudo override.
 		m.revertOverrideLocked()
 		m.effective = ModeOff
 		return
 	}
-	m.holder = cmd
 	m.effective = mode
 	// Dangerous and very_dangerous both need the battery monitor — the
 	// monitor downgrades them when on battery and below cutoff.
@@ -206,8 +215,38 @@ func (m *Manager) killHolderLocked() {
 	if !killProcessGroup(m.holder) {
 		_ = m.holder.Process.Kill()
 	}
-	_, _ = m.holder.Process.Wait()
-	m.holder = nil
+	<-m.holderDone
+	m.holder, m.holderDone = nil, nil
+}
+
+// startHolderLocked starts cmd as the lock holder and reaps it in the
+// background, closing holderDone when it exits — which is how
+// engageLocked notices a holder that died on its own. Caller holds m.mu.
+func (m *Manager) startHolderLocked(cmd *exec.Cmd) error {
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	done := make(chan struct{})
+	go func() {
+		_ = cmd.Wait()
+		close(done)
+	}()
+	m.holder, m.holderDone = cmd, done
+	return nil
+}
+
+// RevertStaleOverride clears a very_dangerous system sleep override
+// left behind by a previous daemon that died without running Stop
+// (SIGKILL, crash, power loss) — overrideOn only lives in memory, so a
+// fresh Manager can't know one is in force. Call once at startup,
+// before the first SetActive. No-op unless very_dangerous is requested.
+func (m *Manager) RevertStaleOverride() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.requested != ModeVeryDangerous || m.overrideOn {
+		return
+	}
+	_ = m.runOverride(context.Background(), false)
 }
 
 // releaseLocked is the off-transition path. Caller holds m.mu.
@@ -267,11 +306,10 @@ func (m *Manager) downgradeFromDangerous(reason string) {
 		m.effective = ModeOff
 		return
 	}
-	if err := cmd.Start(); err != nil {
+	if err := m.startHolderLocked(cmd); err != nil {
 		m.effective = ModeOff
 		return
 	}
-	m.holder = cmd
 	m.effective = ModeSafe
 	// Stop the monitor — we're not at risk of further downgrades.
 	if m.stopMonitor != nil {
@@ -344,15 +382,18 @@ func startLockProcFor(goos string, mode Mode) *exec.Cmd {
 		pid := strconv.Itoa(os.Getpid())
 		switch mode {
 		case ModeSafe:
+			// nocontext: the lock holder runs until released; killHolderLocked ends it.
 			return exec.Command("caffeinate", "-w", pid, "-s")
 		case ModeDangerous, ModeVeryDangerous:
 			// -d display, -i idle, -m disk, -s system. Works on battery.
+			// nocontext: the lock holder runs until released; killHolderLocked ends it.
 			return exec.Command("caffeinate", "-w", pid, "-d", "-i", "-m", "-s")
 		}
 	case "linux":
 		var cmd *exec.Cmd
 		switch mode {
 		case ModeSafe:
+			// nocontext: the lock holder runs until released; killHolderLocked ends it.
 			cmd = exec.Command("systemd-inhibit",
 				"--what=sleep:idle",
 				"--who=ccmuxd", "--why=Claude session active",
@@ -361,6 +402,7 @@ func startLockProcFor(goos string, mode Mode) *exec.Cmd {
 			// Also block handle-lid-switch so a lid-close on battery
 			// doesn't catch us; on most laptops this works without
 			// sudo via systemd-inhibit.
+			// nocontext: the lock holder runs until released; killHolderLocked ends it.
 			cmd = exec.Command("systemd-inhibit",
 				"--what=sleep:idle:handle-lid-switch",
 				"--who=ccmuxd", "--why=Claude session active (dangerous mode)",

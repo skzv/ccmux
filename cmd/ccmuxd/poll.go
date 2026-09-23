@@ -362,6 +362,7 @@ func (s *server) startSleepManager() {
 		cutoff = 20
 	}
 	s.sleeper = sleeplock.NewManager(sleeplock.ParseMode(modeStr), cutoff)
+	s.sleeper.RevertStaleOverride()
 	log.Printf("ccmuxd: sleep manager initialized (mode=%s, low_battery_cutoff=%d%%)",
 		s.sleeper.Requested(), cutoff)
 }

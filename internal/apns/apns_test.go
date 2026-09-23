@@ -1,11 +1,14 @@
 package apns
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/sideshow/apns2"
 )
 
 // TestSendIsNoopWhenDisabled — a Sender built from an Enabled=false
@@ -19,7 +22,7 @@ func TestSendIsNoopWhenDisabled(t *testing.T) {
 	if s.Enabled() {
 		t.Error("Enabled() = true on disabled sender")
 	}
-	if err := s.Send("token", "production", Notification{Title: "x", Body: "y"}); err != nil {
+	if err := s.Send(context.Background(), "token", "production", Notification{Title: "x", Body: "y"}); err != nil {
 		t.Errorf("Send on disabled sender returned %v, want nil", err)
 	}
 }
@@ -32,7 +35,7 @@ func TestSendIsNoopWhenNilReceiver(t *testing.T) {
 	if s.Enabled() {
 		t.Error("nil Sender.Enabled() = true, want false")
 	}
-	if err := s.Send("token", "production", Notification{}); err != nil {
+	if err := s.Send(context.Background(), "token", "production", Notification{}); err != nil {
 		t.Errorf("nil Sender.Send returned %v, want nil", err)
 	}
 }
@@ -224,4 +227,22 @@ func writeFakeKey(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+// TestIsDeadToken — which APNs rejections mean "stop sending to this
+// token" (and let the daemon prune the registration).
+func TestIsDeadToken(t *testing.T) {
+	for _, tc := range []struct {
+		resp apns2.Response
+		want bool
+	}{
+		{apns2.Response{StatusCode: 410, Reason: apns2.ReasonUnregistered}, true},
+		{apns2.Response{StatusCode: 400, Reason: apns2.ReasonBadDeviceToken}, true},
+		{apns2.Response{StatusCode: 403, Reason: apns2.ReasonExpiredProviderToken}, false},
+		{apns2.Response{StatusCode: 429, Reason: apns2.ReasonTooManyRequests}, false},
+	} {
+		if got := isDeadToken(&tc.resp); got != tc.want {
+			t.Errorf("%d %s: isDeadToken = %v, want %v", tc.resp.StatusCode, tc.resp.Reason, got, tc.want)
+		}
+	}
 }

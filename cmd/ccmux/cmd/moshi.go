@@ -55,6 +55,10 @@ func runMoshiSetup(token string) error {
 		}
 		fmt.Println("→ brew tap rjyo/moshi && brew install moshi-hook")
 		for _, args := range moshi.InstallCmds() {
+			// Interactive brew install streaming to the terminal; the
+			// user interrupts it with Ctrl-C, and any fixed timeout
+			// would kill a slow-but-healthy download.
+			// nocontext: interactive install (see above).
 			cmd := exec.Command(args[0], args[1:]...)
 			cmd.Stdout = os.Stdout
 			cmd.Stderr = os.Stderr
