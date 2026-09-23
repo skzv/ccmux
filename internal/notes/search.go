@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/skzv/ccmux/internal/jsonl"
+	"github.com/skzv/ccmux/internal/termsafe"
 )
 
 // SearchHit is one match returned by Vault.Search.
@@ -231,7 +232,8 @@ func (v Vault) searchFallback(ctx context.Context, query string, limit int) ([]S
 // hitFor builds a SearchHit from raw rg/fallback fields, normalizing
 // the absolute + relative paths and trimming the snippet. Rel is
 // slash-separated (filepath.ToSlash) so hits match Entry.Rel's
-// convention on Windows too.
+// convention on Windows too. The snippet is note text headed for the
+// terminal, so control sequences are stripped (termsafe).
 func hitFor(root, absPath string, line int, snippet string) SearchHit {
 	rel, err := filepath.Rel(root, absPath)
 	if err != nil {
@@ -242,6 +244,6 @@ func hitFor(root, absPath string, line int, snippet string) SearchHit {
 		Path:    absPath,
 		Rel:     rel,
 		LineNum: line,
-		Snippet: strings.TrimSpace(strings.TrimRight(snippet, "\n")),
+		Snippet: strings.TrimSpace(termsafe.String(snippet)),
 	}
 }
