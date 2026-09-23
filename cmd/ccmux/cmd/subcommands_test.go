@@ -54,8 +54,8 @@ func TestHostAdd_PersistsToConfig(t *testing.T) {
 	}
 }
 
-// TestHostRemove_DropsByName — removing a host filters by name. A
-// missing name is a silent no-op (matches the current behavior).
+// TestHostRemove_DropsByName — removing a host filters by name. (An
+// unknown name is an error — TestHostRemove_UnknownNameErrorsWithoutWriting.)
 func TestHostRemove_DropsByName(t *testing.T) {
 	withTempCcmuxConfig(t)
 	cfg, _ := config.Load()
@@ -135,6 +135,13 @@ func TestDetachOthersForAttachIntent(t *testing.T) {
 // local tmux server; with no tmux either, it's an empty array.
 // Either way the output must be parseable JSON.
 func TestListCmd_JSONFlag(t *testing.T) {
+	// Hermetic: a temp HOME (no daemon socket) and a private, empty tmux
+	// socket dir, so this never reads the developer's real daemon or
+	// tmux server.
+	withTempCcmuxConfig(t)
+	t.Setenv("TMUX_TMPDIR", t.TempDir())
+	t.Setenv("TMUX", "")
+	os.Unsetenv("TMUX")
 	// Capture stdout.
 	orig := os.Stdout
 	r, w, _ := os.Pipe()

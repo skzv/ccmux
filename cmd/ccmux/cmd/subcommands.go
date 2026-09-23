@@ -37,19 +37,28 @@ import (
 // whichever agent the project's .ccmux/agent sidecar records.
 func newAttachCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "attach [project]",
+		Use:   "attach [project|path]",
 		Short: "Attach to a project's agent session (creates one if missing)",
-		Args:  cobra.MaximumNArgs(1),
+		Long: `Attach to a project's agent session, creating it if it isn't running.
+
+A bare name (no "/") is a project under the projects root (~/Projects,
+projects.root in config, or --projects), so ` + "`ccmux attach auth-redesign`" + `
+works from any directory. Anything with a "/" (./scratch, ../x, /abs/x)
+is a path. With no argument, the current directory is used. A directory
+that doesn't exist is an error — the session is never started elsewhere.`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
-			path := "."
+			arg := ""
 			if len(args) == 1 {
-				path = args[0]
+				arg = args[0]
 			}
-			abs, err := filepath.Abs(path)
+			cfg, _ := config.Load()
+			root, err := cliProjectsRoot(cfg)
 			if err != nil {
 				return err
 			}
-			session := tmux.SessionNameForPath(abs)
+			dir, found := resolveAttachDir(arg, root)
+			session := tmux.SessionNameForPath(dir)
 
 			ctx := context.Background()
 			has, err := tmux.Has(ctx, session)
@@ -58,12 +67,18 @@ func newAttachCmd() *cobra.Command {
 			}
 			created := false
 			if !has {
+				// Never launch into a directory that doesn't exist:
+				// tmux silently falls back to $HOME for a missing -c
+				// dir, and `--continue` there resumes an unrelated
+				// conversation.
+				if !found {
+					return missingAttachDirErr(arg, dir, root)
+				}
 				// Resolve the launch command from the project's
 				// sidecar so an Antigravity-tagged project doesn't
 				// silently boot into claude.
-				cfg, _ := config.Load()
-				launch := agent.LaunchCmd(project.ReadAgent(abs), true, cfg.AgentCommands())
-				if err := tmux.New(ctx, session, abs, launch); err != nil {
+				launch := agent.LaunchCmd(project.ReadAgent(dir), true, cfg.AgentCommands())
+				if err := tmux.New(ctx, session, dir, launch); err != nil {
 					return err
 				}
 				created = true
@@ -71,9 +86,56 @@ func newAttachCmd() *cobra.Command {
 			// Replace this process with tmux attach, applying ccmux
 			// chrome first so a CLI-spawned session looks the same as a
 			// TUI/daemon-spawned one.
-			return attachWithChrome(session, filepath.Base(abs), detachOthersForAttachIntent(created))
+			return attachWithChrome(session, filepath.Base(dir), detachOthersForAttachIntent(created))
 		},
 	}
+}
+
+// resolveAttachDir maps `ccmux attach`'s argument to a directory.
+//
+// A bare name (no path separator) is a project name first: the README
+// flow is `ccmux new auth-redesign` then `ccmux attach auth-redesign`,
+// which must work from any CWD — resolving it against the CWD started
+// the agent in the wrong directory. If <root>/<name> doesn't exist, a
+// bare name falls back to a CWD-relative directory. Anything else (".",
+// "./x", "../x", "/abs/x") is a path relative to the CWD; "" means ".".
+//
+// found reports whether dir exists. The session name is derived from
+// dir either way, so a session that is already running stays
+// attachable after its directory is gone.
+func resolveAttachDir(arg, root string) (dir string, found bool) {
+	if arg == "" {
+		arg = "."
+	}
+	if isBareProjectName(arg) {
+		if p := filepath.Join(root, arg); isDir(p) {
+			return p, true
+		}
+	}
+	abs, err := filepath.Abs(arg)
+	if err != nil {
+		return arg, false
+	}
+	return abs, isDir(abs)
+}
+
+// isBareProjectName reports whether arg names a project rather than a
+// path: no separator, and not "." / "..".
+func isBareProjectName(arg string) bool {
+	return arg != "." && arg != ".." &&
+		!strings.ContainsRune(arg, '/') && !strings.ContainsRune(arg, filepath.Separator)
+}
+
+func missingAttachDirErr(arg, dir, root string) error {
+	if isBareProjectName(arg) {
+		return fmt.Errorf("no project %q under %s (and no directory %s); create it with `ccmux new %s`", arg, root, dir, arg)
+	}
+	return fmt.Errorf("no such directory: %s", dir)
+}
+
+func isDir(p string) bool {
+	fi, err := os.Stat(p)
+	return err == nil && fi.IsDir()
 }
 
 // attachDetachOthers loads the user's config and reports whether an
@@ -113,11 +175,16 @@ func newNewCmd() *cobra.Command {
 			if err := project.ValidateName(args[0]); err != nil {
 				return err
 			}
-			// Create under the configured projects root (README:
-			// "Creates ~/Projects/<name>"), not the current directory.
+			// Create under the projects root (README: "Creates
+			// ~/Projects/<name>"; --projects overrides it), not the
+			// current directory.
+			root, err := cliProjectsRoot(cfg)
+			if err != nil {
+				return err
+			}
 			opts := scaffold.Options{
 				Name:     args[0],
-				Dir:      filepath.Join(project.ResolveRoot(cfg.Projects.Root), args[0]),
+				Dir:      filepath.Join(root, args[0]),
 				Commands: cfg.AgentCommands(),
 			}
 			id, err := newCmdAgent(agentFlag, cfg.Agents.Default)
@@ -194,6 +261,11 @@ func newListCmd() *cobra.Command {
 				}
 			}
 			if asJSON {
+				// Always an array: a nil slice encodes as `null`, which
+				// breaks `ccmux list --json | jq '.[]'` on an idle box.
+				if sessions == nil {
+					sessions = []daemon.SessionState{}
+				}
 				return json.NewEncoder(os.Stdout).Encode(sessions)
 			}
 			tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
@@ -215,18 +287,43 @@ func newKillCmd() *cobra.Command {
 		Short: "Kill a session by project name or full session name",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			name := args[0]
-			// A bare project name/path is resolved to its session name
-			// through the same sanitizer `ccmux attach` and the daemon
-			// use (tmux.SessionNameForPath) — a weaker dots-only rewrite
-			// here would build the wrong target for any project whose
-			// name contains a space, colon, or other special character.
-			if !strings.HasPrefix(name, "c-") {
-				name = tmux.SessionNameForPath(name)
+			ctx := context.Background()
+			name, err := resolveKillTarget(ctx, args[0], tmux.Has)
+			if err != nil {
+				return err
 			}
-			return tmux.Kill(context.Background(), name)
+			return tmux.Kill(ctx, name)
 		},
 	}
+}
+
+// resolveKillTarget maps `ccmux kill`'s argument to a session name. An
+// argument that already IS a live session is killed as-is; otherwise
+// it's a project name/path, mapped through the same sanitizer `ccmux
+// attach` and the daemon use (tmux.SessionNameForPath).
+//
+// It used to guess from the "c-" prefix alone: for a project literally
+// named `c-foo` (session c-c-foo), `kill c-foo` killed project foo's
+// session instead, and a session without the prefix (`ccmux shell
+// --name work`) was rewritten to c-work and could never be killed.
+func resolveKillTarget(ctx context.Context, arg string, has func(context.Context, string) (bool, error)) (string, error) {
+	exists, err := has(ctx, arg)
+	if err != nil {
+		return "", err
+	}
+	if exists {
+		return arg, nil
+	}
+	mapped := tmux.SessionNameForPath(arg)
+	if mapped != arg {
+		if exists, err = has(ctx, mapped); err != nil {
+			return "", err
+		}
+		if exists {
+			return mapped, nil
+		}
+	}
+	return "", fmt.Errorf("no session named %q, and no session %q for a project named %q", arg, mapped, arg)
 }
 
 // newSetupCmd: `ccmux setup` first-run wizard. Idempotent — re-running
@@ -351,23 +448,12 @@ func runDoctor() error {
 		}
 		return macos
 	}
-	checks := []struct {
-		bin, hint string
-	}{
-		{"tmux", hintFor("brew install tmux", "apt/dnf/pacman install tmux")},
-		{"mosh", hintFor("brew install mosh", "apt/dnf/pacman install mosh")},
-		{"tailscale", "https://tailscale.com/download"},
-		{"rg", hintFor("brew install ripgrep (optional, accelerates notes search)", "apt install ripgrep (optional)")},
-	}
-	bad := 0
-	for _, c := range checks {
-		if _, err := exec.LookPath(c.bin); err != nil {
-			fmt.Printf("✗ %s not on PATH — %s\n", c.bin, c.hint)
-			bad++
-		} else {
-			fmt.Printf("✓ %s\n", c.bin)
-		}
-	}
+	bad := runDoctorBinChecks(os.Stdout, []doctorBinCheck{
+		{bin: "tmux", hint: hintFor("brew install tmux", "apt/dnf/pacman install tmux")},
+		{bin: "mosh", hint: hintFor("brew install mosh", "apt/dnf/pacman install mosh")},
+		{bin: "tailscale", hint: "https://tailscale.com/download"},
+		{bin: "rg", hint: hintFor("brew install ripgrep — accelerates notes search", "apt install ripgrep — accelerates notes search"), optional: true},
+	}, exec.LookPath)
 
 	// AI agents block. At least one must be installed for ccmux to
 	// be useful — without an agent there's nothing to put in the tmux
@@ -499,6 +585,34 @@ func runDoctor() error {
 		os.Exit(bad)
 	}
 	return nil
+}
+
+// doctorBinCheck is one "is <bin> on PATH" doctor line.
+type doctorBinCheck struct {
+	bin, hint string
+	// optional binaries are reported when missing but never count
+	// toward doctor's failure exit code.
+	optional bool
+}
+
+// runDoctorBinChecks prints one line per check and returns how many
+// REQUIRED binaries are missing — doctor's exit code sums these. A
+// missing optional binary (rg) used to count too, so a healthy machine
+// without ripgrep made `ccmux doctor` exit 1.
+func runDoctorBinChecks(w io.Writer, checks []doctorBinCheck, lookPath func(string) (string, error)) int {
+	bad := 0
+	for _, c := range checks {
+		switch _, err := lookPath(c.bin); {
+		case err == nil:
+			fmt.Fprintf(w, "✓ %s\n", c.bin)
+		case c.optional:
+			fmt.Fprintf(w, "· %s not on PATH (optional) — %s\n", c.bin, c.hint)
+		default:
+			fmt.Fprintf(w, "✗ %s not on PATH — %s\n", c.bin, c.hint)
+			bad++
+		}
+	}
+	return bad
 }
 
 // agentInstallHint returns the recommended install command for an
@@ -903,11 +1017,17 @@ func newHostCmd() *cobra.Command {
 				if err != nil {
 					return fmt.Errorf("load config (not modifying it): %w", err)
 				}
-				out := cfg.Hosts[:0]
+				out := make([]config.Host, 0, len(cfg.Hosts))
 				for _, h := range cfg.Hosts {
 					if h.Name != args[0] {
 						out = append(out, h)
 					}
+				}
+				// An unknown name is an error, and nothing is written:
+				// this used to exit 0 (a typo looked like success) and
+				// still rewrite config.toml.
+				if len(out) == len(cfg.Hosts) {
+					return fmt.Errorf("no host named %q (see `ccmux host list`)", args[0])
 				}
 				cfg.Hosts = out
 				return config.Save(cfg)

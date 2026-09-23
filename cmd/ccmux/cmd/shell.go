@@ -18,7 +18,7 @@ import (
 
 	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/daemon"
-	"github.com/skzv/ccmux/internal/tmux"
+	"github.com/skzv/ccmux/internal/tmuxchrome"
 )
 
 const remoteShellAttachPath = "PATH=/opt/homebrew/bin:/usr/local/bin:/home/linuxbrew/.linuxbrew/bin:/snap/bin:$PATH"
@@ -144,9 +144,11 @@ func remoteShellTmuxAttach(session string) string {
 }
 
 // shellAttachCmd builds the foreground tmux attach for a freshly-created
-// `ccmux shell` local session. Fresh-session attach preserves other clients.
+// `ccmux shell` local session. Fresh-session attach preserves other
+// clients; from inside tmux it's a switch-client, since a nested
+// attach-session is refused after the session was already created.
 func shellAttachCmd(name string) *exec.Cmd {
-	return tmux.AttachCmd(name, false)
+	return tmuxAttachCmd(name, false, tmuxchrome.InTmux())
 }
 
 // execTmuxAttach is the foreground replacement for "tmux attach -t <name>".
@@ -154,11 +156,7 @@ func shellAttachCmd(name string) *exec.Cmd {
 // in the parent run; for a one-shot CLI subcommand the difference doesn't
 // matter.
 func execTmuxAttach(name string) error {
-	c := shellAttachCmd(name)
-	c.Stdin = os.Stdin
-	c.Stdout = os.Stdout
-	c.Stderr = os.Stderr
-	return c.Run()
+	return runForeground(shellAttachCmd(name))
 }
 
 func defaultPort(p int) int {
