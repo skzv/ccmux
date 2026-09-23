@@ -193,12 +193,31 @@ func findCcmuxRoot(start string) string {
 // — the cheap, good-enough signature of the ccmux checkout. (Mirrors
 // the same predicate in cmd/ccmux/cmd/update.go; kept independent so
 // internal/ doesn't depend on cmd/.)
-func looksLikeCcmuxRepo(dir string) bool {
+func looksLikeCcmuxRepo(dir string) bool { return LooksLikeCcmuxRepo(dir) }
+
+// ccmuxModulePath is the module line a ccmux checkout's go.mod declares.
+const ccmuxModulePath = "github.com/skzv/ccmux"
+
+// LooksLikeCcmuxRepo reports whether dir is a ccmux source checkout:
+// a .git entry, a Makefile, and a go.mod declaring the ccmux module.
+// `ccmux update` runs `git pull` and `make install` in whatever this
+// accepts, so ".git + Makefile" alone was not enough — a binary under
+// ~/dotfiles/bin would have built the dotfiles repo.
+func LooksLikeCcmuxRepo(dir string) bool {
 	if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
 		return false
 	}
 	if _, err := os.Stat(filepath.Join(dir, "Makefile")); err != nil {
 		return false
 	}
-	return true
+	gomod, err := os.ReadFile(filepath.Join(dir, "go.mod"))
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(gomod), "\n") {
+		if f := strings.Fields(line); len(f) == 2 && f[0] == "module" && f[1] == ccmuxModulePath {
+			return true
+		}
+	}
+	return false
 }

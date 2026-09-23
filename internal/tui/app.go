@@ -160,9 +160,13 @@ type App struct {
 	runtimeOverrides   func(*config.Config)
 	detectedClaudeTier string
 	startupConfigErr   error
-	styles             styles.Styles
-	keys               Keymap
-	version            string
+
+	// convLoadGen numbers conversation-list loads; see
+	// refreshConversationsCmd.
+	convLoadGen int
+	styles      styles.Styles
+	keys        Keymap
+	version     string
 
 	width, height int
 
@@ -494,13 +498,19 @@ func (a App) loadConvPreviewCmd(c conversations.Conversation) tea.Cmd {
 // (live, via H) or set conversations.show_headless=true in config.
 // The live toggle takes priority over the config so a temporary peek
 // at automation runs doesn't require a config edit.
-func (a App) refreshConversationsCmd() tea.Cmd {
+//
+// Each load is numbered: the walk can take a while, so two quick
+// refreshes (pressing H twice) may finish out of order, and only the
+// newest may be applied.
+func (a *App) refreshConversationsCmd() tea.Cmd {
+	a.convLoadGen++
+	gen := a.convLoadGen
 	exclude := !a.conversationsM.showHeadless
 	return func() tea.Msg {
 		list, err := conversations.All(conversations.Options{
 			ExcludeHeadless: exclude,
 		})
-		return conversationsLoadedMsg{List: list, Err: err}
+		return conversationsLoadedMsg{List: list, Err: err, Gen: gen}
 	}
 }
 
@@ -599,6 +609,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(a.refreshConversationsCmd(), a.conversationsM.SpinnerTickCmd())
 
 	case conversationsLoadedMsg:
+		if msg.Gen != a.convLoadGen {
+			return a, nil // superseded by a newer refresh
+		}
 		if msg.Err != nil {
 			a.conversationsM.SetLoadErr(msg.Err.Error())
 			return a, nil
@@ -971,11 +984,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// A screen (Notes or Settings) asked the app to suspend and run
 		// $EDITOR. Route the follow-up reload by Source so the right
 		// screen refreshes when control returns.
-		var onSuccess tea.Msg = notesReloadMsg{}
-		if msg.Source == "settings" {
-			onSuccess = configReloadMsg{}
-		}
-		return a, openEditorCmd(msg.Editor, msg.Path, onSuccess)
+		return a, openEditorCmd(msg.Editor, msg.Path, editorReloadMsg(msg.Source))
+
+	case agentsReloadMsg:
+		// An agent's config file was edited in $EDITOR from the Agents
+		// tab (Codex, Antigravity, Gemini) — re-read them all.
+		a.agentsM.Reload()
+		return a, nil
 
 	case configReloadMsg:
 		// User finished editing ~/.config/ccmux/config.toml in $EDITOR.
@@ -1097,6 +1112,16 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case tea.KeyMsg:
+		// The "Opening…" overlay hides every screen and dialog, so keys
+		// must not reach them: a second Enter would start a duplicate
+		// resume, and `q` would open a quit confirmation nobody can see.
+		// ctrl+c still quits.
+		if a.attach.active {
+			if msg.String() == "ctrl+c" {
+				return a, tea.Quit
+			}
+			return a, nil
+		}
 		if a.confirm.open() {
 			return a.updateConfirmationKey(msg)
 		}
@@ -1218,10 +1243,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 
-		// Esc dismisses the current toast (when no modal is open). The
-		// projects-screen modal handles esc itself before this code runs.
-		if msg.String() == "esc" && a.toasts.Active() &&
-			!(a.screen == ScreenProjects && (a.projectsM.form != nil || a.projectsM.menu != nil)) {
+		// Esc dismisses the current toast — unless a form, editor or
+		// overlay is open, where esc belongs to it. (A toast that keeps
+		// being re-set, like the daemon-offline refresh error, used to
+		// make every such form impossible to close.)
+		if msg.String() == "esc" && a.toasts.Active() && !a.modalCapturingText() {
 			a.toasts.Clear()
 			return a, nil
 		}
@@ -1740,6 +1766,19 @@ func (a *App) markTourShown() {
 		c.Tour.ShownVersion = version
 		return nil
 	})
+}
+
+// editorReloadMsg is the message that refreshes the screen which opened
+// $EDITOR, once the editor exits.
+func editorReloadMsg(source string) tea.Msg {
+	switch source {
+	case "settings":
+		return configReloadMsg{}
+	case "agents":
+		return agentsReloadMsg{}
+	default:
+		return notesReloadMsg{}
+	}
 }
 
 // adoptConfig makes cfg (fresh from disk) the app's config: re-applies

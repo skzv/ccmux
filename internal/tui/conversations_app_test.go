@@ -518,3 +518,21 @@ func TestApp_ConversationDeletedMsg_ErrorToasts(t *testing.T) {
 		t.Errorf("delete-failure toast kind = %v, want toastError", toast.Kind)
 	}
 }
+
+// TestConversationsLoaded_StaleResultIgnored — two quick refreshes can
+// finish out of order; the older one must not overwrite the newer.
+func TestConversationsLoaded_StaleResultIgnored(t *testing.T) {
+	a := newAppForTest(t)
+	_ = a.refreshConversationsCmd() // gen 1 (e.g. H pressed)
+	_ = a.refreshConversationsCmd() // gen 2 (H pressed again)
+	newer := []conversations.Conversation{{ID: "new"}}
+	older := []conversations.Conversation{{ID: "old-1"}, {ID: "old-2"}}
+
+	m, _ := a.Update(conversationsLoadedMsg{List: newer, Gen: 2})
+	a = m.(App)
+	m, _ = a.Update(conversationsLoadedMsg{List: older, Gen: 1})
+	a = m.(App)
+	if l := a.conversationsM.list; len(l) != 1 || l[0].ID != "new" {
+		t.Errorf("stale load replaced the list: %+v", l)
+	}
+}
