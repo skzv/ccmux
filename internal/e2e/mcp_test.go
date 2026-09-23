@@ -164,8 +164,9 @@ func TestMCPServer_RoundTripsThroughLiveDaemon(t *testing.T) {
 }
 
 // TestMCPServer_MutateGateOff — calling spawn_session via the
-// read-only server must produce JSON-RPC method-not-found. Pins the
-// security contract: opt-in or it's not on the wire.
+// read-only server must produce the JSON-RPC error MCP specifies for an
+// unknown tool (-32602 invalid params). Pins the security contract:
+// opt-in or it's not on the wire.
 func TestMCPServer_MutateGateOff(t *testing.T) {
 	e := newEnv(t)
 	e.startDaemon()
@@ -179,8 +180,11 @@ func TestMCPServer_MutateGateOff(t *testing.T) {
 	if rerr == nil {
 		t.Fatal("spawn_session must return a JSON-RPC error when mutate is gated")
 	}
-	if code, _ := rerr["code"].(float64); int(code) != -32601 {
-		t.Errorf("error code = %v, want -32601 method not found", rerr["code"])
+	if code, _ := rerr["code"].(float64); int(code) != -32602 {
+		t.Errorf("error code = %v, want -32602 (MCP's code for an unknown tool)", rerr["code"])
+	}
+	if resp["result"] != nil {
+		t.Errorf("gated tool must not return a result: %v", resp["result"])
 	}
 }
 

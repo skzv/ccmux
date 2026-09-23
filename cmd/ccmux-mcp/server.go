@@ -19,7 +19,9 @@ import (
 const protocolVersion = "2025-06-18"
 
 // supportedProtocolVersions are the MCP revisions this server can
-// serve. Everything we implement (tools over newline-delimited stdio)
+// serve. Everything we implement (tools over newline-delimited stdio,
+// plus the JSON-RPC batches 2025-03-26 requires servers to accept —
+// 2025-06-18 dropped batching, and accepting one anyway is harmless)
 // has an identical wire shape across these revisions, so when the
 // client requests one of them in initialize we echo it back per spec;
 // anything else gets protocolVersion and the client decides.
@@ -128,27 +130,71 @@ func (s *Server) Run(ctx context.Context, in io.Reader, out io.Writer) error {
 	}
 }
 
-// dispatchLine parses and handles one raw frame, writing the response
-// (if any) to enc.
+// dispatchLine parses and handles one raw frame — a single request or
+// a JSON-RPC batch — writing the response (if any) to enc.
 func (s *Server) dispatchLine(ctx context.Context, enc *json.Encoder, line []byte) error {
-	var req rpcRequest
-	if err := json.Unmarshal(line, &req); err != nil {
-		// The id couldn't be determined, so per spec it must be
-		// literal null — not absent.
+	if trimmed := bytes.TrimLeft(line, " \t\r\n"); len(trimmed) > 0 && trimmed[0] == '[' {
+		return s.dispatchBatch(ctx, enc, trimmed)
+	}
+	resp, respond := s.dispatchOne(ctx, line)
+	if !respond {
+		return nil
+	}
+	return s.writeFrame(enc, resp)
+}
+
+// dispatchBatch handles a JSON-RPC 2.0 batch (an array of requests).
+// Protocol 2025-03-26, which initialize negotiates, requires servers
+// to accept batches; answering them with a parse error broke any
+// client that used them. Per JSON-RPC: the reply is ONE array holding a
+// response per request (notifications get none); an all-notification
+// batch gets no reply at all; an empty array is itself an Invalid
+// Request, answered with a single (non-array) error. Elements run in
+// order — JSON-RPC allows any order, and sequential keeps tool calls
+// from racing each other.
+func (s *Server) dispatchBatch(ctx context.Context, enc *json.Encoder, line []byte) error {
+	var elems []json.RawMessage
+	if err := json.Unmarshal(line, &elems); err != nil {
 		return s.writeFrame(enc, rpcResponse{JSONRPC: "2.0", ID: nullID, Error: &rpcError{Code: errParseError, Message: "parse error: " + err.Error()}})
+	}
+	if len(elems) == 0 {
+		return s.writeFrame(enc, rpcResponse{JSONRPC: "2.0", ID: nullID, Error: &rpcError{Code: errInvalidRequest, Message: "invalid request: empty batch"}})
+	}
+	out := make([]rpcResponse, 0, len(elems))
+	for _, el := range elems {
+		if resp, respond := s.dispatchOne(ctx, el); respond {
+			out = append(out, resp)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return s.writeFrame(enc, out)
+}
+
+// dispatchOne parses and handles one request object. respond is false
+// for notifications, which get no response.
+func (s *Server) dispatchOne(ctx context.Context, raw []byte) (resp rpcResponse, respond bool) {
+	var req rpcRequest
+	if err := json.Unmarshal(raw, &req); err != nil {
+		// The id couldn't be determined, so per spec it must be
+		// literal null — not absent. Well-formed JSON that isn't a
+		// request object (e.g. a batch element `1`) is an Invalid
+		// Request rather than a parse error.
+		if json.Valid(raw) {
+			return rpcResponse{JSONRPC: "2.0", ID: nullID, Error: &rpcError{Code: errInvalidRequest, Message: "invalid request: " + err.Error()}}, true
+		}
+		return rpcResponse{JSONRPC: "2.0", ID: nullID, Error: &rpcError{Code: errParseError, Message: "parse error: " + err.Error()}}, true
 	}
 	if req.JSONRPC != "2.0" {
 		id := req.ID
 		if len(id) == 0 {
 			id = nullID
 		}
-		return s.writeFrame(enc, rpcResponse{JSONRPC: "2.0", ID: id, Error: &rpcError{Code: errInvalidRequest, Message: `jsonrpc must be "2.0"`}})
+		return rpcResponse{JSONRPC: "2.0", ID: id, Error: &rpcError{Code: errInvalidRequest, Message: `jsonrpc must be "2.0"`}}, true
 	}
 	resp, isNotification := s.handle(ctx, &req)
-	if isNotification {
-		return nil
-	}
-	return s.writeFrame(enc, resp)
+	return resp, !isNotification
 }
 
 // readLimitedLine reads one newline-terminated line from r, capped at
@@ -201,9 +247,10 @@ func trimLineEnding(b []byte) []byte {
 	return bytes.TrimSuffix(b, []byte("\r"))
 }
 
-// writeFrame serializes a response and writes it to the encoder.
-// Errors propagate to Run so no more requests execute after stdout fails.
-func (s *Server) writeFrame(enc *json.Encoder, resp rpcResponse) error {
+// writeFrame serializes a response (or a batch's []rpcResponse) and
+// writes it to the encoder as one line. Errors propagate to Run so no
+// more requests execute after stdout fails.
+func (s *Server) writeFrame(enc *json.Encoder, resp any) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	return enc.Encode(resp)
@@ -337,7 +384,16 @@ func (s *Server) handleToolsCall(ctx context.Context, raw json.RawMessage) (tool
 	}
 	tool, ok := s.tools[p.Name]
 	if !ok {
-		return toolResult{}, &rpcError{Code: errMethodNotFound, Message: "unknown tool: " + p.Name}
+		// MCP reports an unknown tool as Invalid params (the method,
+		// tools/call, exists — its `name` argument is what's wrong).
+		return toolResult{}, &rpcError{Code: errInvalidParams, Message: "unknown tool: " + p.Name}
+	}
+	// `arguments` is optional in MCP. Hand handlers `{}` for a missing
+	// or null value so a tool whose arguments are all optional just
+	// works, and one with required fields reports which field is
+	// missing — not "unexpected end of JSON input".
+	if len(bytes.TrimSpace(p.Arguments)) == 0 || bytes.Equal(bytes.TrimSpace(p.Arguments), []byte("null")) {
+		p.Arguments = json.RawMessage("{}")
 	}
 	// Backstop: a tool handler can't be allowed to hang forever and
 	// block the stdio loop. 30s matches the daemon's per-call budget
