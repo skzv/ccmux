@@ -25,47 +25,59 @@ func mustStyles(t *testing.T) styles.Styles {
 
 // TestModalCapturingText_PerModelSeams pins every state that must
 // suppress global single-key handlers, exercising the per-model
-// capturesInput() seams App.modalCapturingText ORs together. The
+// capturesInput() seams App.modalCapturingText consults. The
 // hand-maintained cross-model list this replaced missed newly-added
 // modals twice; this table is the contract each seam now upholds.
+//
+// A screen's modal captures input only while that screen is focused
+// (screen != appOverlay): a Notes info panel left open must not
+// disable `?` / `T` / esc on Sessions. App-level overlays capture on
+// every screen.
 func TestModalCapturingText_PerModelSeams(t *testing.T) {
+	const appOverlay = Screen(-1)
 	cases := []struct {
-		name string
-		mut  func(a *App)
+		name   string
+		screen Screen
+		mut    func(a *App)
 	}{
-		{"sessions new-session form", func(a *App) { f := newNewSessionForm(a.styles, nil, "", ""); a.sessionsM.form = &f }},
-		{"sessions rename form", func(a *App) { f := newRenameForm(a.styles, "c-x"); a.sessionsM.renameForm = &f }},
-		{"projects new-project form", func(a *App) { f := newNewProjectForm(a.styles, nil, ""); a.projectsM.form = &f }},
-		{"projects menu", func(a *App) { a.projectsM.menu = &projectMenuModel{} }},
-		{"projects filter", func(a *App) { a.projectsM.filterActive = true }},
-		{"notes search", func(a *App) { a.notes.searching = true }},
-		{"notes new-note form", func(a *App) { a.notes.newNoteForm = &newNoteFormModel{} }},
-		{"notes info overlay", func(a *App) { a.notes.noteInfo.open = true }},
-		{"settings inline editor", func(a *App) { a.settings.editing = true }},
-		{"network detail overlay", func(a *App) { a.network.detailOpen = true }},
-		{"agents claude picker", func(a *App) {
+		{"sessions new-session form", ScreenSessions, func(a *App) { f := newNewSessionForm(a.styles, nil, "", ""); a.sessionsM.form = &f }},
+		{"sessions rename form", ScreenSessions, func(a *App) { f := newRenameForm(a.styles, "c-x"); a.sessionsM.renameForm = &f }},
+		{"projects new-project form", ScreenProjects, func(a *App) { f := newNewProjectForm(a.styles, nil, ""); a.projectsM.form = &f }},
+		{"projects menu", ScreenProjects, func(a *App) { a.projectsM.menu = &projectMenuModel{} }},
+		{"projects filter", ScreenProjects, func(a *App) { a.projectsM.filterActive = true }},
+		{"conversations search", ScreenConversations, func(a *App) { a.conversationsM.searchActive = true }},
+		{"notes search", ScreenNotes, func(a *App) { a.notes.searching = true }},
+		{"notes new-note form", ScreenNotes, func(a *App) { a.notes.newNoteForm = &newNoteFormModel{} }},
+		{"notes info overlay", ScreenNotes, func(a *App) { a.notes.noteInfo.open = true }},
+		{"settings inline editor", ScreenSettings, func(a *App) { a.settings.editing = true }},
+		{"network detail overlay", ScreenNetwork, func(a *App) { a.network.detailOpen = true }},
+		{"agents claude picker", ScreenAgents, func(a *App) {
 			a.agentsM.active = agent.IDClaude
 			a.agentsM.claude.picker = pickerModel
 		}},
-		{"quit confirmation", func(a *App) { a.confirm = newQuitConfirmation() }},
-		{"tour", func(a *App) { a.tour.Open() }},
-		{"help overlay", func(a *App) { a.helpOpen = true }},
-		{"usage overlay", func(a *App) { a.usageOpen = true }},
-		{"conversation preview overlay", func(a *App) {
+		{"quit confirmation", appOverlay, func(a *App) { a.confirm = newQuitConfirmation() }},
+		{"tour", appOverlay, func(a *App) { a.tour.Open() }},
+		{"help overlay", appOverlay, func(a *App) { a.helpOpen = true }},
+		{"usage overlay", appOverlay, func(a *App) { a.usageOpen = true }},
+		{"conversation preview overlay", appOverlay, func(a *App) {
 			a.convPreview.Open(conversations.Conversation{ID: "x"})
 		}},
-		{"project info overlay", func(a *App) { a.projectInfoOpen = true }},
-		{"settings info overlay", func(a *App) { a.settingsInfoOpen = true }},
+		{"project info overlay", appOverlay, func(a *App) { a.projectInfoOpen = true }},
+		{"settings info overlay", appOverlay, func(a *App) { a.settingsInfoOpen = true }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			a := newAppForTest(t)
-			if a.modalCapturingText() {
-				t.Fatal("baseline App already capturing text — table is meaningless")
-			}
-			tc.mut(&a)
-			if !a.modalCapturingText() {
-				t.Errorf("%s open but modalCapturingText() = false — global keys would fire over the modal", tc.name)
+			for _, screen := range allScreens() {
+				a := newAppForTest(t)
+				a.screen = screen
+				if a.modalCapturingText() {
+					t.Fatalf("baseline App on %v already capturing text — table is meaningless", screen)
+				}
+				tc.mut(&a)
+				want := tc.screen == appOverlay || tc.screen == screen
+				if got := a.modalCapturingText(); got != want {
+					t.Errorf("%s open, focused screen %v: modalCapturingText() = %v, want %v", tc.name, screen, got, want)
+				}
 			}
 		})
 	}

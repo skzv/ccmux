@@ -232,11 +232,14 @@ type App struct {
 //
 // The App owns only its own overlay states here; every screen model
 // reports its modal/text-capture states through its own
-// capturesInput() method, OR'd below. This replaces the old
-// hand-maintained cross-model list, which missed newly-added modals
-// twice — a screen adding a modal now extends its own
-// capturesInput(), right next to the state it adds, instead of
-// remembering to edit App.
+// capturesInput() method. This replaces the old hand-maintained
+// cross-model list, which missed newly-added modals twice — a screen
+// adding a modal now extends its own capturesInput(), right next to
+// the state it adds, instead of remembering to edit App.
+//
+// Only the ACTIVE screen's capturesInput counts. OR-ing every screen's
+// made a modal left open on one screen (the Notes info panel, say)
+// disable `?`, `T`, esc-to-dismiss and friends on every other screen.
 func (a App) modalCapturingText() bool {
 	if a.confirm.open() {
 		return true
@@ -248,14 +251,28 @@ func (a App) modalCapturingText() bool {
 	if a.tour.Active() || a.helpOpen || a.usageOpen || a.convPreview.IsOpen() || a.projectInfoOpen || a.settingsInfoOpen {
 		return true
 	}
-	// Per-screen seams.
-	return a.conversationsM.capturesInput() ||
-		a.sessionsM.capturesInput() ||
-		a.projectsM.capturesInput() ||
-		a.notes.capturesInput() ||
-		a.agentsM.capturesInput() ||
-		a.settings.capturesInput() ||
-		a.network.capturesInput()
+	return a.activeScreenCapturesInput()
+}
+
+// activeScreenCapturesInput is the focused screen's capturesInput seam.
+func (a App) activeScreenCapturesInput() bool {
+	switch a.screen {
+	case ScreenSessions:
+		return a.sessionsM.capturesInput()
+	case ScreenProjects:
+		return a.projectsM.capturesInput()
+	case ScreenConversations:
+		return a.conversationsM.capturesInput()
+	case ScreenNotes:
+		return a.notes.capturesInput()
+	case ScreenAgents:
+		return a.agentsM.capturesInput()
+	case ScreenSettings:
+		return a.settings.capturesInput()
+	case ScreenNetwork:
+		return a.network.capturesInput()
+	}
+	return false
 }
 
 // New constructs the root model.
@@ -1154,7 +1171,17 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		if a.confirm.open() {
+			// The confirmation handles ctrl+c itself (quit, and release
+			// the mouse capture it turned on).
 			return a.updateConfirmationKey(msg)
+		}
+		// ctrl+c quits from ANYWHERE — every overlay, wizard, form and
+		// text field below. Checked once, here, ahead of all overlay
+		// routing: overlays that swallow "every other key" (tour, help,
+		// usage, previews, info panels, matrix, the SSH wizard) used to
+		// swallow ctrl+c too, although the help promises it quits.
+		if msg.String() == "ctrl+c" {
+			return a, tea.Quit
 		}
 
 		// SSH setup wizard owns the screen when open — keystrokes
@@ -1355,11 +1382,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// If projects screen has its modal open (new-project form or session
-		// picker), route through it. We intentionally still allow global Quit.
+		// picker), route through it. (ctrl+c already quit above.)
 		if a.screen == ScreenProjects && (a.projectsM.form != nil || a.projectsM.menu != nil) {
-			if msg.String() == "ctrl+c" {
-				return a, tea.Quit
-			}
 			var cmd tea.Cmd
 			a.projectsM, cmd = a.projectsM.Update(msg)
 			return a, cmd
@@ -1368,9 +1392,6 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Conversation search owns digits, delete/quit keys, and Enter until
 		// committed; typing a query must never launch or delete a conversation.
 		if a.screen == ScreenConversations && a.conversationsM.capturesInput() {
-			if msg.String() == "ctrl+c" {
-				return a, tea.Quit
-			}
 			var cmd tea.Cmd
 			a.conversationsM, cmd = a.conversationsM.Update(msg)
 			return a, cmd
@@ -1378,12 +1399,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Projects filter mode: textinput owns the keystrokes. Enter
 		// commits the filter and attaches to the highlighted match;
-		// esc clears the filter without firing attach. ctrl+c still
-		// quits so the user is never trapped.
+		// esc clears the filter without firing attach.
 		if a.screen == ScreenProjects && a.projectsM.FilterActive() {
-			if msg.String() == "ctrl+c" {
-				return a, tea.Quit
-			}
 			if keyMatches(msg, a.keys.Enter) {
 				a.projectsM.commitFilter()
 				a2, cmd := a.attachOrCreateForSelectedProject()
@@ -1405,9 +1422,6 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// the cursor was on — observed as "Enter in the new-session form
 		// attaches to c-ccmux instead of creating a new session".
 		if a.screen == ScreenSessions && (a.sessionsM.form != nil || a.sessionsM.renameForm != nil) {
-			if msg.String() == "ctrl+c" {
-				return a, tea.Quit
-			}
 			var cmd tea.Cmd
 			a.sessionsM, cmd = a.sessionsM.Update(msg)
 			return a, cmd
@@ -1416,9 +1430,6 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Notes search mode: the search textinput owns every keystroke so
 		// global bindings like "r" (refresh) don't swallow characters mid-query.
 		if a.screen == ScreenNotes && a.notes.searching {
-			if msg.String() == "ctrl+c" {
-				return a, tea.Quit
-			}
 			var cmd tea.Cmd
 			a.notes, cmd = a.notes.Update(msg)
 			return a, cmd
@@ -1428,9 +1439,16 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// filename / title fields don't have their characters
 		// swallowed by global bindings (e.g. "r" → refresh).
 		if a.screen == ScreenNotes && a.notes.newNoteForm != nil {
-			if msg.String() == "ctrl+c" {
-				return a, tea.Quit
-			}
+			var cmd tea.Cmd
+			a.notes, cmd = a.notes.Update(msg)
+			return a, cmd
+		}
+
+		// Notes info panel (`i`): like the other info overlays it owns
+		// the keyboard until `i` / esc closes it. Without this, a digit
+		// switched screens underneath the panel and left it open on the
+		// Notes model.
+		if a.screen == ScreenNotes && a.notes.noteInfo.open {
 			var cmd tea.Cmd
 			a.notes, cmd = a.notes.Update(msg)
 			return a, cmd
@@ -1439,12 +1457,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Settings inline editor: the textinput owns every keystroke so
 		// characters typed into a value (e.g. a projects.root path with
 		// an "r", a digit, or a "q" in it) aren't hijacked by the global
-		// refresh / screen-switch / quit handlers. ctrl+c still quits so
-		// the user is never trapped.
+		// refresh / screen-switch / quit handlers.
 		if a.screen == ScreenSettings && a.settings.IsEditing() {
-			if msg.String() == "ctrl+c" {
-				return a, tea.Quit
-			}
 			var cmd tea.Cmd
 			a.settings, cmd = a.settings.Update(msg)
 			return a, cmd
@@ -1453,19 +1467,14 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Agents modal picker (Claude model / effort): the picker owns
 		// every keystroke — up/down/enter/esc drive the selection — so
 		// digit screen-switch and the global "q" quit-confirm can't fire
-		// over the modal. ctrl+c still quits.
+		// over the modal.
 		if a.screen == ScreenAgents && a.agentsM.ModalOpen() {
-			if msg.String() == "ctrl+c" {
-				return a, tea.Quit
-			}
 			var cmd tea.Cmd
 			a.agentsM, cmd = a.agentsM.Update(msg)
 			return a, cmd
 		}
 
 		switch {
-		case msg.String() == "ctrl+c":
-			return a, tea.Quit
 		case msg.String() == "q":
 			return a.openQuitConfirmation()
 		case keyMatches(msg, a.keys.Kill) && a.screen == ScreenSessions:
@@ -1529,6 +1538,16 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			ccusage.InvalidateCache()
 			if a.screen == ScreenProjects {
 				return a, tea.Batch(a.refreshSessionsCmd(), a.refreshProjectsCmd())
+			}
+			// Conversations screen: re-walk the transcripts too — the
+			// help overlay promises "refresh conversation list", and a
+			// sessions-only refresh left new transcripts invisible until
+			// the tab was re-entered.
+			if a.screen == ScreenConversations {
+				a.conversationsM.SetLoading(true)
+				sessions := a.refreshSessionsCmd()
+				convs := a.refreshConversationsCmd()
+				return a, tea.Batch(sessions, convs, a.conversationsM.SpinnerTickCmd())
 			}
 			// Network screen: start the per-row spinner so the user
 			// sees a refresh in flight, even when the actual probe
