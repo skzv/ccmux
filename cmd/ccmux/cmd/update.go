@@ -25,6 +25,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/skzv/ccmux/internal/daemonservice"
+
+	"github.com/skzv/ccmux/internal/selfupdate"
 )
 
 // Subprocess timeout tiers for the git helpers below. Local git
@@ -190,18 +192,10 @@ func validateRepo(path string) (string, error) {
 	return abs, nil
 }
 
-func looksLikeCcmuxRepo(dir string) bool {
-	if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
-		return false
-	}
-	if _, err := os.Stat(filepath.Join(dir, "Makefile")); err != nil {
-		return false
-	}
-	return true
-}
+func looksLikeCcmuxRepo(dir string) bool { return selfupdate.LooksLikeCcmuxRepo(dir) }
 
 // findGitRoot walks up from `start` looking for the first directory
-// that contains both a .git entry and a Makefile. Returns "" if none
+// that is a ccmux checkout (see selfupdate.LooksLikeCcmuxRepo). Returns "" if none
 // found before the filesystem root.
 func findGitRoot(start string) string {
 	dir := start

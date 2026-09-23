@@ -600,6 +600,18 @@ func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
 		m.newNoteForm = nil
 		return m, nil
 	case noteInfoOpenMsg:
+		// The info overlay stats the file on local disk; for a remote
+		// device's note that would show "no such file" or, worse, an
+		// unrelated local file at the same path.
+		if m.activeIsRemote() {
+			return m, func() tea.Msg {
+				return toastMsg{
+					Text:  tr("remote notes are read-only — preview only"),
+					Kind:  toastInfo,
+					Until: time.Now().Add(4 * time.Second),
+				}
+			}
+		}
 		path := m.selectedPath()
 		if path == "" {
 			return m, nil

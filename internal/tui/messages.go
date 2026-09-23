@@ -324,6 +324,10 @@ type openEditorMsg struct {
 // file was created/edited externally.
 type notesReloadMsg struct{}
 
+// agentsReloadMsg asks the Agents tab to re-read every agent's config
+// after one was edited in $EDITOR.
+type agentsReloadMsg struct{}
+
 // New-note flow (Notes tab `n` key).
 
 // newNoteSubmitMsg is emitted by newNoteFormModel on Enter. Filename
@@ -432,6 +436,7 @@ type ccusageBlock struct {
 type conversationsLoadedMsg struct {
 	List []conversations.Conversation
 	Err  error
+	Gen  int // matches App.convLoadGen for the newest load only
 }
 
 // conversationStatsLoadedMsg carries the lazy message-count result

@@ -181,8 +181,14 @@ func TestLooksLikeCcmuxRepo(t *testing.T) {
 	bothPresent := t.TempDir()
 	mkDir(t, bothPresent, ".git")
 	mkFile(t, bothPresent, "Makefile")
+	if looksLikeCcmuxRepo(bothPresent) {
+		t.Error(".git + Makefile without ccmux's go.mod should NOT look like the repo")
+	}
+	if err := os.WriteFile(filepath.Join(bothPresent, "go.mod"), []byte("module github.com/skzv/ccmux\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if !looksLikeCcmuxRepo(bothPresent) {
-		t.Error(".git + Makefile dir should look like the repo")
+		t.Error(".git + Makefile + ccmux go.mod should look like the repo")
 	}
 
 	onlyGit := t.TempDir()
