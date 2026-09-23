@@ -241,12 +241,31 @@ func (m *notesModel) SetSize(w, h int) {
 	}
 	m.termWidth = w
 	m.termHeight = h
+	// Shrinking below the split-layout width hides the preview; don't
+	// leave keyboard focus stranded on a pane that isn't drawn.
+	if !m.previewShown() {
+		m.focus = focusList
+	}
 	pw, ph := m.previewPaneSize()
 	m.preview.Width = pw
 	m.preview.Height = ph
 	if m.previewSrc != "" {
 		m.preview.SetContent(m.renderPreviewContent(pw))
 	}
+}
+
+// notesPreviewMinWidth is the terminal width at which View switches
+// from the list-only layout to the list + preview split.
+const notesPreviewMinWidth = 100
+
+// previewShown reports whether View renders the preview pane at the
+// current terminal width. Below notesPreviewMinWidth (phone widths) the
+// screen is list-only, so focus must never move to the invisible
+// preview: j/k would scroll it while the list looked frozen. A zero
+// width means no WindowSizeMsg has arrived yet; treat that as shown
+// (the pre-size default layout).
+func (m notesModel) previewShown() bool {
+	return m.termWidth == 0 || m.termWidth >= notesPreviewMinWidth
 }
 
 // clearSearch drops the query box and any result set, returning the
@@ -600,7 +619,9 @@ func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
 			return m, nil
 		}
 		leftW := m.termWidth / 3
-		if msg.X < leftW {
+		if msg.X < leftW || !m.previewShown() {
+			// List-only layout (phone width): the whole screen is
+			// the list, so every wheel event scrolls it.
 			rowCount := m.listLen()
 			if rowCount == 0 {
 				return m, nil
@@ -803,8 +824,9 @@ func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
 			// Toggle which pane receives navigation keys. List focus
 			// → preview focus → list focus. While the preview is
 			// focused, j/k/arrows scroll the document; while the list
-			// is focused, they change the selected file.
-			if m.focus == focusList {
+			// is focused, they change the selected file. At phone
+			// width there is no preview pane to focus.
+			if m.focus == focusList && m.previewShown() {
 				m.focus = focusPreview
 			} else {
 				m.focus = focusList
@@ -821,7 +843,9 @@ func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
 			// doesn't swallow it.
 			if m.focus == focusList {
 				if m.hasActiveSearch() {
-					m.focus = focusPreview
+					if m.previewShown() {
+						m.focus = focusPreview
+					}
 					return m, nil
 				}
 				return m, m.handleRight()
@@ -1068,7 +1092,9 @@ func (m notesModel) visibleRows() []noteRow {
 func (m *notesModel) handleRight() tea.Cmd {
 	r, ok := m.selectedRow()
 	if !ok {
-		m.focus = focusPreview
+		if m.previewShown() {
+			m.focus = focusPreview
+		}
 		return nil
 	}
 	if r.kind == rowFolder {
@@ -1085,7 +1111,9 @@ func (m *notesModel) handleRight() tea.Cmd {
 		}
 		return nil
 	}
-	m.focus = focusPreview
+	if m.previewShown() {
+		m.focus = focusPreview
+	}
 	return nil
 }
 
@@ -1260,7 +1288,7 @@ func (m notesModel) View(width, height int) string {
 	// than collapse to list-only. Zoomed README GIFs (~116 cols)
 	// in particular need this — the previous isNarrow(120) cutoff
 	// hid the preview in every demo.
-	if width < 100 {
+	if width < notesPreviewMinWidth {
 		return m.renderListOnly(width, height)
 	}
 	leftW := width / 3
