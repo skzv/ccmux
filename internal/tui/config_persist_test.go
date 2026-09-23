@@ -3,6 +3,7 @@ package tui
 import (
 	"os"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -136,5 +137,65 @@ func TestSettingsSave_RefusedWhenConfigUnparseable(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(p); string(got) != broken {
 		t.Errorf("unparseable config.toml was overwritten:\n%s", got)
+	}
+}
+
+// TestEditorReloadMsg_RoutesBySource — editing an agent config from the
+// Agents tab used to fall through to notesReloadMsg, so the tab kept
+// showing the pre-edit values.
+func TestEditorReloadMsg_RoutesBySource(t *testing.T) {
+	cases := map[string]tea.Msg{
+		"settings": configReloadMsg{},
+		"agents":   agentsReloadMsg{},
+		"notes":    notesReloadMsg{},
+		"":         notesReloadMsg{},
+	}
+	for src, want := range cases {
+		if got := editorReloadMsg(src); got != want {
+			t.Errorf("editorReloadMsg(%q) = %T, want %T", src, got, want)
+		}
+	}
+}
+
+// TestAttachOverlay_SwallowsKeys — while "Opening…" hides the screen,
+// keys must not act on what's underneath (a second Enter double-resumes,
+// `q` opens an invisible quit dialog).
+func TestAttachOverlay_SwallowsKeys(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	app := New(config.Defaults(), "test")
+	app.tour.Close()
+	app.startAttaching(attachKindResume, "x")
+	for _, k := range []tea.KeyMsg{
+		{Type: tea.KeyRunes, Runes: []rune{'q'}},
+		{Type: tea.KeyEnter},
+		{Type: tea.KeyRunes, Runes: []rune{'?'}},
+	} {
+		model, cmd := app.Update(k)
+		app = model.(App)
+		if cmd != nil || app.confirm.open() || app.helpOpen {
+			t.Errorf("key %q acted behind the attach overlay", k.String())
+		}
+	}
+	if _, cmd := app.Update(tea.KeyMsg{Type: tea.KeyCtrlC}); cmd == nil {
+		t.Error("ctrl+c must still quit while the overlay is up")
+	}
+}
+
+// TestEsc_ClosesFormBeforeToast — with an error toast showing, esc must
+// reach the open form instead of only dismissing the toast.
+func TestEsc_ClosesFormBeforeToast(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	app := New(config.Defaults(), "test")
+	app.tour.Close()
+	app.settings.editing = true // an open inline editor captures text
+	app.screen = ScreenSettings
+	app.toasts.Set(toastError, "refresh: daemon offline", 5*time.Second)
+	if !app.toasts.Active() {
+		t.Fatal("setup: toast not active")
+	}
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	app = model.(App)
+	if app.settings.editing {
+		t.Error("esc was eaten by the toast; the Settings editor stayed open")
 	}
 }

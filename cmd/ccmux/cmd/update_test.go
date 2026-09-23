@@ -23,6 +23,9 @@ func fakeRepo(t *testing.T, dir string) string {
 	if err := os.WriteFile(filepath.Join(dir, "Makefile"), []byte("build:\n\techo fake\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module github.com/skzv/ccmux\n\ngo 1.26\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -40,6 +43,15 @@ func TestLooksLikeCcmuxRepo(t *testing.T) {
 			"both .git and Makefile",
 			func(t *testing.T, d string) { fakeRepo(t, d) },
 			true,
+		},
+		{
+			"some other repo with .git and Makefile",
+			func(t *testing.T, d string) {
+				_ = os.MkdirAll(filepath.Join(d, ".git"), 0o755)
+				_ = os.WriteFile(filepath.Join(d, "Makefile"), []byte("x"), 0o644)
+				_ = os.WriteFile(filepath.Join(d, "go.mod"), []byte("module example.com/dotfiles\n"), 0o644)
+			},
+			false,
 		},
 		{
 			"only .git, no Makefile",

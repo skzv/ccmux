@@ -59,8 +59,8 @@ func (m agentsModel) Init() tea.Cmd {
 	return m.cursor.Init()
 }
 
-// Reload is called by App on configReloadMsg (after $EDITOR returns
-// or anywhere ccmux's own config changes). Each sub-model owns its
+// Reload is called by App on agentsReloadMsg (after an agent config
+// edited in $EDITOR from this tab is saved). Each sub-model owns its
 // own reload semantics; we just fan out.
 func (m *agentsModel) Reload() {
 	m.claude.reload()

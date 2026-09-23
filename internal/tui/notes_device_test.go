@@ -199,3 +199,22 @@ func TestNotes_LoadEntriesCmd_RemoteUnreachable(t *testing.T) {
 		t.Error("expected an unreachable error for a project on a missing device")
 	}
 }
+
+// TestNoteInfo_RemoteIsReadOnly — the info overlay stats the file on
+// local disk, so on a remote device it must not open (it would describe
+// a missing or unrelated local file).
+func TestNoteInfo_RemoteIsReadOnly(t *testing.T) {
+	m := twoDeviceModel()
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'H'}})
+	if !m.activeIsRemote() {
+		t.Fatal("setup: not on the remote device")
+	}
+	m.entries = []notes.Entry{{Rel: "a.md", Path: "/home/me/remote-proj/a.md"}}
+	m, cmd := m.Update(noteInfoOpenMsg{})
+	if m.noteInfo.open {
+		t.Error("info overlay opened for a remote note")
+	}
+	if cmd == nil {
+		t.Error("expected a read-only toast")
+	}
+}
