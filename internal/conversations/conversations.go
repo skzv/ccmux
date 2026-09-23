@@ -95,8 +95,10 @@ type Conversation struct {
 	//   Claude (sourced from the `entrypoint` field on the first user
 	//   event):
 	//     "cli"        — interactive `claude` session.
-	//     "sdk-cli"    — headless / SDK (`claude -p`, the SDK,
-	//                    automation wrappers).
+	//     "sdk-cli"    — headless / SDK (`claude -p`, automation
+	//                    wrappers); "sdk-ts" / "sdk-py" for the
+	//                    TypeScript / Python Agent SDKs. Every "sdk-*"
+	//                    value is headless.
 	//
 	//   Codex (sourced from `payload.originator` on the first
 	//   `session_meta` event):
@@ -113,15 +115,24 @@ type Conversation struct {
 	// Drives the default "hide automation noise" filter on the
 	// conversations list. See Options.ExcludeHeadless and IsHeadless.
 	Entrypoint string
+
+	// Subagent marks a transcript an agent spawned on its own rather
+	// than one the user started: Codex guardian reviews and
+	// thread_spawn children, whose session_meta carries
+	// payload.source = {"subagent": …} next to an ordinary
+	// originator. IsHeadless treats these as headless.
+	Subagent bool `json:",omitempty"`
 }
 
 // IsHeadless reports whether this conversation was a headless agent
-// invocation (`claude -p`, the SDK, `codex exec`, …) rather than an
-// interactive terminal session. The mapping is per-agent because each
-// agent uses a different tag:
+// invocation (`claude -p`, the SDK, `codex exec`, …) or an
+// agent-spawned subagent run rather than an interactive terminal
+// session. The mapping is per-agent because each agent uses a
+// different tag:
 //
-//   - Claude    → entrypoint == "sdk-cli"
-//   - Codex     → originator == "codex_exec"
+//   - Claude    → entrypoint starts with "sdk-" (sdk-cli, sdk-ts, sdk-py)
+//   - Codex     → originator == "codex_exec", or a subagent rollout
+//     (guardian review, thread_spawn)
 //   - Antigravity → never (known transcript formats carry no signal)
 //
 // Adding a new headless mode to an existing agent only needs an extra
@@ -129,9 +140,9 @@ type Conversation struct {
 func (c Conversation) IsHeadless() bool {
 	switch c.Agent {
 	case agent.IDClaude:
-		return c.Entrypoint == "sdk-cli"
+		return strings.HasPrefix(c.Entrypoint, "sdk-")
 	case agent.IDCodex:
-		return c.Entrypoint == "codex_exec"
+		return c.Subagent || c.Entrypoint == "codex_exec"
 	}
 	return false
 }
@@ -1153,6 +1164,9 @@ func readCodexTranscript(path string) Conversation {
 		if ev.Type == "session_meta" && c.Entrypoint == "" && meta.Originator != "" {
 			c.Entrypoint = meta.Originator
 		}
+		if ev.Type == "session_meta" && meta.isSubagent() {
+			c.Subagent = true
+		}
 		if ev.Cwd != "" && c.Project == "" {
 			c.Project = ev.Cwd
 		}
@@ -1192,6 +1206,23 @@ type codexEventPayload struct {
 	// on Conversation.Entrypoint and drives IsHeadless.
 	Originator string `json:"originator"`
 	Cwd        string `json:"cwd"`
+	// Source is where the session came from: a string ("cli",
+	// "vscode", "exec") for user-started sessions, or an object
+	// {"subagent": {"other": "guardian"} | {"thread_spawn": …}} for
+	// runs Codex spawned itself.
+	Source json.RawMessage `json:"source"`
+}
+
+// isSubagent reports whether payload.source is the {"subagent": …}
+// object Codex writes for guardian reviews and spawned threads.
+func (p codexEventPayload) isSubagent() bool {
+	var src struct {
+		Subagent json.RawMessage `json:"subagent"`
+	}
+	if len(p.Source) == 0 || p.Source[0] != '{' || json.Unmarshal(p.Source, &src) != nil {
+		return false
+	}
+	return len(src.Subagent) > 0 && string(src.Subagent) != "null"
 }
 
 func (e codexEvent) Metadata() codexEventPayload {
@@ -1711,6 +1742,9 @@ func mergeConversation(dst *Conversation, src Conversation) {
 			dst.Entrypoint = src.Entrypoint
 		}
 	}
+	// Like the entrypoint rule: one interactive fragment makes the
+	// logical conversation interactive.
+	dst.Subagent = dst.Subagent && src.Subagent
 	if src.LastActivity.After(dst.LastActivity) {
 		dst.LastActivity = src.LastActivity
 	}
