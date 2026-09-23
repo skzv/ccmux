@@ -307,9 +307,12 @@ type SleepConfig struct {
 	//     pmset/systemctl; reverts on daemon exit.
 	Mode string `toml:"mode"`
 
-	// IdleReleaseMinutes — release the keep-awake lock when all sessions
-	// have been idle for this long. Default 10.
-	IdleReleaseMinutes int `toml:"idle_release_minutes"`
+	// IdleReleaseMinutes is reserved and currently unused: nothing
+	// releases the keep-awake lock on idleness — the daemon holds it
+	// whenever any session is active. The key stays parseable so config
+	// files that set `idle_release_minutes` keep loading (and keep the
+	// value across saves); it is not written when unset.
+	IdleReleaseMinutes int `toml:"idle_release_minutes,omitzero"`
 
 	// DangerousKeepAwakeOnBattery — back-compat flag. If true and Mode
 	// is empty, Mode resolves to "dangerous". Prefer setting Mode
@@ -468,7 +471,6 @@ func Defaults() Config {
 		Editor:   firstNonEmpty(os.Getenv("VISUAL"), os.Getenv("EDITOR"), "nvim"),
 		Sleep: SleepConfig{
 			Mode:                        "safe",
-			IdleReleaseMinutes:          10,
 			DangerousKeepAwakeOnBattery: false,
 			LowBatteryCutoff:            20,
 		},

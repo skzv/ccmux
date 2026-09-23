@@ -275,7 +275,6 @@ tailnet_port = 7474
 
 [sleep]
 mode = "safe"                        # "safe" | "dangerous" | "very_dangerous"
-idle_release_minutes = 10
 low_battery_cutoff = 20              # dangerous mode auto-downgrades below this
 
 [notifications]

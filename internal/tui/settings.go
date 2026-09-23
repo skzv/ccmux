@@ -782,7 +782,6 @@ func (m settingsModel) staticBlocks() []string {
 		"",
 		m.st.Subtitle.Render(tr("Sleep prevention")),
 		"  " + fmt.Sprintf("mode             %s", m.renderChip(sleepModeDisplay(m.cfg.Sleep), false)),
-		"  " + fmt.Sprintf("idle release     %d minutes", m.cfg.Sleep.IdleReleaseMinutes),
 		"  " + fmt.Sprintf("low-batt cutoff  %d%%", m.cfg.Sleep.LowBatteryCutoff),
 		"  " + m.st.Muted.Render(tr("dangerous mode auto-downgrades below the cutoff")),
 		"",

@@ -23,7 +23,6 @@
 │                                                          │ │                                                         │
 │ Sleep prevention                                         │ │                                                         │
 │   mode             [safe]                                │ │                                                         │
-│   idle release     10 minutes                            │ │                                                         │
 │   low-batt cutoff  20%                                   │ │                                                         │
 │   dangerous mode auto-downgrades below the cutoff        │ │                                                         │
 │                                                          │ │                                                         │
@@ -36,5 +35,6 @@
 │   (none pinned — tailnet peers running ccmuxd are auto-  │ │                                                         │
 │ discovered.                                              │ │                                                         │
 │    Use `ccmux host add` only for non-Tailscale hosts or  │ │                                                         │
-│ non-default ports.)                                      │ ╰─────────────────────────────────────────────────────────╯
+│ non-default ports.)                                      │ │                                                         │
+╰──────────────────────────────────────────────────────────╯ ╰─────────────────────────────────────────────────────────╯
 ? help · q quit · i info · e edit config · 1-7 screens                                                                  
