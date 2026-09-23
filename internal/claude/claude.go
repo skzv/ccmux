@@ -4,6 +4,7 @@ package claude
 
 import (
 	"context"
+	"regexp"
 	"strings"
 	"time"
 
@@ -79,23 +80,22 @@ func Classify(pane string, lastChange time.Time, idleNeedsInput time.Duration) S
 	if trimmed == "" {
 		return StateUnknown
 	}
-	// Look at the last non-empty line for prompt detection.
-	lines := strings.Split(trimmed, "\n")
-	tail := ""
-	for i := len(lines) - 1; i >= 0; i-- {
-		if l := strings.TrimSpace(lines[i]); l != "" {
-			tail = l
-			break
-		}
+	// The bottom of the pane is where every prompt shape lives: the
+	// v1 rounded frame on the last line, the v2 ruled input box plus
+	// its footer, a v2 dialog, or a shell prompt after a crash.
+	bottom := lastNonEmptyLines(trimmed, promptRegionLines)
+	if len(bottom) == 0 {
+		return StateUnknown
 	}
+	tail := strings.TrimSpace(bottom[len(bottom)-1])
 	switch {
-	case looksLikeShellPrompt(tail) && !looksLikeClaudePrompt(tail):
-		return StateError
-	case looksLikeClaudePrompt(tail):
+	case looksLikeClaudePrompt(tail), looksLikeClaudeV2Prompt(bottom), looksLikeClaudeV2Dialog(bottom):
 		if time.Since(lastChange) >= idleNeedsInput {
 			return StateNeedsInput
 		}
 		return StateActive
+	case looksLikeShellPrompt(tail) && !hasClaudeChrome(lastN(bottom, shellRegionLines)):
+		return StateError
 	default:
 		if time.Since(lastChange) >= idleNeedsInput {
 			return StateIdle
@@ -147,6 +147,119 @@ func looksLikeClaudePrompt(line string) bool {
 		}
 	}
 	return hits >= 2
+}
+
+// promptRegionLines is how many trailing non-empty lines the v2 input
+// box and dialog checks scan: a multi-line typed prompt plus the
+// footer. Mirrors bottom_non_empty_lines(12) on the v2 rules in
+// internal/agentdetect/rules/claude.toml — the engine consults this
+// package only when no rule matched, so the two must agree.
+const promptRegionLines = 12
+
+// shellRegionLines mirrors claude_shell_prompt's
+// bottom_non_empty_lines(4): the lines that must be free of Claude
+// chrome before a `$`/`#`/`%` tail is believed to be a shell prompt.
+const shellRegionLines = 4
+
+// ruleLinePrefix is the start of a v2 input-box border: a run of at
+// least ten box-drawing horizontals.
+var ruleLinePrefix = strings.Repeat("─", 10)
+
+// numberedChoiceRE matches the focused row of a v2 selector dialog
+// (`❯ 1. Yes`), the shape of every tool-permission prompt.
+var numberedChoiceRE = regexp.MustCompile(`^[\s\x{00A0}]*❯[\s\x{00A0}]*\d+\.[\s\x{00A0}]`)
+
+// looksLikeClaudeV2Prompt reports whether the bottom lines show Claude
+// Code v2's input box: a `❯` (or `>`) line sandwiched between two
+// `────` rules, with any number of typed continuation lines before the
+// closing rule. v2 has no rounded corners, and its last line is a
+// footer (`⏵⏵ auto mode on …`, `? for shortcuts`), so the single-line
+// looksLikeClaudePrompt never sees it.
+func looksLikeClaudeV2Prompt(lines []string) bool {
+	for i := 0; i+2 < len(lines); i++ {
+		if !isRuleLine(lines[i]) || !isInputLine(lines[i+1]) {
+			continue
+		}
+		for _, l := range lines[i+2:] {
+			if isRuleLine(l) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// looksLikeClaudeV2Dialog reports whether the bottom lines show a v2
+// dialog that replaced the input box: a tool-permission prompt or a
+// confirm dialog such as the workspace trust check.
+func looksLikeClaudeV2Dialog(lines []string) bool {
+	joined := strings.ToLower(strings.Join(lines, "\n"))
+	if strings.Contains(joined, "do you want to proceed?") {
+		return true
+	}
+	if strings.Contains(joined, "enter to confirm") && strings.Contains(joined, "esc to cancel") {
+		return true
+	}
+	for _, l := range lines {
+		if numberedChoiceRE.MatchString(l) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasClaudeChrome reports whether any line carries Claude UI furniture —
+// rounded corners, a `────` rule, the `❯` prompt glyph or the `⏵⏵`
+// mode footer. Claude's own footer or a statusline can end in `%`
+// (`Context left until auto-compact: 7%`), so a `%` tail only means a
+// shell prompt when none of this is on screen.
+func hasClaudeChrome(lines []string) bool {
+	for _, l := range lines {
+		if strings.ContainsAny(l, "╭╮╰╯❯⏵") || strings.Contains(l, ruleLinePrefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func isRuleLine(line string) bool {
+	return strings.HasPrefix(strings.TrimLeft(line, " \t"), ruleLinePrefix)
+}
+
+func isInputLine(line string) bool {
+	l := strings.TrimLeft(line, " \t")
+	for _, glyph := range []string{"❯", ">"} {
+		if rest, ok := strings.CutPrefix(l, glyph); ok {
+			return rest == "" || strings.HasPrefix(rest, " ") || strings.HasPrefix(rest, "\t") || strings.HasPrefix(rest, " ")
+		}
+	}
+	return false
+}
+
+// lastNonEmptyLines returns up to n trailing lines of s that aren't
+// blank, in order — the same region the engine's
+// bottom_non_empty_lines(N) extracts.
+func lastNonEmptyLines(s string, n int) []string {
+	lines := strings.Split(s, "\n")
+	out := make([]string, 0, n)
+	for i := len(lines) - 1; i >= 0 && len(out) < n; i-- {
+		if strings.TrimSpace(lines[i]) == "" {
+			continue
+		}
+		out = append(out, lines[i])
+	}
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	return out
+}
+
+// lastN returns the final n entries of lines (all of them when shorter).
+func lastN(lines []string, n int) []string {
+	if len(lines) <= n {
+		return lines
+	}
+	return lines[len(lines)-n:]
 }
 
 // looksLikeShellPrompt heuristically matches a bare shell prompt (Claude has

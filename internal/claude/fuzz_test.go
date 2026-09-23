@@ -31,6 +31,8 @@ func FuzzClassify(f *testing.F) {
 		" ",
 		"recently-active line",
 		"╭─────────╮\n│ > write a function │\n╰─────────╯",
+		"────────────\n❯ \n────────────\n  ⏵⏵ auto mode on · Context left until auto-compact: 7%",
+		" Do you want to proceed?\n ❯ 1. Yes\n   2. No",
 		"skz$ \n",
 		"\x00\x00\x00",
 		"\xff\xfe garbage utf-8",

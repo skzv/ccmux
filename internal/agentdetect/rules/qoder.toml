@@ -9,11 +9,15 @@ region = "osc_title"
 regex = ['^[\x{2800}-\x{28FF}]']
 
 # Approval / confirmation: Qoder spells out what it's waiting for.
+# Scoped to the bottom of the pane and idle-gated: the same phrases in
+# scrollback, or on screen while the agent is visibly working, must not
+# pin needs_input over the working footer and fire a bell.
 [[rules]]
 id = "body_awaiting_user"
 state = "blocked"
 priority = 900
-region = "whole_recent"
+region = "bottom_non_empty_lines(8)"
+require_idle = true
 any = [
   { contains = ["waiting for user confirmation"] },
   { contains = ["awaiting approval"] },

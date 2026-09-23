@@ -39,3 +39,32 @@ func TestClaudeEngine_LoneRoundedGlyphIsNotAPrompt(t *testing.T) {
 		t.Errorf("lone ╰ with recent change classified needs_input")
 	}
 }
+
+// TestSecondWaveBlockedRules_IdleGated — kiro / qoder / amp / opencode
+// / kilo approval rules had no require_idle, so approval-shaped text on
+// screen flipped needs_input (and rang the bell) the instant it was
+// captured, even while the pane was still repainting. They now wait out
+// the idle threshold like every other body-shaped blocked rule.
+func TestSecondWaveBlockedRules_IdleGated(t *testing.T) {
+	const idle = 3 * time.Second
+	cases := []struct {
+		agent Agent
+		pane  string
+	}{
+		{Kiro{}, "output\nThis action requires approval.\n  yes, single permission"},
+		{Qoder{}, "output\nwaiting for user confirmation"},
+		{Amp{}, "output\nAllow editing file: src/main.go?"},
+		{OpenCode{}, "output\n△ Permission required\n  Allow once   Allow always   Reject"},
+		{Kilo{}, "output\n△ Permission required\n  Allow once   Allow always   Reject"},
+	}
+	for _, tc := range cases {
+		t.Run(string(tc.agent.ID()), func(t *testing.T) {
+			if got := ClassifyState(tc.agent, tc.pane, "", time.Now(), idle); got != StateActive {
+				t.Errorf("approval text on a pane that just changed = %v, want active (idle gate)", got)
+			}
+			if got := ClassifyState(tc.agent, tc.pane, "", time.Now().Add(-time.Hour), idle); got != StateNeedsInput {
+				t.Errorf("approval text on a quiet pane = %v, want needs_input", got)
+			}
+		})
+	}
+}

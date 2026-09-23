@@ -9,24 +9,41 @@ region = "osc_title"
 regex = ['^[\x{2800}-\x{28FF}]']
 
 # Permission gate: OpenCode draws a "△ Permission required" panel when
-# it needs the user to approve a tool call.
+# it needs the user to approve a tool call — header, the tool call, then
+# an "Allow once  Allow always  Reject" button row above the footer.
+# The panel is capped at 15 rows, so a long tool call can push the
+# header out of a small bottom region; the button row stays in it.
+#
+# Scoped to the bottom of the pane and idle-gated: the same words in
+# scrollback, or on screen while the agent is visibly working, must not
+# pin needs_input and fire a bell.
 [[rules]]
 id = "body_permission_required"
 state = "blocked"
 priority = 900
-region = "whole_recent"
+region = "bottom_non_empty_lines(8)"
+require_idle = true
 any = [
   { contains = ["Permission required"] },
+  { all = [{ contains = ["Allow once"] }, { contains = ["Reject"] }] },
   { contains = ["permission denied, retry?"] },
 ]
 
-# Working footer: the interrupt hint shows only while a turn is running.
+# Working footer: the interrupt hint (`esc interrupt` in OpenCode 1.x,
+# `esc to interrupt` in older builds, `… again to interrupt` after one
+# press) and the `Working...` busy text show only while a turn runs.
+# Matched as whole tokens: the footer also prints the cwd, and a bare
+# substring "working" kept a session in `…/networking-lab` or
+# `~/Working/…` active forever — no bell, sleep lock never released.
+# The cwd can wrap onto a second footer line under the hint row, hence
+# five lines (pinned by internal/agent/testdata/panes/opencode_*.txt).
 [[rules]]
 id = "body_working_footer"
 state = "working"
 priority = 800
-region = "bottom_non_empty_lines(3)"
+region = "bottom_non_empty_lines(5)"
 any = [
-  { contains = ["esc to interrupt"] },
-  { contains = ["working"] },
+  { regex = ['(?i)\besc (?:to )?interrupt\b'] },
+  { contains = ["again to interrupt"] },
+  { regex = ['(?im)(?:^|\s)working(?:\.\.\.|…)'] },
 ]

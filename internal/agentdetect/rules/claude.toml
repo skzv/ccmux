@@ -41,13 +41,59 @@ any = [
   { all = [{ regex = ['╰'] }, { regex = ['╯'] }] },
 ]
 
-# Shell prompt at the tail = claude crashed.
+# Claude Code v2.x input box. v2 dropped the rounded frame: the prompt
+# is a `❯` line (followed by a non-breaking space in real captures)
+# sandwiched between two full-width `────` rules, with footer line(s)
+# below — `⏵⏵ auto mode on (shift+tab to cycle) · ← for agents`,
+# `? for shortcuts`, a statusline. The v1 rule above never fires on it:
+# the last line is the footer and there are no rounded corners.
+# Pinned by internal/agent/testdata/panes/claude_v2_idle.txt (a real
+# 2.1.281 capture).
+#
+# The region is wide enough for a multi-line typed prompt plus the
+# footer. The box stays on screen while Claude works (the spinner line
+# sits above it), so require_idle is what separates "working" from
+# "waiting": the spinner's elapsed-time counter repaints every second,
+# which keeps the pane from ever going quiet mid-turn.
+[[rules]]
+id = "claude_prompt_frame_v2"
+state = "blocked"
+priority = 900
+region = "bottom_non_empty_lines(12)"
+require_idle = true
+regex = ['(?m)^[ \t]*─{10,}[^\n]*\n[ \t]*[❯>](?:[ \t\x{00A0}][^\n]*)?\n(?:[^\n]*\n)*?[ \t]*─{10,}']
+
+# Claude Code v2.x dialogs that replace the input box: tool permission
+# prompts ("Do you want to proceed?" over a numbered `❯ 1. Yes`
+# selector) and confirm dialogs such as the workspace trust check,
+# whose footer is the `Enter to confirm · Esc to cancel` chord hint.
+# Same idle gate as the input box.
+[[rules]]
+id = "claude_dialog_v2"
+state = "blocked"
+priority = 900
+region = "bottom_non_empty_lines(12)"
+require_idle = true
+any = [
+  { contains = ["Do you want to proceed?"] },
+  { line_regex = ['^[\s\x{00A0}]*❯[\s\x{00A0}]*\d+\.[\s\x{00A0}]'] },
+  { all = [{ contains = ["Enter to confirm"] }, { contains = ["Esc to cancel"] }] },
+]
+
+# Shell prompt at the tail = claude crashed. Only when the bottom of
+# the pane shows no Claude chrome: Claude's own footer or a statusline
+# can end in `%` (`Context left until auto-compact: 7%`, `ctx 42%`),
+# and matching the bare last line turned a healthy session red. The
+# input box's `────` rules, rounded corners, `❯` and the `⏵⏵` mode
+# footer all veto.
 [[rules]]
 id = "claude_shell_prompt"
 state = "error"
 priority = 800
-region = "last_line"
-regex = ['[\$#%]\s*$']
+region = "bottom_non_empty_lines(4)"
+regex = ['[\$#%]\s*\z']
 not = [
   { regex = ['[╭╮╰╯]'] },
+  { regex = ['─{10,}'] },
+  { regex = ['[❯⏵]'] },
 ]

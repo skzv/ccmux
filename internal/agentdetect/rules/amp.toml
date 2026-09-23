@@ -9,12 +9,16 @@ region = "osc_title"
 regex = ['^[\x{2800}-\x{28FF}]']
 
 # Approval gate: Amp waits for approval before invoking a tool or
-# editing a file.
+# editing a file. Scoped to the bottom of the pane and idle-gated: the
+# same phrases in scrollback ("invoke tool" is common prose), or on
+# screen while the agent is visibly working, must not pin needs_input
+# over the working footer and fire a bell.
 [[rules]]
 id = "body_awaiting_approval"
 state = "blocked"
 priority = 900
-region = "whole_recent"
+region = "bottom_non_empty_lines(8)"
+require_idle = true
 any = [
   { contains = ["waiting for approval"] },
   { contains = ["allow editing file:"] },

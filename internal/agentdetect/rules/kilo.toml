@@ -9,21 +9,31 @@ region = "osc_title"
 regex = ['^[\x{2800}-\x{28FF}]']
 
 # Permission gate: Kilo is an OpenCode-compatible fork, so it draws the
-# same "△ Permission required" panel.
+# same "△ Permission required" panel with an "Allow once  Allow always
+# Reject" button row. Scoped to the bottom of the pane and idle-gated
+# for the same reason as opencode.toml: scrollback mentioning a
+# permission must not pin needs_input while the agent works.
 [[rules]]
 id = "body_permission_required"
 state = "blocked"
 priority = 900
-region = "whole_recent"
-contains = ["Permission required"]
+region = "bottom_non_empty_lines(8)"
+require_idle = true
+any = [
+  { contains = ["Permission required"] },
+  { all = [{ contains = ["Allow once"] }, { contains = ["Reject"] }] },
+]
 
-# Working footer: the interrupt hint shows while a turn runs.
+# Working footer: the interrupt hint shows while a turn runs. Whole
+# tokens only — the footer also prints the cwd, and a bare substring
+# "working" matched paths like `…/networking-lab` (see opencode.toml).
 [[rules]]
 id = "body_working_footer"
 state = "working"
 priority = 800
-region = "bottom_non_empty_lines(3)"
+region = "bottom_non_empty_lines(5)"
 any = [
-  { contains = ["esc to interrupt"] },
-  { contains = ["working"] },
+  { regex = ['(?i)\besc (?:to )?interrupt\b'] },
+  { contains = ["again to interrupt"] },
+  { regex = ['(?im)(?:^|\s)working(?:\.\.\.|…)'] },
 ]
