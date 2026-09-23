@@ -151,7 +151,7 @@ func TestAppendHostToFreshConfig_DoesNotRevertWriteBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	// …then the enumerate loop appends a discovered host and saves.
-	if err := appendHostToFreshConfig(config.Host{Name: "bob@sputnik", Address: "sputnik", User: "bob", Mosh: true}); err != nil {
+	if _, err := appendHostToFreshConfig(config.Host{Name: "bob@sputnik", Address: "sputnik", User: "bob", Mosh: true}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -190,7 +190,7 @@ func TestAppendHostToFreshConfig_CorruptConfigRefuses(t *testing.T) {
 	if err := os.WriteFile(cfgPath, []byte(corrupt), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	err := appendHostToFreshConfig(config.Host{Name: "x", Address: "y"})
+	_, err := appendHostToFreshConfig(config.Host{Name: "x", Address: "y"})
 	if err == nil {
 		t.Fatal("appendHostToFreshConfig on a corrupt config should error")
 	}

@@ -162,19 +162,33 @@ func runHostSetupSSH(arg string, skipEnumerate bool) error {
 		if !confirm(fmt.Sprintf("Add %s@%s as a separate host?", u, target.Host)) {
 			continue
 		}
-		name := fmt.Sprintf("%s@%s", u, defaultHostName(target.Host))
-		if err := appendHostToFreshConfig(config.Host{
-			Name:    name,
-			Address: target.Host,
-			User:    u,
-			Port:    target.Port,
-			Mosh:    true,
-		}); err != nil {
+		h := enumeratedHost(u, target)
+		added, err := appendHostToFreshConfig(h)
+		if err != nil {
 			return fmt.Errorf("save host: %w", err)
 		}
-		fmt.Printf("  ✓ added %s\n", name)
+		if !added {
+			fmt.Printf("  · %s is already configured — left as is\n", h.Name)
+			continue
+		}
+		fmt.Printf("  ✓ added %s\n", h.Name)
 	}
 	return nil
+}
+
+// enumeratedHost builds the config row for another account found on
+// target. The wizard's port is the remote sshd port, so it belongs in
+// SSHPort; config.Host.Port is the ccmuxd HTTP port and stays 0
+// (default 7474) — writing 22 there made the new host dial ccmuxd on
+// :22. Mirrors the TUI wizard's persistWizardAdded.
+func enumeratedHost(u string, target sshsetup.Target) config.Host {
+	return config.Host{
+		Name:    fmt.Sprintf("%s@%s", u, defaultHostName(target.Host)),
+		Address: target.Host,
+		User:    u,
+		SSHPort: target.Port,
+		Mosh:    true,
+	}
 }
 
 // appendHostToFreshConfig re-loads config.toml immediately before the
@@ -184,16 +198,25 @@ func runHostSetupSSH(arg string, skipEnumerate bool) error {
 // user on the configured host). The Load error is fatal for the same
 // reason as in runHostSetupSSH: Save-after-failed-Load rewrites the
 // file from Defaults(), erasing everything.
-func appendHostToFreshConfig(h config.Host) error {
+//
+// Like the TUI wizard's persistWizardAdded, a host whose name is
+// already configured is left untouched and reported as not added
+// (added=false), so re-running setup-ssh doesn't stack duplicate rows.
+func appendHostToFreshConfig(h config.Host) (added bool, err error) {
 	cfg, err := config.Load()
 	if err != nil {
-		return fmt.Errorf("load config (not modifying it): %w", err)
+		return false, fmt.Errorf("load config (not modifying it): %w", err)
+	}
+	for _, existing := range cfg.Hosts {
+		if existing.Name == h.Name {
+			return false, nil
+		}
 	}
 	cfg.Hosts = append(cfg.Hosts, h)
 	if err := config.Save(cfg); err != nil {
-		return fmt.Errorf("save config: %w", err)
+		return false, fmt.Errorf("save config: %w", err)
 	}
-	return nil
+	return true, nil
 }
 
 // resolveTarget turns the CLI's positional arg into a Target. The

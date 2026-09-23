@@ -69,8 +69,11 @@ func sshShellExec(target sshsetup.Target) tea.Cmd {
 // key); a config-save failure is recoverable next time the user
 // runs the wizard.
 //
-// The added rows reuse the target's address + port; the only
-// difference is the user. Host names are derived from
+// The added rows reuse the target's address + SSH port; the only
+// difference is the user. The wizard's port is the remote sshd port,
+// so it goes in SSHPort — config.Host.Port is the ccmuxd HTTP port
+// and stays 0 (default 7474). Writing 22 there made every added row
+// dial ccmuxd on :22. Host names are derived from
 // "<user>@<short-name>" via networkHostShortName so they read
 // reasonably in `ccmux host list`.
 func persistWizardAdded(a App, target sshsetup.Target, addedUsers []string) App {
@@ -90,7 +93,7 @@ func persistWizardAdded(a App, target sshsetup.Target, addedUsers []string) App 
 				Name:    name,
 				Address: target.Host,
 				User:    u,
-				Port:    target.Port,
+				SSHPort: target.Port,
 				Mosh:    true,
 			})
 		}
