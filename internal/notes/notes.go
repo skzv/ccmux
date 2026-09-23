@@ -184,9 +184,10 @@ func filenameLabel(rel string) string {
 const h1ScanBytes = 4 * 1024
 
 // h1HeadingRE matches an ATX-style H1: a line starting with exactly
-// one '#', a space, then heading text. Optional trailing '#' closers
-// (per CommonMark) are stripped by the caller.
-var h1HeadingRE = regexp.MustCompile(`^#\s+(.+?)\s*#*\s*$`)
+// one '#', whitespace, then heading text. An optional closing sequence
+// of '#'s is dropped only when whitespace precedes it, per CommonMark —
+// "# Learning C#" keeps its '#', "# Title ##" loses the closers.
+var h1HeadingRE = regexp.MustCompile(`^#\s+(.+?)(?:\s+#+)?\s*$`)
 
 // h1CacheEntry is one row in the H1 memo: the discovered heading
 // text (empty when none was found in the scan window) keyed by file
