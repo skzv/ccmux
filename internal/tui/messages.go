@@ -284,13 +284,19 @@ type bareSessionReadyMsg struct {
 // app responds with an immediate refresh.
 type sessionKilledMsg struct {
 	Name string
+	// Host is "" for a session on this machine, otherwise the remote
+	// host label the kill was sent to (named in the toast).
+	Host string
 	Err  error
 }
 
 // Rename flow (Sessions screen `R` key).
 
-// renameSessionSubmitMsg is emitted by renameFormModel on Enter.
+// renameSessionSubmitMsg is emitted by renameFormModel on Enter. Host
+// is the renamed row's host label, so App renames the session on the
+// machine it lives on rather than always on the local tmux server.
 type renameSessionSubmitMsg struct {
+	Host    string
 	OldName string
 	NewName string
 }
@@ -298,8 +304,10 @@ type renameSessionSubmitMsg struct {
 // renameSessionCancelMsg is emitted by renameFormModel on Esc.
 type renameSessionCancelMsg struct{}
 
-// sessionRenamedMsg is emitted after tmux.Rename completes.
+// sessionRenamedMsg is emitted after the rename completes (local tmux
+// or the remote host's daemon). Host follows sessionKilledMsg.Host.
 type sessionRenamedMsg struct {
+	Host    string
 	OldName string
 	NewName string
 	Err     error

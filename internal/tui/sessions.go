@@ -99,6 +99,10 @@ type sessionsModel struct {
 // path as other session-screen messages.
 type previewLoadedMsg struct {
 	Session string
+	// Host is the captured session's host label. With the same tmux
+	// name on two machines, a capture for one must not be shown for the
+	// other; "" and "local" are equivalent (see sameSession).
+	Host    string
 	Content string
 	Err     error
 }
@@ -118,14 +122,20 @@ func newSessions(st styles.Styles, km Keymap) sessionsModel {
 }
 
 func (m *sessionsModel) SetSessions(ss []daemon.SessionState) {
-	// Preserve cursor by session name across refreshes. Auto-polling
+	// Preserve cursor by session identity across refreshes. Auto-polling
 	// fires every 2s; without this the cursor index silently shifts to
 	// a different session whenever the list order changes (e.g. a
 	// session becomes attached, gets renamed, or a new one is created
 	// that sorts ahead of the current selection).
-	var selectedName string
+	//
+	// Identity is (Host, Name), not Name alone: the same tmux name runs
+	// on several machines (`c-ccmux` on the laptop and on the mini), and
+	// a name-only match jumped the cursor to the other host's row on
+	// every poll — so Enter attached to the wrong machine.
+	var selected *daemon.SessionState
 	if m.cursor >= 0 && m.cursor < len(m.sessions) {
-		selectedName = m.sessions[m.cursor].Name
+		s := m.sessions[m.cursor]
+		selected = &s
 	}
 	// Re-sort by attention priority so a session waiting on the user
 	// (needs_input / done-but-unreviewed / error) surfaces above
@@ -134,9 +144,9 @@ func (m *sessionsModel) SetSessions(ss []daemon.SessionState) {
 	// renders don't flicker the same set of names.
 	sortByAttention(ss)
 	m.sessions = ss
-	if selectedName != "" {
+	if selected != nil {
 		for i, s := range ss {
-			if s.Name == selectedName {
+			if sameSession(s.Host, s.Name, selected.Host, selected.Name) {
 				m.cursor = i
 				return
 			}
@@ -147,10 +157,24 @@ func (m *sessionsModel) SetSessions(ss []daemon.SessionState) {
 	}
 }
 
+// sameSession reports whether two (host, name) pairs are the same
+// session. "" and "local" both mean this machine (daemon wire default
+// vs. the label refresh stamps), so they compare equal.
+func sameSession(hostA, nameA, hostB, nameB string) bool {
+	return nameA == nameB && sessionHostKey(hostA) == sessionHostKey(hostB)
+}
+
+func sessionHostKey(h string) string {
+	if h == "" {
+		return "local"
+	}
+	return h
+}
+
 // capturesInput reports whether this screen has a modal/text-entry
-// state that must swallow global single-key handlers. OR'd into
-// App.modalCapturingText — extend this when adding a new modal to
-// the Sessions screen.
+// state that must swallow global single-key handlers. Consulted by
+// App.modalCapturingText while Sessions is the active screen — extend
+// this when adding a new modal to the Sessions screen.
 func (m sessionsModel) capturesInput() bool {
 	return m.form != nil || m.renameForm != nil
 }
@@ -235,7 +259,7 @@ func (m sessionsModel) Update(msg tea.Msg) (sessionsModel, tea.Cmd) {
 		// if the user moved the cursor while the capture was in flight,
 		// drop the old result silently rather than flashing wrong content.
 		sel := m.Selected()
-		if sel == nil || msg.Session != sel.Name {
+		if sel == nil || !sameSession(msg.Host, msg.Session, sel.Host, sel.Name) {
 			m.previewLoading = false
 			return m, nil
 		}
@@ -274,6 +298,7 @@ func (m sessionsModel) Update(msg tea.Msg) (sessionsModel, tea.Cmd) {
 		case keyMatches(km, m.km.Rename):
 			if sel := m.Selected(); sel != nil {
 				f := newRenameForm(m.st, sel.Name)
+				f.host = sel.Host
 				m.renameForm = &f
 				return m, textinput.Blink
 			}
@@ -352,7 +377,7 @@ func realCapturePreviewCmd(s daemon.SessionState) tea.Cmd {
 		// matches daemon.SessionState.Host's convention (empty = local).
 		if s.Host == "" || s.Host == "local" {
 			out, err := tmux.CapturePane(ctx, s.Name, lines)
-			return previewLoadedMsg{Session: s.Name, Content: out, Err: err}
+			return previewLoadedMsg{Session: s.Name, Host: s.Host, Content: out, Err: err}
 		}
 		// Remote: the daemon at the peer's address has a Preview method
 		// (same path the mobile clients and ccmux-mcp use). The host
@@ -362,7 +387,7 @@ func realCapturePreviewCmd(s daemon.SessionState) tea.Cmd {
 		// unsupported — most users want the preview for "the agent on
 		// my mini," which IS local from the mini's TUI, so this is
 		// a small gap. Tracked in docs/01_Specs/01_Feature_Catalog.md.
-		return previewLoadedMsg{Session: s.Name, Err: errRemotePreviewNotWired}
+		return previewLoadedMsg{Session: s.Name, Host: s.Host, Err: errRemotePreviewNotWired}
 	}
 }
 

@@ -875,7 +875,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case renameSessionSubmitMsg:
 		a.sessionsM.renameForm = nil
-		return a, renameSessionCmd(msg.OldName, msg.NewName)
+		// Route by the row's host: a remote session is renamed through
+		// its own daemon, never on the local tmux server.
+		return a, a.renameSessionTargetCmd(msg.Host, msg.OldName, msg.NewName)
 
 	case renameSessionCancelMsg:
 		a.sessionsM.renameForm = nil
@@ -885,7 +887,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Err != nil {
 			a.toasts.Set(toastError, tr("rename failed: ")+msg.Err.Error(), 5*time.Second)
 		} else {
-			a.toasts.Set(toastSuccess, fmt.Sprintf(tr("renamed %s → %s"), msg.OldName, msg.NewName), 3*time.Second)
+			a.toasts.Set(toastSuccess, fmt.Sprintf(tr("renamed %s → %s"), sessionDisplayName(msg.Host, msg.OldName), msg.NewName), 3*time.Second)
 		}
 		return a, a.refreshSessionsCmd()
 
@@ -976,7 +978,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Err != nil {
 			a.toasts.Set(toastError, tr("kill failed: ")+msg.Err.Error(), 5*time.Second)
 		} else {
-			a.toasts.Set(toastSuccess, fmt.Sprintf(tr("killed %s"), msg.Name), 3*time.Second)
+			a.toasts.Set(toastSuccess, fmt.Sprintf(tr("killed %s"), sessionDisplayName(msg.Host, msg.Name)), 3*time.Second)
 		}
 		return a, a.refreshSessionsCmd()
 
@@ -1439,7 +1441,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a.openQuitConfirmation()
 		case keyMatches(msg, a.keys.Kill) && a.screen == ScreenSessions:
 			if sel := a.sessionsM.Selected(); sel != nil {
-				return a.openKillSessionConfirmation(sel.Name)
+				return a.openKillSessionConfirmation(sel.Host, sel.Name)
 			}
 			return a, nil
 		case keyMatches(msg, a.keys.Quit):
@@ -2974,8 +2976,11 @@ func uniqueSessionName(ctx context.Context, base string) string {
 	return fmt.Sprintf("%s-%d", base, time.Now().UnixMilli())
 }
 
-// renameSessionCmd runs `tmux rename-session` and returns the result.
-func renameSessionCmd(oldName, newName string) tea.Cmd {
+// renameSessionCmd runs `tmux rename-session` on the LOCAL tmux server
+// and returns the result. Remote rows go through renameSessionTargetCmd
+// → renameRemoteSessionCmd instead. A package var so tests can observe
+// routing without a live tmux.
+var renameSessionCmd = func(oldName, newName string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
