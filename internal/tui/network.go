@@ -189,17 +189,35 @@ func (m networkModel) SSHCmd() tea.Cmd {
 	if dial == "" {
 		return nil
 	}
-	cmd := remoteattach.SSHInteractive(dial, sel.SSHPort)
+	target := sshLoginTarget(sel.User, dial)
+	cmd := sshInteractiveCmd(target, sel.SSHPort)
 	if dbg := debugLogger(); dbg != nil {
-		dbg.Printf("network ssh: %s port=%d", dial, sel.SSHPort)
+		dbg.Printf("network ssh: %s port=%d", target, sel.SSHPort)
 	}
-	rt := remoteTargetForSSH(*sel, dial)
+	rt := remoteTargetForSSH(*sel, target)
 	return tea.ExecProcess(cmd, func(err error) tea.Msg {
 		// err is nil on a clean detach (user typed `exit` on the
 		// remote shell). Pass it through unchanged — the
 		// attachExitedMsg handler treats nil-Err as success.
 		return attachExitedMsg{Err: err, RemoteSSHTarget: rt}
 	})
+}
+
+// sshInteractiveCmd builds the interactive-shell process for SSHCmd. A
+// package var so tests can see the exact ssh target without exec'ing.
+var sshInteractiveCmd = remoteattach.SSHInteractive
+
+// sshLoginTarget is the ssh destination for a host row: `user@host`
+// when the host has a configured login user, as the Sessions attach
+// and `ccmux shell` already do. Dropping the user made Network-tab
+// Enter log in as the LOCAL username, which fails (or lands in the
+// wrong account) on any host whose user differs. A dial string that
+// already carries `user@` is left alone.
+func sshLoginTarget(user, dial string) string {
+	if user == "" || strings.Contains(dial, "@") {
+		return dial
+	}
+	return user + "@" + dial
 }
 
 // remoteTargetForSSH derives the user/host/port the wizard would
