@@ -22,6 +22,10 @@ type sessionsLoadedMsg struct {
 	Hosts    []hostStatus
 	Err      error
 	At       time.Time
+	// Gen is the refreshSessionsCmd generation that produced this
+	// result; an older generation than the last applied one is dropped.
+	// 0 means unnumbered and is always applied.
+	Gen int
 }
 
 // projectsLoadedMsg carries discovered projects under the configured root.

@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -32,7 +31,6 @@ import (
 	"github.com/skzv/ccmux/internal/project"
 	"github.com/skzv/ccmux/internal/remoteattach"
 	"github.com/skzv/ccmux/internal/selfupdate"
-	"github.com/skzv/ccmux/internal/tailnet"
 	"github.com/skzv/ccmux/internal/tmux"
 	"github.com/skzv/ccmux/internal/tui/components"
 	"github.com/skzv/ccmux/internal/tui/styles"
@@ -169,6 +167,16 @@ type App struct {
 	version     string
 
 	width, height int
+
+	// sessionsLoadGen numbers sessions refreshes and sessionsAppliedGen
+	// is the newest one applied; see refreshSessionsCmd. sessionsTickGen
+	// is the tick-issued refresh still in flight (0 = none), started at
+	// sessionsTickAt — the 2s tick skips while it's pending so slow
+	// hosts can't stack up overlapping refreshes.
+	sessionsLoadGen    int
+	sessionsAppliedGen int
+	sessionsTickGen    int
+	sessionsTickAt     time.Time
 
 	screen   Screen
 	sessions []daemon.SessionState
@@ -590,7 +598,16 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case tickMsg:
-		cmds := []tea.Cmd{a.refreshSessionsCmd(), tickEvery(2 * time.Second)}
+		cmds := []tea.Cmd{tickEvery(2 * time.Second)}
+		// Don't stack refreshes: with a slow host a refresh can outlive
+		// the 2s tick, and issuing another every tick piled them up.
+		// Skip while the previous tick's refresh is pending — unless
+		// it's overdue, so a lost result can't stall polling for good.
+		if a.sessionsTickGen == 0 || time.Since(a.sessionsTickAt) > sessionsTickStaleAfter {
+			cmds = append(cmds, a.refreshSessionsCmd())
+			a.sessionsTickGen = a.sessionsLoadGen
+			a.sessionsTickAt = time.Now()
+		}
 		// Keep the Settings screen's moshi status fresh while it's
 		// focused — async, so the 30s refresh never blocks the UI
 		// goroutine the way the old inline moshi.Detect did.
@@ -776,6 +793,18 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case sessionsLoadedMsg:
+		if msg.Gen != 0 {
+			// This result (or a newer one) settles the tick's refresh.
+			if a.sessionsTickGen != 0 && msg.Gen >= a.sessionsTickGen {
+				a.sessionsTickGen = 0
+			}
+			// Refreshes finish out of order when a host is slow; never
+			// let an older list overwrite a newer one.
+			if msg.Gen < a.sessionsAppliedGen {
+				return a, nil
+			}
+			a.sessionsAppliedGen = msg.Gen
+		}
 		a.lastRefresh = msg.At
 		a.sessions = msg.Sessions
 		a.hosts = msg.Hosts
@@ -2110,291 +2139,41 @@ func shortHostname(h string) string {
 // refreshSessionsCmd fetches sessions from local ccmuxd, every
 // explicitly-configured remote host, AND every tailnet peer auto-
 // discovered via `tailscale status` + a /v1/health probe. Falls back
-// to direct tmux call when the local daemon is down.
-func (a App) refreshSessionsCmd() tea.Cmd {
-	hosts := a.cfg.Hosts
+// to direct tmux call when the local daemon is down. Every probe runs
+// concurrently under its own budget — see collectSessions (refresh.go).
+//
+// Each refresh is numbered (Gen). Refreshes overlap — the 2s tick, `r`,
+// the post-kill / post-attach refreshes — and a slow host makes them
+// finish out of order, so the sessionsLoadedMsg handler drops a result
+// older than one it already applied instead of letting a stale list
+// overwrite a newer one.
+func (a *App) refreshSessionsCmd() tea.Cmd {
+	a.sessionsLoadGen++
+	gen := a.sessionsLoadGen
+	hosts := append([]config.Host(nil), a.cfg.Hosts...)
 	tailnetPort := a.cfg.Daemon.TailnetPort
 	if tailnetPort == 0 {
 		tailnetPort = 7474
 	}
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-
-		var (
-			sessions []daemon.SessionState
-			hs       []hostStatus
-			err      error
-		)
-
-		local, lerr := daemon.LocalClient()
-		if lerr == nil {
-			ss, e := local.Sessions(ctx)
-			if e == nil {
-				for i := range ss {
-					ss[i].Host = "local"
-				}
-				sessions = append(sessions, ss...)
-				h, _ := local.Health(ctx)
-				localName := shortHostname(h.Hostname)
-				if localName == "" {
-					localName = "local"
-				}
-				hs = append(hs, hostStatus{
-					Name:    localName,
-					Local:   true,
-					Source:  "local",
-					Address: local.Addr(),
-					OK:      h.OK,
-					// The daemon answered /v1/health, so the chip can
-					// honestly say so.
-					DaemonOK:  h.OK,
-					Sessions:  h.Sessions,
-					SleepMode: h.SleepMode,
-					Version:   h.Version,
-					LastProbe: time.Now(),
-				})
-			} else {
-				direct, e2 := fallbackDirectTmux(ctx)
-				if e2 == nil {
-					sessions = append(sessions, direct...)
-					localHost, _ := os.Hostname()
-					name := shortHostname(localHost)
-					if name == "" {
-						name = "local"
-					}
-					// tmux is responding — sessions came back. ccmuxd
-					// is down, but the device itself is fine; mark OK
-					// so the Devices dot stays green.
-					//
-					// DaemonOK stays false: the status-bar chip must
-					// say "offline" here. Without the daemon there are
-					// no bells, no push notifications, and no sleep
-					// lock — the user needs to see that, not a green
-					// check. `ccmux daemon install` fixes it.
-					hs = append(hs, hostStatus{
-						Name:      name,
-						Local:     true,
-						Source:    "local",
-						Address:   "tmux (no daemon)",
-						OK:        true,
-						DaemonOK:  false,
-						LastProbe: time.Now(),
-					})
-				} else {
-					err = fmt.Errorf("local: %w", e2)
-				}
-			}
-		}
-
-		// Configured hosts. Tracked so we don't double-add a peer that's
-		// both explicitly configured AND auto-discovered. configuredHostKeys
-		// resolves DNS names to IPs so a host configured as "mac-mini:7474"
-		// still dedupes against the scan's "100.x.x.x:7474" entry.
-		seen := map[string]bool{}
-		for _, h := range hosts {
-			for _, k := range configuredHostKeys(h, tailnetPort) {
-				seen[k] = true
-			}
-			port := h.Port
-			if port == 0 {
-				port = tailnetPort
-			}
-			addr := fmt.Sprintf("%s:%d", h.Address, port)
-			cli := daemon.RemoteClient(addr)
-			ss, e := cli.Sessions(ctx)
-			st := hostStatus{
-				Name:      h.Name,
-				Source:    "configured",
-				Address:   addr,
-				DialHost:  h.Address, // bare address without port, for ssh/mosh
-				User:      h.User,
-				Mosh:      h.Mosh,
-				SSHPort:   h.SSHPort, // 0 → default 22 at the dial site
-				LastProbe: time.Now(),
-			}
-			if e == nil {
-				// A configured host is reached THROUGH its ccmuxd, so
-				// a successful session list means its daemon answered.
-				st.OK = true
-				st.DaemonOK = true
-				st.Sessions = len(ss)
-				for i := range ss {
-					ss[i].Host = h.Name
-				}
-				sessions = append(sessions, ss...)
-				if hi, hErr := cli.Health(ctx); hErr == nil {
-					st.Version = hi.Version
-				}
-			} else {
-				st.Err = e
-			}
-			hs = append(hs, st)
-		}
-
-		// Tailnet auto-discovery. ScanTailnet probes every online
-		// non-mobile peer for ccmuxd /v1/health and partitions:
-		//   - Reachable: ccmuxd answered → merge as a regular host.
-		//   - NeedsInstall: peer is up but didn't answer → surface
-		//     with a "ccmux not installed / running here" hint so
-		//     the user knows what to do.
-		// Mobile peers (iOS, iPadOS, Android) are skipped entirely
-		// because the Moshi app handles them, and installing ccmux
-		// there isn't an option.
-		// Errors are non-fatal — discovery is convenience.
-		if scan, derr := tailnet.ScanTailnet(ctx, tailnetPort); derr == nil {
-			for _, d := range scan.Reachable {
-				if seen[d.Address] {
-					continue
-				}
-				seen[d.Address] = true
-				cli := daemon.RemoteClient(d.Address)
-				// The probe already succeeded (that's how this peer
-				// ended up in Reachable). Mark OK regardless of the
-				// follow-up Sessions call — a Sessions error means
-				// "couldn't list sessions right now," not "host is
-				// down," so we shouldn't make the dot red.
-				st := hostStatus{
-					Name: d.Name, Address: d.Address,
-					Source:     "discovered",
-					Discovered: true, DialHost: d.DialHost,
-					// Discovered via a successful ccmuxd health probe,
-					// so its daemon is by definition answering.
-					Version: d.Version, OK: true, DaemonOK: true,
-					TailscaleSSH: d.TailscaleSSH,
-					LastProbe:    time.Now(),
-				}
-				if ss, e := cli.Sessions(ctx); e == nil {
-					st.Sessions = len(ss)
-					for i := range ss {
-						ss[i].Host = d.Name
-					}
-					sessions = append(sessions, ss...)
-				} else {
-					st.Err = e
-				}
-				hs = append(hs, st)
-			}
-			for _, p := range scan.NeedsInstall {
-				addr := fmt.Sprintf("%s:%d", p.Addr, tailnetPort)
-				if seen[addr] {
-					continue
-				}
-				seen[addr] = true
-				hs = append(hs, hostStatus{
-					Name:         shortPeerName(p.DisplayName()),
-					Source:       "discovered",
-					Address:      addr,
-					Discovered:   true,
-					NeedsInstall: true,
-					OS:           p.OS,
-					OK:           p.Online,
-					LastProbe:    time.Now(),
-				})
-			}
-			for _, p := range scan.Mobile {
-				// Mobile rows don't have an ccmuxd address; key the
-				// dedupe by the tailnet IP itself so the same phone
-				// doesn't show twice across refreshes.
-				key := "mobile://" + p.Addr
-				if seen[key] {
-					continue
-				}
-				seen[key] = true
-				hs = append(hs, hostStatus{
-					Name:       shortPeerName(p.DisplayName()),
-					Source:     "mobile",
-					Address:    p.Addr,
-					Discovered: true,
-					Mobile:     true,
-					OS:         p.OS,
-					OK:         p.Online,
-					LastProbe:  time.Now(),
-				})
-			}
-		}
-
-		sort.SliceStable(sessions, func(i, j int) bool {
-			pi := statePriority(sessions[i].State)
-			pj := statePriority(sessions[j].State)
-			if pi != pj {
-				return pi < pj
-			}
-			if sessions[i].Host != sessions[j].Host {
-				return sessions[i].Host < sessions[j].Host
-			}
-			return sessions[i].Name < sessions[j].Name
-		})
-
-		return sessionsLoadedMsg{Sessions: sessions, Hosts: hs, Err: err, At: time.Now()}
+		msg := collectSessions(hosts, tailnetPort)
+		msg.Gen = gen
+		return msg
 	}
 }
 
+// refreshProjectsCmd discovers local projects plus every configured
+// host's and discovered peer's projects, concurrently — see
+// collectProjects (refresh.go).
 func (a App) refreshProjectsCmd() tea.Cmd {
 	root := a.cfg.Projects.Root
-	hosts := a.cfg.Hosts
+	hosts := append([]config.Host(nil), a.cfg.Hosts...)
 	tailnetPort := a.cfg.Daemon.TailnetPort
 	if tailnetPort == 0 {
 		tailnetPort = 7474
 	}
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-
-		var all []project.Project
-		// Local projects first so the merge sort keeps them
-		// grouped naturally by Modified after combining.
-		if ps, err := project.Discover(root); err == nil {
-			for _, p := range ps {
-				p.Host = "local"
-				all = append(all, p)
-			}
-		}
-
-		// Configured remote hosts. seen is keyed by every form of the
-		// host's address we can resolve (literal + each tailnet IP) so
-		// the auto-discovery scan below doesn't re-fetch a peer that's
-		// already configured under a DNS name.
-		seen := map[string]bool{}
-		for _, h := range hosts {
-			for _, k := range configuredHostKeys(h, tailnetPort) {
-				seen[k] = true
-			}
-			port := h.Port
-			if port == 0 {
-				port = tailnetPort
-			}
-			addr := fmt.Sprintf("%s:%d", h.Address, port)
-			all = appendRemoteProjects(ctx, all, addr, h.Name)
-		}
-
-		// Auto-discovered tailnet peers. The scan inside ScanTailnet
-		// runs its own concurrent probes, so this is cheap relative
-		// to the per-host project fetches that follow.
-		if scan, err := tailnet.ScanTailnet(ctx, tailnetPort); err == nil {
-			for _, d := range scan.Reachable {
-				if seen[d.Address] {
-					continue
-				}
-				seen[d.Address] = true
-				all = appendRemoteProjects(ctx, all, d.Address, d.Name)
-			}
-		}
-
-		sort.SliceStable(all, func(i, j int) bool {
-			hi, hj := projectHost(all[i]), projectHost(all[j])
-			if hi != hj {
-				if hi == "local" {
-					return true
-				}
-				if hj == "local" {
-					return false
-				}
-				return hi < hj
-			}
-			return all[i].Modified.After(all[j].Modified)
-		})
-		return projectsLoadedMsg{Projects: all}
+		return collectProjects(root, hosts, tailnetPort)
 	}
 }
 
@@ -2424,27 +2203,6 @@ func configuredHostKeys(h config.Host, defaultPort int) []string {
 		}
 	}
 	return keys
-}
-
-// appendRemoteProjects fetches projects from one remote ccmuxd at
-// `addr` and tags each entry with `hostLabel` (the dashboard's
-// friendly name for that host). Failures are silently swallowed —
-// project discovery is best-effort, and a single unreachable peer
-// shouldn't drop the user's local list.
-func appendRemoteProjects(ctx context.Context, into []project.Project, addr, hostLabel string) []project.Project {
-	cli := daemon.RemoteClient(addr)
-	infos, err := cli.Projects(ctx)
-	if err != nil {
-		return into
-	}
-	for _, p := range infos {
-		into = append(into, project.Project{
-			Name: p.Name, Host: hostLabel, Path: p.Path,
-			HasGit: p.HasGit, HasCM: p.HasCM, HasAgents: p.HasAgents, HasDocs: p.HasDocs,
-			Modified: p.Modified,
-		})
-	}
-	return into
 }
 
 // attachSelectedSession is Enter on Sessions screen.
