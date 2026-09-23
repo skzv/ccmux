@@ -38,6 +38,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -1874,28 +1875,46 @@ func removeXMLBlock(s, tag string) string {
 	}
 }
 
-// stripXMLTags removes every <...> tag delimiter from s while keeping
-// the inner text. Naive scan — not an XML parser. Good enough for the
-// agent-injected wrappers we care about (system-reminder,
-// command-message, command-name, …).
+// xmlTagRE matches one well-formed tag: <name>, </name>, <name/>, or
+// <name attr="…">. A bare '<' or '>' ("a < b", "<- in R") never
+// matches, so ordinary prose survives.
+var xmlTagRE = regexp.MustCompile(`</?[A-Za-z][A-Za-z0-9_-]*(?:\s[^<>]*)?/?>`)
+
+// stripXMLTags removes the agent-injected wrapper tags (system-reminder,
+// command-args, environment_context, …) from s while keeping the inner
+// text. Only well-formed tags are touched, and an opening tag glued to
+// the word before it with a name that can't be a wrapper (no '-') is a
+// type parameter — Vec<String>, Promise<void>, Array<TArg> — and stays.
+// Not an XML parser.
 func stripXMLTags(s string) string {
-	var b strings.Builder
-	depth := 0
-	for _, r := range s {
-		switch r {
-		case '<':
-			depth++
-		case '>':
-			if depth > 0 {
-				depth--
-			}
-		default:
-			if depth == 0 {
-				b.WriteRune(r)
-			}
-		}
+	locs := xmlTagRE.FindAllStringIndex(s, -1)
+	if len(locs) == 0 {
+		return s
 	}
+	var b strings.Builder
+	prev := 0
+	for _, loc := range locs {
+		if isTypeParameter(s, loc[0], loc[1]) {
+			continue
+		}
+		b.WriteString(s[prev:loc[0]])
+		prev = loc[1]
+	}
+	b.WriteString(s[prev:])
 	return b.String()
+}
+
+// isTypeParameter reports whether the tag at s[start:end] reads as a
+// generic type argument rather than a wrapper tag: an opening (not
+// closing or self-closing) tag directly after an identifier character,
+// whose name has no '-'.
+func isTypeParameter(s string, start, end int) bool {
+	if start == 0 || s[start+1] == '/' || strings.HasSuffix(s[start:end], "/>") {
+		return false
+	}
+	c := s[start-1]
+	glued := c == '_' || (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+	return glued && !strings.Contains(s[start:end], "-")
 }
 
 func stripLeadingSkillInvocation(s string) string {
