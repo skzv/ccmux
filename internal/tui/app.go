@@ -750,8 +750,15 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.attach.label == "" {
 			a.attach.label = msg.Session
 		}
+		// A session this resume just created is opened in mirror mode;
+		// an already-running one (resumed before) is an ordinary
+		// existing-session attach and honors sessions.attach_mode.
+		attach := a.localNewSessionAttachCmd(msg.Session, label)
+		if msg.Existing {
+			attach = a.localAttachCmd(msg.Session, label)
+		}
 		return a, tea.Batch(
-			a.localNewSessionAttachCmd(msg.Session, label),
+			attach,
 			a.refreshSessionsCmd(),
 			func() tea.Msg {
 				return toastMsg{
@@ -2894,10 +2901,11 @@ func shortConversationID(id string) string {
 // command produces a conversationResumedMsg the App handler turns
 // into an attach + toast + sessions refresh.
 //
-// Session naming: c-resume-<short-id> rather than the usual
-// c-<project> so resuming twice doesn't try to reuse the same tmux
-// session (which would just attach to the first invocation's running
-// agent instead of starting a new one with the resume flag).
+// Session naming: conversations.ResumeSessionName (c-resume-<short-id>
+// -<hash>) rather than the usual c-<project>, so a resume never lands
+// in the project's regular session, and — shared with `ccmux resume` —
+// resuming the same conversation again attaches to its existing
+// session instead of failing "duplicate session".
 //
 // cwd: when the conversation has a known Project path, we cd there so
 // the agent's working directory matches what it had originally —
@@ -2925,17 +2933,30 @@ func (a App) resumeConversationCmd(c conversations.Conversation) tea.Cmd {
 		if len(argv) == 0 {
 			return conversationResumedMsg{Err: fmt.Errorf("don't know how to resume agent %q", c.Agent)}
 		}
-		sessionName := "c-resume-" + shortConversationID(c.ID)
+		sessionName := conversations.ResumeSessionName(c.ID)
 		// Build the shell command tmux runs in the new pane. zsh
 		// fallback keeps the pane alive if the agent binary is missing.
 		cmdline := joinShellArgs(argv) + " || zsh"
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := tmux.New(ctx, sessionName, c.Project, cmdline); err != nil {
+		if err := resumeTmuxNew(ctx, sessionName, c.Project, cmdline); err != nil {
+			// Resumed before and still running: attach to that
+			// session (as `ccmux resume` does) rather than failing
+			// with tmux's "duplicate session". It already carries
+			// its agent tag, and on a tagging error we must not kill
+			// a session this call didn't create.
+			if has, _ := resumeTmuxHas(ctx, sessionName); has {
+				return conversationResumedMsg{
+					Session:  sessionName,
+					Project:  c.Project,
+					Agent:    string(c.Agent),
+					Existing: true,
+				}
+			}
 			return conversationResumedMsg{Err: fmt.Errorf("tmux new-session: %w", err)}
 		}
-		if err := tmux.SetSessionAgent(ctx, sessionName, string(c.Agent)); err != nil {
-			_ = tmux.Kill(ctx, sessionName)
+		if err := resumeTmuxSetAgent(ctx, sessionName, string(c.Agent)); err != nil {
+			_ = resumeTmuxKill(ctx, sessionName)
 			return conversationResumedMsg{Err: err}
 		}
 		return conversationResumedMsg{
@@ -2945,6 +2966,16 @@ func (a App) resumeConversationCmd(c conversations.Conversation) tea.Cmd {
 		}
 	}
 }
+
+// The tmux calls resumeConversationCmd makes — package-level seams so
+// tests can drive the create / already-exists paths without a tmux
+// server.
+var (
+	resumeTmuxNew      = tmux.New
+	resumeTmuxHas      = tmux.Has
+	resumeTmuxSetAgent = tmux.SetSessionAgent
+	resumeTmuxKill     = tmux.Kill
+)
 
 // localAttachCmd kicks off an explicit existing-session attach, honoring
 // sessions.attach_mode. Create-then-attach flows use

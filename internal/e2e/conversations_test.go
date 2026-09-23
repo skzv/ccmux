@@ -183,7 +183,7 @@ func TestConversations_Resume(t *testing.T) {
 
 	_, _, _ = e.ccmux("resume", id)
 
-	want := "c-resume-" + id[:8]
+	want := conversations.ResumeSessionName(id)
 	if !e.hasSession(want) {
 		t.Errorf("`ccmux resume %s` did not create session %q (sessions: %v)", id, want, e.sessionNames())
 	}

@@ -518,6 +518,11 @@ type conversationResumedMsg struct {
 	// wording and the post-resume attach.
 	Agent string
 
+	// Existing is true when the conversation's resume session was
+	// already running (resumed earlier), so the App attaches to it
+	// like any existing session instead of as a freshly created one.
+	Existing bool
+
 	// Err is non-nil when the resume couldn't be started (agent
 	// binary missing, tmux call failed, etc.).
 	Err error
