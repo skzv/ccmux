@@ -11,11 +11,14 @@
 // token spend this week." With --allow-mutate, it can also spawn
 // new sessions and send keys into existing ones.
 //
-// Wire it up in Claude Code via ~/.claude/settings.json:
+// Wire it up in Claude Code as a user-scope MCP server — `ccmux mcp
+// register` (or `ccmux setup`) does this for you, or by hand:
 //
-//	"mcpServers": {
-//	  "ccmux": {"command": "ccmux-mcp"}
-//	}
+//	claude mcp add --scope user ccmux -- ccmux-mcp
+//
+// which stores it under the top-level "mcpServers" of ~/.claude.json.
+// (Claude Code does not read an "mcpServers" key in
+// ~/.claude/settings.json.)
 //
 // See docs/01_Specs/04_MCP_Server.md for the full tool surface and
 // the security model around --allow-mutate.

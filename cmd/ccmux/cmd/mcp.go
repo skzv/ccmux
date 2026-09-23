@@ -38,23 +38,30 @@ their settings file. Each one's idempotent — re-run them freely.`,
 }
 
 // newMCPRegisterCmd is `ccmux mcp register [--allow-mutate]`. The
-// non-wizard path to adding the ccmux entry to ~/.claude/settings.json.
+// non-wizard path to registering ccmux-mcp as a user-scope MCP server
+// in Claude Code (~/.claude.json).
 func newMCPRegisterCmd() *cobra.Command {
 	var allowMutate bool
 	c := &cobra.Command{
 		Use:   "register",
-		Short: "Register ccmux-mcp into Claude Code's settings.json",
-		Long: `Adds a 'ccmux' entry to ~/.claude/settings.json under mcpServers, pointed
-at the ccmux-mcp binary. Existing MCP servers are preserved; a timestamped
-backup is written to ~/.claude/backups/ before the change.
+		Short: "Register ccmux-mcp as a user-scope MCP server in Claude Code",
+		Long: `Registers a user-scope 'ccmux' MCP server in Claude Code, pointed at the
+ccmux-mcp binary — the equivalent of
+
+  claude mcp add-json --scope user ccmux '{"type":"stdio","command":"ccmux-mcp","args":[]}'
+
+which is what runs when the claude CLI is on PATH. Without it, ccmux edits
+the top-level mcpServers object in ~/.claude.json directly (existing
+servers and settings are preserved; a timestamped backup is written to
+~/.claude/backups/ first). A stale entry older ccmux versions left in
+~/.claude/settings.json — which Claude Code never reads — is removed.
 
 Pass --allow-mutate to expose the mutating tools (spawn_session, send_keys,
 kill_session). Read-only by default — safe to leave it on, the agent can
 only see, not type.
 
-Idempotent: re-running prints the current registration mode without
-changing the file. To switch modes, unregister first or hand-edit the
-'args' array in settings.json.`,
+Idempotent: re-running with the same mode changes nothing; running with
+the other mode replaces the entry.`,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			return setupwizard.RegisterMCPForCLI(context.Background(), os.Stdout, allowMutate)
 		},
@@ -76,11 +83,11 @@ func newMCPStatusCmd() *cobra.Command {
 				return err
 			}
 			if !ok {
-				fmt.Println("✗ ccmux-mcp is NOT registered in ~/.claude/settings.json")
+				fmt.Printf("✗ ccmux-mcp is NOT registered as a user-scope MCP server in %s\n", setupwizard.MCPUserConfigPath())
 				fmt.Println("  register it with: ccmux mcp register [--allow-mutate]")
 				return nil
 			}
-			fmt.Printf("✓ ccmux-mcp is registered (%s)\n", mode)
+			fmt.Printf("✓ ccmux-mcp is registered in %s (%s)\n", setupwizard.MCPUserConfigPath(), mode)
 			return nil
 		},
 	}
