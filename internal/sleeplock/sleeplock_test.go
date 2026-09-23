@@ -3,6 +3,7 @@ package sleeplock
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os/exec"
 	"sync"
 	"testing"
@@ -292,5 +293,52 @@ func TestManager_VeryDangerous_LockStartFails_RevertsOverride(t *testing.T) {
 	// not left stranded ON.
 	if len(overrideCalls) != 2 || overrideCalls[0] != true || overrideCalls[1] != false {
 		t.Errorf("override toggles = %v, want [true false] (applied then reverted)", overrideCalls)
+	}
+}
+
+// TestManager_RestartsHolderThatDied — if caffeinate is killed from
+// outside, the next SetActive(true) must start a new one instead of
+// trusting the dead holder forever.
+func TestManager_RestartsHolderThatDied(t *testing.T) {
+	m := NewManager(ModeSafe, 0)
+	starts := 0
+	m.startLockProc = func(Mode) *exec.Cmd { starts++; return fakeLockCmd() }
+	m.SetActive(true)
+	defer m.Stop()
+
+	m.mu.Lock()
+	first, done := m.holder, m.holderDone
+	m.mu.Unlock()
+	_ = first.Process.Kill()
+	<-done
+
+	m.SetActive(true)
+	if starts != 2 {
+		t.Fatalf("lock process started %d times, want 2 (restart after external kill)", starts)
+	}
+	if m.Effective() != ModeSafe {
+		t.Errorf("effective = %q, want safe", m.Effective())
+	}
+}
+
+// TestManager_RevertStaleOverride — a daemon killed while holding the
+// very_dangerous override leaves `pmset disablesleep 1` in force; the
+// next daemon must turn it off at startup.
+func TestManager_RevertStaleOverride(t *testing.T) {
+	for _, tc := range []struct {
+		mode Mode
+		want []bool
+	}{
+		{ModeVeryDangerous, []bool{false}},
+		{ModeSafe, nil},
+		{ModeDangerous, nil},
+	} {
+		m := NewManager(tc.mode, 0)
+		var calls []bool
+		m.runOverride = func(_ context.Context, on bool) error { calls = append(calls, on); return nil }
+		m.RevertStaleOverride()
+		if fmt.Sprint(calls) != fmt.Sprint(tc.want) {
+			t.Errorf("mode %s: override calls = %v, want %v", tc.mode, calls, tc.want)
+		}
 	}
 }

@@ -563,6 +563,7 @@ func defaultDaemonStartDeps() daemonStartDeps {
 			if !ok {
 				return 0, fmt.Errorf("ccmuxd binary not found next to ccmux or on PATH — reinstall ccmux")
 			}
+			// nocontext: the daemon is spawned detached and must outlive us.
 			dCmd := exec.Command(bin)
 			detachProcess(dCmd) // OS-specific: setsid on unix, DETACHED_PROCESS on windows
 			if err := dCmd.Start(); err != nil {
@@ -622,7 +623,9 @@ func waitForDaemonHealth(timeout time.Duration) bool {
 // pre-existing rogue pair) we report the first — enough for the
 // "already running" message.
 func runningCcmuxdPID() (int, bool) {
-	out, err := exec.Command("pgrep", "-x", "ccmuxd").Output()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "pgrep", "-U", strconv.Itoa(os.Getuid()), "-x", "ccmuxd").Output()
 	if err != nil {
 		return 0, false // non-zero exit = no match
 	}
@@ -702,7 +705,9 @@ func newDaemonCmd() *cobra.Command {
 			Use:   "stop",
 			Short: "Stop ccmuxd (this login session only — use `uninstall` to disable autostart too)",
 			RunE: func(_ *cobra.Command, _ []string) error {
-				out, err := exec.Command("pkill", "-x", "ccmuxd").CombinedOutput()
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				out, err := exec.CommandContext(ctx, "pkill", "-U", strconv.Itoa(os.Getuid()), "-x", "ccmuxd").CombinedOutput()
 				if err != nil {
 					// pkill exits 1 when nothing matched — i.e. ccmuxd
 					// isn't running. That's a successful no-op for

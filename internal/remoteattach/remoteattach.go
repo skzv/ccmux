@@ -1,6 +1,8 @@
 // Package remoteattach builds the *exec.Cmd values the TUI hands to
 // tea.ExecProcess when foregrounding into a remote session over ssh
-// or mosh. Exists so the TUI doesn't shell out directly — every site
+// or mosh. They are interactive foreground processes that live as long
+// as the user stays attached, so none of them carries a context
+// (each is marked `nocontext` for the exec lint). Exists so the TUI doesn't shell out directly — every site
 // goes through one helper, which keeps the argv shape consistent
 // across the dashboard's remote-attach, the bare-session remote
 // flow, and the network screen's manual ssh.
@@ -50,6 +52,7 @@ func moshSSHFlags(port int) []string {
 // genuinely no configured port.
 func SSH(target, remoteCmd string, port int) *exec.Cmd {
 	args := append([]string{"-t"}, sshPortFlags(port)...)
+	// nocontext: interactive foreground attach (see package doc).
 	return exec.Command("ssh", append(args, target, remoteCmd)...)
 }
 
@@ -59,6 +62,7 @@ func SSH(target, remoteCmd string, port int) *exec.Cmd {
 // flow. Pass 0 when no port is configured.
 func SSHInteractive(target string, port int) *exec.Cmd {
 	args := append([]string{"-t"}, sshPortFlags(port)...)
+	// nocontext: interactive foreground attach (see package doc).
 	return exec.Command("ssh", append(args, target)...)
 }
 
@@ -95,6 +99,7 @@ func itoa(n int) string {
 // mosh's own `-p`.
 func Mosh(target, remoteCmd string, port int) *exec.Cmd {
 	args := append(moshSSHFlags(port), target, "--", "bash", "-c", remoteCmd)
+	// nocontext: interactive foreground attach (see package doc).
 	return exec.Command("mosh", args...)
 }
 
@@ -112,6 +117,7 @@ func Mosh(target, remoteCmd string, port int) *exec.Cmd {
 // and -t is added so the remote `tmux attach` gets a terminal.
 func RunArgv(target string, useMosh bool, port int, argv []string) *exec.Cmd {
 	if useMosh {
+		// nocontext: interactive foreground attach (see package doc).
 		return exec.Command("mosh", append(append(moshSSHFlags(port), target, "--"), argv...)...)
 	}
 	quoted := make([]string, len(argv))
@@ -119,6 +125,7 @@ func RunArgv(target string, useMosh bool, port int, argv []string) *exec.Cmd {
 		quoted[i] = shellQuote(a)
 	}
 	args := append(append([]string{"-t"}, sshPortFlags(port)...), target, "--", strings.Join(quoted, " "))
+	// nocontext: interactive foreground attach (see package doc).
 	return exec.Command("ssh", args...)
 }
 

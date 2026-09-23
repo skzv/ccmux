@@ -410,3 +410,30 @@ func TestOpenDeviceStore_CorruptFilePreservedNotClobbered(t *testing.T) {
 		t.Error("registration after corrupt-file recovery did not persist")
 	}
 }
+
+// TestRemoveToken — a token APNs reports dead is dropped (and the drop
+// persisted); other registrations stay.
+func TestRemoveToken(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "devices.json")
+	s, err := OpenDeviceStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Register("ssh-ed25519 AAAAone phone", "dead", "production"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Register("ssh-ed25519 AAAAtwo tablet", "alive", "production"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RemoveToken("dead"); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := OpenDeviceStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	all := reopened.All()
+	if len(all) != 1 || all[0].Token != "alive" {
+		t.Errorf("after RemoveToken: %+v, want only the alive token", all)
+	}
+}

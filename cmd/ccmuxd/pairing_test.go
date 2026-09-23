@@ -43,12 +43,14 @@ func testEd25519AuthorizedKey(t *testing.T) string {
 // runs under — handlePairToken refuses to mint a URL pointing at a
 // listener that was never started.
 func pairTestServer() *server {
-	return &server{
+	s := &server{
 		tokens: daemon.NewTokenStore(),
 		cfg: config.Config{
 			Daemon: config.DaemonConfig{TailnetPort: 7474, SSHUser: "alice", ListenTailnet: true},
 		},
 	}
+	s.tailnetLive.Store(true)
+	return s
 }
 
 // TestHandlePairToken_POST — POST /v1/pair-token issues a hex token and a
@@ -339,5 +341,18 @@ func TestHandlePairToken_EscapesQuery(t *testing.T) {
 	q := u.Query()
 	if q.Get("user") != "a&token=forged b" || q.Get("token") != resp.Token {
 		t.Errorf("query not escaped: %q", resp.URL)
+	}
+}
+
+// TestHandlePairToken_RefusesWhileTailnetDown — listen_tailnet is on but
+// the listener hasn't bound yet (Tailscale not up): a pairing URL would
+// point at a closed port, so say so instead.
+func TestHandlePairToken_RefusesWhileTailnetDown(t *testing.T) {
+	s := pairTestServer()
+	s.tailnetLive.Store(false)
+	rec := httptest.NewRecorder()
+	s.handlePairToken(rec, httptest.NewRequest(http.MethodPost, "/v1/pair-token", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503", rec.Code)
 	}
 }

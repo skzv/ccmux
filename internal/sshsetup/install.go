@@ -361,12 +361,40 @@ func defaultSSHDial(ctx context.Context, addr string, cfg *ssh.ClientConfig) (*s
 	if err != nil {
 		return nil, err
 	}
+	// cfg.Timeout only covers the TCP connect. Without a deadline here a
+	// server that accepts and never sends its banner hangs the handshake
+	// forever, and Esc in the wizard (ctx cancel) couldn't stop it.
+	if cfg.Timeout > 0 {
+		_ = conn.SetDeadline(time.Now().Add(cfg.Timeout))
+	}
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	cconn, chans, reqs, err := ssh.NewClientConn(conn, addr, cfg)
+	stopped := stop()
 	if err != nil {
 		_ = conn.Close()
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, err
 	}
+	if !stopped { // ctx fired as the handshake finished; conn is closed
+		_ = cconn.Close()
+		return nil, ctx.Err()
+	}
+	_ = conn.SetDeadline(time.Time{})
 	return ssh.NewClient(cconn, chans, reqs), nil
+}
+
+// runSession runs cmd on sess, closing the session if ctx is cancelled
+// so a remote command that never exits can't block the wizard forever.
+func runSession(ctx context.Context, sess *ssh.Session, cmd string) error {
+	stop := context.AfterFunc(ctx, func() { _ = sess.Close() })
+	defer stop()
+	err := sess.Run(cmd)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	return err
 }
 
 // dialFilteredTCP resolves addr, drops IPv6 link-local (`fe80::/10`)
@@ -528,14 +556,13 @@ func runRemoteScript(ctx context.Context, client *ssh.Client, script string) err
 	// We feed the script over stdin and run `sh -s` to avoid argv
 	// length limits and shell-quoting nightmares for long keys.
 	sess.Stdin = strings.NewReader(script)
-	if err := sess.Run("sh -s"); err != nil {
+	if err := runSession(ctx, sess, "sh -s"); err != nil {
 		s := strings.TrimSpace(stderr.String())
 		if s != "" {
-			return fmt.Errorf("%v: %s", err, s)
+			return fmt.Errorf("%w: %s", err, s)
 		}
 		return err
 	}
-	_ = ctx // session is bound by the parent SSH connection's deadlines
 	return nil
 }
 
@@ -550,14 +577,13 @@ func runRemoteCapture(ctx context.Context, client *ssh.Client, cmd string) (stri
 	var stdout, stderr bytes.Buffer
 	sess.Stdout = &stdout
 	sess.Stderr = &stderr
-	if err := sess.Run(cmd); err != nil {
+	if err := runSession(ctx, sess, cmd); err != nil {
 		s := strings.TrimSpace(stderr.String())
 		if s != "" {
-			return stdout.String(), fmt.Errorf("%v: %s", err, s)
+			return stdout.String(), fmt.Errorf("%w: %s", err, s)
 		}
 		return stdout.String(), err
 	}
-	_ = ctx
 	return stdout.String(), nil
 }
 

@@ -169,7 +169,7 @@ func runSessions(ctx context.Context, count int, duration, probe time.Duration) 
 // findCcmuxd returns the pid of the running ccmuxd or 0 if none.
 // macOS-aware (pgrep is fine on darwin + linux).
 func findCcmuxd() int {
-	out, err := exec.Command("pgrep", "-x", "ccmuxd").Output()
+	out, err := quickOutput("pgrep", "-x", "ccmuxd")
 	if err != nil {
 		return 0
 	}
@@ -181,7 +181,7 @@ func findCcmuxd() int {
 // readRSS returns the resident set size of pid in KB. Returns 0 on
 // any error. Uses `ps -o rss=` which works on both macOS and Linux.
 func readRSS(pid int) int {
-	out, err := exec.Command("ps", "-o", "rss=", "-p", fmt.Sprintf("%d", pid)).Output()
+	out, err := quickOutput("ps", "-o", "rss=", "-p", fmt.Sprintf("%d", pid))
 	if err != nil {
 		return 0
 	}
@@ -194,7 +194,7 @@ func readRSS(pid int) int {
 // kill against a session that the user already killed is fine.
 func cleanupSessions(names []string) {
 	for _, name := range names {
-		_ = exec.Command("tmux", "kill-session", "-t", name).Run()
+		_, _ = quickOutput("tmux", "kill-session", "-t", name)
 	}
 }
 
@@ -309,4 +309,12 @@ func writeReport(profile string, runID int64, body string) error {
 		}
 	}
 	return fmt.Errorf("no writable output dir for report")
+}
+
+// quickOutput runs a short probe (ps/pgrep/tmux) under a timeout so a
+// wedged one can't hang the stress run.
+func quickOutput(name string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return exec.CommandContext(ctx, name, args...).Output()
 }

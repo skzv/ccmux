@@ -9,13 +9,13 @@
 package apns
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 
 	"github.com/sideshow/apns2"
 	"github.com/sideshow/apns2/token"
@@ -39,11 +39,15 @@ type Config struct {
 type Sender struct {
 	cfg Config
 
-	mu     sync.Mutex
-	dev    *apns2.Client // sandbox client (development env tokens)
-	prod   *apns2.Client // production client
-	apnsTk *token.Token
+	dev  *apns2.Client // sandbox client (development env tokens)
+	prod *apns2.Client // production client
 }
+
+// ErrUnregistered is wrapped into Send's error when APNs says the
+// device token is no longer valid (the app was uninstalled, or the
+// token is for another app/environment). The registration should be
+// dropped: every later push to it will fail the same way.
+var ErrUnregistered = errors.New("apns: device token no longer valid")
 
 // Notification is the daemon-side view of one push: a title/body
 // plus the session id, which a mobile client uses to thread together
@@ -78,17 +82,18 @@ func New(cfg Config) (*Sender, error) {
 	}
 	tk := &token.Token{AuthKey: authKey, KeyID: cfg.KeyID, TeamID: cfg.TeamID}
 	return &Sender{
-		cfg:    cfg,
-		apnsTk: tk,
-		prod:   apns2.NewTokenClient(tk).Production(),
-		dev:    apns2.NewTokenClient(tk).Development(),
+		cfg:  cfg,
+		prod: apns2.NewTokenClient(tk).Production(),
+		dev:  apns2.NewTokenClient(tk).Development(),
 	}, nil
 }
 
 // Send pushes one notification to the supplied device token using
 // the environment the client registered with. Returns a wrapped
 // error from APNs on rejection — the daemon logs but doesn't crash.
-func (s *Sender) Send(deviceToken, environment string, n Notification) error {
+// ctx bounds the whole request; errors.Is(err, ErrUnregistered)
+// reports a dead token.
+func (s *Sender) Send(ctx context.Context, deviceToken, environment string, n Notification) error {
 	if s == nil || !s.cfg.Enabled {
 		return nil
 	}
@@ -108,7 +113,7 @@ func (s *Sender) Send(deviceToken, environment string, n Notification) error {
 		return err
 	}
 	client := s.clientFor(environment)
-	resp, err := client.Push(&apns2.Notification{
+	resp, err := client.PushWithContext(ctx, &apns2.Notification{
 		DeviceToken: deviceToken,
 		Topic:       s.cfg.Topic,
 		Payload:     payload,
@@ -117,9 +122,18 @@ func (s *Sender) Send(deviceToken, environment string, n Notification) error {
 		return fmt.Errorf("apns: push: %w", err)
 	}
 	if !resp.Sent() {
+		if isDeadToken(resp) {
+			return fmt.Errorf("%w: %d %s", ErrUnregistered, resp.StatusCode, resp.Reason)
+		}
 		return fmt.Errorf("apns: rejected %d %s", resp.StatusCode, resp.Reason)
 	}
 	return nil
+}
+
+func isDeadToken(resp *apns2.Response) bool {
+	return resp.StatusCode == 410 ||
+		resp.Reason == apns2.ReasonUnregistered ||
+		resp.Reason == apns2.ReasonBadDeviceToken
 }
 
 // Enabled is a cheap predicate the daemon uses to skip the work of
