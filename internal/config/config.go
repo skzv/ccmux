@@ -377,9 +377,12 @@ type NotificationsConfig struct {
 // SubscriptionConfig declares the user's subscription tier per agent
 // so the dashboard can size the right quota bar (e.g. Claude's 5-hour
 // message window) and so per-agent screens can read accurate
-// entitlements. Set an entry to "" or "api" if you're on API /
-// pay-as-you-go for that agent — the dashboard then shows raw token
-// totals + estimated dollar cost without a quota bar for that agent.
+// entitlements. "api" means API / pay-as-you-go for that agent — the
+// dashboard then shows raw token totals + estimated dollar cost
+// without a quota bar. An empty entry is "unset": it reads as api,
+// except that for Claude the TUI displays the plan auto-detected from
+// `claude auth status` instead (never saved). An explicit "api" always
+// wins over the detected plan.
 //
 // History: this struct started Claude-only (`tier = "max5x"`). To
 // stay compatible with every existing config + tool that reads or
@@ -512,7 +515,10 @@ func Defaults() Config {
 			// `ccmux update`.
 			AutoCheck: true,
 		},
-		Subscription: SubscriptionConfig{Tier: "api"},
+		// Subscription.Tier stays "" (unset) so a config that never
+		// chose a tier doesn't save `tier = "api"`: the TUI overlays
+		// the auto-detected Claude plan only on an unset tier, and an
+		// "api" the user picked explicitly must stick.
 	}
 }
 

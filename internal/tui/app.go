@@ -653,9 +653,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tierDetectedMsg:
 		// Async result of detectTierCmd. Only adopt a detected tier when
-		// the user hasn't explicitly declared one ("api" is the
-		// default-empty marker) — a hand-set tier in config.toml always
-		// wins. Push the updated config into the screens that render it.
+		// the user hasn't declared one (tier unset in config.toml) — a
+		// set tier, including an explicit "api", always wins. Push the
+		// updated config into the screens that render it.
 		// Writes through SetTierFor("claude", …) so the per-agent map
 		// + the legacy Tier field stay in sync.
 		//
@@ -1812,14 +1812,18 @@ func (a *App) adoptConfig(cfg config.Config) {
 }
 
 // overlayDetectedTier shows the auto-detected Claude tier when the user
-// hasn't declared one ("api" is the default-empty marker) — a hand-set
-// tier always wins. Reports whether cfg changed.
+// hasn't declared one (an empty tier on disk). Any tier the user set —
+// including an explicit "api" — wins: treating "api" as "unset" meant
+// the Settings cycle could never land on api (or get past it to pro)
+// once a paid plan was detected, because every save of "api" was
+// immediately overlaid with the detected plan again. Reports whether
+// cfg changed.
 func (a *App) overlayDetectedTier(cfg *config.Config) bool {
 	t := a.detectedClaudeTier
 	if t == "" || t == "api" {
 		return false
 	}
-	if cur := cfg.Subscription.TierFor("claude"); cur != "" && cur != "api" {
+	if cfg.Subscription.TierFor("claude") != "" {
 		return false
 	}
 	cfg.Subscription.SetTierFor("claude", t)

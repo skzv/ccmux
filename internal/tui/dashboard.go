@@ -593,20 +593,23 @@ func (m dashboardModel) renderUsageOverlay(st styles.Styles, width, height int) 
 	// Subscription tier + the (est.) caveat. Sourced per-agent so a
 	// future change can render the active agent's quota row; today
 	// the 5-hour window concept is Claude-only so the label is
-	// explicit about scope.
-	if tier := m.cfg.Subscription.TierFor("claude"); tier != "" {
-		limit := planMessageLimit(tier)
-		lines = append(lines, st.Subtitle.Render("Subscription · Claude · "+tr("5h window")))
-		lines = append(lines, fmt.Sprintf("  %s            %s", tr("tier"), tier))
-		if limit > 0 {
-			lines = append(lines,
-				fmt.Sprintf("  %s  %d %s %s", tr("per-window cap"), limit, tr("prompts"), tr("(est.)")),
-				st.Muted.Render("                  "+tr("Anthropic does not publish exact caps;")),
-				st.Muted.Render("                  "+tr("ccmux uses a soft default per tier.")),
-			)
-		}
-		lines = append(lines, "")
+	// explicit about scope. An unset tier (nothing detected) reads as
+	// api, as it did when "api" was the config default.
+	tier := m.cfg.Subscription.TierFor("claude")
+	if tier == "" {
+		tier = "api"
 	}
+	limit := planMessageLimit(tier)
+	lines = append(lines, st.Subtitle.Render("Subscription · Claude · "+tr("5h window")))
+	lines = append(lines, fmt.Sprintf("  %s            %s", tr("tier"), tier))
+	if limit > 0 {
+		lines = append(lines,
+			fmt.Sprintf("  %s  %d %s %s", tr("per-window cap"), limit, tr("prompts"), tr("(est.)")),
+			st.Muted.Render("                  "+tr("Anthropic does not publish exact caps;")),
+			st.Muted.Render("                  "+tr("ccmux uses a soft default per tier.")),
+		)
+	}
+	lines = append(lines, "")
 
 	// Claude detail: prompts, tokens, cache, cost-per-prompt.
 	if a := m.usage; a != nil {

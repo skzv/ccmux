@@ -109,8 +109,8 @@ func TestEditableFields_PerAgentTiers(t *testing.T) {
 				// Claude's tier must not be touched by setting another
 				// agent's tier — the per-agent map is the right
 				// storage for non-claude entries.
-				if cfg.Subscription.Tier != "api" {
-					t.Errorf("setting %s leaked into legacy Tier = %q", tc.label, cfg.Subscription.Tier)
+				if want := config.Defaults().Subscription.Tier; cfg.Subscription.Tier != want {
+					t.Errorf("setting %s leaked into legacy Tier = %q (want the default %q)", tc.label, cfg.Subscription.Tier, want)
 				}
 			}
 			for _, v := range tc.invalid {

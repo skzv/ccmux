@@ -167,7 +167,16 @@ func tierField(agentID, label, hint string, options []string) editableField {
 		chip:    true,
 		options: options,
 		get: func(c *config.Config) string {
-			return c.Subscription.TierFor(agentID)
+			t := c.Subscription.TierFor(agentID)
+			if t == "" && agentID == "claude" {
+				// An unset Claude tier (with no detected plan
+				// overlaid) behaves as api — and was shown as [api]
+				// when that was the config default. Showing it the
+				// same way also makes the Enter cycle start from what
+				// the row displays: api → pro → …
+				return "api"
+			}
+			return t
 		},
 		set: func(c *config.Config, raw string) error {
 			raw = strings.TrimSpace(strings.ToLower(raw))

@@ -845,6 +845,7 @@ func stepConfig(ctx context.Context, out io.Writer) error {
 		fmt.Fprintf(out, "  detected Claude plan: %s\n", stEmphasis.Render(detectedTier))
 	}
 	claudeTier := cfg.Subscription.TierFor("claude")
+	onDiskTier := claudeTier
 	if (claudeTier == "" || claudeTier == "api") && detectedTier != "" && detectedTier != "api" {
 		cfg.Subscription.SetTierFor("claude", detectedTier)
 		claudeTier = detectedTier
@@ -912,7 +913,7 @@ func stepConfig(ctx context.Context, out io.Writer) error {
 
 	cfg.Projects.Root = strings.TrimSpace(root)
 	cfg.Agents.Default = strings.TrimSpace(defaultAgent)
-	cfg.Subscription.SetTierFor("claude", strings.TrimSpace(tier))
+	cfg.Subscription.SetTierFor("claude", claudeTierToSave(onDiskTier, detectedTier, tier))
 	cfg.Daemon.ListenTailnet = listenTailnet
 	cfg.Update.AutoCheck = autoCheckUpdates
 	if err := config.Save(cfg); err != nil {
@@ -926,6 +927,21 @@ func stepConfig(ctx context.Context, out io.Writer) error {
 		fmt.Fprintln(out, stMuted.Render("  ccmuxd will pick this up on next restart — `ccmux update` to apply now."))
 	}
 	return nil
+}
+
+// claudeTierToSave decides what the wizard writes for the Claude tier.
+// The TUI shows the auto-detected plan only while the tier is unset, and
+// treats an explicit "api" as the user's choice. So "api" is saved only
+// when it is one: the config already said api, or a paid plan was
+// detected and the user picked api over it. With nothing on disk and
+// nothing detected, the picker's api default is left unset — pinning it
+// would hide a plan detected later (e.g. after `claude login`).
+func claudeTierToSave(onDisk, detected, chosen string) string {
+	chosen = strings.TrimSpace(chosen)
+	if chosen == "api" && onDisk == "" && (detected == "" || detected == "api") {
+		return ""
+	}
+	return chosen
 }
 
 func defaultAgentChoices(ctx context.Context, cfg config.Config) []agent.ID {
