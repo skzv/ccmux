@@ -192,7 +192,7 @@ func isClientSSH(pid int) bool {
 		if err != nil {
 			return false
 		}
-		return bytes.Contains(b, []byte("SSH_CONNECTION="))
+		return envMarksRemote(b)
 	case "darwin":
 		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 		defer cancel()
@@ -200,14 +200,27 @@ func isClientSSH(pid int) bool {
 		if err != nil {
 			return false
 		}
-		return bytes.Contains(out, []byte("SSH_CONNECTION="))
+		return envMarksRemote(out)
 	}
 	return false
 }
 
+// RemoteClientEnv marks a tmux client that ccmuxd itself spawned on
+// behalf of a remote device (the attach WebSocket's PTY). Such a client
+// is local as far as the process tree goes — no SSH_CONNECTION — but
+// the human is on a phone, so a copy must not land in this machine's
+// clipboard.
+const RemoteClientEnv = "CCMUX_REMOTE_CLIENT"
+
+// envMarksRemote reports whether a dumped process environment belongs
+// to a client whose user is on another device.
+func envMarksRemote(env []byte) bool {
+	return bytes.Contains(env, []byte("SSH_CONNECTION=")) ||
+		bytes.Contains(env, []byte(RemoteClientEnv+"=1"))
+}
+
 // nativeClipboardTool returns the argv for the OS's clipboard reader.
-// Order mirrors nativeClipboardPipe in clipboard.go (Wayland before X
-// on Linux). Empty slice when no tool is available.
+// Wayland before X on Linux. Empty slice when no tool is available.
 func nativeClipboardTool() []string {
 	switch runtime.GOOS {
 	case "darwin":

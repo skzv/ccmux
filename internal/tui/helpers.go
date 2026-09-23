@@ -49,6 +49,7 @@ func pickEditor() string {
 // reload message its screen listens for (e.g. notesReloadMsg,
 // claudeReloadMsg, configReloadMsg).
 func openEditorCmd(editor, path string, onSuccess tea.Msg) tea.Cmd {
+	// nocontext: the user's $EDITOR in the foreground; it ends when they quit it.
 	c := exec.Command(editor, path)
 	return tea.ExecProcess(c, func(err error) tea.Msg {
 		if err != nil {

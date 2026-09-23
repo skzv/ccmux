@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"log"
 	"net/http"
@@ -33,6 +34,12 @@ func (s *server) handlePairToken(w http.ResponseWriter, r *http.Request) {
 	if !s.cfg.Daemon.ListenTailnet {
 		http.Error(w,
 			"tailnet listener disabled (set daemon.listen_tailnet=true in config.toml and restart ccmuxd)",
+			http.StatusServiceUnavailable)
+		return
+	}
+	if !s.tailnetLive.Load() {
+		http.Error(w,
+			"tailnet listener isn't up yet (is Tailscale connected? ccmuxd retries every 30s)",
 			http.StatusServiceUnavailable)
 		return
 	}
@@ -180,6 +187,9 @@ func (s *server) handleTestPush(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// apnsSendTimeout bounds one APNs request.
+const apnsSendTimeout = 15 * time.Second
+
 // sendAPNsAsync dispatches one push on a bounded worker pool. If the
 // pool is saturated (16 concurrent sends — usually means APNs is
 // stalled or down) the call drops the notification and logs, rather
@@ -193,8 +203,19 @@ func (s *server) sendAPNsAsync(label, token, env string, n apns.Notification) {
 	}
 	go func() {
 		defer func() { <-s.apnsSlots }()
-		if err := s.apnsSender.Send(token, env, n); err != nil {
-			log.Printf("ccmuxd: APNs %s (%s): %v", label, n.SessionID, err)
+		// Bounded: a stalled HTTP/2 stream would otherwise hold one
+		// of the 16 slots until the transport's own ~60s timeout.
+		ctx, cancel := context.WithTimeout(context.Background(), apnsSendTimeout)
+		defer cancel()
+		err := s.apnsSender.Send(ctx, token, env, n)
+		if err == nil {
+			return
+		}
+		log.Printf("ccmuxd: APNs %s (%s): %v", label, n.SessionID, err)
+		if errors.Is(err, apns.ErrUnregistered) && s.devices != nil {
+			if rerr := s.devices.RemoveToken(token); rerr != nil {
+				log.Printf("ccmuxd: drop dead APNs token: %v", rerr)
+			}
 		}
 	}()
 }

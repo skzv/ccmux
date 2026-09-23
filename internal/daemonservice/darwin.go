@@ -1,10 +1,11 @@
 package daemonservice
 
 import (
+	"encoding/xml"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"text/template"
 
@@ -19,7 +20,7 @@ func probeDarwin(s *Status, home string) {
 	}
 	// `launchctl list <label>` prints a plist-style dict when loaded;
 	// exits non-zero when not loaded. We only need the exit status.
-	if out, err := exec.Command("launchctl", "list", Label).Output(); err == nil && len(out) > 0 {
+	if out, err := outputCmd("launchctl", "list", Label); err == nil && len(out) > 0 {
 		s.ServiceEnabled = true
 	}
 }
@@ -58,8 +59,8 @@ func installDarwin() (Status, error) {
 
 	// If already loaded, unload first so launchctl picks up any plist
 	// changes (most importantly: a binary path that moved).
-	_ = exec.Command("launchctl", "unload", "-w", s.ServicePath).Run()
-	if out, err := exec.Command("launchctl", "load", "-w", s.ServicePath).CombinedOutput(); err != nil {
+	_ = runCmd("launchctl", "unload", "-w", s.ServicePath)
+	if out, err := combinedCmd("launchctl", "load", "-w", s.ServicePath); err != nil {
 		return s, fmt.Errorf("launchctl load: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
 	return Probe(), nil
@@ -76,11 +77,11 @@ func restartDarwin() (Status, error) {
 	if !s.ServiceEnabled {
 		// Not under launchd — try a plain pkill so a manually-started
 		// daemon can be restarted by the caller.
-		_ = exec.Command("pkill", "-TERM", "-x", "ccmuxd").Run()
+		_ = runCmd("pkill", "-TERM", "-U", uid(), "-x", "ccmuxd")
 		return Probe(), fmt.Errorf("ccmuxd not registered with launchd; restart by hand or run `ccmux daemon install`")
 	}
 	target := "gui/" + uid() + "/" + Label
-	if out, err := exec.Command("launchctl", "kickstart", "-k", target).CombinedOutput(); err != nil {
+	if out, err := combinedCmd("launchctl", "kickstart", "-k", target); err != nil {
 		return s, fmt.Errorf("launchctl kickstart %s: %w (%s)", target, err, strings.TrimSpace(string(out)))
 	}
 	return Probe(), nil
@@ -95,14 +96,14 @@ func uninstallDarwin() (Status, error) {
 	if _, err := os.Stat(plist); err == nil {
 		// `bootout gui/$UID` is the modern launchctl API. Fall back to
 		// `unload -w` and `remove` for older macOS versions.
-		_ = exec.Command("launchctl", "bootout", "gui/"+uid(), plist).Run()
-		_ = exec.Command("launchctl", "unload", "-w", plist).Run()
-		_ = exec.Command("launchctl", "remove", Label).Run()
+		_ = runCmd("launchctl", "bootout", "gui/"+uid(), plist)
+		_ = runCmd("launchctl", "unload", "-w", plist)
+		_ = runCmd("launchctl", "remove", Label)
 		if err := removePathQuiet(plist); err != nil {
 			return Probe(), fmt.Errorf("remove %s: %w", plist, err)
 		}
 	}
-	_ = exec.Command("pkill", "-TERM", "-x", "ccmuxd").Run()
+	_ = runCmd("pkill", "-TERM", "-U", uid(), "-x", "ccmuxd")
 	return Probe(), nil
 }
 
@@ -116,15 +117,18 @@ type plistData struct {
 	Path       string
 }
 
-var plistTemplate = template.Must(template.New("plist").Parse(`<?xml version="1.0" encoding="UTF-8"?>
+// plistTemplate renders the LaunchAgent. Every value is piped through
+// xml: a home dir or binary path containing `&` or `<` would otherwise
+// produce a plist launchd refuses to load.
+var plistTemplate = template.Must(template.New("plist").Funcs(template.FuncMap{"xml": xmlEscape}).Parse(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>{{.Label}}</string>
+  <string>{{.Label | xml}}</string>
   <key>ProgramArguments</key>
   <array>
-    <string>{{.Binary}}</string>
+    <string>{{.Binary | xml}}</string>
   </array>
   <key>RunAtLoad</key>
   <true/>
@@ -144,33 +148,36 @@ var plistTemplate = template.Must(template.New("plist").Parse(`<?xml version="1.
     <false/>
   </dict>
   <key>WorkingDirectory</key>
-  <string>{{.WorkingDir}}</string>
+  <string>{{.WorkingDir | xml}}</string>
   <key>EnvironmentVariables</key>
   <dict>
     <key>HOME</key>
-    <string>{{.HomeDir}}</string>
+    <string>{{.HomeDir | xml}}</string>
     <key>PATH</key>
-    <string>{{.Path}}</string>
+    <string>{{.Path | xml}}</string>
   </dict>
   <key>StandardOutPath</key>
-  <string>{{.StdoutPath}}</string>
+  <string>{{.StdoutPath | xml}}</string>
   <key>StandardErrorPath</key>
-  <string>{{.StderrPath}}</string>
+  <string>{{.StderrPath | xml}}</string>
   <key>ProcessType</key>
   <string>Background</string>
 </dict>
 </plist>
 `))
 
+func xmlEscape(v string) (string, error) {
+	var b strings.Builder
+	if err := xml.EscapeText(&b, []byte(v)); err != nil {
+		return "", err
+	}
+	return b.String(), nil
+}
+
 // uid returns the current user's UID as a string — needed for
-// `launchctl bootout gui/$UID`. Falls back to "$(id -u)" via shell on
-// the off-chance the env var isn't set.
+// `launchctl bootout gui/<uid>`. $UID is a shell variable that usually
+// isn't exported to launchd jobs, and the old fallback hardcoded 501
+// (only right for the first account on a Mac).
 func uid() string {
-	if u := os.Getenv("UID"); u != "" {
-		return u
-	}
-	if out, err := exec.Command("id", "-u").Output(); err == nil {
-		return strings.TrimSpace(string(out))
-	}
-	return "501"
+	return strconv.Itoa(os.Getuid())
 }

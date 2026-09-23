@@ -301,3 +301,19 @@ func TestParseTmuxClientList(t *testing.T) {
 		})
 	}
 }
+
+// TestEnvMarksRemote — a client counts as remote when it came in over
+// SSH, or when ccmuxd spawned it for a phone's attach WebSocket (no
+// SSH_CONNECTION in that process tree, but the user isn't here).
+func TestEnvMarksRemote(t *testing.T) {
+	for env, want := range map[string]bool{
+		"HOME=/Users/x\x00TERM=xterm\x00":                         false,
+		"SSH_CONNECTION=100.1.2.3 5 100.1.2.4 22\x00":             true,
+		"TERM=xterm-256color\x00" + RemoteClientEnv + "=1\x00":    true,
+		"USER=x COLORTERM=truecolor " + RemoteClientEnv + "=1 PS": true, // macOS `ps -E` shape
+	} {
+		if got := envMarksRemote([]byte(env)); got != want {
+			t.Errorf("envMarksRemote(%q) = %v, want %v", env, got, want)
+		}
+	}
+}

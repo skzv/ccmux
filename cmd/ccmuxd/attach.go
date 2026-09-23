@@ -11,6 +11,8 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/creack/pty"
+
+	"github.com/skzv/ccmux/internal/clipboard"
 )
 
 // attachPingInterval is how often the daemon sends a websocket ping to
@@ -56,15 +58,18 @@ func (s *server) handleAttach(w http.ResponseWriter, r *http.Request, name strin
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "tmux", "attach-session", "-t", "="+name)
-	cmd.Env = append(os.Environ(), "TERM=xterm-256color", "LC_ALL=C.UTF-8")
+	// RemoteClientEnv tells `ccmux clipboard-pipe` this tmux client
+	// is a phone, so a selection copied there isn't piped into this
+	// machine's clipboard.
+	cmd.Env = append(os.Environ(), "TERM=xterm-256color", "LC_ALL=C.UTF-8", clipboard.RemoteClientEnv+"=1")
 	ptmx, err := pty.Start(cmd)
 	if err != nil {
 		conn.Close(websocket.StatusInternalError, "pty start failed")
 		return
 	}
-	// Defer order matters: close pty (which causes the read loop to
-	// EOF), then kill+wait the child. Process.Kill is a no-op when
-	// CommandContext already terminated it via ctx cancellation.
+	// Defers run last-registered-first: kill+wait the child, then
+	// close the pty (which EOFs the read loop). Process.Kill is a no-op
+	// when CommandContext already terminated it via ctx cancellation.
 	defer func() { _ = ptmx.Close() }()
 	defer func() {
 		_ = cmd.Process.Kill()

@@ -337,6 +337,7 @@ func AttachArgs(name string, detachOthers bool) []string {
 // so the TUI doesn't shell out to tmux directly (per CLAUDE.md's "all
 // tmux operations go through internal/tmux" rule).
 func AttachCmd(name string, detachOthers bool) *exec.Cmd {
+	// nocontext: a foreground attach lives as long as the user stays attached.
 	return exec.Command("tmux", AttachArgs(name, detachOthers)...)
 }
 
@@ -345,6 +346,7 @@ func AttachCmd(name string, detachOthers bool) *exec.Cmd {
 // ccmux runs inside a tmux session itself, attach-session is refused
 // — switch-client is the correct verb.
 func SwitchClientCmd(name string) *exec.Cmd {
+	// nocontext: handed to tea.ExecProcess like AttachCmd.
 	return exec.Command("tmux", "switch-client", "-t", exactSession(name))
 }
 

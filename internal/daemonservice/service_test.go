@@ -5,7 +5,11 @@ import (
 	"strings"
 	"testing"
 
+	"encoding/xml"
 	"github.com/skzv/ccmux/internal/agent"
+	"io"
+	"os"
+	"strconv"
 )
 
 func TestLabelIsCanonical(t *testing.T) {
@@ -132,6 +136,41 @@ func TestUID_NeverEmpty(t *testing.T) {
 	}
 	if got := uid(); got == "" {
 		t.Fatal("uid() returned empty string")
+	}
+	if got, want := uid(), strconv.Itoa(os.Getuid()); got != want {
+		t.Errorf("uid() = %q, want %q (the process's real uid, not $UID or 501)", got, want)
+	}
+}
+
+// TestPlistTemplate_EscapesXML — a home dir or binary path containing
+// `&` or `<` must still render a well-formed plist launchd will load.
+func TestPlistTemplate_EscapesXML(t *testing.T) {
+	var sb strings.Builder
+	err := plistTemplate.Execute(&sb, plistData{
+		Label:      Label,
+		Binary:     "/Users/a&b/<bin>/ccmuxd",
+		StdoutPath: "/tmp/o",
+		StderrPath: "/tmp/e",
+		HomeDir:    "/Users/a&b",
+		WorkingDir: "/Users/a&b",
+		Path:       "/usr/bin",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dec := xml.NewDecoder(strings.NewReader(sb.String()))
+	dec.Strict = true
+	for {
+		_, err := dec.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("rendered plist is not well-formed XML: %v\n%s", err, sb.String())
+		}
+	}
+	if !strings.Contains(sb.String(), "<string>/Users/a&amp;b/&lt;bin&gt;/ccmuxd</string>") {
+		t.Errorf("binary path not escaped:\n%s", sb.String())
 	}
 }
 

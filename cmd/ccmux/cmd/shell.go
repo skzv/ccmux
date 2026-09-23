@@ -124,6 +124,7 @@ func runShellRemote(ctx context.Context, name, path, host, agentFlag string) err
 	// rather than reaching into internal/tui — that package is
 	// gigantic and the CLI shouldn't drag it in.
 	tmuxAttach := remoteShellTmuxAttach(res.Session)
+	// nocontext: foreground interactive ssh; it ends when the user detaches.
 	c := exec.Command("ssh", shellSSHArgs(hostCfg, tmuxAttach)...)
 	c.Stdin = os.Stdin
 	c.Stdout = os.Stdout

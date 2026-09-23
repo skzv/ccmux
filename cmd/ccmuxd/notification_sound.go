@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/tmux"
@@ -24,23 +25,46 @@ func notificationBell(cfg config.NotificationsConfig) func(context.Context, stri
 		return tmux.RingBell
 	}
 	return func(ctx context.Context, name string) error {
-		if err := playMacSound(ctx, sound); err != nil {
+		if err := playMacSound(sound); err != nil {
 			return tmux.RingBell(ctx, name)
 		}
 		return nil
 	}
 }
 
-func playMacSound(ctx context.Context, sound string) error {
+// maxSoundDuration bounds a notification sound's player process.
+const maxSoundDuration = 10 * time.Second
+
+// soundCommand builds the player process; a seam for tests.
+var soundCommand = func(ctx context.Context, path string) *exec.Cmd {
+	return exec.CommandContext(ctx, "afplay", path)
+}
+
+// playMacSound starts the sound and returns without waiting for it.
+//
+// Deliberately not tied to the caller's context: the bell is rung from
+// a poll tick whose context is cancelled the moment the tick returns,
+// which killed afplay a few milliseconds in — custom sounds were silent
+// or clipped. The player gets its own bounded lifetime instead.
+func playMacSound(sound string) error {
 	path, ok := resolveMacSoundPath(sound, macSystemSoundsDir, fileExists)
 	if !ok {
 		return fmt.Errorf("mac notification sound %q not found", sound)
 	}
-	cmd := exec.CommandContext(ctx, "afplay", path)
+	return startDetached(path)
+}
+
+func startDetached(path string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), maxSoundDuration)
+	cmd := soundCommand(ctx, path)
 	if err := cmd.Start(); err != nil {
+		cancel()
 		return err
 	}
-	go func() { _ = cmd.Wait() }()
+	go func() {
+		defer cancel()
+		_ = cmd.Wait()
+	}()
 	return nil
 }
 

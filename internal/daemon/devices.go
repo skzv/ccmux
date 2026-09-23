@@ -194,6 +194,25 @@ func (s *DeviceStore) Remove(publicKey string) error {
 	return s.flush()
 }
 
+// RemoveToken drops every registration bound to the given push token —
+// used when a gateway reports the token dead, where the caller has the
+// token but not the paired public key.
+func (s *DeviceStore) RemoveToken(token string) error {
+	s.mu.Lock()
+	removed := false
+	for id, reg := range s.byID {
+		if reg.Token == token {
+			delete(s.byID, id)
+			removed = true
+		}
+	}
+	s.mu.Unlock()
+	if !removed {
+		return nil
+	}
+	return s.flush()
+}
+
 func (s *DeviceStore) flush() error {
 	// Hold flushMu across snapshot AND rename: a flush that snapshots
 	// after another flush's rename always persists equal-or-newer state,
