@@ -110,6 +110,9 @@ type Fetcher struct {
 	HTTPDo  func(*http.Request) (*http.Response, error)
 }
 
+// fetchTimeout bounds one Models API fetch (all pages).
+const fetchTimeout = 30 * time.Second
+
 // Fetch lists every model the configured API key can see. Walks
 // pagination via the cursor the Models API returns; in practice
 // there's only one page today but the loop is cheap and futureproof.
@@ -125,6 +128,11 @@ func (f Fetcher) Fetch(ctx context.Context) ([]Model, error) {
 	if do == nil {
 		do = http.DefaultClient.Do
 	}
+	// Bound the whole paginated fetch: callers include the daemon's
+	// refresh loop, whose context lives as long as the daemon, and
+	// http.DefaultClient has no timeout of its own.
+	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
+	defer cancel()
 
 	var out []Model
 	url := base + "/v1/models?limit=100"

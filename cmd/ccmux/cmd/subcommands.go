@@ -110,6 +110,9 @@ func newNewCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			cfg, _ := config.Load()
+			if err := project.ValidateName(args[0]); err != nil {
+				return err
+			}
 			// Create under the configured projects root (README:
 			// "Creates ~/Projects/<name>"), not the current directory.
 			opts := scaffold.Options{
@@ -117,13 +120,11 @@ func newNewCmd() *cobra.Command {
 				Dir:      filepath.Join(project.ResolveRoot(cfg.Projects.Root), args[0]),
 				Commands: cfg.AgentCommands(),
 			}
-			if agentFlag != "" {
-				id, ok := agent.ParseID(agentFlag)
-				if !ok {
-					return fmt.Errorf("unknown agent %q (want claude, codex, antigravity, cursor, pi, grok, or muse)", agentFlag)
-				}
-				opts.Agent = id
+			id, err := newCmdAgent(agentFlag, cfg.Agents.Default)
+			if err != nil {
+				return err
 			}
+			opts.Agent = id
 			session, err := scaffold.StartSession(context.Background(), opts)
 			if err != nil {
 				return err
@@ -132,8 +133,37 @@ func newNewCmd() *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&agentFlag, "agent", "",
-		"agent to launch: claude, codex, antigravity, cursor, pi, grok, or muse (default claude)")
+		"agent to launch: "+agentIDList()+" (default: agents.default from config, else claude)")
 	return c
+}
+
+// newCmdAgent picks the agent `ccmux new` launches: --agent when given,
+// else config's agents.default (as the TUI's new-project form does),
+// else the zero ID, which scaffold treats as Claude. An unrecognised
+// agents.default (e.g. "shell", which isn't an agent) falls through to
+// that default rather than failing.
+func newCmdAgent(flag, configDefault string) (agent.ID, error) {
+	if flag != "" {
+		id, ok := agent.ParseID(flag)
+		if !ok {
+			return "", fmt.Errorf("unknown agent %q (want %s)", flag, agentIDList())
+		}
+		return id, nil
+	}
+	if id, ok := agent.ParseID(configDefault); ok {
+		return id, nil
+	}
+	return "", nil
+}
+
+// agentIDList renders every registered agent id for help and errors, so
+// the list can't fall behind agent.All().
+func agentIDList() string {
+	ids := make([]string, 0, len(agent.All()))
+	for _, a := range agent.All() {
+		ids = append(ids, string(a.ID()))
+	}
+	return strings.Join(ids, ", ")
 }
 
 // newListCmd: `ccmux list [--json]` — list sessions.

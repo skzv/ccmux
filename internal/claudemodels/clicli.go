@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // claudeCLIPrompt is the user-message we send to `claude -p` to elicit
@@ -76,6 +77,9 @@ type claudeCLIResult struct {
 //
 // Any other failure (network, parse, exit code) is returned as a
 // distinct error the caller can log.
+// cliFetchTimeout bounds one `claude -p` catalog query.
+const cliFetchTimeout = 90 * time.Second
+
 func (f ClaudeCLIFetcher) Fetch(ctx context.Context) ([]Model, error) {
 	binary := f.Binary
 	if binary == "" {
@@ -105,6 +109,10 @@ func (f ClaudeCLIFetcher) Fetch(ctx context.Context) ([]Model, error) {
 	if run == nil {
 		run = exec.CommandContext
 	}
+	// A `claude -p` stuck on a prompt (auth, trust dialog) would
+	// otherwise block the daemon's model refresh forever.
+	ctx, cancel := context.WithTimeout(ctx, cliFetchTimeout)
+	defer cancel()
 	cmd := run(ctx, binary, args...)
 	cmd.Stdin = strings.NewReader(claudeCLIPrompt)
 	var stdout, stderr bytes.Buffer

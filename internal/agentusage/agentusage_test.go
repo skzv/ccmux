@@ -170,3 +170,44 @@ func TestWalk_RecursiveSubdirs(t *testing.T) {
 		t.Errorf("tokens = %d/%d, want 300/30 across nested dirs", s.InputTokens, s.OutputTokens)
 	}
 }
+
+// TestWalk_UndatedRecordsFollowTheirNeighbours — an undated record is
+// as old as the dated record before it. A long-running transcript that
+// was touched recently must not have its whole undated history counted
+// as "in the last 5 hours".
+func TestWalk_UndatedRecordsFollowTheirNeighbours(t *testing.T) {
+	root := t.TempDir()
+	old := time.Now().Add(-10 * time.Hour).UTC().Format(time.RFC3339)
+	recent := time.Now().Add(-10 * time.Minute).UTC().Format(time.RFC3339)
+	write(t, filepath.Join(root, "s.jsonl"),
+		`{"role":"user","content":"undated, before anything old"}`,
+		`{"role":"user","timestamp":"`+old+`"}`,
+		`{"role":"assistant","usage":{"input_tokens":1000,"output_tokens":1000}}`, // undated, old
+		`{"role":"user","timestamp":"`+recent+`"}`,
+		`{"role":"assistant","usage":{"input_tokens":7,"output_tokens":3}}`, // undated, recent
+	)
+	s, err := Walk(root, 5*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Prompts != 1 || s.InputTokens != 7 || s.OutputTokens != 3 {
+		t.Errorf("got prompts=%d in=%d out=%d, want 1/7/3", s.Prompts, s.InputTokens, s.OutputTokens)
+	}
+}
+
+// TestWalk_FullyUndatedFileCountsWhole — agents that never write
+// timestamps still show up (the file mtime is the only clock).
+func TestWalk_FullyUndatedFileCountsWhole(t *testing.T) {
+	root := t.TempDir()
+	write(t, filepath.Join(root, "s.jsonl"),
+		`{"role":"user"}`,
+		`{"role":"assistant","usage":{"input_tokens":4,"output_tokens":2}}`,
+	)
+	s, err := Walk(root, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Prompts != 1 || s.InputTokens != 4 {
+		t.Errorf("got prompts=%d in=%d, want 1/4", s.Prompts, s.InputTokens)
+	}
+}

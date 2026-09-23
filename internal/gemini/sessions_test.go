@@ -107,3 +107,21 @@ func TestDeleteRejectsSymlinkEscape(t *testing.T) {
 		t.Fatal(got, err)
 	}
 }
+
+// TestReadJSONLRewindToUnknownIDKeepsHistory — a rewind whose target we
+// never saw must not erase every message.
+func TestReadJSONLRewindToUnknownIDKeepsHistory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session-test.jsonl")
+	writeFixture(t, path, `{"sessionId":"s1","projectHash":"hash"}
+{"id":"u1","type":"user","content":"keep me"}
+{"id":"g1","type":"gemini","content":"and me"}
+{"$rewindTo":"never-seen"}
+`)
+	s, err := Read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Messages) != 2 {
+		t.Fatalf("messages = %d, want 2 (unknown rewind target must be a no-op)", len(s.Messages))
+	}
+}

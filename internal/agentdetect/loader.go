@@ -3,7 +3,7 @@ package agentdetect
 import (
 	"embed"
 	"fmt"
-	"path/filepath"
+	"path"
 	"sort"
 	"strings"
 	"sync"
@@ -53,7 +53,7 @@ func loadCache() {
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		data, err := ruleFS.ReadFile(filepath.Join("rules", name))
+		data, err := ruleFS.ReadFile(path.Join("rules", name)) // embed.FS paths are always slash-separated, even on Windows
 		if err != nil {
 			continue
 		}

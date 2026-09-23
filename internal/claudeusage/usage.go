@@ -6,14 +6,15 @@
 package claudeusage
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
+	"github.com/skzv/ccmux/internal/jsonl"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -26,6 +27,9 @@ type Tokens struct {
 	Output        int `json:"output"`
 	CacheCreation int `json:"cache_creation"`
 	CacheRead     int `json:"cache_read"`
+	// CacheCreation1h is the part of CacheCreation written with the
+	// 1-hour TTL, which is billed at 2x input instead of 1.25x.
+	CacheCreation1h int `json:"cache_creation_1h,omitempty"`
 }
 
 // Add accumulates another Tokens into this one.
@@ -34,6 +38,7 @@ func (t *Tokens) Add(o Tokens) {
 	t.Output += o.Output
 	t.CacheCreation += o.CacheCreation
 	t.CacheRead += o.CacheRead
+	t.CacheCreation1h += o.CacheCreation1h
 }
 
 // Total returns the sum of all four token categories. Useful for the
@@ -105,9 +110,11 @@ func (a *Aggregate) EstimatedCost() float64 {
 	var cost float64
 	for model, t := range a.ByModel {
 		p := priceFor(model)
+		write1h := min(t.CacheCreation1h, t.CacheCreation)
 		cost += float64(t.Input)/1e6*p.Input +
 			float64(t.Output)/1e6*p.Output +
-			float64(t.CacheCreation)/1e6*p.CacheCreation +
+			float64(t.CacheCreation-write1h)/1e6*p.CacheWrite5m +
+			float64(write1h)/1e6*p.CacheWrite1h +
 			float64(t.CacheRead)/1e6*p.CacheRead
 	}
 	return cost
@@ -115,22 +122,99 @@ func (a *Aggregate) EstimatedCost() float64 {
 
 // price is per-million-token cost in USD.
 type price struct {
-	Input, Output, CacheCreation, CacheRead float64
+	Input, Output, CacheWrite5m, CacheWrite1h, CacheRead float64
 }
 
-// priceFor returns USD-per-million-token rates for the listed Anthropic
-// models. Conservatively defaults to Sonnet 4.6 pricing for unknown
-// models so we never under-report cost on a new release.
+// priceFor returns USD-per-million-token rates for an Anthropic model
+// id. Rates differ by version within a family (Opus 4.5 cut Opus from
+// $15/$75 to $5/$25), so the version is parsed out of ids in both the
+// current "claude-opus-4-5-20251101" and the older "claude-3-5-haiku"
+// shapes. Cache writes are 1.25x input (5-minute TTL) or 2x (1-hour),
+// cache reads 0.1x unless the model has its own read rate. Unknown
+// models are priced as Sonnet 4.6.
 func priceFor(model string) price {
 	m := strings.ToLower(model)
+	var in, out float64
+	read := -1.0 // -1: the standard 0.1x input
 	switch {
+	case strings.Contains(m, "fable") || strings.Contains(m, "mythos"):
+		in, out, read = 10, 50, 1.0
+		if v := familyVersion(m, "fable"); v >= 5.1 {
+			read = 0.25
+		}
 	case strings.Contains(m, "opus"):
-		return price{Input: 15.0, Output: 75.0, CacheCreation: 18.75, CacheRead: 1.50}
+		switch v := familyVersion(m, "opus"); {
+		case v >= 5.5:
+			in, out, read = 4, 20, 0.20
+		case v >= 4.5:
+			in, out = 5, 25
+		default: // Opus 3, 4, 4.1
+			in, out = 15, 75
+		}
 	case strings.Contains(m, "haiku"):
-		return price{Input: 1.0, Output: 5.0, CacheCreation: 1.25, CacheRead: 0.10}
-	default: // sonnet / unknown
-		return price{Input: 3.0, Output: 15.0, CacheCreation: 3.75, CacheRead: 0.30}
+		switch v := familyVersion(m, "haiku"); {
+		case v >= 4:
+			in, out = 1, 5
+		case v >= 3.5:
+			in, out = 0.80, 4
+		case v > 0:
+			in, out = 0.25, 1.25
+		default:
+			in, out = 1, 5
+		}
+	case strings.Contains(m, "sonnet") && familyVersion(m, "sonnet") >= 5:
+		in, out = 2, 10
+	default: // Sonnet 3.x-4.x, and unknown models
+		in, out = 3, 15
 	}
+	if read < 0 {
+		read = in * 0.1
+	}
+	return price{Input: in, Output: out, CacheWrite5m: in * 1.25, CacheWrite1h: in * 2, CacheRead: read}
+}
+
+// familyVersion extracts the model version around a family name:
+// "claude-opus-4-5-20251101" → 4.5, "claude-opus-5" → 5,
+// "claude-3-5-haiku-20241022" → 3.5, "claude-3-opus" → 3. Returns 0
+// when no version is present. Date suffixes (8 digits) are ignored.
+func familyVersion(m, family string) float64 {
+	parts := strings.Split(m, "-")
+	idx := -1
+	for i, p := range parts {
+		if p == family {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return 0
+	}
+	small := func(i int) (int, bool) {
+		if i < 0 || i >= len(parts) || len(parts[i]) == 0 || len(parts[i]) > 2 {
+			return 0, false
+		}
+		n, err := strconv.Atoi(parts[i])
+		return n, err == nil
+	}
+	combine := func(major, minor int, hasMinor bool) float64 {
+		if !hasMinor {
+			return float64(major)
+		}
+		return float64(major) + float64(minor)/10
+	}
+	// New shape: family-major[-minor]
+	if major, ok := small(idx + 1); ok {
+		minor, hasMinor := small(idx + 2)
+		return combine(major, minor, hasMinor)
+	}
+	// Old shape: major[-minor]-family
+	if n, ok := small(idx - 1); ok {
+		if major, ok := small(idx - 2); ok {
+			return combine(major, n, true)
+		}
+		return float64(n)
+	}
+	return 0
 }
 
 // Walk scans every .jsonl under ~/.claude/projects/ and returns a single
@@ -316,6 +400,9 @@ func scanFile(path string, cutoff, now time.Time) scanResult {
 					Output        int `json:"output_tokens"`
 					CacheCreation int `json:"cache_creation_input_tokens"`
 					CacheRead     int `json:"cache_read_input_tokens"`
+					CacheBreakout *struct {
+						OneHour int `json:"ephemeral_1h_input_tokens"`
+					} `json:"cache_creation"`
 				} `json:"usage"`
 			} `json:"message"`
 		}
@@ -336,12 +423,16 @@ func scanFile(path string, cutoff, now time.Time) scanResult {
 				CacheCreation: m.Message.Usage.CacheCreation,
 				CacheRead:     m.Message.Usage.CacheRead,
 			}
+			if cb := m.Message.Usage.CacheBreakout; cb != nil {
+				t.CacheCreation1h = cb.OneHour
+			}
 			r.total.Add(t)
 			r.assistantCount++
 			if mb := r.byModel[m.Message.Model]; mb != nil {
 				mb.Add(t)
 			} else {
-				r.byModel[m.Message.Model] = &Tokens{Input: t.Input, Output: t.Output, CacheCreation: t.CacheCreation, CacheRead: t.CacheRead}
+				tc := t
+				r.byModel[m.Message.Model] = &tc
 			}
 			if r.firstMsg.IsZero() || ts.Before(r.firstMsg) {
 				r.firstMsg = ts
@@ -368,53 +459,14 @@ const maxScanLineBytes = 1 << 25
 // the current window.
 const futureSkewTolerance = 2 * time.Minute
 
-// forEachLine invokes fn for every newline-terminated line in rd, up to
-// maxLen bytes per line. A longer line is skipped in its entirety and
-// the iteration continues with the next line. This is the recovery
-// behavior bufio.Scanner cannot give us: its ErrTooLong permanently
-// stops the scan, silently dropping every later line in the file.
-// Trailing "\n" / "\r\n" are stripped, matching bufio.ScanLines.
+// forEachLine invokes fn for every line in rd of at most maxLen bytes;
+// a longer line is skipped and iteration continues (see internal/jsonl
+// for why bufio.Scanner can't be used here).
 func forEachLine(rd io.Reader, maxLen int, fn func(line []byte)) {
-	br := bufio.NewReaderSize(rd, 1<<17)
-	var buf []byte
-	tooLong := false
-	for {
-		chunk, err := br.ReadSlice('\n')
-		if !tooLong && len(chunk) > 0 {
-			buf = append(buf, chunk...)
-			if len(buf) > maxLen {
-				buf = nil
-				tooLong = true
-			}
-		}
-		switch err {
-		case nil: // reached a newline
-			if tooLong {
-				tooLong = false // oversized line fully skipped
-			} else {
-				fn(trimLineEnding(buf))
-			}
-			buf = buf[:0]
-		case bufio.ErrBufferFull:
-			continue // same line keeps going
-		default: // io.EOF or a real read error — flush any final partial line
-			if !tooLong && len(buf) > 0 {
-				fn(trimLineEnding(buf))
-			}
-			return
-		}
+	sc := jsonl.NewScanner(rd, maxLen)
+	for sc.Scan() {
+		fn(sc.Bytes())
 	}
-}
-
-// trimLineEnding strips one trailing "\n" or "\r\n" from a line.
-func trimLineEnding(b []byte) []byte {
-	if n := len(b); n > 0 && b[n-1] == '\n' {
-		b = b[:n-1]
-	}
-	if n := len(b); n > 0 && b[n-1] == '\r' {
-		b = b[:n-1]
-	}
-	return b
 }
 
 // alreadyCounted reports whether this (message.id, requestId) pair has
@@ -567,8 +619,7 @@ func readCwdFromJSONL(path string) string {
 		return ""
 	}
 	defer f.Close()
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 1<<16), 1<<24)
+	sc := jsonl.NewScanner(f, 1<<24)
 	for i := 0; sc.Scan() && i < 32; i++ {
 		line := sc.Bytes()
 		if !maybeContains(line, []byte(`"cwd":`)) {

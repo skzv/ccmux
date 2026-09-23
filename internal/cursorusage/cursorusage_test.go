@@ -3,6 +3,7 @@ package cursorusage
 import (
 	"database/sql"
 	"errors"
+	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -174,5 +175,45 @@ func seedFixture(t *testing.T, dbPath string, now time.Time) {
 			c.tab, c.comp, c.at.UnixMilli()); err != nil {
 			t.Fatalf("insert commit: %v", err)
 		}
+	}
+}
+
+// TestOpen_NullLineCountsAndOddPath — a scored_commits row with only one
+// of the two line counts set still counts, and a database path with
+// URI-special characters still opens.
+func TestOpen_NullLineCountsAndOddPath(t *testing.T) {
+	// Build the fixture at a plain path (the driver would cut a raw
+	// path at `?`), then move it under the awkward directory name.
+	plain := filepath.Join(t.TempDir(), "ai-code-tracking.db")
+	createSchema(t, plain)
+	db, err := sql.Open("sqlite", plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	for _, q := range []string{
+		`INSERT INTO scored_commits (tabLinesAdded, composerLinesAdded, scoredAt) VALUES (5, NULL, ?)`,
+		`INSERT INTO scored_commits (tabLinesAdded, composerLinesAdded, scoredAt) VALUES (NULL, 7, ?)`,
+	} {
+		if _, err := db.Exec(q, now.UnixMilli()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = db.Close()
+	dir := filepath.Join(t.TempDir(), "odd #dir? 100%")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(dir, "ai-code-tracking.db")
+	if err := os.Rename(plain, dbPath); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open(%q): %v", dbPath, err)
+	}
+	if s.AILinesLast7d != 12 {
+		t.Errorf("AILinesLast7d = %d, want 12", s.AILinesLast7d)
 	}
 }

@@ -23,8 +23,8 @@
 package agentusage
 
 import (
-	"bufio"
 	"encoding/json"
+	"github.com/skzv/ccmux/internal/jsonl"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -102,8 +102,10 @@ func Walk(root string, window time.Duration) (Summary, error) {
 
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			// A permission error on one subdir shouldn't sink the walk.
-			if os.IsPermission(err) {
+			// A permission error on one subdir, or a file/dir removed
+			// while we walk (agents rotate transcripts), shouldn't sink
+			// the whole walk.
+			if os.IsPermission(err) || os.IsNotExist(err) {
 				return nil
 			}
 			return err
@@ -138,10 +140,24 @@ func scanFile(path string, cutoff time.Time, sum *Summary) {
 		return
 	}
 	defer f.Close()
-	sc := bufio.NewScanner(f)
-	// Transcript lines can be long (a full assistant message); give the
-	// scanner room so it doesn't choke on them.
-	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+	// Transcript lines can be long (a full assistant message); allow up
+	// to 8 MiB, and skip — rather than stop at — anything longer.
+	sc := jsonl.NewScanner(f, 8*1024*1024)
+	// An undated record is placed at the time of the dated record before
+	// it (transcripts are append-only, so that's when it was written).
+	// Undated records before the first dated one are held until we see
+	// that one; a file with no timestamps at all is counted whole, since
+	// the mtime pre-filter already put it inside the window.
+	var lastTS time.Time
+	var pending Summary
+	add := func(dst *Summary, r record) {
+		if r.isUserTurn() {
+			dst.Prompts++
+		}
+		in, out := r.tokens()
+		dst.InputTokens += in
+		dst.OutputTokens += out
+	}
 	for sc.Scan() {
 		line := sc.Bytes()
 		if len(line) == 0 || line[0] != '{' {
@@ -151,17 +167,32 @@ func scanFile(path string, cutoff time.Time, sum *Summary) {
 		if err := json.Unmarshal(line, &r); err != nil {
 			continue
 		}
-		// Per-message time gate when a timestamp is present; otherwise
-		// the file-mtime pre-filter already admitted this file.
-		if ts, ok := r.when(); ok && ts.Before(cutoff) {
+		ts, dated := r.when()
+		if !dated {
+			if lastTS.IsZero() {
+				add(&pending, r)
+				continue
+			}
+			ts = lastTS
+		} else if lastTS.IsZero() && !ts.Before(cutoff) {
+			// First dated record is in the window, so the undated ones
+			// written just before it are too.
+			sum.Prompts += pending.Prompts
+			sum.InputTokens += pending.InputTokens
+			sum.OutputTokens += pending.OutputTokens
+		}
+		if dated {
+			lastTS = ts
+		}
+		if ts.Before(cutoff) {
 			continue
 		}
-		if r.isUserTurn() {
-			sum.Prompts++
-		}
-		in, out := r.tokens()
-		sum.InputTokens += in
-		sum.OutputTokens += out
+		add(sum, r)
+	}
+	if lastTS.IsZero() {
+		sum.Prompts += pending.Prompts
+		sum.InputTokens += pending.InputTokens
+		sum.OutputTokens += pending.OutputTokens
 	}
 }
 

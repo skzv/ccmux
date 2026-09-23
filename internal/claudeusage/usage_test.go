@@ -23,31 +23,52 @@ func TestTokens_AddAndTotal(t *testing.T) {
 	}
 }
 
-func TestPriceFor_KnownAndUnknownModels(t *testing.T) {
+func TestPriceFor_ByFamilyAndVersion(t *testing.T) {
 	cases := []struct {
-		model           string
-		wantInput       float64
-		isOpus, isHaiku bool
+		model     string
+		in, out   float64
+		cacheRead float64
 	}{
-		{"claude-opus-4-7", 15.0, true, false},
-		{"claude-opus-4-6", 15.0, true, false},
-		{"claude-sonnet-4-6", 3.0, false, false},
-		{"claude-haiku-4-5", 1.0, false, true},
-		{"some-future-model", 3.0, false, false}, // sonnet default
-		{"", 3.0, false, false},
+		{"claude-3-opus-20240229", 15, 75, 1.5},
+		{"claude-opus-4-20250514", 15, 75, 1.5},
+		{"claude-opus-4-1-20250805", 15, 75, 1.5},
+		{"claude-opus-4-5-20251101", 5, 25, 0.5},
+		{"claude-opus-4-8", 5, 25, 0.5},
+		{"claude-opus-5", 5, 25, 0.5},
+		{"claude-opus-5-5", 4, 20, 0.2},
+		{"claude-3-7-sonnet-20250219", 3, 15, 0.3},
+		{"claude-sonnet-4-6", 3, 15, 0.3},
+		{"claude-sonnet-5", 2, 10, 0.2},
+		{"claude-3-haiku-20240307", 0.25, 1.25, 0.025},
+		{"claude-3-5-haiku-20241022", 0.8, 4, 0.08},
+		{"claude-haiku-4-5-20251001", 1, 5, 0.1},
+		{"claude-fable-5", 10, 50, 1},
+		{"claude-fable-5-1", 10, 50, 0.25},
+		{"some-future-model", 3, 15, 0.3}, // priced as Sonnet 4.6
+		{"", 3, 15, 0.3},
 	}
+	near := func(a, b float64) bool { return a-b < 1e-9 && b-a < 1e-9 }
 	for _, tc := range cases {
-		got := priceFor(tc.model)
-		if got.Input != tc.wantInput {
-			t.Errorf("priceFor(%q).Input = %v, want %v", tc.model, got.Input, tc.wantInput)
+		p := priceFor(tc.model)
+		if !near(p.Input, tc.in) || !near(p.Output, tc.out) || !near(p.CacheRead, tc.cacheRead) {
+			t.Errorf("priceFor(%q) = in %v out %v read %v, want %v %v %v",
+				tc.model, p.Input, p.Output, p.CacheRead, tc.in, tc.out, tc.cacheRead)
 		}
-		// Haiku should be cheapest, opus most expensive — sanity check.
-		switch {
-		case tc.isOpus && got.Input < priceFor("sonnet").Input:
-			t.Errorf("opus should cost more than sonnet")
-		case tc.isHaiku && got.Input > priceFor("sonnet").Input:
-			t.Errorf("haiku should cost less than sonnet")
+		if !near(p.CacheWrite5m, tc.in*1.25) || !near(p.CacheWrite1h, tc.in*2) {
+			t.Errorf("priceFor(%q): cache writes %v/%v, want 1.25x/2x input", tc.model, p.CacheWrite5m, p.CacheWrite1h)
 		}
+	}
+}
+
+// TestEstimatedCost_OneHourCacheWrites — 1-hour cache writes cost 2x
+// input, not the 5-minute 1.25x.
+func TestEstimatedCost_OneHourCacheWrites(t *testing.T) {
+	a := &Aggregate{ByModel: map[string]*Tokens{
+		"claude-sonnet-4-6": {CacheCreation: 2_000_000, CacheCreation1h: 1_000_000},
+	}}
+	// 1M at 5m ($3.75) + 1M at 1h ($6.00)
+	if got := a.EstimatedCost(); got < 9.7499 || got > 9.7501 {
+		t.Errorf("EstimatedCost = %v, want 9.75", got)
 	}
 }
 
@@ -606,11 +627,12 @@ func TestResetAt(t *testing.T) {
 
 func TestEstimatedCost(t *testing.T) {
 	agg := &Aggregate{ByModel: map[string]*Tokens{
-		"claude-opus-4-7": {Input: 1_000_000, Output: 1_000_000}, // 15 + 75 = 90
+		"claude-opus-4-1": {Input: 1_000_000, Output: 1_000_000}, // 15 + 75 = 90
+		"claude-opus-4-7": {Input: 1_000_000, Output: 1_000_000}, // 5 + 25 = 30
 	}}
 	got := agg.EstimatedCost()
-	if got < 89.9 || got > 90.1 {
-		t.Errorf("EstimatedCost = %v, want ~90", got)
+	if got < 119.9 || got > 120.1 {
+		t.Errorf("EstimatedCost = %v, want ~120", got)
 	}
 }
 

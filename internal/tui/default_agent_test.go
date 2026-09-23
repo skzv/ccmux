@@ -1,9 +1,12 @@
 package tui
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/tui/styles"
@@ -137,5 +140,36 @@ func TestProjectsModel_SetDefaultAgent_Propagates(t *testing.T) {
 	m.SetDefaultAgent("codex")
 	if m.defaultAgent != "codex" {
 		t.Errorf("defaultAgent = %q, want codex", m.defaultAgent)
+	}
+}
+
+// TestNewProjectForm_RejectsEscapingNames — the name is joined onto the
+// projects root, so a path-like name must be refused in the form.
+func TestNewProjectForm_RejectsEscapingNames(t *testing.T) {
+	for _, bad := range []string{"../escape", "a/b", ".hidden"} {
+		f := newNewProjectForm(styles.Default(), nil, "")
+		f.name.SetValue(bad)
+		next, cmd := f.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		if cmd != nil {
+			t.Errorf("name %q: form submitted", bad)
+		}
+		if next.err == "" {
+			t.Errorf("name %q: no validation error shown", bad)
+		}
+	}
+}
+
+// TestWriteNewFile_RefusesExisting — creating a note must never
+// overwrite one that appeared since the form opened.
+func TestWriteNewFile_RefusesExisting(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "n.md")
+	if err := writeNewFile(p, []byte("first")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeNewFile(p, []byte("second")); !errors.Is(err, os.ErrExist) {
+		t.Errorf("second create err = %v, want os.ErrExist", err)
+	}
+	if b, _ := os.ReadFile(p); string(b) != "first" {
+		t.Errorf("existing note overwritten: %q", b)
 	}
 }

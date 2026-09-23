@@ -18,6 +18,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"time"
@@ -61,9 +62,8 @@ type Summary struct {
 // `mode=ro`) so a half-written transaction by the Cursor app can't
 // be mistaken for a write attempt by ccmux. SQLite still requires
 // write access on the directory for the -journal/-wal sidecar files;
-// to keep the call safe against an in-progress Cursor session we
-// also disable the WAL with `_journal=OFF` and use `_busy_timeout`
-// to ride out short lock contention.
+// to keep the call safe against an in-progress Cursor session we use a
+// busy timeout to ride out short lock contention.
 func Open(dbPath string) (Summary, error) {
 	if _, err := os.Stat(dbPath); errors.Is(err, os.ErrNotExist) {
 		return Summary{}, ErrNotInstalled
@@ -71,7 +71,9 @@ func Open(dbPath string) (Summary, error) {
 		return Summary{}, fmt.Errorf("cursorusage: stat %s: %w", dbPath, err)
 	}
 
-	dsn := "file:" + dbPath + "?mode=ro&_pragma=busy_timeout(2000)"
+	// The path goes into a URI, so `?`, `#` and `%` in it must be
+	// escaped or they'd be read as the query/fragment.
+	dsn := "file:" + (&url.URL{Path: dbPath}).EscapedPath() + "?mode=ro&_pragma=busy_timeout(2000)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return Summary{}, fmt.Errorf("cursorusage: open %s: %w", dbPath, err)
@@ -132,7 +134,9 @@ func topModels(db *sql.DB, n int) ([]string, error) {
 // as a Unix-millisecond integer; we compare on the same basis.
 func aiLinesSince(db *sql.DB, since time.Time) (int, error) {
 	var total sql.NullInt64
-	err := db.QueryRow(`SELECT COALESCE(SUM(tabLinesAdded + composerLinesAdded), 0)
+	// COALESCE each column: NULL + n is NULL, so a row with only one
+	// of the two counts set would otherwise drop out of the sum.
+	err := db.QueryRow(`SELECT COALESCE(SUM(COALESCE(tabLinesAdded, 0) + COALESCE(composerLinesAdded, 0)), 0)
 		FROM scored_commits WHERE scoredAt >= ?`, since.UnixMilli()).Scan(&total)
 	if err != nil {
 		return 0, fmt.Errorf("cursorusage: ai lines: %w", err)
