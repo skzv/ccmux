@@ -505,3 +505,4 @@
 "config.toml didn't load; using defaults and not saving changes: " = "não foi possível carregar o config.toml; usando padrões e sem salvar alterações: "
 "save: " = "salvar: "
 "saved ✓" = "salvo ✓"
+"Kill tmux session %q on %s. This cannot be undone." = "Encerrar a sessão tmux %q em %s. Isso não pode ser desfeito."

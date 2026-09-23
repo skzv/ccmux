@@ -832,3 +832,37 @@ func shortTempHome(t *testing.T) string {
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	return dir
 }
+
+// TestClient_RenamePostsToRenameEndpoint pins the wire shape the TUI's
+// remote-row rename relies on: POST /v1/sessions/<old>/rename with a
+// {"name": <new>} body, and a daemon-side error surfaced to the caller.
+func TestClient_RenamePostsToRenameEndpoint(t *testing.T) {
+	var gotMethod, gotPath string
+	var gotBody RenameRequest
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/sessions/", func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath = r.Method, r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		if gotBody.Name == "bad:name" {
+			http.Error(w, "name must not contain /, \\, :, or .", http.StatusBadRequest)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(SessionState{Name: gotBody.Name, Host: "local"})
+	})
+	c := spawnFakeDaemon(t, mux)
+
+	if err := c.Rename(context.Background(), "c-old", "c-new"); err != nil {
+		t.Fatalf("Rename: %v", err)
+	}
+	if gotMethod != http.MethodPost || gotPath != "/v1/sessions/c-old/rename" {
+		t.Errorf("request = %s %s, want POST /v1/sessions/c-old/rename", gotMethod, gotPath)
+	}
+	if gotBody.Name != "c-new" {
+		t.Errorf("body name = %q, want c-new", gotBody.Name)
+	}
+
+	err := c.Rename(context.Background(), "c-old", "bad:name")
+	if err == nil || !strings.Contains(err.Error(), "must not contain") {
+		t.Errorf("Rename error = %v, want the daemon's validation message", err)
+	}
+}

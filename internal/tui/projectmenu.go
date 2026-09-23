@@ -99,27 +99,57 @@ func (m projectMenuModel) Update(msg tea.Msg) (projectMenuModel, tea.Cmd) {
 	return m, nil
 }
 
-func (m projectMenuModel) View(width int) string {
+// View renders the modal into at most `height` lines. The rows scroll
+// with the cursor: a project with dozens of past conversations used to
+// render every row, so the modal outgrew the screen and — since the
+// cursor starts on the trailing "Start a new session" row when nothing
+// is running — the highlighted row and the key-hint footer were cut
+// off the bottom.
+func (m projectMenuModel) View(width, height int) string {
 	st := m.st
-	lines := []string{
-		st.Emphasis.Render(m.project),
-		st.Muted.Render(m.projectPath),
+	rowW := width - 4
+	head := []string{
+		st.Emphasis.Render(truncate(m.project, rowW)),
+		st.Muted.Render(truncate(m.projectPath, rowW)),
 		"",
 	}
+	footer := []string{"", st.Muted.Render(truncate(tr("↑/↓: move   enter: select   esc: cancel"), rowW))}
+
 	// Section headers are emitted lazily as the entry kind changes, so
 	// "Running sessions" / "Past conversations" appear only when those
-	// lists are non-empty.
+	// lists are non-empty. Rows are one line each (labels truncated to
+	// the row width) so the window arithmetic below is exact.
+	var rows []string
+	var isHeader []bool
+	cursorRow := 0
 	lastKind := projectMenuEntryKind(-1)
-	rowW := width - 4
 	for i, e := range m.entries {
 		if e.kind != lastKind {
-			lines = append(lines, st.Subtitle.Render(menuSectionHeader(e.kind)))
+			rows = append(rows, st.Subtitle.Render(truncate(menuSectionHeader(e.kind), rowW)))
+			isHeader = append(isHeader, true)
 			lastKind = e.kind
 		}
-		text := m.entryLabel(e)
-		lines = append(lines, components.RenderListRow(st, text, i == m.cursor, rowW))
+		if i == m.cursor {
+			cursorRow = len(rows)
+		}
+		text := truncate(m.entryLabel(e), rowW-2)
+		rows = append(rows, components.RenderListRow(st, text, i == m.cursor, rowW))
+		isHeader = append(isHeader, false)
 	}
-	lines = append(lines, "", st.Muted.Render(tr("↑/↓: move   enter: select   esc: cancel")))
+
+	// Pane border takes 2 lines; the title block and footer the rest.
+	budget := height - 2 - len(head) - len(footer)
+	if budget < 1 {
+		budget = 1
+	}
+	start, end := windowAroundCursor(cursorRow, len(rows), budget)
+	// Keep a section's header on screen with its first entry when the
+	// window has scrolled to exactly that entry.
+	if start > 0 && start == cursorRow && isHeader[start-1] && end-1 > cursorRow {
+		start--
+		end--
+	}
+	lines := append(append(head, rows[start:end]...), footer...)
 	return st.PaneFocused.Width(width - 2).Render(strings.Join(lines, "\n"))
 }
 

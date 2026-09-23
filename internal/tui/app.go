@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -32,7 +31,6 @@ import (
 	"github.com/skzv/ccmux/internal/project"
 	"github.com/skzv/ccmux/internal/remoteattach"
 	"github.com/skzv/ccmux/internal/selfupdate"
-	"github.com/skzv/ccmux/internal/tailnet"
 	"github.com/skzv/ccmux/internal/tmux"
 	"github.com/skzv/ccmux/internal/tui/components"
 	"github.com/skzv/ccmux/internal/tui/styles"
@@ -170,6 +168,16 @@ type App struct {
 
 	width, height int
 
+	// sessionsLoadGen numbers sessions refreshes and sessionsAppliedGen
+	// is the newest one applied; see refreshSessionsCmd. sessionsTickGen
+	// is the tick-issued refresh still in flight (0 = none), started at
+	// sessionsTickAt — the 2s tick skips while it's pending so slow
+	// hosts can't stack up overlapping refreshes.
+	sessionsLoadGen    int
+	sessionsAppliedGen int
+	sessionsTickGen    int
+	sessionsTickAt     time.Time
+
 	screen   Screen
 	sessions []daemon.SessionState
 	projects []project.Project
@@ -224,11 +232,14 @@ type App struct {
 //
 // The App owns only its own overlay states here; every screen model
 // reports its modal/text-capture states through its own
-// capturesInput() method, OR'd below. This replaces the old
-// hand-maintained cross-model list, which missed newly-added modals
-// twice — a screen adding a modal now extends its own
-// capturesInput(), right next to the state it adds, instead of
-// remembering to edit App.
+// capturesInput() method. This replaces the old hand-maintained
+// cross-model list, which missed newly-added modals twice — a screen
+// adding a modal now extends its own capturesInput(), right next to
+// the state it adds, instead of remembering to edit App.
+//
+// Only the ACTIVE screen's capturesInput counts. OR-ing every screen's
+// made a modal left open on one screen (the Notes info panel, say)
+// disable `?`, `T`, esc-to-dismiss and friends on every other screen.
 func (a App) modalCapturingText() bool {
 	if a.confirm.open() {
 		return true
@@ -240,14 +251,28 @@ func (a App) modalCapturingText() bool {
 	if a.tour.Active() || a.helpOpen || a.usageOpen || a.convPreview.IsOpen() || a.projectInfoOpen || a.settingsInfoOpen {
 		return true
 	}
-	// Per-screen seams.
-	return a.conversationsM.capturesInput() ||
-		a.sessionsM.capturesInput() ||
-		a.projectsM.capturesInput() ||
-		a.notes.capturesInput() ||
-		a.agentsM.capturesInput() ||
-		a.settings.capturesInput() ||
-		a.network.capturesInput()
+	return a.activeScreenCapturesInput()
+}
+
+// activeScreenCapturesInput is the focused screen's capturesInput seam.
+func (a App) activeScreenCapturesInput() bool {
+	switch a.screen {
+	case ScreenSessions:
+		return a.sessionsM.capturesInput()
+	case ScreenProjects:
+		return a.projectsM.capturesInput()
+	case ScreenConversations:
+		return a.conversationsM.capturesInput()
+	case ScreenNotes:
+		return a.notes.capturesInput()
+	case ScreenAgents:
+		return a.agentsM.capturesInput()
+	case ScreenSettings:
+		return a.settings.capturesInput()
+	case ScreenNetwork:
+		return a.network.capturesInput()
+	}
+	return false
 }
 
 // New constructs the root model.
@@ -590,7 +615,16 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case tickMsg:
-		cmds := []tea.Cmd{a.refreshSessionsCmd(), tickEvery(2 * time.Second)}
+		cmds := []tea.Cmd{tickEvery(2 * time.Second)}
+		// Don't stack refreshes: with a slow host a refresh can outlive
+		// the 2s tick, and issuing another every tick piled them up.
+		// Skip while the previous tick's refresh is pending — unless
+		// it's overdue, so a lost result can't stall polling for good.
+		if a.sessionsTickGen == 0 || time.Since(a.sessionsTickAt) > sessionsTickStaleAfter {
+			cmds = append(cmds, a.refreshSessionsCmd())
+			a.sessionsTickGen = a.sessionsLoadGen
+			a.sessionsTickAt = time.Now()
+		}
 		// Keep the Settings screen's moshi status fresh while it's
 		// focused — async, so the 30s refresh never blocks the UI
 		// goroutine the way the old inline moshi.Detect did.
@@ -776,6 +810,18 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case sessionsLoadedMsg:
+		if msg.Gen != 0 {
+			// This result (or a newer one) settles the tick's refresh.
+			if a.sessionsTickGen != 0 && msg.Gen >= a.sessionsTickGen {
+				a.sessionsTickGen = 0
+			}
+			// Refreshes finish out of order when a host is slow; never
+			// let an older list overwrite a newer one.
+			if msg.Gen < a.sessionsAppliedGen {
+				return a, nil
+			}
+			a.sessionsAppliedGen = msg.Gen
+		}
 		a.lastRefresh = msg.At
 		a.sessions = msg.Sessions
 		a.hosts = msg.Hosts
@@ -875,7 +921,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case renameSessionSubmitMsg:
 		a.sessionsM.renameForm = nil
-		return a, renameSessionCmd(msg.OldName, msg.NewName)
+		// Route by the row's host: a remote session is renamed through
+		// its own daemon, never on the local tmux server.
+		return a, a.renameSessionTargetCmd(msg.Host, msg.OldName, msg.NewName)
 
 	case renameSessionCancelMsg:
 		a.sessionsM.renameForm = nil
@@ -885,7 +933,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Err != nil {
 			a.toasts.Set(toastError, tr("rename failed: ")+msg.Err.Error(), 5*time.Second)
 		} else {
-			a.toasts.Set(toastSuccess, fmt.Sprintf(tr("renamed %s → %s"), msg.OldName, msg.NewName), 3*time.Second)
+			a.toasts.Set(toastSuccess, fmt.Sprintf(tr("renamed %s → %s"), sessionDisplayName(msg.Host, msg.OldName), msg.NewName), 3*time.Second)
 		}
 		return a, a.refreshSessionsCmd()
 
@@ -976,7 +1024,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Err != nil {
 			a.toasts.Set(toastError, tr("kill failed: ")+msg.Err.Error(), 5*time.Second)
 		} else {
-			a.toasts.Set(toastSuccess, fmt.Sprintf(tr("killed %s"), msg.Name), 3*time.Second)
+			a.toasts.Set(toastSuccess, fmt.Sprintf(tr("killed %s"), sessionDisplayName(msg.Host, msg.Name)), 3*time.Second)
 		}
 		return a, a.refreshSessionsCmd()
 
@@ -1123,7 +1171,17 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		if a.confirm.open() {
+			// The confirmation handles ctrl+c itself (quit, and release
+			// the mouse capture it turned on).
 			return a.updateConfirmationKey(msg)
+		}
+		// ctrl+c quits from ANYWHERE — every overlay, wizard, form and
+		// text field below. Checked once, here, ahead of all overlay
+		// routing: overlays that swallow "every other key" (tour, help,
+		// usage, previews, info panels, matrix, the SSH wizard) used to
+		// swallow ctrl+c too, although the help promises it quits.
+		if msg.String() == "ctrl+c" {
+			return a, tea.Quit
 		}
 
 		// SSH setup wizard owns the screen when open — keystrokes
@@ -1324,11 +1382,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// If projects screen has its modal open (new-project form or session
-		// picker), route through it. We intentionally still allow global Quit.
+		// picker), route through it. (ctrl+c already quit above.)
 		if a.screen == ScreenProjects && (a.projectsM.form != nil || a.projectsM.menu != nil) {
-			if msg.String() == "ctrl+c" {
-				return a, tea.Quit
-			}
 			var cmd tea.Cmd
 			a.projectsM, cmd = a.projectsM.Update(msg)
 			return a, cmd
@@ -1337,9 +1392,6 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Conversation search owns digits, delete/quit keys, and Enter until
 		// committed; typing a query must never launch or delete a conversation.
 		if a.screen == ScreenConversations && a.conversationsM.capturesInput() {
-			if msg.String() == "ctrl+c" {
-				return a, tea.Quit
-			}
 			var cmd tea.Cmd
 			a.conversationsM, cmd = a.conversationsM.Update(msg)
 			return a, cmd
@@ -1347,12 +1399,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Projects filter mode: textinput owns the keystrokes. Enter
 		// commits the filter and attaches to the highlighted match;
-		// esc clears the filter without firing attach. ctrl+c still
-		// quits so the user is never trapped.
+		// esc clears the filter without firing attach.
 		if a.screen == ScreenProjects && a.projectsM.FilterActive() {
-			if msg.String() == "ctrl+c" {
-				return a, tea.Quit
-			}
 			if keyMatches(msg, a.keys.Enter) {
 				a.projectsM.commitFilter()
 				a2, cmd := a.attachOrCreateForSelectedProject()
@@ -1374,9 +1422,6 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// the cursor was on — observed as "Enter in the new-session form
 		// attaches to c-ccmux instead of creating a new session".
 		if a.screen == ScreenSessions && (a.sessionsM.form != nil || a.sessionsM.renameForm != nil) {
-			if msg.String() == "ctrl+c" {
-				return a, tea.Quit
-			}
 			var cmd tea.Cmd
 			a.sessionsM, cmd = a.sessionsM.Update(msg)
 			return a, cmd
@@ -1385,9 +1430,6 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Notes search mode: the search textinput owns every keystroke so
 		// global bindings like "r" (refresh) don't swallow characters mid-query.
 		if a.screen == ScreenNotes && a.notes.searching {
-			if msg.String() == "ctrl+c" {
-				return a, tea.Quit
-			}
 			var cmd tea.Cmd
 			a.notes, cmd = a.notes.Update(msg)
 			return a, cmd
@@ -1397,9 +1439,16 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// filename / title fields don't have their characters
 		// swallowed by global bindings (e.g. "r" → refresh).
 		if a.screen == ScreenNotes && a.notes.newNoteForm != nil {
-			if msg.String() == "ctrl+c" {
-				return a, tea.Quit
-			}
+			var cmd tea.Cmd
+			a.notes, cmd = a.notes.Update(msg)
+			return a, cmd
+		}
+
+		// Notes info panel (`i`): like the other info overlays it owns
+		// the keyboard until `i` / esc closes it. Without this, a digit
+		// switched screens underneath the panel and left it open on the
+		// Notes model.
+		if a.screen == ScreenNotes && a.notes.noteInfo.open {
 			var cmd tea.Cmd
 			a.notes, cmd = a.notes.Update(msg)
 			return a, cmd
@@ -1408,12 +1457,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Settings inline editor: the textinput owns every keystroke so
 		// characters typed into a value (e.g. a projects.root path with
 		// an "r", a digit, or a "q" in it) aren't hijacked by the global
-		// refresh / screen-switch / quit handlers. ctrl+c still quits so
-		// the user is never trapped.
+		// refresh / screen-switch / quit handlers.
 		if a.screen == ScreenSettings && a.settings.IsEditing() {
-			if msg.String() == "ctrl+c" {
-				return a, tea.Quit
-			}
 			var cmd tea.Cmd
 			a.settings, cmd = a.settings.Update(msg)
 			return a, cmd
@@ -1422,24 +1467,19 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Agents modal picker (Claude model / effort): the picker owns
 		// every keystroke — up/down/enter/esc drive the selection — so
 		// digit screen-switch and the global "q" quit-confirm can't fire
-		// over the modal. ctrl+c still quits.
+		// over the modal.
 		if a.screen == ScreenAgents && a.agentsM.ModalOpen() {
-			if msg.String() == "ctrl+c" {
-				return a, tea.Quit
-			}
 			var cmd tea.Cmd
 			a.agentsM, cmd = a.agentsM.Update(msg)
 			return a, cmd
 		}
 
 		switch {
-		case msg.String() == "ctrl+c":
-			return a, tea.Quit
 		case msg.String() == "q":
 			return a.openQuitConfirmation()
 		case keyMatches(msg, a.keys.Kill) && a.screen == ScreenSessions:
 			if sel := a.sessionsM.Selected(); sel != nil {
-				return a.openKillSessionConfirmation(sel.Name)
+				return a.openKillSessionConfirmation(sel.Host, sel.Name)
 			}
 			return a, nil
 		case keyMatches(msg, a.keys.Quit):
@@ -1498,6 +1538,16 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			ccusage.InvalidateCache()
 			if a.screen == ScreenProjects {
 				return a, tea.Batch(a.refreshSessionsCmd(), a.refreshProjectsCmd())
+			}
+			// Conversations screen: re-walk the transcripts too — the
+			// help overlay promises "refresh conversation list", and a
+			// sessions-only refresh left new transcripts invisible until
+			// the tab was re-entered.
+			if a.screen == ScreenConversations {
+				a.conversationsM.SetLoading(true)
+				sessions := a.refreshSessionsCmd()
+				convs := a.refreshConversationsCmd()
+				return a, tea.Batch(sessions, convs, a.conversationsM.SpinnerTickCmd())
 			}
 			// Network screen: start the per-row spinner so the user
 			// sees a refresh in flight, even when the actual probe
@@ -1655,7 +1705,9 @@ func (a App) View() string {
 	conversationsSideToast := a.toasts.Active() &&
 		a.screen == ScreenConversations && !isNarrow(a.width)
 	if a.toasts.Active() && !conversationsSideToast {
-		toastRow = lipgloss.PlaceHorizontal(a.width, lipgloss.Right, a.toasts.Render(a.styles))
+		// Capped to the terminal (less a column each side) so a long
+		// message wraps inside the bubble instead of being truncated.
+		toastRow = lipgloss.PlaceHorizontal(a.width, lipgloss.Right, a.toasts.Render(a.styles, a.width-2))
 		toastH = lipgloss.Height(toastRow)
 	}
 
@@ -1678,7 +1730,9 @@ func (a App) View() string {
 		// banner at the top of the detail pane — closer to the action
 		// that produced the notification.
 		if !isNarrow(a.width) && a.toasts.Active() {
-			a.conversationsM.SetBanner(a.toasts.Render(a.styles))
+			// The banner sits inside the detail pane: half the width,
+			// less the pane's border and padding.
+			a.conversationsM.SetBanner(a.toasts.Render(a.styles, a.width/2-4))
 		} else {
 			a.conversationsM.SetBanner("")
 		}
@@ -2108,291 +2162,41 @@ func shortHostname(h string) string {
 // refreshSessionsCmd fetches sessions from local ccmuxd, every
 // explicitly-configured remote host, AND every tailnet peer auto-
 // discovered via `tailscale status` + a /v1/health probe. Falls back
-// to direct tmux call when the local daemon is down.
-func (a App) refreshSessionsCmd() tea.Cmd {
-	hosts := a.cfg.Hosts
+// to direct tmux call when the local daemon is down. Every probe runs
+// concurrently under its own budget — see collectSessions (refresh.go).
+//
+// Each refresh is numbered (Gen). Refreshes overlap — the 2s tick, `r`,
+// the post-kill / post-attach refreshes — and a slow host makes them
+// finish out of order, so the sessionsLoadedMsg handler drops a result
+// older than one it already applied instead of letting a stale list
+// overwrite a newer one.
+func (a *App) refreshSessionsCmd() tea.Cmd {
+	a.sessionsLoadGen++
+	gen := a.sessionsLoadGen
+	hosts := append([]config.Host(nil), a.cfg.Hosts...)
 	tailnetPort := a.cfg.Daemon.TailnetPort
 	if tailnetPort == 0 {
 		tailnetPort = 7474
 	}
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-
-		var (
-			sessions []daemon.SessionState
-			hs       []hostStatus
-			err      error
-		)
-
-		local, lerr := daemon.LocalClient()
-		if lerr == nil {
-			ss, e := local.Sessions(ctx)
-			if e == nil {
-				for i := range ss {
-					ss[i].Host = "local"
-				}
-				sessions = append(sessions, ss...)
-				h, _ := local.Health(ctx)
-				localName := shortHostname(h.Hostname)
-				if localName == "" {
-					localName = "local"
-				}
-				hs = append(hs, hostStatus{
-					Name:    localName,
-					Local:   true,
-					Source:  "local",
-					Address: local.Addr(),
-					OK:      h.OK,
-					// The daemon answered /v1/health, so the chip can
-					// honestly say so.
-					DaemonOK:  h.OK,
-					Sessions:  h.Sessions,
-					SleepMode: h.SleepMode,
-					Version:   h.Version,
-					LastProbe: time.Now(),
-				})
-			} else {
-				direct, e2 := fallbackDirectTmux(ctx)
-				if e2 == nil {
-					sessions = append(sessions, direct...)
-					localHost, _ := os.Hostname()
-					name := shortHostname(localHost)
-					if name == "" {
-						name = "local"
-					}
-					// tmux is responding — sessions came back. ccmuxd
-					// is down, but the device itself is fine; mark OK
-					// so the Devices dot stays green.
-					//
-					// DaemonOK stays false: the status-bar chip must
-					// say "offline" here. Without the daemon there are
-					// no bells, no push notifications, and no sleep
-					// lock — the user needs to see that, not a green
-					// check. `ccmux daemon install` fixes it.
-					hs = append(hs, hostStatus{
-						Name:      name,
-						Local:     true,
-						Source:    "local",
-						Address:   "tmux (no daemon)",
-						OK:        true,
-						DaemonOK:  false,
-						LastProbe: time.Now(),
-					})
-				} else {
-					err = fmt.Errorf("local: %w", e2)
-				}
-			}
-		}
-
-		// Configured hosts. Tracked so we don't double-add a peer that's
-		// both explicitly configured AND auto-discovered. configuredHostKeys
-		// resolves DNS names to IPs so a host configured as "mac-mini:7474"
-		// still dedupes against the scan's "100.x.x.x:7474" entry.
-		seen := map[string]bool{}
-		for _, h := range hosts {
-			for _, k := range configuredHostKeys(h, tailnetPort) {
-				seen[k] = true
-			}
-			port := h.Port
-			if port == 0 {
-				port = tailnetPort
-			}
-			addr := fmt.Sprintf("%s:%d", h.Address, port)
-			cli := daemon.RemoteClient(addr)
-			ss, e := cli.Sessions(ctx)
-			st := hostStatus{
-				Name:      h.Name,
-				Source:    "configured",
-				Address:   addr,
-				DialHost:  h.Address, // bare address without port, for ssh/mosh
-				User:      h.User,
-				Mosh:      h.Mosh,
-				SSHPort:   h.SSHPort, // 0 → default 22 at the dial site
-				LastProbe: time.Now(),
-			}
-			if e == nil {
-				// A configured host is reached THROUGH its ccmuxd, so
-				// a successful session list means its daemon answered.
-				st.OK = true
-				st.DaemonOK = true
-				st.Sessions = len(ss)
-				for i := range ss {
-					ss[i].Host = h.Name
-				}
-				sessions = append(sessions, ss...)
-				if hi, hErr := cli.Health(ctx); hErr == nil {
-					st.Version = hi.Version
-				}
-			} else {
-				st.Err = e
-			}
-			hs = append(hs, st)
-		}
-
-		// Tailnet auto-discovery. ScanTailnet probes every online
-		// non-mobile peer for ccmuxd /v1/health and partitions:
-		//   - Reachable: ccmuxd answered → merge as a regular host.
-		//   - NeedsInstall: peer is up but didn't answer → surface
-		//     with a "ccmux not installed / running here" hint so
-		//     the user knows what to do.
-		// Mobile peers (iOS, iPadOS, Android) are skipped entirely
-		// because the Moshi app handles them, and installing ccmux
-		// there isn't an option.
-		// Errors are non-fatal — discovery is convenience.
-		if scan, derr := tailnet.ScanTailnet(ctx, tailnetPort); derr == nil {
-			for _, d := range scan.Reachable {
-				if seen[d.Address] {
-					continue
-				}
-				seen[d.Address] = true
-				cli := daemon.RemoteClient(d.Address)
-				// The probe already succeeded (that's how this peer
-				// ended up in Reachable). Mark OK regardless of the
-				// follow-up Sessions call — a Sessions error means
-				// "couldn't list sessions right now," not "host is
-				// down," so we shouldn't make the dot red.
-				st := hostStatus{
-					Name: d.Name, Address: d.Address,
-					Source:     "discovered",
-					Discovered: true, DialHost: d.DialHost,
-					// Discovered via a successful ccmuxd health probe,
-					// so its daemon is by definition answering.
-					Version: d.Version, OK: true, DaemonOK: true,
-					TailscaleSSH: d.TailscaleSSH,
-					LastProbe:    time.Now(),
-				}
-				if ss, e := cli.Sessions(ctx); e == nil {
-					st.Sessions = len(ss)
-					for i := range ss {
-						ss[i].Host = d.Name
-					}
-					sessions = append(sessions, ss...)
-				} else {
-					st.Err = e
-				}
-				hs = append(hs, st)
-			}
-			for _, p := range scan.NeedsInstall {
-				addr := fmt.Sprintf("%s:%d", p.Addr, tailnetPort)
-				if seen[addr] {
-					continue
-				}
-				seen[addr] = true
-				hs = append(hs, hostStatus{
-					Name:         shortPeerName(p.DisplayName()),
-					Source:       "discovered",
-					Address:      addr,
-					Discovered:   true,
-					NeedsInstall: true,
-					OS:           p.OS,
-					OK:           p.Online,
-					LastProbe:    time.Now(),
-				})
-			}
-			for _, p := range scan.Mobile {
-				// Mobile rows don't have an ccmuxd address; key the
-				// dedupe by the tailnet IP itself so the same phone
-				// doesn't show twice across refreshes.
-				key := "mobile://" + p.Addr
-				if seen[key] {
-					continue
-				}
-				seen[key] = true
-				hs = append(hs, hostStatus{
-					Name:       shortPeerName(p.DisplayName()),
-					Source:     "mobile",
-					Address:    p.Addr,
-					Discovered: true,
-					Mobile:     true,
-					OS:         p.OS,
-					OK:         p.Online,
-					LastProbe:  time.Now(),
-				})
-			}
-		}
-
-		sort.SliceStable(sessions, func(i, j int) bool {
-			pi := statePriority(sessions[i].State)
-			pj := statePriority(sessions[j].State)
-			if pi != pj {
-				return pi < pj
-			}
-			if sessions[i].Host != sessions[j].Host {
-				return sessions[i].Host < sessions[j].Host
-			}
-			return sessions[i].Name < sessions[j].Name
-		})
-
-		return sessionsLoadedMsg{Sessions: sessions, Hosts: hs, Err: err, At: time.Now()}
+		msg := collectSessions(hosts, tailnetPort)
+		msg.Gen = gen
+		return msg
 	}
 }
 
+// refreshProjectsCmd discovers local projects plus every configured
+// host's and discovered peer's projects, concurrently — see
+// collectProjects (refresh.go).
 func (a App) refreshProjectsCmd() tea.Cmd {
 	root := a.cfg.Projects.Root
-	hosts := a.cfg.Hosts
+	hosts := append([]config.Host(nil), a.cfg.Hosts...)
 	tailnetPort := a.cfg.Daemon.TailnetPort
 	if tailnetPort == 0 {
 		tailnetPort = 7474
 	}
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-
-		var all []project.Project
-		// Local projects first so the merge sort keeps them
-		// grouped naturally by Modified after combining.
-		if ps, err := project.Discover(root); err == nil {
-			for _, p := range ps {
-				p.Host = "local"
-				all = append(all, p)
-			}
-		}
-
-		// Configured remote hosts. seen is keyed by every form of the
-		// host's address we can resolve (literal + each tailnet IP) so
-		// the auto-discovery scan below doesn't re-fetch a peer that's
-		// already configured under a DNS name.
-		seen := map[string]bool{}
-		for _, h := range hosts {
-			for _, k := range configuredHostKeys(h, tailnetPort) {
-				seen[k] = true
-			}
-			port := h.Port
-			if port == 0 {
-				port = tailnetPort
-			}
-			addr := fmt.Sprintf("%s:%d", h.Address, port)
-			all = appendRemoteProjects(ctx, all, addr, h.Name)
-		}
-
-		// Auto-discovered tailnet peers. The scan inside ScanTailnet
-		// runs its own concurrent probes, so this is cheap relative
-		// to the per-host project fetches that follow.
-		if scan, err := tailnet.ScanTailnet(ctx, tailnetPort); err == nil {
-			for _, d := range scan.Reachable {
-				if seen[d.Address] {
-					continue
-				}
-				seen[d.Address] = true
-				all = appendRemoteProjects(ctx, all, d.Address, d.Name)
-			}
-		}
-
-		sort.SliceStable(all, func(i, j int) bool {
-			hi, hj := projectHost(all[i]), projectHost(all[j])
-			if hi != hj {
-				if hi == "local" {
-					return true
-				}
-				if hj == "local" {
-					return false
-				}
-				return hi < hj
-			}
-			return all[i].Modified.After(all[j].Modified)
-		})
-		return projectsLoadedMsg{Projects: all}
+		return collectProjects(root, hosts, tailnetPort)
 	}
 }
 
@@ -2422,27 +2226,6 @@ func configuredHostKeys(h config.Host, defaultPort int) []string {
 		}
 	}
 	return keys
-}
-
-// appendRemoteProjects fetches projects from one remote ccmuxd at
-// `addr` and tags each entry with `hostLabel` (the dashboard's
-// friendly name for that host). Failures are silently swallowed —
-// project discovery is best-effort, and a single unreachable peer
-// shouldn't drop the user's local list.
-func appendRemoteProjects(ctx context.Context, into []project.Project, addr, hostLabel string) []project.Project {
-	cli := daemon.RemoteClient(addr)
-	infos, err := cli.Projects(ctx)
-	if err != nil {
-		return into
-	}
-	for _, p := range infos {
-		into = append(into, project.Project{
-			Name: p.Name, Host: hostLabel, Path: p.Path,
-			HasGit: p.HasGit, HasCM: p.HasCM, HasAgents: p.HasAgents, HasDocs: p.HasDocs,
-			Modified: p.Modified,
-		})
-	}
-	return into
 }
 
 // attachSelectedSession is Enter on Sessions screen.
@@ -2974,8 +2757,11 @@ func uniqueSessionName(ctx context.Context, base string) string {
 	return fmt.Sprintf("%s-%d", base, time.Now().UnixMilli())
 }
 
-// renameSessionCmd runs `tmux rename-session` and returns the result.
-func renameSessionCmd(oldName, newName string) tea.Cmd {
+// renameSessionCmd runs `tmux rename-session` on the LOCAL tmux server
+// and returns the result. Remote rows go through renameSessionTargetCmd
+// → renameRemoteSessionCmd instead. A package var so tests can observe
+// routing without a live tmux.
+var renameSessionCmd = func(oldName, newName string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()

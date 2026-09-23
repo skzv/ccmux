@@ -513,3 +513,4 @@
 "config.toml didn't load; using defaults and not saving changes: " = "无法加载 config.toml；正在使用默认值，更改不会保存："
 "save: " = "保存："
 "saved ✓" = "已保存 ✓"
+"Kill tmux session %q on %s. This cannot be undone." = "终止 %[2]s 上的 tmux 会话 %[1]q。此操作无法撤销。"

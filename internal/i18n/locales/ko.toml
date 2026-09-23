@@ -505,3 +505,4 @@
 "config.toml didn't load; using defaults and not saving changes: " = "config.toml을 불러오지 못했습니다. 기본값을 사용하며 변경 사항은 저장하지 않습니다: "
 "save: " = "저장: "
 "saved ✓" = "저장됨 ✓"
+"Kill tmux session %q on %s. This cannot be undone." = "%[2]s의 tmux 세션 %[1]q을(를) 종료합니다. 되돌릴 수 없습니다."

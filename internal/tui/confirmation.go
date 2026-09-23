@@ -31,15 +31,20 @@ const (
 type confirmationModal struct {
 	kind   confirmationKind
 	target string
-	focus  confirmationFocus
+	// host is the kill target's host label: "" when the session lives
+	// on this machine, otherwise the remote host whose daemon receives
+	// the kill (and which the modal names, so the user can tell the
+	// laptop's c-ccmux from the mini's).
+	host  string
+	focus confirmationFocus
 }
 
 func newQuitConfirmation() confirmationModal {
 	return confirmationModal{kind: confirmationQuit, focus: confirmationFocusCancel}
 }
 
-func newKillSessionConfirmation(name string) confirmationModal {
-	return confirmationModal{kind: confirmationKillSession, target: name, focus: confirmationFocusCancel}
+func newKillSessionConfirmation(host, name string) confirmationModal {
+	return confirmationModal{kind: confirmationKillSession, target: name, host: host, focus: confirmationFocusCancel}
 }
 
 func (m confirmationModal) open() bool {
@@ -62,6 +67,9 @@ func (m confirmationModal) body() string {
 	case confirmationQuit:
 		return "Exit ccmux. Managed tmux sessions will keep running."
 	case confirmationKillSession:
+		if m.host != "" {
+			return fmt.Sprintf(tr("Kill tmux session %q on %s. This cannot be undone."), m.target, m.host)
+		}
 		return fmt.Sprintf("Kill tmux session %q. This cannot be undone.", m.target)
 	default:
 		return ""
@@ -84,8 +92,15 @@ func (a App) openQuitConfirmation() (App, tea.Cmd) {
 	return a, tea.EnableMouseCellMotion
 }
 
-func (a App) openKillSessionConfirmation(name string) (App, tea.Cmd) {
-	a.confirm = newKillSessionConfirmation(name)
+// openKillSessionConfirmation opens the kill modal for the session
+// `name` on host label `host`. Local labels ("", "local", this
+// machine's hostname) collapse to "" so the modal and the kill route
+// agree on what "local" means.
+func (a App) openKillSessionConfirmation(host, name string) (App, tea.Cmd) {
+	if a.isLocalSessionHost(host) {
+		host = ""
+	}
+	a.confirm = newKillSessionConfirmation(host, name)
 	return a, tea.EnableMouseCellMotion
 }
 
@@ -104,7 +119,7 @@ func (a App) acceptConfirmation() (App, tea.Cmd) {
 		if confirm.target == "" {
 			return a, tea.DisableMouse
 		}
-		return a, tea.Batch(tea.DisableMouse, killSessionCmd(confirm.target))
+		return a, tea.Batch(tea.DisableMouse, a.killSessionTargetCmd(confirm.host, confirm.target))
 	default:
 		return a, tea.DisableMouse
 	}

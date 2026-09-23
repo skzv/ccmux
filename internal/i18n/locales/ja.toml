@@ -505,3 +505,4 @@
 "config.toml didn't load; using defaults and not saving changes: " = "config.toml を読み込めませんでした。既定値を使用し、変更は保存しません: "
 "save: " = "保存: "
 "saved ✓" = "保存しました ✓"
+"Kill tmux session %q on %s. This cannot be undone." = "%[2]s の tmux セッション %[1]q を終了します。元に戻せません。"

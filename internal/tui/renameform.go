@@ -12,7 +12,10 @@ import (
 // renameFormModel is the single-field modal the Sessions screen opens on `R`.
 // Pre-filled with the current session name; Enter renames, Esc cancels.
 type renameFormModel struct {
-	st      styles.Styles
+	st styles.Styles
+	// host is the session's host label, echoed into the submit message
+	// so a remote row is renamed on its own machine.
+	host    string
 	oldName string
 	input   textinput.Model
 	err     string
@@ -49,7 +52,7 @@ func (m renameFormModel) Update(msg tea.Msg) (renameFormModel, tea.Cmd) {
 				return m, func() tea.Msg { return renameSessionCancelMsg{} }
 			}
 			return m, func() tea.Msg {
-				return renameSessionSubmitMsg{OldName: m.oldName, NewName: newName}
+				return renameSessionSubmitMsg{Host: m.host, OldName: m.oldName, NewName: newName}
 			}
 		}
 	}

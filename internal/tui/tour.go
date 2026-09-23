@@ -164,6 +164,13 @@ func (m tourModel) View(w, h int) string {
 	if cardW < 50 {
 		cardW = 50
 	}
+	// ...but never wider than the terminal: the 50-col floor made the
+	// card (plus its 2-col border) overflow a phone-width screen, and
+	// Bubble Tea hard-truncated the right edge off. Width excludes the
+	// border, so the card fits in w-2.
+	if cardW > w-2 {
+		cardW = maxInt(1, w-2)
+	}
 
 	var lines []string
 	// Title.

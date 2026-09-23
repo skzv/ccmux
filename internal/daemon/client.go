@@ -370,6 +370,14 @@ func (c *Client) Kill(ctx context.Context, name string) error {
 	return c.post(ctx, path, nil, nil)
 }
 
+// Rename renames the named tmux session on this daemon's machine. Used
+// by the TUI's Sessions-screen `R` on a row that lives on a remote
+// host — a local tmux rename there would target the wrong server.
+func (c *Client) Rename(ctx context.Context, name, newName string) error {
+	path := "/v1/sessions/" + url.PathEscape(name) + "/rename"
+	return c.post(ctx, path, RenameRequest{Name: newName}, nil)
+}
+
 // Addr returns a human description of this client's target.
 func (c *Client) Addr() string { return c.scheme + "://" + c.addr }
 
