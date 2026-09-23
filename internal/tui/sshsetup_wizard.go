@@ -539,11 +539,9 @@ func (m *sshWizardModel) updateKey(msg tea.KeyMsg) (*sshWizardModel, tea.Cmd) {
 	case sshWizardHostKeyMismatch:
 		switch msg.String() {
 		case "y", "Y":
-			// Remove the stale known_hosts entry and re-run
-			// install with the SAME password the user already
-			// typed — saves them re-prompting. The remove is
-			// done synchronously (it's just a file rewrite) so
-			// we can bail loudly if it fails.
+			// Remove the stale known_hosts entry, then retry. The
+			// remove is done synchronously (it's just a file
+			// rewrite) so we can bail loudly if it fails.
 			n, err := sshsetup.RemoveKnownHostEntries(m.target.Host, m.target.Port)
 			if err != nil {
 				m.step = sshWizardError
@@ -555,9 +553,21 @@ func (m *sshWizardModel) updateKey(msg tea.KeyMsg) (*sshWizardModel, tea.Cmd) {
 				m.err = "no matching entry found in ~/.ssh/known_hosts — investigate manually"
 				return m, nil
 			}
-			m.step = sshWizardRunning
 			m.stages = nil
-			return m, m.startInstall(m.passwd.Value())
+			pw := m.passwd.Value()
+			if pw == "" {
+				// Reached from the pre-password re-probe, so no
+				// password has been typed yet — installing now would
+				// send an empty one. Re-probe instead: with the stale
+				// key gone, key auth may simply work; otherwise
+				// afterProbe routes to the Password step.
+				m.step = sshWizardProbing
+				return m, m.startProbe()
+			}
+			// Reached from a failed install: retry with the SAME
+			// password the user already typed — saves re-prompting.
+			m.step = sshWizardRunning
+			return m, m.startInstall(pw)
 		case "n", "N", "esc":
 			return m, m.emitCancel()
 		}
