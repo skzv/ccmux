@@ -106,9 +106,14 @@ func (v Vault) List() ([]Entry, error) {
 }
 
 // Read returns the bytes of the file at `rel` (a slash-separated path
-// relative to the project root). Wraps the canonical filesystem error.
+// relative to the project root). Wraps the canonical filesystem error;
+// a path that escapes the project returns ErrOutsideVault.
 func (v Vault) Read(rel string) ([]byte, error) {
-	return os.ReadFile(filepath.Join(v.Root, filepath.FromSlash(rel)))
+	cleaned, err := CleanRel(rel)
+	if err != nil {
+		return nil, err
+	}
+	return os.ReadFile(filepath.Join(v.Root, filepath.FromSlash(cleaned)))
 }
 
 // skipDir reports whether a directory should be pruned from the vault

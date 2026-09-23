@@ -130,13 +130,11 @@ func TestParseRegionArg(t *testing.T) {
 }
 
 // TestRulesFor_LoadsBundledFiles — confirms the embed.FS hookup
-// works end-to-end: every agent we ship a rules file for is reachable
-// via RulesFor, and each rule list is non-empty.
+// works end-to-end for a sample of bundled files. Full coverage (every
+// registered agent has rules) is TestEveryAgentHasDetectionRules in
+// internal/agent, which can see the registry.
 func TestRulesFor_LoadsBundledFiles(t *testing.T) {
-	for _, id := range []ID{
-		"claude", "codex", "cursor", "pi", "grok", "antigravity",
-		"opencode", "kimi", "droid", "copilot", "qoder", "kilo", "hermes", "amp", "kiro",
-	} {
+	for _, id := range []ID{"claude", "codex", "gemini"} {
 		got := RulesFor(id)
 		if len(got) == 0 {
 			t.Errorf("RulesFor(%q) returned no rules — embed.FS or TOML parsing broken", id)

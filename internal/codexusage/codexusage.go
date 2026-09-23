@@ -15,9 +15,9 @@
 package codexusage
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
+	"github.com/skzv/ccmux/internal/jsonl"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -92,12 +92,20 @@ type price struct {
 // honest than a missing one.
 func priceFor(model string) price {
 	m := strings.ToLower(model)
+	// Order matters: the o-series and 4o minis must match before the
+	// generic "mini" (gpt-5-mini) case, and "o3" before "o1".
 	switch {
 	case strings.Contains(m, "nano"):
 		return price{Input: 0.05, Cached: 0.005, Output: 0.40}
+	case strings.Contains(m, "o3-mini"), strings.Contains(m, "o4-mini"):
+		return price{Input: 1.10, Cached: 0.275, Output: 4.40}
+	case strings.Contains(m, "4o-mini"):
+		return price{Input: 0.15, Cached: 0.075, Output: 0.60}
 	case strings.Contains(m, "mini"):
 		return price{Input: 0.25, Cached: 0.025, Output: 2.00}
-	case strings.Contains(m, "o3"), strings.Contains(m, "o1"):
+	case strings.Contains(m, "o3"):
+		return price{Input: 2.00, Cached: 0.50, Output: 8.00}
+	case strings.Contains(m, "o1"):
 		return price{Input: 15.0, Cached: 7.50, Output: 60.0}
 	case strings.Contains(m, "4o"):
 		return price{Input: 2.50, Cached: 1.25, Output: 10.0}
@@ -231,8 +239,7 @@ func scanFile(path string, cutoff, now time.Time) scanResult {
 		return r
 	}
 	defer f.Close()
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 1<<17), 1<<25)
+	sc := jsonl.NewScanner(f, 1<<25)
 	currentModel := "" // last model seen from a turn_context record
 	for sc.Scan() {
 		line := sc.Bytes()

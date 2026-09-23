@@ -3,6 +3,8 @@ package cmd
 import (
 	"strings"
 	"testing"
+
+	"github.com/skzv/ccmux/internal/agent"
 )
 
 // TestDefaultPort — tiny helper but the wrong default would route
@@ -53,5 +55,28 @@ func TestShellAttachCommandsOmitDetachFlag(t *testing.T) {
 	}
 	if !strings.Contains(remote, " tmux attach-session -t 'c-foo'") {
 		t.Errorf("remote shell attach should use mirror attach: %q", remote)
+	}
+}
+
+// TestNewCmdAgent — `ccmux new` honours agents.default like the TUI
+// form does; --agent still wins, and a bad flag lists every agent.
+func TestNewCmdAgent(t *testing.T) {
+	if id, err := newCmdAgent("", "codex"); err != nil || id != agent.IDCodex {
+		t.Errorf("config default codex: got %q, %v", id, err)
+	}
+	if id, err := newCmdAgent("cursor", "codex"); err != nil || id != agent.IDCursor {
+		t.Errorf("--agent should win: got %q, %v", id, err)
+	}
+	if id, err := newCmdAgent("", "shell"); err != nil || id != "" {
+		t.Errorf("non-agent default should fall back: got %q, %v", id, err)
+	}
+	_, err := newCmdAgent("nope", "")
+	if err == nil {
+		t.Fatal("unknown --agent accepted")
+	}
+	for _, a := range agent.All() {
+		if !strings.Contains(err.Error(), string(a.ID())) {
+			t.Errorf("error %q doesn't list agent %q", err, a.ID())
+		}
 	}
 }

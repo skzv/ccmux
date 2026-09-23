@@ -4,11 +4,11 @@
 package gemini
 
 import (
-	"bufio"
 	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"github.com/skzv/ccmux/internal/jsonl"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -84,8 +84,7 @@ func Read(path string) (Session, error) {
 	if strings.HasSuffix(path, ".json") {
 		err = json.Unmarshal(b, &s)
 	} else {
-		scanner := bufio.NewScanner(bytes.NewReader(b))
-		scanner.Buffer(make([]byte, 4096), 16*1024*1024)
+		scanner := jsonl.NewScanner(bytes.NewReader(b), 16*1024*1024)
 		for scanner.Scan() {
 			var record map[string]json.RawMessage
 			if json.Unmarshal(scanner.Bytes(), &record) != nil {
@@ -96,14 +95,15 @@ func Read(path string) (Session, error) {
 				if json.Unmarshal(raw, &id) != nil {
 					continue
 				}
-				end := 0
+				// Truncate back to (not including) the rewind target. An
+				// id we never saw — e.g. it lived in a line we skipped —
+				// leaves the history alone rather than wiping all of it.
 				for i, m := range s.Messages {
 					if m.ID == id {
-						end = i
+						s.Messages = s.Messages[:i]
 						break
 					}
 				}
-				s.Messages = s.Messages[:end]
 			} else if raw, ok := record["$set"]; ok {
 				// Unmarshal into the existing struct preserves fields absent
 				// from a metadata update, including the current messages.

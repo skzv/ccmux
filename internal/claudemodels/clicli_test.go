@@ -225,12 +225,16 @@ func TestClaudeCLIFetcher_ContextCancel(t *testing.T) {
 			return exec.CommandContext(ctx, "true")
 		},
 	}
-	ctx := context.Background()
+	type ctxKey struct{}
+	ctx := context.WithValue(context.Background(), ctxKey{}, "parent")
 	_, _ = f.Fetch(ctx)
 	if !called {
 		t.Error("Run hook never invoked — Fetch should call into it")
 	}
-	if seenCtx != ctx {
-		t.Error("Run did not receive the parent context — ctx cancellation won't propagate")
+	if seenCtx == nil || seenCtx.Value(ctxKey{}) != "parent" {
+		t.Error("Run did not receive a context derived from the parent — ctx cancellation won't propagate")
+	}
+	if _, ok := seenCtx.Deadline(); !ok {
+		t.Error("Run's context has no deadline — a stuck `claude -p` would block forever")
 	}
 }

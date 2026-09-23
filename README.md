@@ -319,7 +319,7 @@ bell = true                          # ring local terminal BEL on needs_input
 
 ### 🏗️ New projects
 
-- `ccmux new <name>` — creates the directory + starts the agent. **No CLAUDE.md, no docs/ tree, no git init.** Bootstrapping is the agent's job.
+- `ccmux new <name>` — creates the directory + starts the agent (`--agent`, else `agents.default` from config, else Claude). **No CLAUDE.md, no docs/ tree, no git init.** Bootstrapping is the agent's job.
 - **Open a project = see its history.** Enter on a project lists running sessions _and_ past conversations.
 - **Conversations list hides automation noise.** Headless `claude -p` / SDK runs and `codex exec` invocations are filtered by default. Press `H` to toggle. Antigravity transcripts carry no headless tag, so those are always shown.
 - **Create on any device.** Press `n` in Projects, pick a host, the remote daemon does the work.

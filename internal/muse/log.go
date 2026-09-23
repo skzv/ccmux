@@ -3,9 +3,9 @@
 package muse
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
+	"github.com/skzv/ccmux/internal/jsonl"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -256,8 +256,7 @@ func Read(path string) (Session, error) {
 		if err != nil {
 			return s, err
 		}
-		scanner := bufio.NewScanner(file)
-		scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
+		scanner := jsonl.NewScanner(file, 16*1024*1024)
 		for scanner.Scan() {
 			var r record
 			if json.Unmarshal(scanner.Bytes(), &r) == nil {

@@ -3,6 +3,7 @@ package conversations
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -1346,5 +1347,88 @@ func TestAll_ExcludeHeadlessDefaultsToOff(t *testing.T) {
 	}
 	if !got[0].IsHeadless() {
 		t.Errorf("expected the headless row to be present; got %+v", got[0])
+	}
+}
+
+// TestListClaude_OversizedLineDoesNotHideLaterEvents — a single huge
+// line (a pasted screenshot, a giant tool result) used to stop the
+// scan, freezing LastActivity and the message count at that point.
+func TestListClaude_OversizedLineDoesNotHideLaterEvents(t *testing.T) {
+	home := t.TempDir()
+	tsEarly := "2026-04-30T10:00:00.000Z"
+	tsLate := "2026-04-30T12:00:00.000Z"
+	huge := `{"type":"user","message":{"role":"user","content":"` + strings.Repeat("A", 5*1024*1024) + `"},"timestamp":"` + tsEarly + `"}`
+	path := filepath.Join(home, ".claude/projects/-Users-skz-Projects-foo/big-1.jsonl")
+	writeFile(t, path,
+		`{"type":"user","message":{"role":"user","content":"first prompt"},"timestamp":"`+tsEarly+`"}`+"\n"+
+			huge+"\n"+
+			`{"type":"assistant","message":{"role":"assistant","content":"after the big line"},"timestamp":"`+tsLate+`"}`+"\n",
+	)
+	got, err := ListClaude(home)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("ListClaude = %v, %v", got, err)
+	}
+	want, _ := time.Parse(time.RFC3339Nano, tsLate)
+	if !got[0].LastActivity.Equal(want) {
+		t.Errorf("LastActivity = %v, want %v: events after the oversized line were dropped", got[0].LastActivity, want)
+	}
+	msgs, err := readClaudeMessages(path, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) == 0 || msgs[len(msgs)-1].Content != "after the big line" {
+		t.Errorf("messages after the oversized line missing: %+v", msgs)
+	}
+}
+
+// TestCountClaudeMessages_MatchesReader — the thread length shown in
+// the list must equal the number of messages the preview renders; tool
+// results ride on "user" events and used to be counted as messages.
+func TestCountClaudeMessages_MatchesReader(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "t.jsonl")
+	writeFile(t, path, strings.Join([]string{
+		`{"type":"user","message":{"role":"user","content":"do the thing"}}`,
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{}}]}}`,
+		`{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}`,
+		`{"type":"assistant","message":{"role":"assistant","content":"done"}}`,
+	}, "\n")+"\n")
+	n, err := countClaudeMessages(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	msgs, err := readClaudeMessages(path, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != len(msgs) {
+		t.Errorf("count = %d, reader shows %d messages", n, len(msgs))
+	}
+}
+
+// TestGuardTranscriptPath_SymlinkedDirEscapes — a project directory
+// under ~/.claude/projects that is a symlink to elsewhere must not let
+// Delete remove files outside the transcript tree.
+func TestGuardTranscriptPath_SymlinkedDirEscapes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks need privileges on windows")
+	}
+	home := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "important")
+	writeFile(t, filepath.Join(outside, "notes.jsonl"), "{}\n")
+	projects := filepath.Join(home, ".claude", "projects")
+	if err := os.MkdirAll(projects, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(projects, "-evil")); err != nil {
+		t.Fatal(err)
+	}
+	escaping := filepath.Join(projects, "-evil", "notes.jsonl")
+	if err := guardTranscriptPath(home, agent.IDClaude, escaping); err == nil {
+		t.Error("guard accepted a transcript whose directory resolves outside ~/.claude/projects")
+	}
+	legit := filepath.Join(projects, "-Users-x-proj", "abc.jsonl")
+	writeFile(t, legit, "{}\n")
+	if err := guardTranscriptPath(home, agent.IDClaude, legit); err != nil {
+		t.Errorf("legit transcript rejected: %v", err)
 	}
 }

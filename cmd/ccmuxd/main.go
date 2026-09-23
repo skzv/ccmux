@@ -874,16 +874,12 @@ func (s *server) handleNotes(w http.ResponseWriter, r *http.Request) {
 	vault := notes.Open(proj.Path)
 
 	if rel := strings.TrimSpace(r.URL.Query().Get("file")); rel != "" {
-		// Path-traversal hardening: reject absolute paths, ".." segments,
-		// and anything that isn't a .md file. notes.Vault.Read trusts
-		// its input, so we validate here.
-		if strings.HasPrefix(rel, "/") || strings.HasPrefix(rel, `\`) {
-			http.Error(w, "file must be a project-relative path", http.StatusBadRequest)
-			return
-		}
-		cleaned := filepath.ToSlash(filepath.Clean(rel))
-		if strings.HasPrefix(cleaned, "..") || strings.Contains(cleaned, "/../") {
-			http.Error(w, "path traversal not allowed", http.StatusBadRequest)
+		// Path-traversal hardening: notes.CleanRel rejects absolute
+		// paths and ".." escapes (Vault.Read re-checks); only .md files
+		// are served.
+		cleaned, err := notes.CleanRel(rel)
+		if err != nil {
+			http.Error(w, "file must be a project-relative path: "+err.Error(), http.StatusBadRequest)
 			return
 		}
 		if !strings.HasSuffix(strings.ToLower(cleaned), ".md") {
@@ -1307,8 +1303,8 @@ func (s *server) createProject(w http.ResponseWriter, r *http.Request) {
 	// no `..`, no leading dots. The daemon is the security boundary
 	// here — a malicious tailnet peer could otherwise create
 	// directories at arbitrary paths.
-	if strings.ContainsAny(name, "/\\") || strings.HasPrefix(name, ".") {
-		http.Error(w, "name must be a single non-hidden path segment", http.StatusBadRequest)
+	if err := project.ValidateName(name); err != nil {
+		http.Error(w, "name must be a single non-hidden path segment: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 	dir := filepath.Join(project.ResolveRoot(s.cfg.Projects.Root), name)

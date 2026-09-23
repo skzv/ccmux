@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"github.com/skzv/ccmux/internal/project"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -184,6 +185,10 @@ func (m newProjectFormModel) Update(msg tea.Msg) (newProjectFormModel, tea.Cmd) 
 			name := strings.TrimSpace(m.name.Value())
 			if name == "" {
 				m.err = tr("name is required")
+				return m, nil
+			}
+			if err := project.ValidateName(name); err != nil {
+				m.err = err.Error()
 				return m, nil
 			}
 			h := m.currentHost()

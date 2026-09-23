@@ -34,7 +34,6 @@
 package conversations
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -45,6 +44,7 @@ import (
 
 	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/gemini"
+	"github.com/skzv/ccmux/internal/jsonl"
 	"github.com/skzv/ccmux/internal/muse"
 )
 
@@ -298,22 +298,15 @@ func readClaudeMessages(path string, limit int) ([]Message, error) {
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}
 	defer f.Close()
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	sc := jsonl.NewScanner(f, 4*1024*1024)
 	var all []Message
 	for sc.Scan() {
 		var ev claudeEvent
 		if err := json.Unmarshal(sc.Bytes(), &ev); err != nil {
 			continue
 		}
-		if ev.Type != "user" && ev.Type != "assistant" {
-			continue
-		}
-		body := strings.TrimSpace(ev.MessageContent())
-		if ev.Type == "user" {
-			body = cleanPromptText(body)
-		}
-		if body == "" {
+		body, ok := claudeVisibleBody(ev)
+		if !ok {
 			continue
 		}
 		all = append(all, Message{
@@ -334,8 +327,7 @@ func readCodexMessages(path string, limit int) ([]Message, error) {
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}
 	defer f.Close()
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	sc := jsonl.NewScanner(f, 4*1024*1024)
 	var all []Message
 	for sc.Scan() {
 		var ev codexEvent
@@ -370,8 +362,7 @@ func readCursorMessages(path string, limit int) ([]Message, error) {
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}
 	defer f.Close()
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	sc := jsonl.NewScanner(f, 4*1024*1024)
 	var all []Message
 	for sc.Scan() {
 		var ev cursorEvent
@@ -491,23 +482,36 @@ func CountMessages(c Conversation) (int, error) {
 	return total, nil
 }
 
+// claudeVisibleBody returns the text a Claude transcript event shows as
+// a conversation message, and false for events that aren't one
+// (tool-result-only user turns, empty blocks, non-message events).
+// Shared by readClaudeMessages and countClaudeMessages so the thread
+// length always matches what the preview lists.
+func claudeVisibleBody(ev claudeEvent) (string, bool) {
+	if ev.Type != "user" && ev.Type != "assistant" {
+		return "", false
+	}
+	body := strings.TrimSpace(ev.MessageContent())
+	if ev.Type == "user" {
+		body = cleanPromptText(body)
+	}
+	return body, body != ""
+}
+
 func countClaudeMessages(path string) (int, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return 0, fmt.Errorf("open %s: %w", path, err)
 	}
 	defer f.Close()
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	sc := jsonl.NewScanner(f, 4*1024*1024)
 	n := 0
 	for sc.Scan() {
-		var head struct {
-			Type string `json:"type"`
-		}
-		if err := json.Unmarshal(sc.Bytes(), &head); err != nil {
+		var ev claudeEvent
+		if err := json.Unmarshal(sc.Bytes(), &ev); err != nil {
 			continue
 		}
-		if head.Type == "user" || head.Type == "assistant" {
+		if _, ok := claudeVisibleBody(ev); ok {
 			n++
 		}
 	}
@@ -520,8 +524,7 @@ func countCodexMessages(path string) (int, error) {
 		return 0, fmt.Errorf("open %s: %w", path, err)
 	}
 	defer f.Close()
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	sc := jsonl.NewScanner(f, 4*1024*1024)
 	n := 0
 	for sc.Scan() {
 		var ev codexEvent
@@ -542,8 +545,7 @@ func countCursorMessages(path string) (int, error) {
 		return 0, fmt.Errorf("open %s: %w", path, err)
 	}
 	defer f.Close()
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	sc := jsonl.NewScanner(f, 4*1024*1024)
 	n := 0
 	for sc.Scan() {
 		var ev cursorEvent
@@ -646,10 +648,31 @@ func guardTranscriptPath(home string, agentID agent.ID, path string) error {
 	for _, candidate := range allowed {
 		if strings.HasPrefix(clean, candidate.root+string(filepath.Separator)) &&
 			strings.HasSuffix(clean, candidate.ext) {
-			return nil
+			return guardResolvedParent(candidate.root, clean)
 		}
 	}
 	return fmt.Errorf("refusing to delete %s — not under a known %s transcript root", clean, agentID)
+}
+
+// guardResolvedParent re-checks containment after resolving symlinks.
+// The lexical check alone passes ~/.claude/projects/<link>/x.jsonl
+// even when <link> points outside the tree, and os.Remove follows
+// symlinked parent directories. (A symlinked final element is fine:
+// os.Remove deletes the link, not its target.)
+func guardResolvedParent(root, path string) error {
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return fmt.Errorf("resolve %s: %w", root, err)
+	}
+	realDir, err := filepath.EvalSymlinks(filepath.Dir(path))
+	if err != nil {
+		return fmt.Errorf("resolve %s: %w", filepath.Dir(path), err)
+	}
+	rel, err := filepath.Rel(realRoot, realDir)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("refusing to delete %s — resolves outside %s", path, root)
+	}
+	return nil
 }
 
 // Options modulates a List call. Zero value works (no limit, default
@@ -885,10 +908,9 @@ func readClaudeTranscript(path, project string) Conversation {
 	// top of the recent list.
 	var latestEvent time.Time
 	var cwdFromTranscript string
-	sc := bufio.NewScanner(f)
-	// Claude transcripts can have long lines (tool outputs etc.); bump
-	// the buffer well past bufio's 64KB default.
-	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	// Claude transcripts can have long lines (tool outputs, pasted
+	// images); a line over 4 MiB is skipped without ending the read.
+	sc := jsonl.NewScanner(f, 4*1024*1024)
 	for sc.Scan() {
 		line := sc.Bytes()
 		if len(line) == 0 {
@@ -1115,8 +1137,7 @@ func readCodexTranscript(path string) Conversation {
 		return c
 	}
 	defer f.Close()
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	sc := jsonl.NewScanner(f, 4*1024*1024)
 	var latestEvent time.Time
 	for sc.Scan() {
 		var ev codexEvent
@@ -1300,8 +1321,7 @@ func readCursorTranscript(path, project string) Conversation {
 	}
 	defer f.Close()
 	var latestEvent time.Time
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	sc := jsonl.NewScanner(f, 4*1024*1024)
 	for sc.Scan() {
 		var ev cursorEvent
 		if err := json.Unmarshal(sc.Bytes(), &ev); err != nil {
@@ -1466,8 +1486,7 @@ func readPiTranscript(root, path string) Conversation {
 	}
 	defer f.Close()
 	var latestEvent time.Time
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	sc := jsonl.NewScanner(f, 4*1024*1024)
 	for sc.Scan() {
 		var ev piEvent
 		if err := json.Unmarshal(sc.Bytes(), &ev); err != nil {
@@ -1522,8 +1541,7 @@ func readPiMessages(path string, limit int) ([]Message, error) {
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}
 	defer f.Close()
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	sc := jsonl.NewScanner(f, 4*1024*1024)
 	var all []Message
 	for sc.Scan() {
 		var ev piEvent
@@ -1559,8 +1577,7 @@ func countPiMessages(path string) (int, error) {
 		return 0, fmt.Errorf("open %s: %w", path, err)
 	}
 	defer f.Close()
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	sc := jsonl.NewScanner(f, 4*1024*1024)
 	n := 0
 	for sc.Scan() {
 		var ev piEvent

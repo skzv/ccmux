@@ -236,3 +236,23 @@ func abs(f float64) float64 {
 	}
 	return f
 }
+
+// TestPriceFor_MatchOrder — substring matching must not let o3-mini or
+// gpt-4o-mini fall into the gpt-5-mini bucket, or o3 into o1's.
+func TestPriceFor_MatchOrder(t *testing.T) {
+	for model, wantIn := range map[string]float64{
+		"gpt-5":       1.25,
+		"gpt-5-mini":  0.25,
+		"gpt-5-nano":  0.05,
+		"o3-mini":     1.10,
+		"o4-mini":     1.10,
+		"gpt-4o-mini": 0.15,
+		"o3":          2.00,
+		"o1":          15.0,
+		"gpt-4o":      2.50,
+	} {
+		if got := priceFor(model).Input; got != wantIn {
+			t.Errorf("priceFor(%q).Input = %v, want %v", model, got, wantIn)
+		}
+	}
+}
