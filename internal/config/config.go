@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/BurntSushi/toml"
 	"github.com/skzv/ccmux/internal/agent"
@@ -555,21 +556,149 @@ func Load() (Config, error) {
 // be world-readable. The rename also replaces any pre-existing
 // world-readable file, tightening old installs down to 0600 on the
 // first Save.
+//
+// Keys this version of ccmux doesn't know about (written by a newer
+// release, or hand-added) are carried over from the file being
+// replaced rather than silently dropped. Comments are not preserved.
 func Save(cfg Config) error {
 	p, err := Path()
 	if err != nil {
 		return err
 	}
-	var buf bytes.Buffer
-	enc := toml.NewEncoder(&buf)
-	enc.Indent = "  "
-	if err := enc.Encode(cfg); err != nil {
-		return fmt.Errorf("encode config: %w", err)
+	data, err := encode(cfg)
+	if err != nil {
+		return err
 	}
-	if err := configfile.WriteAtomic(p, buf.Bytes(), 0o600); err != nil {
+	if prev, err := os.ReadFile(p); err == nil {
+		if merged, ok := carryUnknownKeys(data, prev); ok {
+			data = merged
+		}
+	}
+	if err := configfile.WriteAtomic(p, data, 0o600); err != nil {
 		return fmt.Errorf("write config %q: %w", p, err)
 	}
 	return nil
+}
+
+func encode(v any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := toml.NewEncoder(&buf)
+	enc.Indent = "  "
+	if err := enc.Encode(v); err != nil {
+		return nil, fmt.Errorf("encode config: %w", err)
+	}
+	return buf.Bytes(), nil
+}
+
+// carryUnknownKeys returns `encoded` (the new file body) with every key
+// from `prev` that Config has no field for copied back in. ok=false
+// means "nothing to carry" (or prev doesn't parse) and the caller keeps
+// `encoded` as-is — so files with only known keys keep the struct's
+// field order. Keys nested inside arrays of tables can't be addressed
+// by path and are not carried.
+func carryUnknownKeys(encoded, prev []byte) ([]byte, bool) {
+	var probe Config
+	md, err := toml.Decode(string(prev), &probe)
+	if err != nil {
+		return nil, false
+	}
+	undecoded := md.Undecoded()
+	if len(undecoded) == 0 {
+		return nil, false
+	}
+	var old, merged map[string]any
+	if _, err := toml.Decode(string(prev), &old); err != nil {
+		return nil, false
+	}
+	if _, err := toml.Decode(string(encoded), &merged); err != nil {
+		return nil, false
+	}
+	carried := false
+	for _, key := range undecoded {
+		v, ok := lookupPath(old, key)
+		if !ok {
+			continue
+		}
+		if setPathIfAbsent(merged, key, v) {
+			carried = true
+		}
+	}
+	if !carried {
+		return nil, false
+	}
+	out, err := encode(merged)
+	if err != nil {
+		return nil, false
+	}
+	return out, true
+}
+
+func lookupPath(m map[string]any, key toml.Key) (any, bool) {
+	var cur any = m
+	for _, k := range key {
+		tbl, ok := cur.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		if cur, ok = tbl[k]; !ok {
+			return nil, false
+		}
+	}
+	return cur, true
+}
+
+// setPathIfAbsent sets key=v in m, creating intermediate tables, unless
+// something already lives at key (e.g. a parent unknown table was
+// carried whole on an earlier iteration). Reports whether it wrote.
+func setPathIfAbsent(m map[string]any, key toml.Key, v any) bool {
+	tbl := m
+	for _, k := range key[:len(key)-1] {
+		next, ok := tbl[k]
+		if !ok {
+			child := map[string]any{}
+			tbl[k] = child
+			tbl = child
+			continue
+		}
+		if tbl, ok = next.(map[string]any); !ok {
+			return false
+		}
+	}
+	last := key[len(key)-1]
+	if _, exists := tbl[last]; exists {
+		return false
+	}
+	tbl[last] = v
+	return true
+}
+
+// updateMu serializes Update calls within this process so two
+// concurrent read-modify-write cycles can't interleave.
+var updateMu sync.Mutex
+
+// Update is the read-modify-write every in-app config change should use:
+// it re-reads config.toml from disk, applies fn, and saves. Working from
+// the on-disk state (instead of a long-lived in-memory copy) means one
+// writer can't clobber another's earlier change with a stale snapshot.
+//
+// If the file exists but fails to load (e.g. a TOML syntax error from a
+// hand edit), Update returns that error and writes nothing — saving
+// would otherwise replace the user's whole file with defaults. An error
+// from fn also aborts without writing. Returns the saved config.
+func Update(fn func(*Config) error) (Config, error) {
+	updateMu.Lock()
+	defer updateMu.Unlock()
+	cfg, err := Load()
+	if err != nil {
+		return cfg, err
+	}
+	if err := fn(&cfg); err != nil {
+		return cfg, err
+	}
+	if err := Save(cfg); err != nil {
+		return cfg, err
+	}
+	return cfg, nil
 }
 
 func firstNonEmpty(vs ...string) string {

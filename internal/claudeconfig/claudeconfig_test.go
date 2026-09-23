@@ -1020,3 +1020,29 @@ func TestRoundTrip_SchemaDriftKeyPreserved(t *testing.T) {
 		t.Errorf("permissions after round-trip = %s (err %v), want the original list", out["permissions"], err)
 	}
 }
+
+// TestSetModel_KeepsExplicitAlwaysThinkingFalse — a user-written
+// `"alwaysThinkingEnabled": false` is a decision, not a default; an
+// unrelated write must not delete it and hand control back to Claude
+// Code's own default.
+func TestSetModel_KeepsExplicitAlwaysThinkingFalse(t *testing.T) {
+	dir := withFakeClaudeDir(t)
+	p := filepath.Join(dir, "settings.json")
+	if err := os.WriteFile(p, []byte(`{"alwaysThinkingEnabled":false}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SetModel("sonnet"); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if string(got["alwaysThinkingEnabled"]) != "false" {
+		t.Errorf("explicit false dropped: %s", raw)
+	}
+}

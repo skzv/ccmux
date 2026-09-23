@@ -43,9 +43,13 @@ func TestUserHostIdentity_TwoUsersSameAddressRenderDistinctly(t *testing.T) {
 // post-success persistence creates SEPARATE rows for each user.
 func TestPersistWizardAdded_AppendsDistinctRows(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	app := New(config.Config{
+	seed := config.Config{
 		Hosts: []config.Host{{Name: "alice@sputnik", Address: "sputnik", User: "alice"}},
-	}, "test")
+	}
+	if err := config.Save(seed); err != nil {
+		t.Fatal(err)
+	}
+	app := New(seed, "test")
 	target := sshsetup.Target{User: "alice", Host: "sputnik", Port: 22}
 	app2 := persistWizardAdded(app, target, []string{"bob", "carol"})
 	if got := len(app2.cfg.Hosts); got != 3 {
@@ -71,9 +75,15 @@ func TestPersistWizardAdded_AppendsDistinctRows(t *testing.T) {
 // hostExistsByName guard inside persistWizardAdded enforces this.
 func TestPersistWizardAdded_IdempotentOnRerun(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	app := New(config.Config{
+	// persistWizardAdded read-modify-writes config.toml, so the seed
+	// row has to be on disk, as it would be in real use.
+	seed := config.Config{
 		Hosts: []config.Host{{Name: "alice@sputnik", Address: "sputnik", User: "alice"}},
-	}, "test")
+	}
+	if err := config.Save(seed); err != nil {
+		t.Fatal(err)
+	}
+	app := New(seed, "test")
 	target := sshsetup.Target{User: "alice", Host: "sputnik", Port: 22}
 	app2 := persistWizardAdded(app, target, []string{"bob"})
 	if got := len(app2.cfg.Hosts); got != 2 {

@@ -77,33 +77,34 @@ func persistWizardAdded(a App, target sshsetup.Target, addedUsers []string) App 
 	if len(addedUsers) == 0 {
 		return a
 	}
-	cfg := a.cfg
 	shortHost := networkHostShortName(target.Host)
-	for _, u := range addedUsers {
-		name := fmt.Sprintf("%s@%s", u, shortHost)
-		// Skip if the name is already present — re-running the
-		// wizard shouldn't create duplicate rows.
-		if hostExistsByName(cfg, name) {
-			continue
+	addHosts := func(cfg *config.Config) {
+		for _, u := range addedUsers {
+			name := fmt.Sprintf("%s@%s", u, shortHost)
+			// Skip if the name is already present — re-running the
+			// wizard shouldn't create duplicate rows.
+			if hostExistsByName(*cfg, name) {
+				continue
+			}
+			cfg.Hosts = append(cfg.Hosts, config.Host{
+				Name:    name,
+				Address: target.Host,
+				User:    u,
+				Port:    target.Port,
+				Mosh:    true,
+			})
 		}
-		cfg.Hosts = append(cfg.Hosts, config.Host{
-			Name:    name,
-			Address: target.Host,
-			User:    u,
-			Port:    target.Port,
-			Mosh:    true,
-		})
 	}
-	if err := config.Save(cfg); err != nil {
-		// Stash the error onto the model — keep the rest of the
-		// flow successful. We deliberately don't fire a toast
-		// here; the caller already emits a success toast.
+	saved, err := config.Update(func(c *config.Config) error { addHosts(c); return nil })
+	if err != nil {
+		// Keep the rest of the flow successful. We deliberately don't
+		// fire a toast here; the caller already emits a success toast.
 		if dbg := debugLogger(); dbg != nil {
 			dbg.Printf("persist wizard-added users: %v", err)
 		}
 		return a
 	}
-	a.cfg = cfg
+	a.adoptConfig(saved)
 	return a
 }
 

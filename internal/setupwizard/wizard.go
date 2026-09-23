@@ -125,6 +125,17 @@ func RunWithOptions(ctx context.Context, out io.Writer, opts Options) error {
 	return nil
 }
 
+// loadConfigForSetup loads config.toml for a step that will save it.
+// A file that exists but doesn't parse must stop the step: carrying on
+// with defaults would write them over the user's hosts and API keys.
+func loadConfigForSetup() (config.Config, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return cfg, fmt.Errorf("%w (fix or move the file, then re-run `ccmux setup`)", err)
+	}
+	return cfg, nil
+}
+
 // markSetupCompleted records that setup finished so the launch-time
 // "ccmux isn't set up yet — run setup?" nudge stops firing. Best-effort:
 // a config write failure here must not fail an otherwise-good setup.
@@ -231,7 +242,10 @@ func stepDeps(ctx context.Context, out io.Writer) error {
 	// the right install command for anything still missing.
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, stEmphasis.Render("  AI agents (need at least one)"))
-	cfg, _ := config.Load()
+	cfg, err := loadConfigForSetup()
+	if err != nil {
+		return err
+	}
 	anyAgent := false
 	for _, a := range agent.All() {
 		configured := configuredAgentCommand(cfg, a.ID())
@@ -816,7 +830,10 @@ func stepSSHKey(ctx context.Context, out io.Writer) error {
 // plan via claudeauth so we don't make the user pick from a list of
 // strings they may not have memorized.
 func stepConfig(ctx context.Context, out io.Writer) error {
-	cfg, _ := config.Load()
+	cfg, err := loadConfigForSetup()
+	if err != nil {
+		return err
+	}
 	if cfg.Projects.Root == "" {
 		home, _ := os.UserHomeDir()
 		cfg.Projects.Root = filepath.Join(home, "Projects")

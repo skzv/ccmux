@@ -506,21 +506,36 @@ func (m settingsModel) commit() (settingsModel, tea.Cmd) {
 		return m, nil
 	}
 	raw := m.editor.Value()
-	if err := fields[m.cursor].set(&m.cfg, raw); err != nil {
+	f := fields[m.cursor]
+	if err := f.set(&m.cfg, raw); err != nil {
 		m.errMsg = err.Error()
 		return m, nil
 	}
-	if err := config.Save(m.cfg); err != nil {
-		m.errMsg = "save: " + err.Error()
+	saved, err := persistField(f, raw)
+	if err != nil {
+		m.errMsg = tr("save: ") + err.Error()
 		m.lastErr = err.Error()
 		return m, nil
 	}
 	m.editing = false
 	m.errMsg = ""
-	m.saveMsg = "saved ✓"
+	m.saveMsg = tr("saved ✓")
 	m.savedAt = time.Now()
 	m.lastErr = ""
-	return m, nil
+	return m, savedCmd(saved)
+}
+
+// persistField writes one field's new value to config.toml. It applies
+// the setter to the on-disk config (config.Update) rather than saving
+// this screen's copy wholesale — that copy can be stale (hosts added by
+// the SSH wizard since) or carry display-only state (the auto-detected
+// subscription tier, --projects), none of which may be written back.
+func persistField(f editableField, raw string) (config.Config, error) {
+	return config.Update(func(c *config.Config) error { return f.set(c, raw) })
+}
+
+func savedCmd(cfg config.Config) tea.Cmd {
+	return func() tea.Msg { return configSavedMsg{Cfg: cfg} }
 }
 
 // cycleField advances a cycle-picker row (one with options) to its next
@@ -543,16 +558,17 @@ func (m settingsModel) cycleField(f editableField) (settingsModel, tea.Cmd) {
 		m.errMsg = err.Error()
 		return m, nil
 	}
-	if err := config.Save(m.cfg); err != nil {
-		m.errMsg = "save: " + err.Error()
+	saved, err := persistField(f, next)
+	if err != nil {
+		m.errMsg = tr("save: ") + err.Error()
 		m.lastErr = err.Error()
 		return m, nil
 	}
 	m.errMsg = ""
-	m.saveMsg = "saved ✓  " + f.label + " → " + next
+	m.saveMsg = tr("saved ✓") + "  " + f.label + " → " + next
 	m.savedAt = time.Now()
 	m.lastErr = ""
-	return m, nil
+	return m, savedCmd(saved)
 }
 
 // openEditor suspends the TUI, opens $EDITOR pointing at config.toml,

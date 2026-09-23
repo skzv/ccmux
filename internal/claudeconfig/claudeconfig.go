@@ -399,7 +399,11 @@ func readSettingsAt(path string) (*Settings, error) {
 				s.Extra[key] = val
 			}
 		case "alwaysThinkingEnabled":
-			if json.Unmarshal(val, &s.AlwaysThinkingEnabled) != nil {
+			// An explicit false is kept in Extra so it round-trips:
+			// WriteSettings only emits the typed field when true, and
+			// dropping the user's `false` would hand the decision back
+			// to Claude Code's default.
+			if json.Unmarshal(val, &s.AlwaysThinkingEnabled) != nil || !s.AlwaysThinkingEnabled {
 				s.AlwaysThinkingEnabled = false
 				s.Extra[key] = val
 			}

@@ -150,10 +150,19 @@ func tabBarMinWidth() int {
 
 // App is the root Bubble Tea model.
 type App struct {
-	cfg     config.Config
-	styles  styles.Styles
-	keys    Keymap
-	version string
+	cfg config.Config
+	// runtimeOverrides re-applies per-run, never-persisted tweaks
+	// (--projects, --expand-notes) whenever a fresh config is adopted
+	// from disk. detectedClaudeTier is the auto-detected subscription
+	// tier: shown in the UI, but only ever written to disk if the user
+	// sets the tier themselves. startupConfigErr is a config.toml load
+	// failure, surfaced as a toast once the UI is up.
+	runtimeOverrides   func(*config.Config)
+	detectedClaudeTier string
+	startupConfigErr   error
+	styles             styles.Styles
+	keys               Keymap
+	version            string
 
 	width, height int
 
@@ -341,6 +350,13 @@ func (a App) Init() tea.Cmd {
 	// updateCheckMsg handler); the worst case is no banner.
 	if a.cfg.Update.AutoCheck {
 		cmds = append(cmds, checkForUpdateCmd())
+	}
+	if a.startupConfigErr != nil {
+		// Printed to stderr this would be wiped by the alt screen
+		// instantly. Every in-app save goes through config.Update,
+		// which refuses to write while the file doesn't load.
+		cmds = append(cmds, toastCmd(toastError,
+			tr("config.toml didn't load; using defaults and not saving changes: ")+a.startupConfigErr.Error(), 15))
 	}
 	return tea.Batch(cmds...)
 }
@@ -627,9 +643,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// wins. Push the updated config into the screens that render it.
 		// Writes through SetTierFor("claude", …) so the per-agent map
 		// + the legacy Tier field stay in sync.
-		claudeTier := a.cfg.Subscription.TierFor("claude")
-		if (claudeTier == "" || claudeTier == "api") && msg.Tier != "api" {
-			a.cfg.Subscription.SetTierFor("claude", msg.Tier)
+		//
+		// The detected tier is display-only: it lives in
+		// detectedClaudeTier and is overlaid on each adopted config,
+		// never saved, so a later detection (or a plan change) can't be
+		// frozen into config.toml.
+		a.detectedClaudeTier = msg.Tier
+		if a.overlayDetectedTier(&a.cfg) {
 			a.dashboard.SetConfig(a.cfg)
 			a.settings.SetConfig(a.cfg)
 		}
@@ -965,20 +985,16 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if cfg, err := config.Load(); err != nil {
 			a.toasts.Set(toastError, tr("reload config: ")+err.Error(), 5*time.Second)
 		} else {
-			a.cfg = cfg
-			// A config.toml edit may have changed `lang` — re-apply it so
-			// a $EDITOR-based language switch takes effect without a
-			// restart (the Settings row path hot-switches already).
-			i18n.SetLanguage(cfg.Lang)
-			a.settings.SetConfig(cfg)
-			a.dashboard.SetConfig(cfg)
-			a.sessionsM.SetDefaultDir(cfg.Sessions.DefaultDir)
-			a.sessionsM.SetDefaultAgent(cfg.Agents.Default)
-			a.sessionsM.SetAgentCommands(cfg.AgentCommands())
-			a.projectsM.SetDefaultAgent(cfg.Agents.Default)
-			a.projectsM.SetAgentCommands(cfg.AgentCommands())
+			a.startupConfigErr = nil
+			a.adoptConfig(cfg)
 			a.toasts.Set(toastSuccess, tr("config reloaded"), 2*time.Second)
 		}
+		return a, nil
+
+	case configSavedMsg:
+		// A screen persisted a change via config.Update. Adopt the saved
+		// state so every screen — and any later save — sees it.
+		a.adoptConfig(msg.Cfg)
 		return a, nil
 
 	case refreshAfterDetachMsg:
@@ -1716,8 +1732,59 @@ func (a *App) markTourShown() {
 	}
 	a.cfg.Tour.Shown = true
 	a.cfg.Tour.ShownVersion = a.version
-	_ = config.Save(a.cfg)
+	// Touch only the tour fields on disk: saving a.cfg wholesale would
+	// also persist runtime overrides and whatever stale state it holds.
+	version := a.version
+	_, _ = config.Update(func(c *config.Config) error {
+		c.Tour.Shown = true
+		c.Tour.ShownVersion = version
+		return nil
+	})
 }
+
+// adoptConfig makes cfg (fresh from disk) the app's config: re-applies
+// the runtime-only overlays and pushes it into every screen that caches
+// a copy.
+func (a *App) adoptConfig(cfg config.Config) {
+	if a.runtimeOverrides != nil {
+		a.runtimeOverrides(&cfg)
+	}
+	a.overlayDetectedTier(&cfg)
+	a.cfg = cfg
+	// A config.toml edit may have changed `lang` — re-apply it so a
+	// $EDITOR-based language switch takes effect without a restart.
+	i18n.SetLanguage(cfg.Lang)
+	a.settings.SetConfig(cfg)
+	a.dashboard.SetConfig(cfg)
+	a.sessionsM.SetDefaultDir(cfg.Sessions.DefaultDir)
+	a.sessionsM.SetDefaultAgent(cfg.Agents.Default)
+	a.sessionsM.SetAgentCommands(cfg.AgentCommands())
+	a.projectsM.SetDefaultAgent(cfg.Agents.Default)
+	a.projectsM.SetAgentCommands(cfg.AgentCommands())
+}
+
+// overlayDetectedTier shows the auto-detected Claude tier when the user
+// hasn't declared one ("api" is the default-empty marker) — a hand-set
+// tier always wins. Reports whether cfg changed.
+func (a *App) overlayDetectedTier(cfg *config.Config) bool {
+	t := a.detectedClaudeTier
+	if t == "" || t == "api" {
+		return false
+	}
+	if cur := cfg.Subscription.TierFor("claude"); cur != "" && cur != "api" {
+		return false
+	}
+	cfg.Subscription.SetTierFor("claude", t)
+	return true
+}
+
+// SetRuntimeOverrides installs the per-run config tweaks that must be
+// re-applied (never saved) each time a fresh config is adopted.
+func (a *App) SetRuntimeOverrides(fn func(*config.Config)) { a.runtimeOverrides = fn }
+
+// SetStartupConfigError records a config.toml load failure to show once
+// the UI is running.
+func (a *App) SetStartupConfigError(err error) { a.startupConfigErr = err }
 
 // padToHeight extends `s` with trailing blank lines so its line
 // count is at least `n`. Screens whose body doesn't wrap in a

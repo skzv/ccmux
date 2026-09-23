@@ -22,7 +22,23 @@ const MaxBackupsPerFile = 50
 // WriteAtomic writes `data` to `dst` via a sibling temp file + fsync +
 // rename. Atomic on the same filesystem: a crash mid-write leaves
 // either the previous content or the new content, never half.
+//
+// `mode` is the most permissive the file may end up: a new file gets
+// exactly `mode`, an existing one keeps its own bits intersected with
+// `mode`. So a settings.json the user chmod'ed 0600 (it can hold API
+// keys) stays 0600, while a caller passing 0600 still tightens an old
+// 0644 file.
+//
+// If dst is a symlink (dotfiles managed by stow/chezmoi), the link's
+// target is rewritten and the link itself is left in place — renaming
+// over dst would silently replace the link with a regular file.
 func WriteAtomic(dst string, data []byte, mode os.FileMode) error {
+	if resolved, err := filepath.EvalSymlinks(dst); err == nil {
+		dst = resolved
+	}
+	if info, err := os.Stat(dst); err == nil {
+		mode &= info.Mode().Perm()
+	}
 	dir := filepath.Dir(dst)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
@@ -67,7 +83,7 @@ func Backup(src, backupDir string) (string, error) {
 	if _, err := os.Stat(src); os.IsNotExist(err) {
 		return "", nil
 	}
-	if err := os.MkdirAll(backupDir, 0o755); err != nil {
+	if err := os.MkdirAll(backupDir, 0o700); err != nil {
 		return "", err
 	}
 	ts := time.Now().Format("20060102-150405.000")
@@ -78,7 +94,9 @@ func Backup(src, backupDir string) (string, error) {
 		return "", err
 	}
 	defer in.Close()
-	out, err := os.Create(dst)
+	// 0600: backups are copies of files that can hold API keys, and
+	// they outlive any later chmod of the original.
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return "", err
 	}

@@ -99,14 +99,18 @@ func readSettingsAt(path string) (*Settings, error) {
 	}
 	s := &Settings{Extra: map[string]json.RawMessage{}}
 	for key, val := range raw {
+		var dst any
 		switch key {
 		case "model":
-			_ = json.Unmarshal(val, &s.Model)
+			dst = &s.Model
 		case "reasoningEffort":
-			_ = json.Unmarshal(val, &s.ReasoningEffort)
+			dst = &s.ReasoningEffort
 		case "yolo":
-			_ = json.Unmarshal(val, &s.Yolo)
-		default:
+			dst = &s.Yolo
+		}
+		// A known key holding an unexpected type (say "yolo": "true")
+		// is kept verbatim in Extra rather than dropped on next write.
+		if dst == nil || json.Unmarshal(val, dst) != nil {
 			s.Extra[key] = val
 		}
 	}
@@ -125,22 +129,7 @@ func WriteSettings(s *Settings) (backup string, err error) {
 	if backup, err = backupFile(p.Settings, p.BackupsDir); err != nil {
 		return "", err
 	}
-	out := map[string]any{}
-	for k, v := range s.Extra {
-		var any any
-		_ = json.Unmarshal(v, &any)
-		out[k] = any
-	}
-	if s.Model != "" {
-		out["model"] = s.Model
-	}
-	if s.ReasoningEffort != "" {
-		out["reasoningEffort"] = s.ReasoningEffort
-	}
-	if s.Yolo {
-		out["yolo"] = true
-	}
-	data, err := json.MarshalIndent(out, "", "  ")
+	data, err := encodeSettings(s)
 	if err != nil {
 		return backup, err
 	}
@@ -148,6 +137,40 @@ func WriteSettings(s *Settings) (backup string, err error) {
 		return backup, err
 	}
 	return backup, nil
+}
+
+// encodeSettings merges the typed fields over Extra. Extra values are
+// written back as the raw bytes they were read as — decoding them into
+// `any` would turn large integers into float64 and change them.
+func encodeSettings(s *Settings) ([]byte, error) {
+	out := make(map[string]json.RawMessage, len(s.Extra)+3)
+	for k, v := range s.Extra {
+		out[k] = v
+	}
+	set := func(key string, v any) error {
+		b, err := json.Marshal(v)
+		if err != nil {
+			return err
+		}
+		out[key] = b
+		return nil
+	}
+	if s.Model != "" {
+		if err := set("model", s.Model); err != nil {
+			return nil, err
+		}
+	}
+	if s.ReasoningEffort != "" {
+		if err := set("reasoningEffort", s.ReasoningEffort); err != nil {
+			return nil, err
+		}
+	}
+	if s.Yolo {
+		if err := set("yolo", true); err != nil {
+			return nil, err
+		}
+	}
+	return json.MarshalIndent(out, "", "  ")
 }
 
 // backupFile delegates to the shared helper so all three agent-config
