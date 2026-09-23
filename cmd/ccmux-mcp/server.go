@@ -98,8 +98,9 @@ func NewServer(client DaemonClient, allowMutate bool, version string) *Server {
 // `out`. Returns nil on EOF, error on unrecoverable I/O failure.
 func (s *Server) Run(ctx context.Context, in io.Reader, out io.Writer) error {
 	// MCP requests/responses can be large (full pane previews, project
-	// lists); 4 MiB is generous and matches the daemon's inbound JSON
-	// cap. Lines over the cap are drained and answered with a JSON-RPC
+	// lists); 4 MiB is generous. (It is deliberately larger than the
+	// daemon's 64 KiB request-body cap: a request that passes here can
+	// still be refused there.) Lines over the cap are drained and answered with a JSON-RPC
 	// error instead of aborting the loop — bufio.Scanner's ErrTooLong
 	// is unrecoverable, so one oversized request used to kill every
 	// in-flight and future call on this transport.

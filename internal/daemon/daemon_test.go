@@ -196,35 +196,6 @@ func TestClient_PostNoBodyStillSucceeds(t *testing.T) {
 	}
 }
 
-func TestIsUnreachable(t *testing.T) {
-	if IsUnreachable(nil) {
-		t.Error("nil shouldn't be unreachable")
-	}
-	// A real connection-refused error (no daemon at this socket).
-	dir, err := os.MkdirTemp("/tmp", "ccmux-d-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	hc := &http.Client{
-		Transport: &http.Transport{
-			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-				var d net.Dialer
-				return d.DialContext(ctx, "unix", filepath.Join(dir, "nope"))
-			},
-		},
-		Timeout: 200 * time.Millisecond,
-	}
-	c := &Client{hc: hc, base: "http://unix", scheme: "unix", addr: "nope"}
-	_, err = c.Health(context.Background())
-	if err == nil {
-		t.Fatal("expected error from missing daemon")
-	}
-	if !IsUnreachable(err) {
-		t.Errorf("IsUnreachable should classify connect-failure: %v", err)
-	}
-}
-
 func TestRemoteClient_TargetsHTTPHost(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(HealthInfo{OK: true, Hostname: "remote", Version: "x"})

@@ -14,12 +14,10 @@
 package claudeconfig
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -770,15 +768,4 @@ func ListSkills() ([]Skill, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
-}
-
-// Run is a tiny wrapper around exec for callers that want the Claude
-// CLI's view of effective config (currently unused — kept as a hook
-// for the future when /status becomes available non-interactively).
-func Run(ctx context.Context, args ...string) (string, error) {
-	c, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(c, "claude", args...)
-	out, err := cmd.Output()
-	return string(out), err
 }
