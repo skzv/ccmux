@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/skzv/ccmux/internal/configfile"
 )
 
 // ccmuxInstallDir is where `make install` drops the binaries. Centralized
@@ -65,10 +67,10 @@ func detectShellRC(home, shellEnv string) (rcPath, exportLine string) {
 		return filepath.Join(home, ".zshrc"),
 			fmt.Sprintf(`export PATH="%s:$PATH"`, binDir)
 	case "bash":
-		// bash on macOS reads ~/.bash_profile for login shells; bash on
-		// Linux usually reads ~/.bashrc. Pick by GOOS.
-		if runtime.GOOS == "darwin" {
-			return filepath.Join(home, ".bash_profile"),
+		// bash on macOS runs login shells (Terminal.app), which read a
+		// login rc; bash on Linux usually reads ~/.bashrc. Pick by GOOS.
+		if hostGOOS == "darwin" {
+			return bashLoginRC(home),
 				fmt.Sprintf(`export PATH="%s:$PATH"`, binDir)
 		}
 		return filepath.Join(home, ".bashrc"),
@@ -83,6 +85,38 @@ func detectShellRC(home, shellEnv string) (rcPath, exportLine string) {
 	// reads on login.
 	return filepath.Join(home, ".profile"),
 		fmt.Sprintf(`export PATH="%s:$PATH"`, binDir)
+}
+
+// hostGOOS is runtime.GOOS, as a variable so tests can exercise the
+// macOS rc-file choice on any host.
+var hostGOOS = runtime.GOOS
+
+// bashLoginRC picks the file a bash login shell will actually read.
+// bash reads only the FIRST of ~/.bash_profile, ~/.bash_login and
+// ~/.profile that exists, so creating ~/.bash_profile when the user
+// keeps their setup in ~/.profile would make bash silently stop reading
+// ~/.profile. Use whichever exists first; create ~/.bash_profile only
+// when none of them does.
+func bashLoginRC(home string) string {
+	for _, name := range []string{".bash_profile", ".bash_login", ".profile"} {
+		p := filepath.Join(home, name)
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return filepath.Join(home, ".bash_profile")
+}
+
+// writeRCAtomic replaces rcPath with data via temp file + rename, so an
+// interrupted write can't leave the user's shell rc truncated. An
+// existing file keeps its permission bits (and a symlinked rc from a
+// dotfile manager keeps its link); a new one is created 0644.
+func writeRCAtomic(rcPath string, data []byte) error {
+	mode := os.FileMode(0o644)
+	if info, err := os.Stat(rcPath); err == nil {
+		mode = info.Mode().Perm()
+	}
+	return configfile.WriteAtomic(rcPath, data, mode)
 }
 
 // pathAlreadyManaged reports whether `rcBody` already contains a ccmux
@@ -166,7 +200,7 @@ func ensureCcmuxOnPath(out io.Writer) error {
 		fmt.Fprintln(out, "  add this line to your shell rc by hand: "+stEmphasis.Render(exportLine))
 		return nil
 	}
-	if err := os.WriteFile(rcPath, []byte(newBody), 0o644); err != nil {
+	if err := writeRCAtomic(rcPath, []byte(newBody)); err != nil {
 		fmt.Fprintln(out, stWarn.Render("  could not write "+rcPath+": "+err.Error()))
 		fmt.Fprintln(out, "  add this line to your shell rc by hand: "+stEmphasis.Render(exportLine))
 		return nil
