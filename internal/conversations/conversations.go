@@ -39,6 +39,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -156,10 +157,17 @@ func (c Conversation) IsHeadless() bool {
 // know each agent's flag dialect — it just passes the picked
 // Conversation through.
 // ValidateResume prevents unresolved Gemini project hashes from becoming a
-// fabricated cwd (or silently resuming in ccmux's own working directory).
+// fabricated cwd (or silently resuming in ccmux's own working directory),
+// and refuses a Cursor project directory that doesn't exist — tmux
+// would quietly start the session in $HOME instead.
 func (c Conversation) ValidateResume() error {
 	if c.Agent == agent.IDGemini && !filepath.IsAbs(c.Project) {
 		return fmt.Errorf("Gemini project directory is unknown; open this project in Gemini CLI once to register its location")
+	}
+	if c.Agent == agent.IDCursor {
+		if info, err := os.Stat(c.Project); err != nil || !info.IsDir() {
+			return fmt.Errorf("Cursor project directory %q not found on disk; can't resume there", c.Project)
+		}
 	}
 	return nil
 }
@@ -1302,10 +1310,25 @@ func (e codexEvent) MessageContent() (string, string) {
 }
 
 // ListCursor walks ~/.cursor/projects/<encoded-cwd>/agent-transcripts/<uuid>/<uuid>.jsonl.
-// Cursor's JSONL carries role + message content. The project label is
-// derived from Cursor's encoded project directory.
+// Cursor's JSONL carries role + message content. The project directory
+// is recovered from Cursor's encoded project directory name by probing
+// the filesystem (resolveCursorProject); when nothing on disk matches,
+// Project holds a best-effort label and ValidateResume refuses to
+// resume there.
 func ListCursor(home string) ([]Conversation, error) {
 	root := filepath.Join(home, ".cursor", "projects")
+	resolved := map[string]string{} // encoded dir name → project
+	cursorProject := func(encoded string) string {
+		if p, ok := resolved[encoded]; ok {
+			return p
+		}
+		p, err := resolveCursorProject(encoded)
+		if err != nil {
+			p = decodeCursorProject(encoded)
+		}
+		resolved[encoded] = p
+		return p
+	}
 	var out []Conversation
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -1320,11 +1343,11 @@ func ListCursor(home string) ([]Conversation, error) {
 		if !strings.HasSuffix(d.Name(), ".jsonl") {
 			return nil
 		}
-		project, id, ok := cursorConversationPath(root, path)
+		encoded, id, ok := cursorConversationPath(root, path)
 		if !ok {
 			return nil
 		}
-		c := readCursorTranscript(path, project)
+		c := readCursorTranscript(path, cursorProject(encoded))
 		c.ID = id
 		if c.ID != "" {
 			out = append(out, c)
@@ -1337,7 +1360,9 @@ func ListCursor(home string) ([]Conversation, error) {
 	return mergeConversations(out), nil
 }
 
-func cursorConversationPath(root, path string) (project, id string, ok bool) {
+// cursorConversationPath splits a transcript path under root into the
+// encoded project directory name and the conversation id.
+func cursorConversationPath(root, path string) (encodedProject, id string, ok bool) {
 	rel, err := filepath.Rel(root, path)
 	if err != nil || rel == "." {
 		return "", "", false
@@ -1350,9 +1375,88 @@ func cursorConversationPath(root, path string) (project, id string, ok bool) {
 	if id == "" || parts[2] != id {
 		return "", "", false
 	}
-	return decodeCursorProject(parts[0]), id, true
+	return parts[0], id, true
 }
 
+// resolveCursorProject maps Cursor's encoded project directory name
+// back to the directory on disk. Cursor writes /Users/me/Projects/my-app
+// as "Users-me-Projects-my-app": every separator (and other punctuation)
+// becomes '-', so a naive decode turns my-app into my/app — and tmux,
+// asked to start in a directory that doesn't exist, silently falls back
+// to $HOME. Instead, starting at the filesystem root (or a Windows drive
+// root), each step descends into the directory entry whose own encoded
+// name matches the next piece of the string, backtracking on dead ends.
+// Returns an error when no existing directory matches.
+func resolveCursorProject(encoded string) (string, error) {
+	enc := strings.TrimPrefix(strings.TrimSpace(encoded), "-")
+	if enc == "" {
+		return "", fmt.Errorf("empty Cursor project name")
+	}
+	root, rest := string(filepath.Separator), enc
+	if runtime.GOOS == "windows" && len(enc) >= 2 && enc[1] == '-' && isASCIILetter(enc[0]) {
+		root, rest = strings.ToUpper(enc[:1])+`:\`, enc[2:]
+	}
+	if p, ok := resolveEncodedPath(root, encodePathSegment(rest)); ok {
+		return p, nil
+	}
+	return "", fmt.Errorf("no directory on disk matches Cursor project %q", encoded)
+}
+
+// resolveEncodedPath finds the directory under dir whose path, encoded
+// segment by segment and joined with '-', equals rest (already passed
+// through encodePathSegment).
+func resolveEncodedPath(dir, rest string) (string, bool) {
+	if rest == "" {
+		return dir, true
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", false
+	}
+	type candidate struct{ name, enc string }
+	var cands []candidate
+	for _, e := range entries {
+		enc := encodePathSegment(e.Name())
+		if enc == "" || (rest != enc && !strings.HasPrefix(rest, enc+"-")) {
+			continue
+		}
+		cands = append(cands, candidate{e.Name(), enc})
+	}
+	// Longest match first: "my-app" before "my" when both exist.
+	sort.Slice(cands, func(i, j int) bool { return len(cands[i].enc) > len(cands[j].enc) })
+	for _, c := range cands {
+		next := filepath.Join(dir, c.name)
+		if info, err := os.Stat(next); err != nil || !info.IsDir() { // follows symlinks
+			continue
+		}
+		if p, ok := resolveEncodedPath(next, strings.TrimPrefix(rest[len(c.enc):], "-")); ok {
+			return p, true
+		}
+	}
+	return "", false
+}
+
+// encodePathSegment lowercases s and turns every character that isn't
+// an ASCII letter or digit into '-', so a path name compares equal to
+// Cursor's encoding whichever punctuation Cursor chose to keep.
+func encodePathSegment(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('-')
+		}
+	}
+	return b.String()
+}
+
+func isASCIILetter(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+}
+
+// decodeCursorProject is the naive decode ('-' → '/'), used only as a
+// display label when resolveCursorProject finds nothing on disk.
 func decodeCursorProject(encoded string) string {
 	encoded = strings.TrimSpace(encoded)
 	if encoded == "" {
