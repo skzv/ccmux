@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"os"
 	"os/exec"
 	"strings"
@@ -385,9 +386,44 @@ func Attach(name string, detachOthers bool) error {
 // is the only way to guarantee a future caller that we haven't shipped
 // is safe by default. Matches the existing `cc()` zsh function output
 // for all names that were already safe.
+//
+// Rewriting is lossy — `my.app` and `my_app` both sanitize to `my_app`,
+// and every all-non-ASCII name of the same byte length (`日本`, `中文`)
+// to the same run of underscores — and two projects sharing a session
+// name meant attaching to the wrong project's agent, "duplicate
+// session" when opening the second one, and the daemon handing back
+// the other project's session. So when sanitizing changed anything, a
+// short stable tag of the original name is appended (`my.app` →
+// `c-my_app-ipltv`). Names already in the safe alphabet map exactly as
+// before, so their existing sessions keep attaching.
 func SessionNameForPath(path string) string {
-	base := lastSegment(path)
-	return "c-" + sanitizeSessionName(base)
+	return SessionNameForBase(lastSegment(path))
+}
+
+// SessionNameForBase is SessionNameForPath for a directory name that
+// has already been split off its path (project.Project.Name), applied
+// to the whole string.
+func SessionNameForBase(base string) string {
+	name := sanitizeSessionName(base)
+	if name != base {
+		name += "-" + sessionNameTag(base)
+	}
+	return "c-" + name
+}
+
+// sessionNameTag is a five-letter digest of name (FNV-1a folded into
+// base 26). Letters only, so it can never look like the numeric `-2`,
+// `-3` suffix ccmux gives a project's additional sessions.
+func sessionNameTag(name string) string {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(name))
+	v := h.Sum32()
+	var tag [5]byte
+	for i := range tag {
+		tag[i] = 'a' + byte(v%26)
+		v /= 26
+	}
+	return string(tag[:])
 }
 
 // sanitizeSessionName rewrites `name` into the tmux-safe alphabet.

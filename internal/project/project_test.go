@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/skzv/ccmux/internal/agent"
+	"github.com/skzv/ccmux/internal/tmux"
 )
 
 // mkdir is a tiny test helper that creates a directory and t.Fatals on
@@ -33,20 +34,43 @@ func writeFile(t *testing.T, path, content string) {
 func TestSessionName(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"foo", "c-foo"},
-		{"foo.bar", "c-foo_bar"},
-		{"a.b.c", "c-a_b_c"},
 		{"no-dots-here", "c-no-dots-here"},
-		// Broader sanitization — matches the fuzz-driven update to
-		// tmux.SessionNameForPath. Any character outside
-		// [a-zA-Z0-9_-] becomes `_`.
-		{"with:colon", "c-with_colon"},
-		{"with space", "c-with_space"},
-		{"with/slash", "c-with_slash"},
+		{"my_app", "c-my_app"},
+		// Any character outside [a-zA-Z0-9_-] becomes `_`, and a
+		// rewritten name carries a stable tag of the original so it
+		// can't share a session with another project.
+		{"foo.bar", "c-foo_bar-sjscm"},
+		{"a.b.c", "c-a_b_c-bzngv"},
+		{"my.app", "c-my_app-ipltv"},
+		{"with:colon", "c-with_colon-uogqt"},
+		{"with space", "c-with_space-pamny"},
+		{"with/slash", "c-with_slash-jvlud"},
+		{"日本", "c-______-noabt"},
+		{"中文", "c-______-zqxmn"},
 	}
 	for _, tc := range cases {
 		p := Project{Name: tc.in}
 		if got := p.SessionName(); got != tc.want {
 			t.Errorf("SessionName(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestSessionName_MatchesTmuxSessionNameForPath — the project list and
+// every tmux.New call site (scaffold, CLI, daemon) must agree on a
+// project's session name; a separate sanitizer copy here used to be the
+// source of truth for one and not the other.
+func TestSessionName_MatchesTmuxSessionNameForPath(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"foo", "my.app", "my_app", "日本", "with space"} {
+		dir := filepath.Join(root, name)
+		mkdir(t, dir)
+		p, ok := Lookup(dir)
+		if !ok {
+			t.Fatalf("Lookup(%q) failed", dir)
+		}
+		if got, want := p.SessionName(), tmux.SessionNameForPath(dir); got != want {
+			t.Errorf("%q: Project.SessionName = %q, tmux.SessionNameForPath = %q", name, got, want)
 		}
 	}
 }

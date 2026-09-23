@@ -189,28 +189,66 @@ func TestClientTTYs_FiltersEmptyUnsafeAndDuplicateRows(t *testing.T) {
 
 func TestSessionNameForPath(t *testing.T) {
 	cases := []struct{ in, want string }{
-		// Original cases — `.` → `_` substitution is preserved.
+		// Names already in the safe alphabet are unchanged — existing
+		// sessions for them keep attaching.
 		{"/Users/skz/Projects/foo", "c-foo"},
 		{"/Users/skz/Projects/foo/", "c-foo"},
-		{"/Users/skz/Projects/with.dots", "c-with_dots"},
-		{"/Users/skz/Projects/a.b.c", "c-a_b_c"},
 		{"foo", "c-foo"},
 		{"/", "c-"},
-
-		// Broader sanitization added after fuzz uncovered the `:` case
-		// — tmux's `-t` target parser treats `:` as the session/window
-		// separator, so a name like `c-a:b` would route to window `b`
-		// of session `c-a`. Anything outside [a-zA-Z0-9_-] becomes `_`.
-		{"a:b", "c-a_b"},
-		{"a b c", "c-a_b_c"},
-		{"a\nb", "c-a_b"},
-		{"a\x00b", "c-a_b"},
 		{"name-with-dashes", "c-name-with-dashes"},
 		{"under_score", "c-under_score"},
+		{"/Users/skz/Projects/my_app", "c-my_app"},
+
+		// `.` → `_` substitution is preserved, and anything else outside
+		// [a-zA-Z0-9_-] becomes `_` too (fuzz uncovered `:` — tmux's
+		// `-t` parser treats it as the session/window separator). Every
+		// such lossy rewrite carries a stable tag of the original name.
+		{"/Users/skz/Projects/with.dots", "c-with_dots-ljbwe"},
+		{"/Users/skz/Projects/a.b.c", "c-a_b_c-bzngv"},
+		{"a:b", "c-a_b-qicxi"},
+		{"a b c", "c-a_b_c-nrmfz"},
+		{"a\nb", "c-a_b-wxdjt"},
+		{"a\x00b", "c-a_b-yzkjy"},
+		{"/Users/skz/Projects/日本", "c-______-noabt"},
 	}
 	for _, tc := range cases {
 		if got := SessionNameForPath(tc.in); got != tc.want {
 			t.Errorf("SessionNameForPath(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestSessionNameForPath_DistinctNamesDoNotCollide — sanitizing is lossy,
+// and it used to be the whole name: `my.app` and `my_app` both became
+// `c-my_app`, every all-CJK name of one byte length became the same run
+// of underscores. Two projects sharing a session name meant attaching to
+// the other project's agent and "duplicate session" on open.
+func TestSessionNameForPath_DistinctNamesDoNotCollide(t *testing.T) {
+	groups := [][]string{
+		{"my.app", "my_app", "my app", "my:app", "my-app"},
+		{"日本", "中文", "한국", "______"},
+		{"a.b", "a_b", "a:b", "a b", "a\nb"},
+		{"api.v1", "api_v1", "api-v1"},
+	}
+	for _, names := range groups {
+		seen := map[string]string{}
+		for _, n := range names {
+			got := SessionNameForPath("/Users/me/Projects/" + n)
+			if prev, dup := seen[got]; dup {
+				t.Errorf("%q and %q both map to session %q", prev, n, got)
+			}
+			seen[got] = n
+		}
+	}
+}
+
+// TestSessionNameForBase_MatchesPath — project.Project.SessionName goes
+// through SessionNameForBase with the directory name; it must agree with
+// SessionNameForPath on the full path so the two never disagree.
+func TestSessionNameForBase_MatchesPath(t *testing.T) {
+	for _, base := range []string{"foo", "my.app", "日本", "with space", "a:b"} {
+		if got, want := SessionNameForBase(base), SessionNameForPath("/home/me/Projects/"+base); got != want {
+			t.Errorf("SessionNameForBase(%q) = %q, SessionNameForPath = %q", base, got, want)
 		}
 	}
 }
