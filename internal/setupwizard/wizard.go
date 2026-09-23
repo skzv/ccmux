@@ -295,6 +295,14 @@ func configureAgentCommands(ctx context.Context, out io.Writer, cfg *config.Conf
 }
 
 func configureAgentCommand(ctx context.Context, out io.Writer, cfg *config.Config, a agent.Agent) (bool, error) {
+	// Agents without an [agents.<id>] command field can't be pinned:
+	// "selecting" a command for them changed nothing, yet reported a
+	// change (so the wizard claimed it wrote the selection) and, with
+	// nothing saved, prompted again on every run. They keep resolving
+	// their binary on PATH.
+	if agentCommandField(cfg, a.ID()) == nil {
+		return false, nil
+	}
 	candidates := setupAgentCandidates(ctx, a)
 	agentCommand, shouldPrompt := defaultAgentCommandSelection(configuredAgentCommand(*cfg, a.ID()), candidates)
 	if configuredAgentCommand(*cfg, a.ID()) != "" {
@@ -375,48 +383,44 @@ func defaultAgentCommandSelection(current string, candidates []string) (selectio
 	}
 }
 
-func configuredAgentCommand(cfg config.Config, id agent.ID) string {
+// agentCommandField returns the [agents.<id>] command setting for id,
+// or nil when config.toml has no command field for that agent (the
+// second-wave agents: opencode, kimi, droid, copilot, …). The single
+// switch keeps configuredAgentCommand / setConfiguredAgentCommand /
+// configureAgentCommand agreeing on which agents can be pinned.
+func agentCommandField(cfg *config.Config, id agent.ID) *config.AgentCommandConfig {
 	switch id {
 	case agent.IDClaude:
-		return strings.TrimSpace(cfg.Agents.Claude.Command)
+		return &cfg.Agents.Claude
 	case agent.IDCodex:
-		return strings.TrimSpace(cfg.Agents.Codex.Command)
+		return &cfg.Agents.Codex
 	case agent.IDGemini:
-		return strings.TrimSpace(cfg.Agents.Gemini.Command)
+		return &cfg.Agents.Gemini
 	case agent.IDAntigravity:
-		return strings.TrimSpace(cfg.Agents.Antigravity.Command)
+		return &cfg.Agents.Antigravity
 	case agent.IDCursor:
-		return strings.TrimSpace(cfg.Agents.Cursor.Command)
+		return &cfg.Agents.Cursor
 	case agent.IDPi:
-		return strings.TrimSpace(cfg.Agents.Pi.Command)
+		return &cfg.Agents.Pi
 	case agent.IDMuse:
-		return strings.TrimSpace(cfg.Agents.Muse.Command)
+		return &cfg.Agents.Muse
 	case agent.IDGrok:
-		return strings.TrimSpace(cfg.Agents.Grok.Command)
+		return &cfg.Agents.Grok
 	default:
-		return ""
+		return nil
 	}
 }
 
+func configuredAgentCommand(cfg config.Config, id agent.ID) string {
+	if f := agentCommandField(&cfg, id); f != nil {
+		return strings.TrimSpace(f.Command)
+	}
+	return ""
+}
+
 func setConfiguredAgentCommand(cfg *config.Config, id agent.ID, command string) {
-	command = strings.TrimSpace(command)
-	switch id {
-	case agent.IDClaude:
-		cfg.Agents.Claude.Command = command
-	case agent.IDCodex:
-		cfg.Agents.Codex.Command = command
-	case agent.IDGemini:
-		cfg.Agents.Gemini.Command = command
-	case agent.IDAntigravity:
-		cfg.Agents.Antigravity.Command = command
-	case agent.IDCursor:
-		cfg.Agents.Cursor.Command = command
-	case agent.IDPi:
-		cfg.Agents.Pi.Command = command
-	case agent.IDMuse:
-		cfg.Agents.Muse.Command = command
-	case agent.IDGrok:
-		cfg.Agents.Grok.Command = command
+	if f := agentCommandField(cfg, id); f != nil {
+		f.Command = strings.TrimSpace(command)
 	}
 }
 
