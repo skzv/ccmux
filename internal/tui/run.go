@@ -29,16 +29,7 @@ func Run(version string, projectsOverride string, expandNotes bool) error {
 		dbg.Printf("ccmux %s starting", version)
 	}
 
-	cfg, err := config.Load()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "config:", err)
-	}
-	// `--expand-notes` is a per-run override: it can force the Notes
-	// folder tree open, but never forces it collapsed (that's the
-	// default and the config-driven choice).
-	if expandNotes {
-		cfg.Notes.ExpandFolders = true
-	}
+	cfg, cfgErr := config.Load()
 	if projectsOverride != "" {
 		abs, err := filepath.Abs(projectsOverride)
 		if err != nil {
@@ -49,10 +40,25 @@ func Run(version string, projectsOverride string, expandNotes bool) error {
 		} else if !fi.IsDir() {
 			return fmt.Errorf("projects dir %q is not a directory", abs)
 		}
-		cfg.Projects.Root = abs
+		projectsOverride = abs
 	}
+	// Per-run overrides, re-applied whenever the app adopts a fresh
+	// config from disk and never saved. `--expand-notes` can force the
+	// Notes folder tree open, but never forces it collapsed (that's the
+	// default and the config-driven choice).
+	overrides := func(c *config.Config) {
+		if expandNotes {
+			c.Notes.ExpandFolders = true
+		}
+		if projectsOverride != "" {
+			c.Projects.Root = projectsOverride
+		}
+	}
+	overrides(&cfg)
 
 	app := New(cfg, version)
+	app.SetRuntimeOverrides(overrides)
+	app.SetStartupConfigError(cfgErr)
 	// Mouse cell-motion mode is enabled so wheel events reach the
 	// program (the Notes preview viewport, the Agents browser preview,
 	// and other scrollable regions forward them to their

@@ -501,3 +501,7 @@
 "Search projects, previews, or IDs" = "Buscar proyectos, vistas previas o ID"
 
 "Gemini CLI uses ~/.gemini/settings.json and GEMINI.md. Press e to edit settings; manage authentication in gemini." = "Gemini CLI usa ~/.gemini/settings.json y GEMINI.md. Pulsa e para editar los ajustes; gestiona la autenticación en gemini."
+
+"config.toml didn't load; using defaults and not saving changes: " = "config.toml no se pudo cargar; se usan valores predeterminados y no se guardarán cambios: "
+"save: " = "guardar: "
+"saved ✓" = "guardado ✓"

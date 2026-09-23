@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -134,5 +135,87 @@ func TestBackup_RotatesBeyondCap(t *testing.T) {
 	}
 	if matches != MaxBackupsPerFile {
 		t.Errorf("after rotation: %d backup files, want %d", matches, MaxBackupsPerFile)
+	}
+}
+
+// TestWriteAtomic_NeverLoosensMode — a settings file the user locked to
+// 0600 (it can carry API keys) must not come back 0644 because the
+// caller passed 0644; a caller passing 0600 still tightens a 0644 file.
+func TestWriteAtomic_NeverLoosensMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix permission bits")
+	}
+	dir := t.TempDir()
+	for _, tc := range []struct {
+		existing, requested, want os.FileMode
+	}{
+		{0o600, 0o644, 0o600},
+		{0o644, 0o600, 0o600},
+		{0o644, 0o644, 0o644},
+	} {
+		p := filepath.Join(dir, "settings.json")
+		_ = os.Remove(p)
+		if err := os.WriteFile(p, []byte("{}"), tc.existing); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(p, tc.existing); err != nil {
+			t.Fatal(err)
+		}
+		if err := WriteAtomic(p, []byte(`{"a":1}`), tc.requested); err != nil {
+			t.Fatal(err)
+		}
+		info, _ := os.Stat(p)
+		if got := info.Mode().Perm(); got != tc.want {
+			t.Errorf("existing %o, requested %o: mode = %o, want %o", tc.existing, tc.requested, got, tc.want)
+		}
+	}
+}
+
+// TestWriteAtomic_KeepsSymlink — a dotfiles-managed settings file is a
+// symlink; writing must update the target and leave the link intact.
+func TestWriteAtomic_KeepsSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks need privileges on windows")
+	}
+	dir := t.TempDir()
+	target := filepath.Join(dir, "dotfiles", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "settings.json")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteAtomic(link, []byte(`{"new":true}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Lstat(link); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("symlink replaced by a regular file (err=%v)", err)
+	}
+	if got, _ := os.ReadFile(target); string(got) != `{"new":true}` {
+		t.Errorf("target not updated: %q", got)
+	}
+}
+
+// TestBackup_IsOwnerOnly — backups copy files that can hold secrets.
+func TestBackup_IsOwnerOnly(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix permission bits")
+	}
+	dir := t.TempDir()
+	src := filepath.Join(dir, "settings.json")
+	if err := os.WriteFile(src, []byte(`{"env":{"ANTHROPIC_API_KEY":"x"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dst, err := Backup(src, filepath.Join(dir, "backups"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, _ := os.Stat(dst)
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Errorf("backup mode = %o, want 600", got)
 	}
 }

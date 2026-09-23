@@ -5,6 +5,7 @@ import (
 
 	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/claudeusage"
+	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/conversations"
 	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/notes"
@@ -142,6 +143,10 @@ type hostStatus struct {
 type tickMsg struct{ At time.Time }
 
 // toastMsg displays a one-line transient notification in the status bar.
+// configSavedMsg carries the config a screen just persisted through
+// config.Update, so the App adopts it instead of keeping a stale copy.
+type configSavedMsg struct{ Cfg config.Config }
+
 type toastMsg struct {
 	Text  string
 	Kind  toastKind

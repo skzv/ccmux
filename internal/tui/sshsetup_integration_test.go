@@ -86,6 +86,9 @@ func TestApp_WizardCompletedMsg_PersistsAddedUsers(t *testing.T) {
 			{Name: "alice@sputnik", Address: "sputnik", User: "alice"},
 		},
 	}
+	if err := config.Save(cfg); err != nil { // persistence reads from disk
+		t.Fatal(err)
+	}
 	app := New(cfg, "test")
 	app.tour.Close()
 	msg := wizardCompletedMsg{

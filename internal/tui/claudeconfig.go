@@ -1127,10 +1127,9 @@ func applyModelChoiceCmd(c modelChoice) tea.Cmd {
 // accidental stray space in a future caller can't leak to the launch
 // command (where it would set ANTHROPIC_MODEL=" haiku ").
 func setCcmuxClaudeDefault(model string) error {
-	cfg, err := config.Load()
-	if err != nil {
-		return err
-	}
-	cfg.Claude.DefaultModel = strings.TrimSpace(model)
-	return config.Save(cfg)
+	_, err := config.Update(func(c *config.Config) error {
+		c.Claude.DefaultModel = strings.TrimSpace(model)
+		return nil
+	})
+	return err
 }

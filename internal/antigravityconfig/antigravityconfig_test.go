@@ -280,3 +280,35 @@ func TestSetYoloMode_PreservesUnrelatedFields(t *testing.T) {
 		t.Error("customKey dropped by SetYoloMode")
 	}
 }
+
+// TestSetEffortLevel_PreservesOddValuesVerbatim — a known key with an
+// unexpected type, and integers too large for float64, must survive an
+// unrelated write byte-for-byte.
+func TestSetEffortLevel_PreservesOddValuesVerbatim(t *testing.T) {
+	dir := withFakeAntigravityDir(t)
+	body := `{"yolo":"true","sessionId":12345678901234567890,"model":"gemini-2.5-pro"}`
+	p := filepath.Join(dir, "settings.json")
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SetEffortLevel("high"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]json.RawMessage
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if string(got["yolo"]) != `"true"` {
+		t.Errorf("wrong-typed yolo not preserved: %s", got["yolo"])
+	}
+	if string(got["sessionId"]) != `12345678901234567890` {
+		t.Errorf("large integer altered: %s", got["sessionId"])
+	}
+	if string(got["reasoningEffort"]) != `"high"` {
+		t.Errorf("effort not written: %s", data)
+	}
+}
