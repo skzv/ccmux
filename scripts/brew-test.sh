@@ -130,7 +130,13 @@ ls -l "$brew_ccmux" "$brew_ccmuxd"
 
 echo
 echo "== ccmux --help (first 6 lines):"
-"$brew_ccmux" --help 2>&1 | head -6
+# Capture first, then trim: piping straight into `head` races under
+# `set -o pipefail` — head exits after 6 lines while cobra is still
+# writing the rest of the help in small writes, the next write gets
+# SIGPIPE (exit 141), and the whole check failed ~1% of runs. Capturing
+# also means a --help that exits non-zero fails the script on its own.
+help_out="$("$brew_ccmux" --help 2>&1)"
+printf '%s\n' "$help_out" | sed -n '1,6p'
 
 echo
 echo "== ccmuxd --version:"
