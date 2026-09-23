@@ -96,12 +96,18 @@ collapses it to a yes/no:
 - **Claude** — `entrypoint` field on every user event in the JSONL
   transcript:
   - `"cli"` — interactive `claude` session in a terminal.
-  - `"sdk-cli"` — headless run via `claude -p`, the SDK, or any
-    automation wrapper.
+  - `"sdk-cli"` — headless run via `claude -p` or any automation
+    wrapper; `"sdk-ts"` / `"sdk-py"` for the TypeScript / Python Agent
+    SDKs. Every `sdk-*` value counts as headless.
 - **Codex** — `payload.originator` on the first `session_meta` event
   in each rollout:
   - `"codex-tui"` — interactive `codex` session.
   - `"codex_exec"` — headless `codex exec` run.
+  - Independently of the originator, a rollout whose
+    `payload.source` is `{"subagent": …}` (guardian reviews,
+    `thread_spawn` children) is something Codex spawned on its own;
+    `Conversation.Subagent` records it and `IsHeadless()` treats it as
+    headless.
 - **Antigravity** — transcripts are opaque protobuf (encrypted on
   disk), so no signal is available. `Entrypoint` is always empty and
   `IsHeadless()` always returns false; rows are never filtered by this

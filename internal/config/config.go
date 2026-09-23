@@ -144,9 +144,10 @@ func (s SessionsConfig) DetachOthersOnAttach() bool {
 // it useful as automation noise piles up.
 type ConversationsConfig struct {
 	// ShowHeadless includes headless agent runs in the list. Default
-	// false: hide them. The filter covers Claude `sdk-cli` runs
-	// (`claude -p`, the SDK, automation wrappers) and Codex
-	// `codex_exec` runs (`codex exec`); Antigravity rows have no
+	// false: hide them. The filter covers Claude `sdk-*` runs
+	// (`claude -p`, the Agent SDKs, automation wrappers), Codex
+	// `codex_exec` runs (`codex exec`) and Codex subagent rollouts
+	// (guardian reviews, spawned threads); Antigravity rows have no
 	// headless tag and are always shown. Headless transcripts
 	// routinely dwarf interactive ones for users who wire agents into
 	// scripts. Set true to see everything, or toggle live in the
