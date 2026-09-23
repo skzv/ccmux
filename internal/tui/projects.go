@@ -78,9 +78,24 @@ func newProjects(st styles.Styles, km Keymap) projectsModel {
 	return projectsModel{st: st, km: km, filter: ti, spin: sp}
 }
 
+// SetProjects replaces the list, keeping the selection on the same
+// project. The list is sorted by mtime, so working in a project moves
+// it to the top on the next refresh; keeping the cursor by index left
+// it pointing at whichever project slid into that slot. Identity is
+// (host, path) — the same path can exist on two machines.
 func (m *projectsModel) SetProjects(p []project.Project) {
+	sel := m.Selected()
 	m.projects = p
 	m.loaded = true
+	if sel != nil {
+		host := projectHost(*sel)
+		for i, v := range m.visibleProjects() {
+			if v.Path == sel.Path && projectHost(v) == host {
+				m.cursor = i
+				return
+			}
+		}
+	}
 	m.clampCursor()
 }
 
