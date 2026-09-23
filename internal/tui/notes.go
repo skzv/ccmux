@@ -660,6 +660,12 @@ func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
 			return m, nil
 		}
 		delete(m.entriesCache, m.cacheKey(m.project))
+		// The note under the cursor may have just been edited ($EDITOR
+		// returned, or `r`). Forget the cached body so the refresh after
+		// the reload re-reads it — refreshPreview skips the fetch when
+		// the selection is unchanged and a body is already held.
+		m.previewRel = ""
+		m.previewSrc = ""
 		m.loading = true
 		return m, tea.Batch(m.loadEntriesCmd(*m.project), m.loadingSpinner.Tick)
 	case notesEntriesLoadedMsg:
