@@ -198,12 +198,17 @@ func (m *notesModel) SetProject(p *project.Project) tea.Cmd {
 		m.previewRel = ""
 		m.preview.SetContent("")
 		m.loading = false
+		m.clearSearch()
 		return nil
 	}
 	if m.project != nil && m.project.Path == p.Path && projectHost(*m.project) == projectHost(*p) {
 		return nil
 	}
 	m.project = p
+	// Search hits belong to the project they were run against. Keeping
+	// them across a switch left project A's results on screen while
+	// project B was selected — and Enter opened A's file.
+	m.clearSearch()
 	// Keep the active device in sync with the project the App handed us
 	// (e.g. opening a remote project from the Projects screen switches
 	// the Notes device to that host). The toggle can still move it.
@@ -242,6 +247,16 @@ func (m *notesModel) SetSize(w, h int) {
 	if m.previewSrc != "" {
 		m.preview.SetContent(m.renderPreviewContent(pw))
 	}
+}
+
+// clearSearch drops the query box and any result set, returning the
+// list to the file tree.
+func (m *notesModel) clearSearch() {
+	m.searching = false
+	m.searchInput.Blur()
+	m.searchInput.SetValue("")
+	m.searchResults = nil
+	m.searchQuery = ""
 }
 
 // previewPaneSize returns (viewportWidth, viewportHeight) for the
@@ -687,6 +702,12 @@ func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
 		m.preview.GotoTop()
 		return m, nil
 	case notesSearchResultMsg:
+		// Drop results for a project (or device) the user has since
+		// switched away from — they'd list, and Enter would open, the
+		// old project's files.
+		if m.project == nil || msg.Path != m.project.Path || msg.Host != projectHost(*m.project) {
+			return m, nil
+		}
 		if msg.Err != "" {
 			m.deviceErr = msg.Err
 			return m, nil
@@ -1144,13 +1165,13 @@ func (m notesModel) runSearch(query string) tea.Cmd {
 		return nil
 	}
 	label := projectHost(*m.project)
+	path := m.project.Path
 	if label == localDeviceLabel {
-		root := m.project.Path
 		return func() tea.Msg {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
-			hits, _ := notes.Open(root).Search(ctx, query, 100)
-			return notesSearchResultMsg{Query: query, Hits: hits}
+			hits, _ := notes.Open(path).Search(ctx, query, 100)
+			return notesSearchResultMsg{Query: query, Hits: hits, Host: label, Path: path}
 		}
 	}
 	// Remote search hits the daemon's /v1/notes/search endpoint.
@@ -1158,7 +1179,7 @@ func (m notesModel) runSearch(query string) tea.Cmd {
 	if !ok {
 		host := label
 		return func() tea.Msg {
-			return notesSearchResultMsg{Query: query, Err: "device " + host + " is unreachable"}
+			return notesSearchResultMsg{Query: query, Err: "device " + host + " is unreachable", Host: host, Path: path}
 		}
 	}
 	name := m.project.Name
@@ -1167,9 +1188,9 @@ func (m notesModel) runSearch(query string) tea.Cmd {
 		defer cancel()
 		dhits, err := daemon.RemoteClient(addr).SearchNotes(ctx, name, query)
 		if err != nil {
-			return notesSearchResultMsg{Query: query, Err: err.Error()}
+			return notesSearchResultMsg{Query: query, Err: err.Error(), Host: label, Path: path}
 		}
-		return notesSearchResultMsg{Query: query, Hits: searchHitsFromDaemon(dhits)}
+		return notesSearchResultMsg{Query: query, Hits: searchHitsFromDaemon(dhits), Host: label, Path: path}
 	}
 }
 
