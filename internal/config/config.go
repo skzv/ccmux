@@ -61,10 +61,12 @@ type OpenRouterConfig struct {
 	// RouteAgents lists the agent IDs (e.g. "codex", "opencode", "kilo")
 	// ccmux should launch routed through OpenRouter — it injects
 	// OPENAI_BASE_URL + OPENAI_API_KEY (the key via the shell's
-	// OPENROUTER_API_KEY) into those agents' launch commands. Only
-	// agents that honor the OpenAI-compatible env vars make sense here;
-	// ccmux doesn't guess, so this is an explicit opt-in. Empty = no
-	// routing (the default).
+	// OPENROUTER_API_KEY) into those agents' launch commands. If
+	// OPENROUTER_API_KEY is unset when the session starts, the agent is
+	// not launched (it never falls back to OPENAI_API_KEY, which would
+	// send the OpenAI key to OpenRouter). Only agents that honor the
+	// OpenAI-compatible env vars make sense here; ccmux doesn't guess,
+	// so this is an explicit opt-in. Empty = no routing (the default).
 	RouteAgents []string `toml:"route_agents,omitempty"`
 }
 

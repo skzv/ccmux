@@ -232,9 +232,17 @@ func TestAgent_LaunchCmd_NewVsContinue(t *testing.T) {
 				if !strings.Contains(cont, " --resume") {
 					t.Errorf("Gemini must use --resume: %q", cont)
 				}
-			case IDCursor, IDMuse:
+			case IDCursor, IDMuse, IDCodex:
 				if !strings.Contains(cont, " resume") {
 					t.Errorf("continue LaunchCmd = %q, expected resume subcommand", cont)
+				}
+			case IDAmp:
+				if !strings.Contains(cont, " threads continue --last") {
+					t.Errorf("Amp must use `threads continue --last`: %q", cont)
+				}
+			case IDDroid:
+				if !strings.Contains(cont, " --resume --last") {
+					t.Errorf("Droid must use `--resume --last`: %q", cont)
 				}
 			default:
 				// claude / codex / antigravity / pi all take --continue
@@ -248,6 +256,50 @@ func TestAgent_LaunchCmd_NewVsContinue(t *testing.T) {
 			// is still nice when present, but sh is the POSIX guarantee.
 			if !strings.Contains(cont, "|| sh") {
 				t.Errorf("continue LaunchCmd = %q, missing `|| sh` POSIX fallback", cont)
+			}
+		})
+	}
+}
+
+// TestLaunchCmd_ContinueCommandPerAgent pins every agent's exact
+// "resume the latest conversation" command. Several agents were given
+// a `--continue` they don't have — verified against the real CLIs:
+// `codex --continue` fails with "unexpected argument" (it's `codex
+// resume --last`), `amp --continue` is an unknown option (`amp threads
+// continue --last`), and `droid --continue` quietly starts a fresh
+// session (`droid --resume --last`). The per-agent LaunchCmd method and
+// the package-level LaunchCmd must agree.
+func TestLaunchCmd_ContinueCommandPerAgent(t *testing.T) {
+	want := map[ID]string{
+		IDClaude:      "claude --continue || claude || zsh || bash || sh",
+		IDCodex:       "codex resume --last || codex || zsh || bash || sh",
+		IDAntigravity: "agy --continue || agy || zsh || bash || sh",
+		IDCursor:      "cursor-agent resume || cursor-agent || zsh || bash || sh",
+		IDPi:          "pi --continue || pi || zsh || bash || sh",
+		IDGrok:        "grok --continue || grok || zsh || bash || sh",
+		IDOpenCode:    "opencode --continue || opencode || zsh || bash || sh",
+		IDKimi:        "kimi --continue || kimi || zsh || bash || sh",
+		IDDroid:       "droid --resume --last || droid || zsh || bash || sh",
+		IDCopilot:     "copilot --continue || copilot || zsh || bash || sh",
+		IDQoder:       "qoder --continue || qoder || zsh || bash || sh",
+		IDKilo:        "kilo --continue || kilo || zsh || bash || sh",
+		IDHermes:      "hermes --continue || hermes || zsh || bash || sh",
+		IDAmp:         "amp threads continue --last || amp || zsh || bash || sh",
+		IDKiro:        "kiro-cli --continue || kiro-cli || zsh || bash || sh",
+		IDMuse:        "muse resume --last || muse || zsh || bash || sh",
+		IDGemini:      "gemini --resume || gemini || zsh || bash || sh",
+	}
+	for _, a := range All() {
+		t.Run(string(a.ID()), func(t *testing.T) {
+			w, ok := want[a.ID()]
+			if !ok {
+				t.Fatalf("no pinned continue command for %q — add one", a.ID())
+			}
+			if got := a.LaunchCmd(true); got != w {
+				t.Errorf("%T.LaunchCmd(true) = %q, want %q", a, got, w)
+			}
+			if got := LaunchCmd(a.ID(), true, Commands{}); got != w {
+				t.Errorf("LaunchCmd(%q, true) = %q, want %q", a.ID(), got, w)
 			}
 		})
 	}
@@ -515,7 +567,7 @@ func TestLaunchCmd_ConfiguredCommands(t *testing.T) {
 		{
 			name: "codex",
 			id:   IDCodex,
-			want: "/Users/me/.nvm/versions/node/bin/codex --continue || /Users/me/.nvm/versions/node/bin/codex || zsh || bash || sh",
+			want: "/Users/me/.nvm/versions/node/bin/codex resume --last || /Users/me/.nvm/versions/node/bin/codex || zsh || bash || sh",
 		},
 		{
 			name: "antigravity",
@@ -546,6 +598,55 @@ func TestLaunchCmd_ConfiguredCommands(t *testing.T) {
 				t.Errorf("LaunchCmd configured = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestConfiguredCommand_ExpandsTilde — a configured command like
+// `~/.local/bin/claude` was single-quoted into the tmux command (so no
+// shell expanded the tilde), passed verbatim as resume argv, and
+// stat'ed literally by commandAvailable: the agent never launched and
+// never showed as available. The leading `~/` is expanded against the
+// home directory wherever configured commands are resolved.
+func TestConfiguredCommand_ExpandsTilde(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // os.UserHomeDir on Windows
+	bin := filepath.Join(home, ".local", "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeExecutable(t, filepath.Join(bin, "codex"))
+
+	cmds := Commands{Claude: "~/.local/bin/claude", Codex: " ~/.local/bin/codex "}
+	claudePath := filepath.Join(home, ".local", "bin", "claude")
+	if got, want := LaunchCmd(IDClaude, false, cmds), ShellQuote(claudePath); got != want {
+		t.Errorf("LaunchCmd = %q, want %q", got, want)
+	}
+	if got := ResumeArgs(IDClaude, "abc-123", cmds); len(got) == 0 || got[0] != claudePath {
+		t.Errorf("ResumeArgs = %v, want argv[0] %q", got, claudePath)
+	}
+
+	orig := installLookupHook
+	defer func() { installLookupHook = orig }()
+	installLookupHook = func(context.Context, string) bool { return false }
+	if got := AllAvailable(context.Background(), cmds); len(got) != 1 || got[0].ID() != IDCodex {
+		t.Errorf("AllAvailable with ~/ codex command = %v, want [codex]", agentIDs(got))
+	}
+	if !Executable("~/.local/bin/codex") {
+		t.Error(`Executable("~/.local/bin/codex") = false, want true`)
+	}
+
+	for in, want := range map[string]string{
+		"~":               home,
+		"~/x/claude":      filepath.Join(home, "x", "claude"),
+		"~other/bin/x":    "~other/bin/x",
+		"/opt/bin/claude": "/opt/bin/claude",
+		"claude":          "claude",
+		"bin/~/claude":    "bin/~/claude",
+	} {
+		if got := ExpandHome(in); got != want {
+			t.Errorf("ExpandHome(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 

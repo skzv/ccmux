@@ -22,14 +22,12 @@ func (Codex) DisplayName() string { return "Codex" }
 func (Codex) Binary() string      { return "codex" }
 
 func (Codex) LaunchCmd(continueFlag bool) string {
-	if continueFlag {
-		// Codex's --continue flag re-attaches the last session in the
-		// cwd; the zsh→bash→sh fallback keeps the pane alive when codex
-		// is missing. sh is the POSIX guarantee — minimal Linux hosts
-		// without zsh would otherwise drop a dead pane.
-		return "codex --continue || codex || zsh || bash || sh"
-	}
-	return "codex"
+	// `codex resume --last` re-attaches the newest session (codex has
+	// no --continue flag and rejects it); the zsh→bash→sh fallback
+	// keeps the pane alive when codex is missing. sh is the POSIX
+	// guarantee — minimal Linux hosts without zsh would otherwise drop
+	// a dead pane. See launchChain.
+	return launchCmdWithBinary(Codex{}, "codex", continueFlag, Commands{})
 }
 
 func (Codex) ConfigRoot(home string) string      { return filepath.Join(home, ".codex") }

@@ -144,7 +144,7 @@ func TestProjectLaunchCmd_ConfiguredCommands(t *testing.T) {
 		want string
 	}{
 		{name: "claude", id: agent.IDClaude, want: "/tmp/claude --continue || /tmp/claude || zsh || bash || sh"},
-		{name: "codex", id: agent.IDCodex, want: "/tmp/codex --continue || /tmp/codex || zsh || bash || sh"},
+		{name: "codex", id: agent.IDCodex, want: "/tmp/codex resume --last || /tmp/codex || zsh || bash || sh"},
 		{name: "antigravity", id: agent.IDAntigravity, want: "/tmp/agy --continue || /tmp/agy || zsh || bash || sh"},
 		{name: "cursor", id: agent.IDCursor, want: "/tmp/cursor-agent resume || /tmp/cursor-agent || zsh || bash || sh"},
 	}
