@@ -203,16 +203,30 @@ func TestWalk_DashedProjectNamesSurviveRoundTrip(t *testing.T) {
 	})
 	f.Close()
 
-	agg, err := Walk(time.Hour)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := agg.ByProject["my-plain-blog"]; !ok {
-		got := make([]string, 0, len(agg.ByProject))
-		for k := range agg.ByProject {
-			got = append(got, k)
+	for name, walk := range bothWalkers() {
+		agg, err := walk()
+		if err != nil {
+			t.Fatal(err)
 		}
-		t.Fatalf("ByProject missing \"my-plain-blog\"; got keys %v", got)
+		if _, ok := agg.ByProject["my-plain-blog"]; !ok {
+			got := make([]string, 0, len(agg.ByProject))
+			for k := range agg.ByProject {
+				got = append(got, k)
+			}
+			t.Fatalf("%s: ByProject missing \"my-plain-blog\"; got keys %v", name, got)
+		}
+	}
+}
+
+// bothWalkers returns the session-block walker the dashboard uses and
+// the rolling 1h walker these tests were first written against. A
+// 1-hour *block* is hour-floored like ccusage's, so it would already
+// have expired for a message 15 minutes ago whenever the test runs in
+// the first quarter of an hour — hence SessionBlock for Walk.
+func bothWalkers() map[string]func() (*Aggregate, error) {
+	return map[string]func() (*Aggregate, error){
+		"Walk(SessionBlock)":     func() (*Aggregate, error) { return Walk(SessionBlock) },
+		"WalkRolling(time.Hour)": func() (*Aggregate, error) { return WalkRolling(time.Hour) },
 	}
 }
 
@@ -655,11 +669,13 @@ func TestWalk_HandlesLargeLines(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "s.jsonl"), []byte(line+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	agg, err := Walk(time.Hour)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if agg.Messages != 1 {
-		t.Fatalf("large line dropped: messages=%d", agg.Messages)
+	for name, walk := range bothWalkers() {
+		agg, err := walk()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if agg.Messages != 1 {
+			t.Fatalf("%s: large line dropped: messages=%d", name, agg.Messages)
+		}
 	}
 }
