@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -617,8 +616,3 @@ func uniqStrings(xs []string) []string {
 	}
 	return out
 }
-
-// discard is a sink we hand to ssh.Session.Stdout when we don't care
-// about the body — keeps the goroutine pump quiet when the only
-// signal we want is the exit status.
-var _ = io.Discard

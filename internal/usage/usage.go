@@ -1,14 +1,11 @@
-// Package usage is the per-agent token-usage walker layer. Today it's
-// a thin wrapper:
+// Package usage is the per-agent token-usage walker layer:
 //
-//   - Claude: delegates to internal/claudeusage.Walk (existing rich
-//     walker; the dashboard's main Claude panel still uses that
-//     package directly for its 5h-window quota bar + per-project
-//     drill-down).
-//   - Codex, Antigravity: stubs that return zero-valued AgentSummary.
-//     They'll grow real implementations once we have real
-//     transcripts to fixture against. See
-//     docs/01_Specs/02_Multi_Agent.md, Phase-4 deferred items.
+//   - Claude: delegates to internal/claudeusage.Walk (the rich walker;
+//     the dashboard's main Claude panel also uses that package
+//     directly for its 5h-window quota bar + per-project drill-down).
+//   - Codex: internal/codexusage. Antigravity, Gemini, Muse: their own
+//     walkers below. The remaining agents go through the generic
+//     JSONL walker in internal/agentusage (WalkOthers).
 //
 // The dashboard uses this package to render compact per-agent rows
 // beneath the Claude panel so users adopting Codex / Antigravity see

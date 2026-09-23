@@ -156,14 +156,17 @@ func displayFor(rel, absPath string, mod time.Time) string {
 	return filenameLabel(rel)
 }
 
+// sortPrefixRx matches the "NN_" ordering prefix on note filenames.
+// Compiled once: filenameLabel runs for every file in every listing.
+var sortPrefixRx = regexp.MustCompile(`^\d{2,}_`)
+
 // filenameLabel returns the cleaned-up filename label: strip the .md
 // suffix, drop the leading "NN_" sort prefix when present, and turn
 // underscores into spaces.
 func filenameLabel(rel string) string {
 	base := filepath.Base(rel)
 	base = strings.TrimSuffix(base, ".md")
-	rx := regexp.MustCompile(`^\d{2,}_`)
-	base = rx.ReplaceAllString(base, "")
+	base = sortPrefixRx.ReplaceAllString(base, "")
 	base = strings.ReplaceAll(base, "_", " ")
 	return base
 }

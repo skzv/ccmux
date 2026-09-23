@@ -24,7 +24,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 )
 
 // Config carries everything the daemon needs to talk to FCM. All
@@ -42,8 +41,6 @@ type Config struct {
 // no-op sends don't materialize a goroutine.
 type Sender struct {
 	cfg Config
-
-	mu sync.Mutex
 	// client *messaging.Client  // populated by the follow-up PR
 }
 

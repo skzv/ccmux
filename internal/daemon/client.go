@@ -1,9 +1,9 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -161,18 +161,6 @@ func RemoteClient(addr string) *Client {
 	// without ever holding a connection.
 	actual, _ := remoteClientCache.LoadOrStore(addr, cli)
 	return actual.(*Client)
-}
-
-// resetClientCacheForTest clears the process-wide LocalClient/RemoteClient
-// caches. Test-only; production code should never need this. Exposed at
-// package scope (not in a _test.go file) so test helpers in other packages
-// can use it if they ever need to, but kept unexported to keep the
-// production surface clean.
-func resetClientCacheForTest() {
-	localClientOnce = sync.Once{}
-	localClientVal = nil
-	localClientErr = nil
-	remoteClientCache = sync.Map{}
 }
 
 // localSocketPath returns the canonical Unix-socket path for ccmuxd.
@@ -446,7 +434,7 @@ func (c *Client) post(ctx context.Context, path string, body, out any) error {
 	ctx, cancel := ensureDeadline(ctx)
 	defer cancel()
 	// Important: pass an untyped nil io.Reader when there's no body —
-	// a typed-nil *bytesReader satisfies the interface and trips
+	// a typed-nil *bytes.Reader satisfies the interface and trips
 	// net/http's "non-nil body" path, which then nil-dereferences in
 	// Read. (Bare-POST endpoints like /kill hit this.)
 	var rdr io.Reader
@@ -455,7 +443,7 @@ func (c *Client) post(ctx context.Context, path string, body, out any) error {
 		if err != nil {
 			return err
 		}
-		rdr = &bytesReader{b: b}
+		rdr = bytes.NewReader(b)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+path, rdr)
 	if err != nil {
@@ -476,37 +464,4 @@ func (c *Client) post(ctx context.Context, path string, body, out any) error {
 		return decodeCapped(resp.Body, out)
 	}
 	return nil
-}
-
-// IsUnreachable reports whether an error from this client is due to the
-// daemon not running / not listening, vs. some other failure. Callers
-// use this to fall back to direct tmux calls.
-func IsUnreachable(err error) bool {
-	if err == nil {
-		return false
-	}
-	var nerr net.Error
-	if errors.As(err, &nerr) {
-		return true
-	}
-	return false
-}
-
-// bytesReader is a minimal io.Reader over a byte slice. We avoid bytes.NewReader
-// to keep the import surface small.
-type bytesReader struct {
-	b []byte
-	i int
-}
-
-func (r *bytesReader) Read(p []byte) (int, error) {
-	if r.i >= len(r.b) {
-		// Must be io.EOF (the sentinel) — Go's io.Copy treats any other
-		// error as a real failure and net/http will not retire the
-		// request body cleanly.
-		return 0, io.EOF
-	}
-	n := copy(p, r.b[r.i:])
-	r.i += n
-	return n, nil
 }

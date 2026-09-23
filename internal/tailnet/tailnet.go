@@ -275,18 +275,6 @@ func ScanTailnet(ctx context.Context, port int) (Scan, error) {
 	return scan, nil
 }
 
-// Discover is the back-compat shorthand for ScanTailnet's Reachable
-// list. New callers should use ScanTailnet so they can also show the
-// non-ccmuxd peers (typically other Macs / Linux boxes on your
-// tailnet that haven't installed ccmux yet).
-func Discover(ctx context.Context, port int) ([]Discovered, error) {
-	scan, err := ScanTailnet(ctx, port)
-	if err != nil {
-		return nil, err
-	}
-	return scan.Reachable, nil
-}
-
 // probeOne is the cheap "is there a ccmuxd here" check. 1-second hard
 // timeout so a slow host can't stall the dashboard.
 func probeOne(ctx context.Context, addr string) (daemon.HealthInfo, error) {
