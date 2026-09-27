@@ -46,6 +46,27 @@ func TestPriceFor_ByFamilyAndVersion(t *testing.T) {
 		{"claude-fable-5-1", 10, 50, 0.25},
 		{"some-future-model", 3, 15, 0.3}, // priced as Sonnet 4.6
 		{"", 3, 15, 0.3},
+		// Vertex AI ids date-stamp with '@'. Regression: splitting on '-'
+		// alone read "4-5@20251101" as Opus 4 ($15/$75) and lost the
+		// Haiku version entirely.
+		{"claude-opus-4-5@20251101", 5, 25, 0.5},
+		{"claude-opus-4-1@20250805", 15, 75, 1.5},
+		{"claude-opus-4@20250514", 15, 75, 1.5},
+		{"claude-opus-5-5@20260101", 4, 20, 0.2},
+		{"claude-3-5-haiku@20241022", 0.8, 4, 0.08},
+		{"claude-3-haiku@20240307", 0.25, 1.25, 0.025},
+		{"claude-haiku-4-5@20251001", 1, 5, 0.1},
+		{"claude-sonnet-4-5@20250929", 3, 15, 0.3},
+		{"claude-3-7-sonnet@20250219", 3, 15, 0.3},
+		{"claude-fable-5-1@20260101", 10, 50, 0.25},
+		// Bedrock ids: provider prefix, optional region prefix, -v1:0.
+		{"anthropic.claude-opus-4-5-20251101-v1:0", 5, 25, 0.5},
+		{"us.anthropic.claude-opus-4-1-20250805-v1:0", 15, 75, 1.5},
+		{"anthropic.claude-opus-4-6-v1", 5, 25, 0.5},
+		{"anthropic.claude-3-5-haiku-20241022-v1:0", 0.8, 4, 0.08},
+		{"anthropic.claude-3-haiku-20240307-v1:0", 0.25, 1.25, 0.025},
+		{"global.anthropic.claude-haiku-4-5-20251001-v1:0", 1, 5, 0.1},
+		{"anthropic.claude-3-opus-20240229-v1:0", 15, 75, 1.5},
 	}
 	near := func(a, b float64) bool { return a-b < 1e-9 && b-a < 1e-9 }
 	for _, tc := range cases {

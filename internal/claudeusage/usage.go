@@ -189,9 +189,11 @@ func priceFor(model string) price {
 // familyVersion extracts the model version around a family name:
 // "claude-opus-4-5-20251101" → 4.5, "claude-opus-5" → 5,
 // "claude-3-5-haiku-20241022" → 3.5, "claude-3-opus" → 3. Returns 0
-// when no version is present. Date suffixes (8 digits) are ignored.
+// when no version is present. Date suffixes (8 digits) are ignored,
+// including Vertex AI's "@" form ("claude-opus-4-5@20251101"); Bedrock
+// ids ("us.anthropic.claude-opus-4-5-20251101-v1:0") parse as-is.
 func familyVersion(m, family string) float64 {
-	parts := strings.Split(m, "-")
+	parts := strings.FieldsFunc(m, func(r rune) bool { return r == '-' || r == '@' })
 	idx := -1
 	for i, p := range parts {
 		if p == family {
