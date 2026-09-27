@@ -38,9 +38,10 @@ func readPaneFixture(t *testing.T, name string) string {
 }
 
 // TestDetectionFixtures pins what each fixture classifies as through
-// the daemon's real entry point — ClassifyState, which applies the rule
-// engine, the require_idle gate and the per-agent fallback — both when
-// the pane has been quiet for ten minutes and when it just changed.
+// ClassifyState (the daemon reaches it via ClassifyStateFrom), which
+// applies the rule engine, the require_idle gate and the per-agent
+// fallback — both when the pane has been quiet for ten minutes and when
+// it just changed.
 // A rule-file edit that silently breaks detection for a real screen
 // fails here.
 func TestDetectionFixtures(t *testing.T) {

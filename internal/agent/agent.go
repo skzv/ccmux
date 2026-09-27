@@ -133,6 +133,29 @@ func ClassifyState(a Agent, pane, title string, lastChange time.Time, idleThresh
 	return a.Classify(pane, lastChange, idleThreshold)
 }
 
+// ClassifyStateFrom is ClassifyState for a caller that tracks each
+// session's previous state — the daemon's poll loop. When the winning
+// detection rule carries skip_state_update (a transient overlay such as
+// a transcript viewer or help screen), the session keeps prev rather
+// than being reclassified from whatever the overlay shows, as the rule
+// schema documents. ClassifyState has no previous state to keep, so
+// there the rule falls through to the agent's fallback classifier.
+//
+// A session with no real previous state yet (prev unknown, e.g. its
+// first poll tick) is classified normally.
+func ClassifyStateFrom(a Agent, prev State, pane, title string, lastChange time.Time, idleThreshold time.Duration) State {
+	if prev != StateUnknown && prev != "" && hasSkipRule(a.ID()) {
+		engineTitle := title
+		if _, ok := a.(TitleAwareAgent); !ok {
+			engineTitle = "" // the body-only Classify never shows the engine a title
+		}
+		if res := evaluateRules(a.ID(), pane, engineTitle); res.MatchedRuleID != "" && res.SkipStateUpdate {
+			return prev
+		}
+	}
+	return ClassifyState(a, pane, title, lastChange, idleThreshold)
+}
+
 // Commands holds user-configured executable paths for agents. Empty
 // fields preserve the default binary-on-PATH behavior for that agent.
 //

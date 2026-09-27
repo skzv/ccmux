@@ -27,8 +27,13 @@ import (
 // title is the OSC-set pane title passed through from the poll loop
 // (see Phase 1). It's part of the engine input alongside the body so
 // rule files can match on either signal.
+//
+// A winning skip_state_update rule means "keep the previous state",
+// which only a caller that tracks it can honor: ClassifyStateFrom does,
+// before it gets here. Without a previous state the overlay tells us
+// nothing, so it falls through to the fallback like a rule miss.
 func engineClassify(id ID, pane, title string, lastChange time.Time, idleThreshold time.Duration) State {
-	res, _ := agentdetect.ClassifyAgent(agentdetect.ID(id), agentdetect.Input{Pane: pane, Title: title})
+	res := evaluateRules(id, pane, title)
 	if res.MatchedRuleID != "" && !res.SkipStateUpdate {
 		st := State(res.State)
 		// require_idle rules re-apply the legacy idle gate: a blocked-
@@ -50,6 +55,29 @@ func engineClassify(id ID, pane, title string, lastChange time.Time, idleThresho
 		return State(claude.Classify(pane, lastChange, idleThreshold))
 	}
 	return legacyFallback(pane, lastChange, idleThreshold)
+}
+
+// rulesFor is where the engine gets an agent's detection rules. A
+// variable only so tests can exercise engine behaviour for rule flags
+// no shipped rule uses yet (skip_state_update).
+var rulesFor = func(id ID) []agentdetect.Rule { return agentdetect.RulesFor(agentdetect.ID(id)) }
+
+// evaluateRules runs the agent's rules over one capture. No rules (an
+// agent without a rule file) is the same as no match.
+func evaluateRules(id ID, pane, title string) agentdetect.Result {
+	return agentdetect.Evaluate(rulesFor(id), agentdetect.Input{Pane: pane, Title: title})
+}
+
+// hasSkipRule reports whether any of the agent's rules carries
+// skip_state_update, so ClassifyStateFrom only pays for a second rule
+// evaluation on agents that can actually park their state.
+func hasSkipRule(id ID) bool {
+	for _, r := range rulesFor(id) {
+		if r.SkipStateUpdate {
+			return true
+		}
+	}
+	return false
 }
 
 // legacyFallback is the pre-Phase-3 "went quiet = needs_input"

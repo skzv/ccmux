@@ -174,13 +174,15 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 		if pane != sn.prevLast && !sn.baseline {
 			lastCh = time.Now()
 		}
-		// ClassifyState routes through ClassifyWithTitle when the agent
-		// implements TitleAwareAgent, otherwise falls back to the
+		// ClassifyStateFrom routes through ClassifyWithTitle when the
+		// agent implements TitleAwareAgent, otherwise falls back to the
 		// legacy body-only Classify. So agents that don't implement
-		// the new path keep their exact pre-Phase-1 behavior.
+		// the new path keep their exact pre-Phase-1 behavior. It also
+		// takes the previous state, which a skip_state_update rule
+		// (a transient overlay) keeps instead of reclassifying.
 		newSt := agent.StateIdle // a plain shell has no agent state to detect
 		if sn.agentID != shellAgentID {
-			newSt = agent.ClassifyState(agent.ByID(sn.agentID), pane, title, lastCh, idleNeeds)
+			newSt = agent.ClassifyStateFrom(agent.ByID(sn.agentID), sn.prevSt, pane, title, lastCh, idleNeeds)
 		}
 		results = append(results, result{name: sn.ts.Name, pane: pane, newState: newSt})
 	}
