@@ -620,6 +620,11 @@ func countGeminiMessages(path string) (int, error) {
 // always comes from our own walkers so this is belt-and-suspenders,
 // but it guarantees a hand-constructed or corrupted Conversation
 // can't be turned into an arbitrary `rm` of any file on disk.
+//
+// A Claude conversation also owns ~/.claude/projects/<enc>/<id>/,
+// which holds tool-results/ (contents of files the session read),
+// subagents/ and workflows/. That directory goes too, under the same
+// root-containment and symlink checks — see claudeSessionDirs.
 func Delete(c Conversation) error {
 	paths := transcriptPaths(c)
 	if len(paths) == 0 {
@@ -643,12 +648,71 @@ func Delete(c Conversation) error {
 			return err
 		}
 	}
+	var sessionDirs []string
+	if c.Agent == agent.IDClaude {
+		if sessionDirs, err = claudeSessionDirs(home, c.ID, paths); err != nil {
+			return err
+		}
+	}
 	for _, path := range paths {
 		if err := os.Remove(path); err != nil {
 			return fmt.Errorf("delete transcript: %w", err)
 		}
 	}
+	for _, dir := range sessionDirs {
+		if err := os.RemoveAll(dir); err != nil {
+			return fmt.Errorf("delete session directory: %w", err)
+		}
+	}
 	return nil
+}
+
+// claudeUUID matches a Claude Code session ID. Claude names a session's
+// directory after that UUID; the project directory also holds folders
+// of its own (memory/), which must never be mistaken for one.
+var claudeUUID = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+// claudeSessionDirs returns the existing ~/.claude/projects/<enc>/<id>/
+// directories that belong to conversation id, one per project
+// directory its transcript paths live in (already checked by
+// guardTranscriptPath). Refuses an empty id or one with a path
+// separator; an id that isn't a session UUID owns no directory. Each
+// directory must be a real directory (not a symlink) whose parent
+// resolves inside the Claude root.
+func claudeSessionDirs(home, id string, paths []string) ([]string, error) {
+	if id == "" || id == "." || id == ".." || strings.ContainsAny(id, `/\`) {
+		return nil, fmt.Errorf("refusing to delete session directory for conversation id %q", id)
+	}
+	if !claudeUUID.MatchString(id) {
+		return nil, nil
+	}
+	root := filepath.Join(home, ".claude", "projects")
+	seen := map[string]bool{}
+	var dirs []string
+	for _, path := range paths {
+		rel, err := filepath.Rel(root, filepath.Clean(path))
+		if err != nil {
+			continue
+		}
+		project, _, _ := strings.Cut(rel, string(filepath.Separator))
+		if project == "" || project == "." || project == ".." {
+			continue
+		}
+		dir := filepath.Join(root, project, id)
+		if seen[dir] {
+			continue
+		}
+		seen[dir] = true
+		info, err := os.Lstat(dir)
+		if err != nil || !info.IsDir() {
+			continue
+		}
+		if err := guardResolvedParent(root, dir); err != nil {
+			return nil, err
+		}
+		dirs = append(dirs, dir)
+	}
+	return dirs, nil
 }
 
 // guardTranscriptPath returns nil only when path is a plausible

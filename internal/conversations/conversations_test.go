@@ -950,18 +950,39 @@ func TestDelete_RemovesClaudeTranscript(t *testing.T) {
 	}
 }
 
+// TestDelete_RemovesMergedClaudeFragments — every transcript fragment
+// goes, and so does the session's own directory. Regression: Delete
+// removed only the .jsonl files and left <id>/ behind, including
+// tool-results/ (contents of files the session read), workflows/ and
+// the non-jsonl metadata under subagents/. Other sessions' directories
+// and Claude's per-project memory/ must survive.
 func TestDelete_RemovesMergedClaudeFragments(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	const id = "0f5c2a8e-1b2c-4d3e-8f90-a1b2c3d4e5f6"
 	projectDir := filepath.Join(home, ".claude/projects/-Users-skz-Projects-foo")
-	parentPath := filepath.Join(projectDir, "parent-1.jsonl")
-	subagentPath := filepath.Join(projectDir, "parent-1/subagents/agent-a123.jsonl")
+	sessionDir := filepath.Join(projectDir, id)
+	parentPath := filepath.Join(projectDir, id+".jsonl")
+	subagentPath := filepath.Join(sessionDir, "subagents/agent-a123.jsonl")
 	writeFile(t, parentPath,
 		`{"type":"user","message":{"role":"user","content":"hi"},"timestamp":"2026-04-30T10:00:00Z"}`+"\n",
 	)
 	writeFile(t, subagentPath,
 		`{"type":"assistant","message":{"role":"assistant","content":"done"},"timestamp":"2026-04-30T10:01:00Z"}`+"\n",
 	)
+	leftovers := []string{
+		filepath.Join(sessionDir, "tool-results/toolu_01.txt"),
+		filepath.Join(sessionDir, "subagents/agent-a123.meta.json"),
+		filepath.Join(sessionDir, "workflows/run.json"),
+	}
+	for _, p := range leftovers {
+		writeFile(t, p, "secret file contents")
+	}
+	otherSession := filepath.Join(projectDir, "11111111-2222-4333-8444-555555555555/tool-results/x.txt")
+	memory := filepath.Join(projectDir, "memory/MEMORY.md")
+	writeFile(t, otherSession, "keep")
+	writeFile(t, memory, "keep")
+
 	got, err := ListClaude(home)
 	if err != nil {
 		t.Fatalf("ListClaude: %v", err)
@@ -973,11 +994,71 @@ func TestDelete_RemovesMergedClaudeFragments(t *testing.T) {
 	if err := Delete(got[0]); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	for _, path := range []string{parentPath, subagentPath} {
+	for _, path := range []string{parentPath, subagentPath, sessionDir} {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Errorf("%s still exists after Delete: stat err = %v", path, err)
 		}
 	}
+	for _, path := range []string{otherSession, memory} {
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("%s was removed by an unrelated Delete: %v", path, err)
+		}
+	}
+}
+
+// TestDelete_ClaudeSessionDirGuards — the session directory is only
+// removed when it is a real directory named by a session UUID inside
+// the Claude root. An id with a path separator is refused before
+// anything is deleted, a non-UUID id ("memory") owns no directory, and
+// a symlinked session directory is left alone so its target survives.
+func TestDelete_ClaudeSessionDirGuards(t *testing.T) {
+	t.Run("separator in id", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		path := filepath.Join(home, ".claude/projects/-p/x.jsonl")
+		writeFile(t, path, "{}\n")
+		for _, id := range []string{"", "..", "a/b", `a\b`} {
+			if err := Delete(Conversation{ID: id, Agent: agent.IDClaude, Path: path}); err == nil {
+				t.Errorf("Delete with id %q should be refused", id)
+			}
+		}
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("a refused Delete must not remove the transcript: %v", err)
+		}
+	})
+	t.Run("non-uuid id", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		path := filepath.Join(home, ".claude/projects/-p/memory.jsonl")
+		memory := filepath.Join(home, ".claude/projects/-p/memory/MEMORY.md")
+		writeFile(t, path, "{}\n")
+		writeFile(t, memory, "keep")
+		if err := Delete(Conversation{ID: "memory", Agent: agent.IDClaude, Path: path}); err != nil {
+			t.Fatalf("Delete: %v", err)
+		}
+		if _, err := os.Stat(memory); err != nil {
+			t.Errorf("memory/ must survive: %v", err)
+		}
+	})
+	t.Run("symlinked session dir", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		const id = "0f5c2a8e-1b2c-4d3e-8f90-a1b2c3d4e5f6"
+		projectDir := filepath.Join(home, ".claude/projects/-p")
+		path := filepath.Join(projectDir, id+".jsonl")
+		writeFile(t, path, "{}\n")
+		outside := filepath.Join(home, "outside/keep.txt")
+		writeFile(t, outside, "keep")
+		if err := os.Symlink(filepath.Dir(outside), filepath.Join(projectDir, id)); err != nil {
+			t.Skipf("symlink: %v", err)
+		}
+		if err := Delete(Conversation{ID: id, Agent: agent.IDClaude, Path: path}); err != nil {
+			t.Fatalf("Delete: %v", err)
+		}
+		if _, err := os.Stat(outside); err != nil {
+			t.Errorf("symlink target must survive: %v", err)
+		}
+	})
 }
 
 // TestDelete_RemovesAntigravityPB — Antigravity transcripts are .pb
