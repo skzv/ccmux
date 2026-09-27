@@ -394,7 +394,9 @@ func TestSetAlwaysThinking_RoundTrip(t *testing.T) {
 		t.Error("alwaysThinkingEnabled = false, want true")
 	}
 
-	// Toggling off should drop the key (omitempty), not write `false`.
+	// Toggling off must write an explicit `false`. Regression: the key
+	// was dropped, which handed the choice back to Claude Code's
+	// default — turning it off in ccmux didn't turn it off.
 	if _, err := SetAlwaysThinking(false); err != nil {
 		t.Fatal(err)
 	}
@@ -407,8 +409,27 @@ func TestSetAlwaysThinking_RoundTrip(t *testing.T) {
 	if err := json.Unmarshal(raw, &roundTrip); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := roundTrip["alwaysThinkingEnabled"]; ok {
-		t.Errorf("alwaysThinkingEnabled should have been omitted when false, file: %v", roundTrip)
+	if v, ok := roundTrip["alwaysThinkingEnabled"]; !ok || v != false {
+		t.Errorf("alwaysThinkingEnabled should be written as false, file: %v", roundTrip)
+	}
+	if s, err := ReadSettings(); err != nil || s.AlwaysThinkingEnabled {
+		t.Errorf("ReadSettings after toggle off = %+v (err %v), want AlwaysThinkingEnabled false", s, err)
+	}
+
+	// And back on: the typed true replaces the explicit false.
+	if _, err := SetAlwaysThinking(true); err != nil {
+		t.Fatal(err)
+	}
+	raw, err = os.ReadFile(p.Settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roundTrip = nil
+	if err := json.Unmarshal(raw, &roundTrip); err != nil {
+		t.Fatal(err)
+	}
+	if roundTrip["alwaysThinkingEnabled"] != true {
+		t.Errorf("alwaysThinkingEnabled should be true after toggling back on, file: %v", roundTrip)
 	}
 }
 

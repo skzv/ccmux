@@ -569,15 +569,22 @@ func SetEffortLevel(level string) (string, error) {
 	return WriteSettings(s)
 }
 
-// SetAlwaysThinking toggles the alwaysThinkingEnabled boolean. When false,
-// the key is omitted from settings.json entirely so we don't litter the
-// file with explicit `false`s the user didn't ask for.
+// SetAlwaysThinking toggles the alwaysThinkingEnabled boolean. Turning
+// it off writes an explicit `false`: that is the user's choice, and
+// dropping the key instead would hand the decision back to Claude
+// Code's default, which can be on. The false lives in Extra, the same
+// place readSettingsAt keeps a user-written one.
 func SetAlwaysThinking(enabled bool) (string, error) {
 	s, err := ReadSettings()
 	if err != nil {
 		return "", err
 	}
 	s.AlwaysThinkingEnabled = enabled
+	if enabled {
+		delete(s.Extra, "alwaysThinkingEnabled")
+	} else {
+		s.Extra["alwaysThinkingEnabled"] = json.RawMessage("false")
+	}
 	return WriteSettings(s)
 }
 
