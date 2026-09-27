@@ -2585,8 +2585,9 @@ func (a App) attachOrCreateLocal(p project.Project) tea.Cmd {
 }
 
 // conversationsForProject returns past conversations whose recorded
-// working directory matches projectPath, newest first (conversations.All
-// already sorts by recency). Drives the project menu's "resume" rows.
+// working directory matches projectPath (symlinks resolved on both
+// sides), newest first (conversations.All already sorts by recency).
+// Drives the project menu's "resume" rows.
 // Honors the same headless-visibility default as the Conversations
 // screen — automation runs would otherwise clutter the per-project
 // resume picker just as much as the global list.
@@ -2597,13 +2598,7 @@ func (a App) conversationsForProject(projectPath string) []conversations.Convers
 	if err != nil {
 		return nil
 	}
-	var out []conversations.Conversation
-	for _, c := range all {
-		if c.Project == projectPath {
-			out = append(out, c)
-		}
-	}
-	return out
+	return conversations.ForProject(all, projectPath)
 }
 
 // attachOrCreateRemote starts (or attaches to) a Claude session on a

@@ -1515,3 +1515,49 @@ func TestGuardTranscriptPath_SymlinkedDirEscapes(t *testing.T) {
 		t.Errorf("legit transcript rejected: %v", err)
 	}
 }
+
+// TestForProject_ResolvesSymlinks — a project symlinked into the
+// projects dir has the link as its path while agents record the
+// resolved cwd; the two must match from either side. Unrelated
+// projects, relative labels and a project that shares a name don't.
+func TestForProject_ResolvesSymlinks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks need privileges on windows")
+	}
+	root := t.TempDir()
+	realDir := filepath.Join(root, "external", "app")
+	other := filepath.Join(root, "external", "other")
+	for _, d := range []string{realDir, other, filepath.Join(root, "Projects")} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link := filepath.Join(root, "Projects", "app")
+	if err := os.Symlink(realDir, link); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := filepath.EvalSymlinks(realDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	list := []Conversation{
+		{ID: "resolved", Project: resolved},
+		{ID: "via-link", Project: link},
+		{ID: "trailing-slash", Project: resolved + "/"},
+		{ID: "other", Project: other},
+		{ID: "label", Project: "app"},
+		{ID: "empty"},
+	}
+	ids := func(cs []Conversation) string {
+		var out []string
+		for _, c := range cs {
+			out = append(out, c.ID)
+		}
+		return strings.Join(out, ",")
+	}
+	for _, projectPath := range []string{link, resolved} {
+		if got := ids(ForProject(list, projectPath)); got != "resolved,via-link,trailing-slash" {
+			t.Errorf("ForProject(%s) = %s, want resolved,via-link,trailing-slash", projectPath, got)
+		}
+	}
+}

@@ -2317,6 +2317,35 @@ func truncatedPreview(s string) string {
 	return out
 }
 
+// ForProject returns the conversations in list that ran in projectPath,
+// in list order. Both sides are compared after resolving symlinks: a
+// project reached through a link (~/Projects/app → /Volumes/ext/app)
+// has the link as its path, while agents record the resolved working
+// directory. Each distinct path is resolved once per call, however
+// many conversations share it.
+func ForProject(list []Conversation, projectPath string) []Conversation {
+	resolved := map[string]string{}
+	resolve := func(p string) string {
+		if r, ok := resolved[p]; ok {
+			return r
+		}
+		r := filepath.Clean(p)
+		if real, err := filepath.EvalSymlinks(p); err == nil {
+			r = real
+		}
+		resolved[p] = r
+		return r
+	}
+	want := resolve(projectPath)
+	var out []Conversation
+	for _, c := range list {
+		if c.Project == projectPath || (filepath.IsAbs(c.Project) && resolve(c.Project) == want) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 // MatchesQuery searches visible conversation metadata without loading every
 // full transcript on each keystroke. Message previews remain lazy-loaded.
 func MatchesQuery(c Conversation, query string) bool {

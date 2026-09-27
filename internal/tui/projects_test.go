@@ -661,3 +661,39 @@ func TestLocalProjectDir_ExpandsTilde(t *testing.T) {
 		t.Errorf("localProjectDir(~/Code) = %q, want %q", got, want)
 	}
 }
+
+// TestConversationsForProject_SymlinkedProject — regression: a project
+// symlinked into ~/Projects has the link as its Path, but the agent
+// records the resolved cwd, so the project menu offered none of the
+// project's past conversations to resume.
+func TestConversationsForProject_SymlinkedProject(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	realDir := filepath.Join(home, "external", "app")
+	if err := os.MkdirAll(realDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(home, "Projects", "app")
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realDir, link); err != nil {
+		t.Skipf("symlink: %v", err)
+	}
+	cwd, err := filepath.EvalSymlinks(realDir) // what the agent records
+	if err != nil {
+		t.Fatal(err)
+	}
+	transcript := filepath.Join(home, ".claude", "projects", "-external-app", "0f5c2a8e-1b2c-4d3e-8f90-a1b2c3d4e5f6.jsonl")
+	if err := os.MkdirAll(filepath.Dir(transcript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	line := fmt.Sprintf(`{"type":"user","cwd":%q,"entrypoint":"cli","message":{"role":"user","content":"resume me"},"timestamp":"2026-05-01T10:00:00Z"}`+"\n", cwd)
+	if err := os.WriteFile(transcript, []byte(line), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := App{}.conversationsForProject(link)
+	if len(got) != 1 || got[0].Preview != "resume me" {
+		t.Fatalf("conversationsForProject(%s) = %+v, want the conversation recorded under %s", link, got, cwd)
+	}
+}
