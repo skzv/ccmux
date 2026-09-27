@@ -4,12 +4,43 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/tmux"
 )
+
+// TestPreview_RealPaneReturnsLastNLines — on a real tmux, capture-pane
+// -S -N returns N lines of history plus the whole (mostly blank) visible
+// screen; /preview?lines=N must answer exactly the last N lines.
+func TestPreview_RealPaneReturnsLastNLines(t *testing.T) {
+	dir := pollSandbox(t)
+	mustTmux(t, "new-session", "-d", "-s", "c-seq", "-x", "80", "-y", "30", "-c", dir, "seq 1 100; sleep 300")
+	httpSrv := newAPIServer(t, dir)
+	var got daemon.PreviewResponse
+	for range 40 { // wait for seq's output to land
+		resp, err := httpSrv.Client().Get(httpSrv.URL + "/v1/sessions/c-seq/preview?lines=5")
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = json.NewDecoder(resp.Body).Decode(&got)
+		_ = resp.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(got.Content, "100") {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if want := "96\n97\n98\n99\n100\n"; got.Content != want || got.Lines != 5 {
+		t.Errorf("preview?lines=5 = %d, %q; want 5, %q", got.Lines, got.Content, want)
+	}
+}
 
 // TestTmuxDollarNamesAreSessionIDs — pins, on a real tmux, why
 // badSessionName refuses a leading `$`: even the exact `=name:` target

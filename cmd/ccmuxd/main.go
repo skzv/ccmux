@@ -1409,7 +1409,25 @@ func (s *server) handlePreview(w http.ResponseWriter, r *http.Request, name stri
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, daemon.PreviewResponse{Lines: lines, Content: out})
+	writeJSON(w, daemon.PreviewResponse{Lines: lines, Content: lastLines(out, lines)})
+}
+
+// lastLines keeps the last n lines of a capture-pane dump, ignoring the
+// blank rows that pad out the visible screen below the last output.
+// capture-pane -S -N returns N lines of scrollback plus the whole
+// visible screen, so ?lines=N (and MCP read_pane) answered N + the
+// screen height, while reporting "lines": N.
+func lastLines(s string, n int) string {
+	rows := strings.Split(s, "\n")
+	end := len(rows)
+	for end > 0 && strings.TrimSpace(rows[end-1]) == "" {
+		end--
+	}
+	rows = rows[max(0, end-n):end]
+	if len(rows) == 0 {
+		return ""
+	}
+	return strings.Join(rows, "\n") + "\n"
 }
 
 // handlePeers returns every tailnet peer plus an indication of which

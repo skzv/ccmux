@@ -188,8 +188,9 @@ Enter). Passed through to `tmux send-keys`.
 - **Request:** `SendKeysRequest`. **Response:** `204`.
 
 #### `GET /v1/sessions/{name}/preview`
-Last N lines of the active pane as plain text (ANSI stripped). A lightweight
-"peek" without opening the attach socket.
+Last N lines of the active pane as plain text (ANSI stripped) — exactly N
+when the pane has that many, not counting the blank rows below the last
+output. A lightweight "peek" without opening the attach socket.
 - **Query:** `?lines=N` (default `24`; values above `500` are clamped to `500`).
 - **Response `200`:** `PreviewResponse`. `404` if the session doesn't exist.
 
