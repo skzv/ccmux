@@ -647,6 +647,75 @@ func TestTopProjects_OrdersByTotalDesc(t *testing.T) {
 	}
 }
 
+// TestTopProjects_DropsZeroRowsAndBreaksTiesByName — regression: a
+// project whose only file had a prompt but no response yet showed as a
+// 0-token row, and projects with equal totals came out of a map in
+// random order through an unstable sort, so the dashboard rows swapped
+// places on every refresh.
+func TestTopProjects_DropsZeroRowsAndBreaksTiesByName(t *testing.T) {
+	agg := &Aggregate{ByProject: map[string]*Tokens{
+		"pending": {},
+		"delta":   {Input: 50},
+		"charlie": {Input: 50},
+		"alpha":   {Input: 50},
+		"bravo":   {Output: 50},
+		"top":     {Input: 500},
+	}}
+	want := []string{"top", "alpha", "bravo", "charlie", "delta"}
+	for i := 0; i < 50; i++ {
+		got := agg.TopProjects(0)
+		names := make([]string, len(got))
+		for j, p := range got {
+			names[j] = p.Project
+		}
+		if strings.Join(names, ",") != strings.Join(want, ",") {
+			t.Fatalf("TopProjects order = %v, want %v", names, want)
+		}
+	}
+}
+
+// TestWalk_PromptWithoutResponseAddsNoProjectRow — the walker itself
+// must not create a zero-token ByProject entry for a file that so far
+// holds only a prompt.
+func TestWalk_PromptWithoutResponseAddsNoProjectRow(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	ts := time.Now().Add(-10 * time.Minute).Format(time.RFC3339)
+	write := func(project string, lines ...map[string]any) {
+		dir := filepath.Join(home, ".claude", "projects", project)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		f, err := os.Create(filepath.Join(dir, "s.jsonl"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close()
+		for _, l := range lines {
+			writeJSONL(t, f, l)
+		}
+	}
+	write("-w-answered",
+		map[string]any{"type": "user", "timestamp": ts, "cwd": "/w/answered", "message": map[string]any{"content": "hi"}},
+		map[string]any{"type": "assistant", "timestamp": ts, "message": map[string]any{
+			"model": "claude-sonnet-4-6", "usage": map[string]any{"input_tokens": 10, "output_tokens": 5},
+		}},
+	)
+	write("-w-waiting",
+		map[string]any{"type": "user", "timestamp": ts, "cwd": "/w/waiting", "message": map[string]any{"content": "still thinking"}},
+	)
+	agg, err := WalkRolling(5 * time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agg.UserPrompts != 2 {
+		t.Errorf("UserPrompts = %d, want 2 (the waiting prompt still counts)", agg.UserPrompts)
+	}
+	if _, ok := agg.ByProject["waiting"]; ok || len(agg.ByProject) != 1 {
+		t.Errorf("ByProject = %v, want only the answered project", agg.ByProject)
+	}
+}
+
 func TestResetAt(t *testing.T) {
 	now := time.Now()
 	agg := &Aggregate{FirstMessageInWindow: now.Add(-2 * time.Hour)}
