@@ -1,4 +1,4 @@
-.PHONY: build install setup uninstall run test test-e2e lint clean fmt vet daemon tui check-go bootstrap fuzz fuzz-quick tapes tapes-check release-check release-snapshot brew-test mcp
+.PHONY: build install setup uninstall run test test-e2e lint staticcheck vulncheck clean fmt vet daemon tui check-go bootstrap fuzz fuzz-quick tapes tapes-check release-check release-snapshot brew-test mcp
 
 BIN_DIR    := bin
 INSTALL_DIR := $(HOME)/.local/bin
@@ -199,12 +199,22 @@ fmt: check-go
 vet: check-go
 	go vet ./...
 
-lint: fmt vet
-	@if command -v staticcheck >/dev/null 2>&1; then \
-		staticcheck ./...; \
-	else \
-		echo "staticcheck not installed; skipping"; \
-	fi
+# Pinned analyzers, run through `go run` so neither CI nor a
+# contributor has to install them (lint used to skip staticcheck when
+# it wasn't on PATH, which is how dead code and a 21-advisory
+# dependency backlog built up unnoticed). Bump deliberately: a new
+# staticcheck release can add checks that fail the build.
+STATICCHECK := honnef.co/go/tools/cmd/staticcheck@v0.8.1
+GOVULNCHECK := golang.org/x/vuln/cmd/govulncheck@v1.8.0
+
+lint: fmt vet staticcheck
+
+staticcheck: check-go
+	go run $(STATICCHECK) ./...
+
+# Needs network access (it fetches the Go vulnerability database).
+vulncheck: check-go
+	go run $(GOVULNCHECK) ./...
 
 clean:
 	rm -rf $(BIN_DIR) dist

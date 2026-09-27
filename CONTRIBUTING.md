@@ -22,6 +22,7 @@ Read `CLAUDE.md` for architecture and repository conventions. Install Go 1.26 or
 go test ./internal/i18n ./internal/tui ./cmd/ccmux/cmd
 go test ./...
 make lint
+make vulncheck
 make build
 ```
 

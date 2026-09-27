@@ -54,7 +54,8 @@ make run           # go run ./cmd/ccmux   (alias: make tui)
 make daemon        # go run ./cmd/ccmuxd
 make mcp           # build just bin/ccmux-mcp
 make test
-make lint          # gofmt + go vet + staticcheck if installed
+make lint          # gofmt + go vet + staticcheck (pinned, via go run; CI runs it too)
+make vulncheck     # govulncheck (pinned, via go run; CI fails on reachable advisories)
 make fuzz          # 5min/target over FUZZ_TARGETS (≈40min total)
 make fuzz-quick    # FUZZTIME=100000x — mirrors CI's PR-time smoke pass
 make test-e2e      # builds binaries, runs the integration suite (needs tmux)

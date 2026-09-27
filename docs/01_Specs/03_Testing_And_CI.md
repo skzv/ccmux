@@ -68,9 +68,19 @@ Create `.github/workflows/ci.yml` with three jobs:
      Linux-only integration coverage would miss every regression in
      the most-used code path.
 
+4. **`lint`** (single ubuntu-latest runner), added in the third audit
+   pass (Sept 2026):
+   - `make staticcheck`: `go run honnef.co/go/tools/cmd/staticcheck@<pinned>`
+     with the repo's `staticcheck.conf`
+   - `make vulncheck`: `go run golang.org/x/vuln/cmd/govulncheck@<pinned>`,
+     which fails only on advisories in code ccmux actually calls
+   - Both are pinned in the Makefile and run through `go run`, so
+     nothing needs installing. Before this job existed, `make lint`
+     skipped staticcheck whenever it wasn't on PATH. That is how dead
+     code and 21 reachable advisories (old `x/crypto`, `x/net`, `x/text`,
+     goldmark and a 1.26.3 standard library) built up unnoticed.
+
 Optional follow-ups once the basics are stable:
-   - `staticcheck ./...` step (Charm uses it; ccmux's `make lint`
-     already references it)
    - `gosec` for security lint
    - Branch-protection rules requiring `test` + `cross-compile` to
      pass before merge
