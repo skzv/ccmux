@@ -35,19 +35,16 @@ func newResumeCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "resume [conversation-id]",
 		Short: "Resume a past agent conversation in a new tmux session",
-		Long: `Resume a past Claude / Codex / Antigravity / Cursor / pi / Muse Code conversation in a
-fresh tmux session running the right agent with the native resume command.
+		Long: `Resume a past agent conversation in a fresh tmux session running the
+right agent with its native resume command.
 
 Forms:
 
   ccmux resume                    # most recent conversation across all agents
   ccmux resume <id>               # specific conversation by ID (or a unique prefix)
-  ccmux resume --agent claude     # most recent Claude conversation
-  ccmux resume --agent codex      # most recent Codex conversation
-  ccmux resume --agent antigravity# most recent Antigravity conversation
-  ccmux resume --agent cursor     # most recent Cursor conversation
-  ccmux resume --agent pi         # most recent pi conversation
-  ccmux resume --agent muse       # most recent Muse Code conversation
+  ccmux resume --agent <agent>    # most recent conversation for one agent
+
+Agents: ` + agentIDList() + `.
 
 Use ` + "`ccmux list-conversations`" + ` to discover IDs. The shortened IDs in
 its table work as-is, trailing "…" included.`,
@@ -96,7 +93,7 @@ its table work as-is, trailing "…" included.`,
 				if agentFilter != "" {
 					want, ok := agent.ParseID(agentFilter)
 					if !ok {
-						return fmt.Errorf("unknown agent %q (claude, codex, antigravity, cursor, pi, grok, muse)", agentFilter)
+						return fmt.Errorf("unknown agent %q (want %s)", agentFilter, agentIDList())
 					}
 					target = pickMostRecentByAgent(list, want)
 					if target.ID == "" {
@@ -110,7 +107,7 @@ its table work as-is, trailing "…" included.`,
 			return resumeNow(target)
 		},
 	}
-	cmd.Flags().StringVar(&agentFilter, "agent", "", "restrict to a specific agent (claude / codex / antigravity / cursor / pi / grok / muse)")
+	cmd.Flags().StringVar(&agentFilter, "agent", "", "restrict to a specific agent: "+agentIDList())
 	return cmd
 }
 
@@ -230,7 +227,13 @@ func ensureResumeSession(ctx context.Context, target conversations.Conversation,
 		existed = true
 	}
 	if err := resumeTmuxSetAgent(ctx, name, string(target.Agent)); err != nil {
-		return "", false, err
+		// Don't leave an untagged session behind that the next resume
+		// would silently reuse — but only kill one this call created
+		// (as the TUI does), never a session that was already running.
+		if !existed {
+			_ = resumeTmuxKill(ctx, name)
+		}
+		return "", false, fmt.Errorf("tag tmux session %s with its agent: %w", name, err)
 	}
 	return name, existed, nil
 }
@@ -242,6 +245,7 @@ var (
 	resumeTmuxNew      = tmux.New
 	resumeTmuxHas      = tmux.Has
 	resumeTmuxSetAgent = tmux.SetSessionAgent
+	resumeTmuxKill     = tmux.Kill
 )
 
 // joinArgs glues an argv slice into a shell command, quoting each

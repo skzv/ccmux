@@ -32,7 +32,8 @@ func TestParseSince(t *testing.T) {
 			t.Errorf("parseSince(%q) = %v, %v; want %v", in, got, err, want)
 		}
 	}
-	for _, in := range []string{"", "d", "7", "-1d", "7dd", "7x", "1d-2h", "abc", "99999999999999d"} {
+	for _, in := range []string{"", "d", "7", "-1d", "7dd", "7x", "1d-2h", "abc", "99999999999999d",
+		"NaNd", "nand", "Infd", "+Infd", "-Infd", "NaNd1h"} {
 		if _, err := parseSince(in); err == nil {
 			t.Errorf("parseSince(%q) accepted, want an error", in)
 		}

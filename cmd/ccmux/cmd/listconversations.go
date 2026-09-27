@@ -116,8 +116,11 @@ func parseSince(v string) (time.Duration, error) {
 	}
 	var total time.Duration
 	if i := strings.IndexByte(s, 'd'); i >= 0 {
+		// ParseFloat also takes "NaN" and "Inf"; NaN slips past every
+		// comparison below (and converts to an arbitrary Duration), so
+		// it's rejected explicitly.
 		days, err := strconv.ParseFloat(s[:i], 64)
-		if err != nil || days < 0 || math.IsInf(days, 0) || days > math.MaxInt64/float64(24*time.Hour) {
+		if err != nil || math.IsNaN(days) || days < 0 || math.IsInf(days, 0) || days > math.MaxInt64/float64(24*time.Hour) {
 			return 0, bad
 		}
 		total = time.Duration(days * float64(24*time.Hour))
@@ -163,12 +166,14 @@ func printConversationsTable(list []conversations.Conversation) {
 	}
 }
 
-// printConversationsJSON dumps the slice as a JSON array on stdout.
-// Useful for scripting ("which conversation did I have yesterday on
-// the auth project?"). Keys match the struct's exported fields.
+// printConversationsJSON writes one JSON object per conversation, one
+// per line (JSON Lines — what the --json help promises), not an array:
+// pipe through `jq -s` to get one. Useful for scripting ("which
+// conversation did I have yesterday on the auth project?"). Keys match
+// the struct's exported fields.
 func printConversationsJSON(list []conversations.Conversation) error {
-	// json.Encoder writes a trailing newline; that's what most CLI
-	// tools expect.
+	// json.Encoder writes a trailing newline after each object, which
+	// is what makes the output line-delimited.
 	enc := newStdoutEncoder()
 	for _, c := range list {
 		if err := enc.Encode(c); err != nil {

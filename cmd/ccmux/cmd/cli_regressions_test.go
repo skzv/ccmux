@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/conversations"
 )
 
@@ -300,6 +301,29 @@ func TestConversationIDs_TableFormRoundTrips(t *testing.T) {
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Errorf("transcript still on disk after delete-conversation %s (stat err %v)", short, err)
+	}
+}
+
+// TestResume_AgentListCoversEveryAgent — the --agent help and the
+// unknown-agent error hard-coded seven agents, so every agent added
+// since (gemini, opencode, kiro, …) was missing from both.
+func TestResume_AgentListCoversEveryAgent(t *testing.T) {
+	e := newCLIEnv(t)
+	e.seedClaudeTranscript("3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b", "hello")
+
+	help := e.run("", "resume", "--help")
+	bad := e.run("", "resume", "--agent", "nosuchagent")
+	if bad.code == 0 {
+		t.Fatalf("resume --agent nosuchagent should fail; stdout: %s", bad.stdout)
+	}
+	for _, a := range agent.All() {
+		id := string(a.ID())
+		if !strings.Contains(help.stdout, id) {
+			t.Errorf("resume --help doesn't list agent %q:\n%s", id, help.stdout)
+		}
+		if !strings.Contains(bad.stderr, id) {
+			t.Errorf("unknown-agent error doesn't list agent %q: %s", id, bad.stderr)
+		}
 	}
 }
 
