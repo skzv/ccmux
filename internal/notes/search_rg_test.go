@@ -4,10 +4,12 @@ package notes
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -192,5 +194,82 @@ func TestSearch_SameFilesAsList(t *testing.T) {
 				t.Errorf("search found %v, List shows %v", found, listed)
 			}
 		})
+	}
+}
+
+// TestSearch_RipgrepResultsInPathOrder — regression: rg ran without
+// --sort and nothing sorted its hits, so results came back in the
+// parallel walk's order — different on every run — and which hits
+// survived the cap varied too. rg must walk in path order, and Search
+// lists hits by path then line like the fallback does.
+func TestSearch_RipgrepResultsInPathOrder(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("CCMUX_TEST_RG_ROOT", root)
+	argsFile := fakeRipgrepScript(t, `for rec in "b.md 9" "a/z.md 2" "b.md 3" "a.md 7" "a/z.md 1"; do
+  set -- $rec
+  printf '{"type":"match","data":{"path":{"text":"%s/%s"},"lines":{"text":"hit"},"line_number":%s}}\n' "$CCMUX_TEST_RG_ROOT" "$1" "$2"
+done
+exit 0
+`)
+	hits, err := Vault{Root: root}.Search(context.Background(), "hit", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, h := range hits {
+		got = append(got, h.Rel+":"+strconv.Itoa(h.LineNum))
+	}
+	want := "a.md:7,a/z.md:1,a/z.md:2,b.md:3,b.md:9"
+	if strings.Join(got, ",") != want {
+		t.Errorf("hits = %v, want %s", got, want)
+	}
+	raw, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains("\n"+string(raw), "\n--sort\npath\n") {
+		t.Errorf("rg must run with --sort path so the capped hit set is deterministic:\n%s", raw)
+	}
+}
+
+// TestSearch_BackendsAgreeUnderCap — with more matches than the cap,
+// rg and the fallback must return the same hits in the same order.
+// Needs a real rg on PATH.
+func TestSearch_BackendsAgreeUnderCap(t *testing.T) {
+	if _, err := exec.LookPath("rg"); err != nil {
+		t.Skip("ripgrep unavailable")
+	}
+	root := t.TempDir()
+	for d := 0; d < 6; d++ {
+		for f := 0; f < 8; f++ {
+			p := filepath.Join(root, fmt.Sprintf("d%d", d), fmt.Sprintf("n%d.md", f))
+			if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(p, []byte("needle one\nfiller\nneedle two\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	v := Vault{Root: root}
+	key := func(hits []SearchHit) string {
+		var b strings.Builder
+		for _, h := range hits {
+			fmt.Fprintf(&b, "%s:%d,", h.Rel, h.LineNum)
+		}
+		return b.String()
+	}
+	fallback, err := v.searchFallback(context.Background(), "needle", 15)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 5; i++ {
+		got, err := v.Search(context.Background(), "needle", 15)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if key(got) != key(fallback) {
+			t.Fatalf("run %d: rg hits %s\nfallback hits %s", i, key(got), key(fallback))
+		}
 	}
 }

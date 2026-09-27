@@ -47,9 +47,22 @@ func (v Vault) Search(ctx context.Context, query string, limit int) ([]SearchHit
 		return nil, err
 	}
 	if _, err := exec.LookPath("rg"); err == nil {
-		return v.searchRipgrep(ctx, query, limit)
+		hits, err := v.searchRipgrep(ctx, query, limit)
+		sortHits(hits)
+		return hits, err
 	}
 	return v.searchFallback(ctx, query, limit)
+}
+
+// sortHits orders hits by Rel, then line, so both backends list results
+// the same way.
+func sortHits(hits []SearchHit) {
+	sort.Slice(hits, func(i, j int) bool {
+		if hits[i].Rel != hits[j].Rel {
+			return hits[i].Rel < hits[j].Rel
+		}
+		return hits[i].LineNum < hits[j].LineNum
+	})
 }
 
 // maxSearchLineBytes caps one line of input: a note line in the
@@ -62,10 +75,14 @@ const maxSearchLineBytes = 4 << 20
 // and prunedDirs directories excluded, and no .gitignore / .ignore /
 // global-ignore filtering — List shows gitignored notes, so search must
 // find them. --no-config keeps a user's RIPGREP_CONFIG_PATH from
-// changing any of that.
+// changing any of that. --sort path makes rg walk files in name order,
+// the same order as the fallback's WalkDir: without it rg's parallel
+// walk returned hits in a different order on every run, and which ones
+// made the cap varied too. (It also makes rg single-threaded, which a
+// notes tree doesn't notice.)
 func ripgrepArgs(query, root string) []string {
 	args := []string{
-		"--json", "--no-config", "--no-ignore", "--hidden",
+		"--json", "--no-config", "--no-ignore", "--hidden", "--sort", "path",
 		"--iglob", "*.md", "--glob", "!.*/",
 	}
 	for _, d := range prunedDirs {
@@ -218,14 +235,7 @@ func (v Vault) searchFallback(ctx context.Context, query string, limit int) ([]S
 	if err != nil {
 		return nil, err
 	}
-	// Sort fallback hits by rel + line so the TUI list reads
-	// consistently across the rg and non-rg paths.
-	sort.Slice(hits, func(i, j int) bool {
-		if hits[i].Rel != hits[j].Rel {
-			return hits[i].Rel < hits[j].Rel
-		}
-		return hits[i].LineNum < hits[j].LineNum
-	})
+	sortHits(hits)
 	return hits, nil
 }
 
