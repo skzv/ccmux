@@ -931,14 +931,17 @@ func stepConfig(ctx context.Context, out io.Writer) error {
 
 // claudeTierToSave decides what the wizard writes for the Claude tier.
 // The TUI shows the auto-detected plan only while the tier is unset, and
-// treats an explicit "api" as the user's choice. So "api" is saved only
-// when it is one: the config already said api, or a paid plan was
-// detected and the user picked api over it. With nothing on disk and
-// nothing detected, the picker's api default is left unset — pinning it
-// would hide a plan detected later (e.g. after `claude login`).
+// never saves a detected tier, so the display follows plan changes. The
+// wizard keeps to the same rule: with nothing on disk, a tier that is
+// just the detected plan (what `setup --yes` always takes, and what the
+// picker is pre-set to) stays unset rather than being frozen into
+// config.toml, where it would hide a later upgrade or downgrade. So
+// does the picker's api default when nothing paid was detected. A tier
+// the user actually chose — anything else, or any change to a tier
+// already on disk — is saved as chosen.
 func claudeTierToSave(onDisk, detected, chosen string) string {
 	chosen = strings.TrimSpace(chosen)
-	if chosen == "api" && onDisk == "" && (detected == "" || detected == "api") {
+	if onDisk == "" && (chosen == detected || (chosen == "api" && detected == "")) {
 		return ""
 	}
 	return chosen
