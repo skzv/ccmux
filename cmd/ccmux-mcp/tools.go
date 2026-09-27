@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/skzv/ccmux/internal/daemon"
 )
@@ -36,7 +37,20 @@ type Tool struct {
 	Description string
 	InputSchema map[string]any
 	Handler     ToolHandler
+	// Mutating tools change state (spawn, type, kill). The dispatcher
+	// runs them exclusively, in wire order, relative to every other
+	// call — see dispatch.go.
+	Mutating bool
+	// Timeout overrides defaultToolTimeout for this tool; zero keeps
+	// the default.
+	Timeout time.Duration
 }
+
+// healthTimeout is get_daemon_health's budget. It's the "is the daemon
+// alive?" first probe, so it must answer fast — against a hung daemon
+// the 30s default made it the slowest way to find out. A var only so
+// tests can shrink it.
+var healthTimeout = 5 * time.Second
 
 // ToolHandler is the unified shape every tool handler implements.
 // Receives raw JSON args (validate inside) and returns a serializable
@@ -111,6 +125,7 @@ func buildTools(s *Server) map[string]Tool {
 			Description: "Return ccmuxd health: hostname, version, session count, and sleep-prevention mode. Useful as a first probe to confirm the daemon is alive.",
 			InputSchema: emptySchema(),
 			Handler:     wrap(s.handleGetHealth),
+			Timeout:     healthTimeout,
 		},
 	}
 	if s.allowMutate {
@@ -123,7 +138,8 @@ func buildTools(s *Server) map[string]Tool {
 				"continue": boolSchema("resume the latest session in this project instead of starting fresh", false),
 				"name":     stringSchema("explicit tmux session name. Empty = derived from project path.", false),
 			}, []string{"project"}),
-			Handler: wrap(s.handleSpawnSession),
+			Handler:  wrap(s.handleSpawnSession),
+			Mutating: true,
 		}
 		t["spawn_bare_session"] = Tool{
 			Description: "Spawn a bare (project-less) agent session. Just a tmux session running the picked agent (or $SHELL) at the given path. Requires ccmux-mcp --allow-mutate.",
@@ -132,7 +148,8 @@ func buildTools(s *Server) map[string]Tool {
 				"path":  stringSchema("working directory on the daemon's host. Empty = $HOME on the daemon.", false),
 				"agent": stringSchema("agent to launch, or 'shell' for no agent. Empty = daemon default.", false),
 			}, nil),
-			Handler: wrap(s.handleSpawnBareSession),
+			Handler:  wrap(s.handleSpawnBareSession),
+			Mutating: true,
 		}
 		t["send_keys"] = Tool{
 			Description: "Send a literal keystroke string into a session's active pane. tmux interprets named keys (Enter, C-c, Escape, …). Use with care — this is the same as typing into the user's session. Requires ccmux-mcp --allow-mutate.",
@@ -140,14 +157,16 @@ func buildTools(s *Server) map[string]Tool {
 				"name": stringSchema("tmux session name (from list_sessions[].name)", true),
 				"keys": stringSchema("keystroke string (e.g. 'hello' or 'C-c'). Use 'Enter' for newline.", true),
 			}, []string{"name", "keys"}),
-			Handler: wrap(s.handleSendKeys),
+			Handler:  wrap(s.handleSendKeys),
+			Mutating: true,
 		}
 		t["kill_session"] = Tool{
 			Description: "Terminate a tmux session. The agent process inside is SIGKILLed by tmux. Requires ccmux-mcp --allow-mutate.",
 			InputSchema: object(map[string]any{
 				"name": stringSchema("tmux session name (from list_sessions[].name)", true),
 			}, []string{"name"}),
-			Handler: wrap(s.handleKillSession),
+			Handler:  wrap(s.handleKillSession),
+			Mutating: true,
 		}
 	}
 	return t

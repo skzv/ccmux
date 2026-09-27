@@ -90,7 +90,8 @@ Tools are listed in alphabetical order via `tools/list`. Mutating tools are not 
 - **Transport.** stdio is the only transport. The Unix socket the daemon listens on is filesystem-permission scoped to the user; tailnet HTTP requires being on the tailnet. ccmux-mcp inherits whichever the daemon is.
 - **Mutation.** Off by default. The `--allow-mutate` flag is the only way to expose `spawn_session` / `send_keys` / `kill_session`. There is no per-tool override.
 - **Bound input.** `read_pane` caps the requested line count at 500 so a buggy or malicious agent can't drag the daemon down by requesting full scrollback every call.
-- **Per-call deadline.** Every handler runs under a 30-second context — well above legitimate work, well below "hangs the stdio loop."
+- **Per-call deadline.** Every handler runs under a 30-second context — well above legitimate work. `get_daemon_health`, the first probe, gets 5 seconds so a hung daemon is reported quickly.
+- **Concurrency.** Tool calls run concurrently (at most 16 at once; past that the server stops reading until one finishes), so one call stuck on a hung daemon never holds up the rest: `ping`, `initialize`, `tools/list` and protocol errors are answered inline, immediately. Read-only calls run in parallel; a mutating call waits for every call received before it, and every later call waits for it, so pipelined mutations keep their order. `notifications/cancelled` cancels the named in-flight call, which then gets no response (per MCP).
 
 ## Wire shapes
 
@@ -140,11 +141,12 @@ Result: one `content` block of type `text` whose body is the JSON-encoded tool o
 
 ### Batches
 
-A line holding a JSON array is a JSON-RPC 2.0 batch (protocol 2025-03-26 requires servers to accept them). The reply is one array frame with a response per request, in order; notifications get none, an all-notification batch gets no reply, and `[]` gets a single `-32600` error.
+A line holding a JSON array is a JSON-RPC 2.0 batch (protocol 2025-03-26 requires servers to accept them). The reply is one array frame with a response per request, in order, written once every call in it has finished (its tool calls run concurrently, under the same ordering rules as separate frames); notifications get none, an all-notification batch gets no reply, and `[]` gets a single `-32600` error.
 
 ## Testing
 
 - `cmd/ccmux-mcp/server_test.go` — protocol-level tests: handshake, ping, parse errors, notifications, unknown method, mutate gating, argument validation, tools list ordering.
+- `cmd/ccmux-mcp/concurrency_test.go` — the dispatcher against a daemon that hangs on demand: a ping or `notifications/cancelled` behind a hung call is handled at once, read-only calls overlap, mutations keep wire order, the in-flight bound holds, and the health probe fails fast.
 - `cmd/ccmux-mcp/handlers_test.go` — per-tool tests against a `fakeClient` that records every daemon call. Confirms argument forwarding, nil-safety, and `lines` capping for `read_pane`.
 - `internal/e2e/mcp_test.go` (`//go:build integration`) — spawns the real `ccmux-mcp` binary against a real ccmuxd in the isolated `TMUX_TMPDIR` sandbox. Runs `initialize` → `tools/list` → `tools/call list_sessions` end-to-end and confirms a live tmux session appears in the result. Mutate-gate-off path is pinned end-to-end too.
 

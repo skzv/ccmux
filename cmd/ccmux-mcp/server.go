@@ -34,9 +34,9 @@ var supportedProtocolVersions = []string{"2024-11-05", "2025-03-26", protocolVer
 // the member entirely and strict clients would discard the response.
 var nullID = json.RawMessage("null")
 
-// rpcRequest is one JSON-RPC 2.0 request frame. Method is always set;
-// ID is nil for notifications (no response expected) and a string or
-// number for requests.
+// rpcRequest is one JSON-RPC 2.0 request frame. ID is nil for
+// notifications (no response expected) and a string or number for
+// requests.
 type rpcRequest struct {
 	JSONRPC string          `json:"jsonrpc"`
 	ID      json.RawMessage `json:"id,omitempty"`
@@ -69,6 +69,16 @@ const (
 	errInternal       = -32603
 )
 
+// defaultToolTimeout is the per-call backstop for a tool handler. It
+// matches the daemon client's own per-call budget and is well above any
+// legitimate read or write; a Tool can ask for less (Tool.Timeout).
+const defaultToolTimeout = 30 * time.Second
+
+// maxInFlight bounds how many tools/call requests run at once. Past it
+// the reader stops taking new frames until one finishes — backpressure,
+// not an error.
+const maxInFlight = 16
+
 // Server holds the long-lived state for one ccmux-mcp process: the
 // daemon client it proxies to, the tool registry, and whether
 // mutating tools are exposed. Run() drives the stdio loop until the
@@ -79,10 +89,8 @@ type Server struct {
 	allowMutate bool
 	version     string
 
-	// writeMu serializes writes to stdout so concurrent tool calls
-	// don't interleave JSON frames. MCP is request/response so this
-	// is mostly defensive — the spec does allow batched/concurrent
-	// requests on a single transport.
+	// writeMu serializes writes to stdout: tool calls run concurrently
+	// and each writes its own response, so frames must not interleave.
 	writeMu sync.Mutex
 }
 
@@ -98,103 +106,65 @@ func NewServer(client DaemonClient, allowMutate bool, version string) *Server {
 // Run reads JSON-RPC frames (newline-delimited JSON, per MCP's stdio
 // transport) from `in`, dispatches each, and writes responses to
 // `out`. Returns nil on EOF, error on unrecoverable I/O failure.
+//
+// Frames are read and parsed one at a time, but tool calls run
+// concurrently (see dispatch.go): one hung daemon call no longer
+// freezes the loop, so a ping or a notifications/cancelled behind it is
+// answered at once. Everything else — initialize, ping, tools/list,
+// errors — is answered inline, in order. At EOF, Run waits for the
+// calls still in flight so their responses are written.
 func (s *Server) Run(ctx context.Context, in io.Reader, out io.Writer) error {
 	// MCP requests/responses can be large (full pane previews, project
 	// lists); 4 MiB is generous. (It is deliberately larger than the
 	// daemon's 64 KiB request-body cap: a request that passes here can
-	// still be refused there.) Lines over the cap are drained and answered with a JSON-RPC
-	// error instead of aborting the loop — bufio.Scanner's ErrTooLong
-	// is unrecoverable, so one oversized request used to kill every
-	// in-flight and future call on this transport.
+	// still be refused there.) Lines over the cap are drained and
+	// answered with a JSON-RPC error instead of aborting the loop —
+	// bufio.Scanner's ErrTooLong is unrecoverable, so one oversized
+	// request used to kill every in-flight and future call on this
+	// transport.
 	const maxLine = 4 << 20
 	r := bufio.NewReaderSize(in, 64<<10)
-	enc := json.NewEncoder(out)
+	rs := newRunState(ctx, s, json.NewEncoder(out))
+	defer rs.stop()
 
+	var runErr error
 	for {
 		line, tooLong, err := readLimitedLine(r, maxLine)
+		// A response an in-flight call wrote may have failed meanwhile:
+		// stop before this frame runs (it could be a mutation).
+		if werr := rs.writeFailure(); werr != nil {
+			runErr = fmt.Errorf("write stdout: %w", werr)
+			break
+		}
 		var writeErr error
 		if tooLong {
-			writeErr = s.writeFrame(enc, rpcResponse{JSONRPC: "2.0", ID: nullID, Error: &rpcError{Code: errParseError, Message: fmt.Sprintf("parse error: request exceeds %d bytes", maxLine)}})
+			writeErr = rs.write(rpcResponse{JSONRPC: "2.0", ID: nullID, Error: &rpcError{Code: errParseError, Message: fmt.Sprintf("parse error: request exceeds %d bytes", maxLine)}})
 		} else if len(line) > 0 {
-			writeErr = s.dispatchLine(ctx, enc, line)
+			writeErr = rs.dispatchLine(line)
 		}
 		if writeErr != nil {
-			return fmt.Errorf("write stdout: %w", writeErr)
+			runErr = fmt.Errorf("write stdout: %w", writeErr)
+			break
 		}
 		if errors.Is(err, io.EOF) {
-			return nil
+			break
 		}
 		if err != nil {
-			return fmt.Errorf("read stdin: %w", err)
+			runErr = fmt.Errorf("read stdin: %w", err)
+			break
 		}
 	}
-}
-
-// dispatchLine parses and handles one raw frame — a single request or
-// a JSON-RPC batch — writing the response (if any) to enc.
-func (s *Server) dispatchLine(ctx context.Context, enc *json.Encoder, line []byte) error {
-	if trimmed := bytes.TrimLeft(line, " \t\r\n"); len(trimmed) > 0 && trimmed[0] == '[' {
-		return s.dispatchBatch(ctx, enc, trimmed)
+	if runErr != nil {
+		// Nobody can read the answers of the calls still running.
+		rs.stop()
 	}
-	resp, respond := s.dispatchOne(ctx, line)
-	if !respond {
-		return nil
-	}
-	return s.writeFrame(enc, resp)
-}
-
-// dispatchBatch handles a JSON-RPC 2.0 batch (an array of requests).
-// Protocol 2025-03-26, which initialize negotiates, requires servers
-// to accept batches; answering them with a parse error broke any
-// client that used them. Per JSON-RPC: the reply is ONE array holding a
-// response per request (notifications get none); an all-notification
-// batch gets no reply at all; an empty array is itself an Invalid
-// Request, answered with a single (non-array) error. Elements run in
-// order — JSON-RPC allows any order, and sequential keeps tool calls
-// from racing each other.
-func (s *Server) dispatchBatch(ctx context.Context, enc *json.Encoder, line []byte) error {
-	var elems []json.RawMessage
-	if err := json.Unmarshal(line, &elems); err != nil {
-		return s.writeFrame(enc, rpcResponse{JSONRPC: "2.0", ID: nullID, Error: &rpcError{Code: errParseError, Message: "parse error: " + err.Error()}})
-	}
-	if len(elems) == 0 {
-		return s.writeFrame(enc, rpcResponse{JSONRPC: "2.0", ID: nullID, Error: &rpcError{Code: errInvalidRequest, Message: "invalid request: empty batch"}})
-	}
-	out := make([]rpcResponse, 0, len(elems))
-	for _, el := range elems {
-		if resp, respond := s.dispatchOne(ctx, el); respond {
-			out = append(out, resp)
+	rs.wg.Wait()
+	if runErr == nil {
+		if werr := rs.writeFailure(); werr != nil {
+			runErr = fmt.Errorf("write stdout: %w", werr)
 		}
 	}
-	if len(out) == 0 {
-		return nil
-	}
-	return s.writeFrame(enc, out)
-}
-
-// dispatchOne parses and handles one request object. respond is false
-// for notifications, which get no response.
-func (s *Server) dispatchOne(ctx context.Context, raw []byte) (resp rpcResponse, respond bool) {
-	var req rpcRequest
-	if err := json.Unmarshal(raw, &req); err != nil {
-		// The id couldn't be determined, so per spec it must be
-		// literal null — not absent. Well-formed JSON that isn't a
-		// request object (e.g. a batch element `1`) is an Invalid
-		// Request rather than a parse error.
-		if json.Valid(raw) {
-			return rpcResponse{JSONRPC: "2.0", ID: nullID, Error: &rpcError{Code: errInvalidRequest, Message: "invalid request: " + err.Error()}}, true
-		}
-		return rpcResponse{JSONRPC: "2.0", ID: nullID, Error: &rpcError{Code: errParseError, Message: "parse error: " + err.Error()}}, true
-	}
-	if req.JSONRPC != "2.0" {
-		id := req.ID
-		if len(id) == 0 {
-			id = nullID
-		}
-		return rpcResponse{JSONRPC: "2.0", ID: id, Error: &rpcError{Code: errInvalidRequest, Message: `jsonrpc must be "2.0"`}}, true
-	}
-	resp, isNotification := s.handle(ctx, &req)
-	return resp, !isNotification
+	return runErr
 }
 
 // readLimitedLine reads one newline-terminated line from r, capped at
@@ -247,18 +217,11 @@ func trimLineEnding(b []byte) []byte {
 	return bytes.TrimSuffix(b, []byte("\r"))
 }
 
-// writeFrame serializes a response (or a batch's []rpcResponse) and
-// writes it to the encoder as one line. Errors propagate to Run so no
-// more requests execute after stdout fails.
-func (s *Server) writeFrame(enc *json.Encoder, resp any) error {
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	return enc.Encode(resp)
-}
-
-// handle dispatches one request. Returns (response, isNotification).
-// Notifications (request without an ID per JSON-RPC) get no response.
-func (s *Server) handle(ctx context.Context, req *rpcRequest) (rpcResponse, bool) {
+// handle answers one request that runs inline — everything except
+// tools/call and notifications/cancelled, which dispatch.go handles.
+// Returns (response, isNotification). Notifications (request without
+// an ID per JSON-RPC) get no response.
+func (s *Server) handle(req *rpcRequest) (rpcResponse, bool) {
 	isNotification := len(req.ID) == 0
 	resp := rpcResponse{JSONRPC: "2.0", ID: req.ID}
 
@@ -272,13 +235,6 @@ func (s *Server) handle(ctx context.Context, req *rpcRequest) (rpcResponse, bool
 		resp.Result = map[string]any{}
 	case "tools/list":
 		resp.Result = s.handleToolsList()
-	case "tools/call":
-		out, rerr := s.handleToolsCall(ctx, req.Params)
-		if rerr != nil {
-			resp.Error = rerr
-		} else {
-			resp.Result = out
-		}
 	case "resources/list", "prompts/list":
 		// We declare neither capability in initialize, but some
 		// clients still probe. Return empty rather than -32601 so
@@ -363,6 +319,17 @@ type toolsCallParams struct {
 	Arguments json.RawMessage `json:"arguments"`
 }
 
+// toolFor resolves the tool a tools/call's params name, if any — the
+// dispatcher needs to know up front whether a call mutates.
+func (s *Server) toolFor(raw json.RawMessage) (Tool, bool) {
+	var p toolsCallParams
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return Tool{}, false
+	}
+	t, ok := s.tools[p.Name]
+	return t, ok
+}
+
 // toolResult is what tools/call returns. The MCP spec wraps tool
 // output as a list of content blocks; we use one `text` block whose
 // body is the JSON-encoded tool result. Agents (and humans inspecting
@@ -392,16 +359,19 @@ func (s *Server) handleToolsCall(ctx context.Context, raw json.RawMessage) (tool
 	// or null value so a tool whose arguments are all optional just
 	// works, and one with required fields reports which field is
 	// missing — not "unexpected end of JSON input".
-	if len(bytes.TrimSpace(p.Arguments)) == 0 || bytes.Equal(bytes.TrimSpace(p.Arguments), []byte("null")) {
-		p.Arguments = json.RawMessage("{}")
+	args := bytes.TrimSpace(p.Arguments)
+	if len(args) == 0 || bytes.Equal(args, []byte("null")) {
+		args = []byte("{}")
 	}
-	// Backstop: a tool handler can't be allowed to hang forever and
-	// block the stdio loop. 30s matches the daemon's per-call budget
-	// and is well above any legitimate read/write.
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	// Backstop: a tool handler can't be allowed to run forever.
+	timeout := tool.Timeout
+	if timeout <= 0 {
+		timeout = defaultToolTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	out, err := tool.Handler(ctx, p.Arguments)
+	out, err := tool.Handler(ctx, args)
 	if err != nil {
 		// Distinguish "wrong arguments" from "ccmuxd failed."
 		// The former is a protocol error the agent should retry
