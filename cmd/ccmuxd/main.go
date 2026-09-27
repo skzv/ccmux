@@ -939,11 +939,18 @@ func parseUsageWindow(q string) time.Duration {
 // which no tmux session name can hold (tmux 3.7 refuses it, older
 // versions store it escaped). Centralizes the rule every handler that
 // passes a name to a tmux `-t` argument shares.
+//
+// A leading `$` is refused too: tmux reads a target session starting
+// with `$` as a session ID even in the exact `=name:` form, so
+// POST /v1/sessions/$1/kill killed whichever session had ID $1, and a
+// session created as "$0" could never be found by that name (tmux keeps
+// `@` and `%` names verbatim and finds them by name, so those are fine).
 func badSessionName(name string) bool {
-	return strings.ContainsAny(name, "/\\:.") || strings.ContainsFunc(name, unicode.IsControl)
+	return strings.HasPrefix(name, "$") ||
+		strings.ContainsAny(name, "/\\:.") || strings.ContainsFunc(name, unicode.IsControl)
 }
 
-const badSessionNameMsg = "name must not contain /, \\, :, . or control characters"
+const badSessionNameMsg = "name must not start with $ or contain /, \\, :, . or control characters"
 
 // badNewSessionName is badSessionName for a name ccmux gives a session
 // (create, rename), which additionally must not contain `#`: tmux
@@ -955,7 +962,7 @@ func badNewSessionName(name string) bool {
 	return badSessionName(name) || strings.Contains(name, "#")
 }
 
-const badNewSessionNameMsg = "name must not contain /, \\, :, ., # or control characters"
+const badNewSessionNameMsg = "name must not start with $ or contain /, \\, :, ., # or control characters"
 
 func (s *server) handleSessionsItem(w http.ResponseWriter, r *http.Request) {
 	// /v1/sessions/<name>[/<subaction>]

@@ -355,7 +355,9 @@ func TestValidSessionName(t *testing.T) {
 			t.Errorf("rejected %q", ok)
 		}
 	}
-	for _, bad := range []string{"", "api.v2", "-x", "a:b", "a/b", "a b", "näme"} {
+	// "$0" would target a session by ID; "@x"/"%x" look like window and
+	// pane IDs to any caller that forgets the exact "=name:" form.
+	for _, bad := range []string{"", "api.v2", "-x", "a:b", "a/b", "a b", "näme", "$0", "$x", "@x", "%x", "x#y"} {
 		if ValidSessionName(bad) {
 			t.Errorf("accepted %q", bad)
 		}

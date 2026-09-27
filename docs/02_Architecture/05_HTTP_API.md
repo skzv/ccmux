@@ -556,9 +556,11 @@ The daemon enforces these (and `400`s on violation); validate before sending
 for a better UX:
 
 - **tmux session names** must not contain `/`, `\`, `:`, `.` or control
-  characters (a tmux target-spec injection guard). Names you create or rename
-  to also must not contain `#`: tmux expands formats in them. Leading and
-  trailing whitespace is trimmed.
+  characters (a tmux target-spec injection guard), and must not start with
+  `$` (tmux reads a `$`-prefixed target as a session ID, so `$1` would act
+  on whichever session has ID `$1`). Names you create or rename to also
+  must not contain `#`: tmux expands formats in them. Leading and trailing
+  whitespace is trimmed.
 - **project names** for `POST /v1/projects`, and for `POST /v1/sessions`
   without a `path`, must be a single non-hidden path segment — no `/`, `\`,
   no leading `.`. A `path` may start with `~/` (the daemon's home).

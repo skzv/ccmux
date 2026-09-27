@@ -10,7 +10,7 @@ import (
 // are path separators. Anything else (including the c- prefix names ccmux
 // generates) is allowed.
 func TestBadSessionName(t *testing.T) {
-	bad := []string{"a:b", "a/b", `a\b`, "c-foo:1", "win:0.1", "a.b", "tab\tname", "nl\nname", "esc\x1b[31m", "del\x7f"}
+	bad := []string{"a:b", "a/b", `a\b`, "c-foo:1", "win:0.1", "a.b", "tab\tname", "nl\nname", "esc\x1b[31m", "del\x7f", "$0", "$1", "$x"}
 	for _, n := range bad {
 		if !badSessionName(n) {
 			t.Errorf("badSessionName(%q) = false, want true", n)
@@ -18,7 +18,7 @@ func TestBadSessionName(t *testing.T) {
 	}
 	// `#` is fine in a target: a session someone created outside ccmux
 	// with a `#` in its name must stay reachable.
-	good := []string{"c-foo", "myproj", "c-shell-12ab", "foo-bar_baz", "", "work#2", "café"}
+	good := []string{"c-foo", "myproj", "c-shell-12ab", "foo-bar_baz", "", "work#2", "café", "a$1", "@0", "%0"}
 	for _, n := range good {
 		if badSessionName(n) {
 			t.Errorf("badSessionName(%q) = true, want false", n)
