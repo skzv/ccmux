@@ -190,6 +190,14 @@ func (m newSessionFormModel) Update(msg tea.Msg) (newSessionFormModel, tea.Cmd) 
 				return m, nil
 			}
 		case "enter":
+			// The rule the rename form, `ccmux new` and the daemon apply.
+			// tmux accepted `a:b` or `my.shell` but read the name as a
+			// session:window target afterwards, so the new session could
+			// never be attached, previewed, killed or renamed.
+			if name := strings.TrimSpace(m.name.Value()); name != "" && !tmux.ValidSessionName(name) {
+				m.err = tr("use only letters, digits, - and _ (not starting with -)")
+				return m, nil
+			}
 			h := m.currentHost()
 			a := m.currentAgent()
 			submit := newBareSessionSubmitMsg{
@@ -317,7 +325,16 @@ func spawnBareSessionCmd(submit newBareSessionSubmitMsg) tea.Cmd {
 			}
 			return remoteStartedFromBareSubmit(submit, res.Session)
 		}
-		// Local case. Resolve workdir client-side using the same
+		// Local case. The form validates the name; this guards any
+		// other producer of the submit message the same way.
+		if submit.Name != "" && !tmux.ValidSessionName(submit.Name) {
+			return toastMsg{
+				Text:  fmt.Sprintf(tr("new session: invalid name %q — use only letters, digits, - and _"), submit.Name),
+				Kind:  toastError,
+				Until: time.Now().Add(5 * time.Second),
+			}
+		}
+		// Resolve workdir client-side using the same
 		// rules the daemon would: explicit → $HOME (no config
 		// fallback here because this code path doesn't read the
 		// daemon's config; the form's placeholder already showed
@@ -353,20 +370,25 @@ func spawnBareSessionCmd(submit newBareSessionSubmitMsg) tea.Cmd {
 		launch := launchCmdForBareSessionWithCommands(submit.Agent, cfg.AgentCommands())
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		if err := tmux.New(ctx, name, path, launch); err != nil {
+		// Tag what runs there in the same tmux call that creates it, so
+		// ccmuxd classifies it with the right rules from its first poll —
+		// untagged, a bare shell was judged as Claude and its prompt
+		// showed as "error".
+		if err := bareTmuxNew(ctx, name, path, launch, bareSessionAgentTag(submit.Agent)); err != nil {
 			return toastMsg{
 				Text:  tr("tmux new-session: ") + err.Error(),
 				Kind:  toastError,
 				Until: time.Now().Add(5 * time.Second),
 			}
 		}
-		// Tag what runs there so ccmuxd classifies it with the right
-		// rules — untagged, a bare shell was judged as Claude and its
-		// prompt showed as "error". Best effort: the session exists.
-		_ = tmux.SetSessionAgent(ctx, name, bareSessionAgentTag(submit.Agent))
 		return bareSessionReadyMsg{Session: name}
 	}
 }
+
+// bareTmuxNew creates a local bare session together with its agent tag
+// (tmux.NewWithAgent). A package var so tests can see the exact call
+// without a tmux server.
+var bareTmuxNew = tmux.NewWithAgent
 
 // remoteStartedFromBareSubmit maps a remote bare-session submit onto
 // the attach trigger, carrying every SSH addressing field (DialHost,

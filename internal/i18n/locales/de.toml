@@ -508,3 +508,4 @@
 "save: " = "speichern: "
 "saved ✓" = "gespeichert ✓"
 "Kill tmux session %q on %s. This cannot be undone." = "tmux-Sitzung %q auf %s beenden. Dies kann nicht rückgängig gemacht werden."
+"new session: invalid name %q — use only letters, digits, - and _" = "neue Sitzung: ungültiger Name %q — nur Buchstaben, Ziffern, - und _ verwenden"

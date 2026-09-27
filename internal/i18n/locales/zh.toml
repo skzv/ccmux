@@ -516,3 +516,4 @@
 "save: " = "保存："
 "saved ✓" = "已保存 ✓"
 "Kill tmux session %q on %s. This cannot be undone." = "终止 %[2]s 上的 tmux 会话 %[1]q。此操作无法撤销。"
+"new session: invalid name %q — use only letters, digits, - and _" = "新建会话：名称 %q 无效——只能使用字母、数字、- 和 _"

@@ -508,3 +508,4 @@
 "save: " = "저장: "
 "saved ✓" = "저장됨 ✓"
 "Kill tmux session %q on %s. This cannot be undone." = "%[2]s의 tmux 세션 %[1]q을(를) 종료합니다. 되돌릴 수 없습니다."
+"new session: invalid name %q — use only letters, digits, - and _" = "새 세션: 잘못된 이름 %q — 문자, 숫자, - 및 _만 사용하세요"
