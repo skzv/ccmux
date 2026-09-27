@@ -164,6 +164,59 @@ func TestHandleModels_RefreshQuery_HitsAPI(t *testing.T) {
 	_ = context.Background
 }
 
+// TestHandleModels_RefreshMergesFallback — ?refresh=true returned the
+// discovery chain's raw result: the upstream's models without the
+// curated list a plain GET merges in, and {"models":null} when neither
+// the CLI nor an API key is available. Both must match a plain GET.
+func TestHandleModels_RefreshMergesFallback(t *testing.T) {
+	get := func(srv *server, url string) claudemodels.Catalog {
+		t.Helper()
+		w := httptest.NewRecorder()
+		srv.handleModels(w, httptest.NewRequest(http.MethodGet, url, nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET %s: status %d", url, w.Code)
+		}
+		var cat claudemodels.Catalog
+		if err := json.Unmarshal(w.Body.Bytes(), &cat); err != nil {
+			t.Fatal(err)
+		}
+		return cat
+	}
+	ids := func(cat claudemodels.Catalog) string {
+		var out []string
+		for _, m := range cat.Models {
+			out = append(out, m.ID)
+		}
+		return strings.Join(out, ",")
+	}
+
+	// No CLI, no API key: the fallback-only refresh.
+	bare := claudemodels.New(filepath.Join(t.TempDir(), "models.json"), "")
+	disableTestCLIFetcher(bare)
+	bare.MinRefreshInterval = 0
+	srv := &server{models: bare}
+	refreshed := get(srv, "/v1/models?refresh=true")
+	if len(refreshed.Models) != len(claudemodels.Fallback()) {
+		t.Errorf("no-source refresh returned %d models (%s), want the %d curated ones", len(refreshed.Models), ids(refreshed), len(claudemodels.Fallback()))
+	}
+
+	// A live source listing one model: the curated ones still show.
+	upstream, _ := countingUpstream(t, http.StatusOK, 0)
+	live := claudemodels.New(filepath.Join(t.TempDir(), "models.json"), "k")
+	disableTestCLIFetcher(live)
+	swapFetcherBaseURL(t, live, upstream.URL)
+	live.MinRefreshInterval = 0
+	srv = &server{models: live}
+	refreshed = get(srv, "/v1/models?refresh=true")
+	plain := get(srv, "/v1/models")
+	if ids(refreshed) != ids(plain) {
+		t.Errorf("?refresh=true models = %s\nplain GET models   = %s", ids(refreshed), ids(plain))
+	}
+	if len(refreshed.Models) != len(claudemodels.Fallback())+1 {
+		t.Errorf("refresh returned %d models (%s), want the live one plus the curated ones", len(refreshed.Models), ids(refreshed))
+	}
+}
+
 // swapFetcherBaseURL points a Service's Fetcher at a stub upstream
 // for tests. claudemodels.Service.Fetcher is exposed (public field) so
 // this is a one-line poke rather than reflection.

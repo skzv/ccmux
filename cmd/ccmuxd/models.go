@@ -110,6 +110,11 @@ func (s *server) handleModels(w http.ResponseWriter, r *http.Request) {
 				cat = s.models.Cached()
 			}
 		}
+		// Refresh returns the discovery chain's own list; give the
+		// client the same merged catalog a plain GET does. Without it
+		// ?refresh=true answered 2 models where GET answered 7, and
+		// {"source":"fallback","models":null} with no CLI and no key.
+		cat = claudemodels.WithFallback(cat)
 	} else {
 		cat, _ = s.models.Catalog(ctx)
 	}

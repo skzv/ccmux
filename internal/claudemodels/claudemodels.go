@@ -682,7 +682,14 @@ func (s *Service) writeAndReturn(cat Catalog) (Catalog, error) {
 
 // withFallback merges curated fallbacks in and sorts for display.
 // Centralised here so Catalog and Refresh callers get the same shape.
-func (s *Service) withFallback(cat Catalog) Catalog {
+func (s *Service) withFallback(cat Catalog) Catalog { return WithFallback(cat) }
+
+// WithFallback is the catalog as clients see it: cat's models merged
+// with the curated list (see Merge) and sorted for display. Catalog and
+// Cached already return this shape; Refresh returns what the discovery
+// chain produced, so a caller that hands a Refresh result to a client
+// merges it here. Idempotent.
+func WithFallback(cat Catalog) Catalog {
 	merged := Merge(cat.Models, Fallback())
 	Sort(merged)
 	out := cat
