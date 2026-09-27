@@ -175,6 +175,7 @@ FUZZ_TARGETS := \
 	./internal/clipboard:FuzzOSC52RoundTrip \
 	./internal/sleeplock:FuzzParsePmsetBatt \
 	./internal/claude:FuzzClassify \
+	./internal/agent:FuzzClaudeRulesAgreeWithFallback \
 	./internal/tmux:FuzzSessionNameForPath \
 	./internal/tui:FuzzRenderSessionLine_DegenerateInputs \
 	./internal/tui:FuzzDialTarget \

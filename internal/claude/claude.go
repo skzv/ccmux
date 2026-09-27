@@ -73,21 +73,23 @@ func classifyTitle(title string) (State, bool) {
 // `lastChange` is when this session's pane content last changed (the caller
 // tracks this — typically the daemon's poll loop).
 func Classify(pane string, lastChange time.Time, idleNeedsInput time.Duration) State {
-	if pane == "" {
-		return StateUnknown
-	}
-	trimmed := strings.TrimRight(pane, " \n\t")
-	if trimmed == "" {
-		return StateUnknown
-	}
 	// The bottom of the pane is where every prompt shape lives: the
 	// v1 rounded frame on the last line, the v2 ruled input box plus
 	// its footer, a v2 dialog, or a shell prompt after a crash.
-	bottom := lastNonEmptyLines(trimmed, promptRegionLines)
+	//
+	// The lines are taken untrimmed, byte for byte what the engine's
+	// last_line / bottom_non_empty_lines(N) regions hold: the prompt
+	// regexes allow for indentation and trailing blanks themselves.
+	// Trimming first (the pane's trailing spaces, or strings.TrimSpace
+	// on the last line, which also eats non-breaking and other Unicode
+	// spaces the rules' \s does not) let the two classifiers disagree on
+	// the same pane. Blank lines are skipped, so an all-blank pane has
+	// no bottom and stays unknown.
+	bottom := lastNonEmptyLines(pane, promptRegionLines)
 	if len(bottom) == 0 {
 		return StateUnknown
 	}
-	tail := strings.TrimSpace(bottom[len(bottom)-1])
+	tail := bottom[len(bottom)-1]
 	switch {
 	case looksLikeClaudePrompt(tail), looksLikeClaudeV2Prompt(bottom), looksLikeClaudeV2Dialog(bottom):
 		if time.Since(lastChange) >= idleNeedsInput {
