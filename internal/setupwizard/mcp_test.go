@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -329,6 +330,223 @@ func TestRegisterMCPForCLI_RemovesStaleSettingsEntry(t *testing.T) {
 	}
 	if _, ok, _ := MCPStatus(); !ok {
 		t.Error("ccmux not registered in ~/.claude.json")
+	}
+}
+
+// --- UnregisterMCP ---------------------------------------------------
+
+// TestUnregisterMCP_UsesClaudeCLIUserScope — uninstall left
+// mcpServers.ccmux in ~/.claude.json pointing at a deleted binary, so
+// Claude Code reported a failing MCP server on every start. With the
+// claude CLI available, unregistering runs exactly `claude mcp remove
+// --scope user ccmux`, after a backup.
+func TestUnregisterMCP_UsesClaudeCLIUserScope(t *testing.T) {
+	home := withFakeClaudeHome(t)
+	calls := fakeClaudeCLI(t, home)
+	seedUserConfig(t, home, `{"mcpServers": {"ccmux": {"type": "stdio", "command": "ccmux-mcp", "args": []}}}`)
+
+	summary, err := UnregisterMCP(context.Background())
+	if err != nil {
+		t.Fatalf("UnregisterMCP: %v", err)
+	}
+	want := []string{"mcp", "remove", "--scope", "user", "ccmux"}
+	if len(*calls) != 1 || strings.Join((*calls)[0], "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("claude invocations = %q, want exactly %q", *calls, want)
+	}
+	if _, ok, _ := MCPStatus(); ok {
+		t.Error("ccmux still registered after UnregisterMCP")
+	}
+	if !strings.Contains(summary, "unregistered") {
+		t.Errorf("summary = %q, want it to say the entry was unregistered", summary)
+	}
+	if entries, _ := os.ReadDir(filepath.Join(home, ".claude", "backups")); len(entries) == 0 {
+		t.Error("~/.claude.json was modified without a backup")
+	}
+}
+
+// TestUnregisterMCP_FallbackEditsClaudeJSON — without the claude CLI the
+// entry is deleted from ~/.claude.json directly; every other key and
+// server survives verbatim (including numbers that don't fit a float64)
+// and a backup is kept.
+func TestUnregisterMCP_FallbackEditsClaudeJSON(t *testing.T) {
+	home := withFakeClaudeHome(t)
+	noClaudeCLI(t)
+	seedUserConfig(t, home, `{
+  "numStartups": 42,
+  "firstStartTime": 1698765432109876543,
+  "projects": {"/Users/me/p": {"allowedTools": ["Bash"]}},
+  "mcpServers": {
+    "postgres": {"type": "stdio", "command": "postgres-mcp", "args": ["--db", "mydb"]},
+    "ccmux": {"type": "stdio", "command": "/Users/me/.local/bin/ccmux-mcp", "args": ["--allow-mutate"]}
+  }
+}`)
+
+	if _, err := UnregisterMCP(context.Background()); err != nil {
+		t.Fatalf("UnregisterMCP: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(home, ".claude.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &top); err != nil {
+		t.Fatalf("~/.claude.json no longer valid JSON: %v\n%s", err, raw)
+	}
+	if string(top["firstStartTime"]) != "1698765432109876543" || string(top["numStartups"]) != "42" {
+		t.Errorf("unrelated keys changed: firstStartTime=%s numStartups=%s", top["firstStartTime"], top["numStartups"])
+	}
+	if !strings.Contains(string(top["projects"]), "allowedTools") {
+		t.Errorf("projects key lost: %s", top["projects"])
+	}
+	servers := readUserServers(t, home)
+	if _, ok := servers["ccmux"]; ok {
+		t.Errorf("ccmux entry still present: %v", servers)
+	}
+	if args, _ := servers["postgres"]["args"].([]any); servers["postgres"]["command"] != "postgres-mcp" || len(args) != 2 {
+		t.Errorf("postgres server changed: %v", servers["postgres"])
+	}
+	if entries, _ := os.ReadDir(filepath.Join(home, ".claude", "backups")); len(entries) == 0 {
+		t.Error("~/.claude.json was modified without a backup")
+	}
+}
+
+// TestUnregisterMCP_RealExecFallsBackWhenCLIFails — drives the real exec
+// seam with a `claude` stub that fails every command: the entry must
+// still be removed from ~/.claude.json via the direct edit.
+func TestUnregisterMCP_RealExecFallsBackWhenCLIFails(t *testing.T) {
+	home := withFakeClaudeHome(t)
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte("#!/bin/sh\necho 'unknown command' >&2\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	seedUserConfig(t, home, `{"numStartups": 7, "mcpServers": {"ccmux": {"type": "stdio", "command": "ccmux-mcp"}}}`)
+
+	summary, err := UnregisterMCP(context.Background())
+	if err != nil {
+		t.Fatalf("UnregisterMCP: %v", err)
+	}
+	if _, ok, _ := MCPStatus(); ok {
+		t.Fatalf("ccmux still registered after the fallback edit; summary: %s", summary)
+	}
+	if !strings.Contains(summary, "claude mcp remove") {
+		t.Errorf("summary should say why the CLI path was abandoned: %s", summary)
+	}
+}
+
+// TestUnregisterMCP_NothingRegisteredIsNoOp — idempotent: with no entry
+// (or no ~/.claude.json at all) nothing runs and nothing is written, not
+// even a backup.
+func TestUnregisterMCP_NothingRegisteredIsNoOp(t *testing.T) {
+	for name, seed := range map[string]string{
+		"no file":        "",
+		"other servers":  `{"mcpServers": {"postgres": {"type": "stdio", "command": "postgres-mcp"}}}`,
+		"no mcpServers":  `{"numStartups": 1}`,
+		"null mcpServer": `{"mcpServers": null}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			home := withFakeClaudeHome(t)
+			calls := fakeClaudeCLI(t, home)
+			if seed != "" {
+				seedUserConfig(t, home, seed)
+			}
+			summary, err := UnregisterMCP(context.Background())
+			if err != nil {
+				t.Fatalf("UnregisterMCP: %v", err)
+			}
+			if !strings.Contains(summary, "nothing to remove") {
+				t.Errorf("summary = %q, want a nothing-to-remove report", summary)
+			}
+			if len(*calls) != 0 {
+				t.Errorf("claude ran with nothing registered: %q", *calls)
+			}
+			if _, err := os.Stat(filepath.Join(home, ".claude", "backups")); !os.IsNotExist(err) {
+				t.Error("a backup was written for a no-op unregister")
+			}
+			if seed == "" {
+				if _, err := os.Stat(filepath.Join(home, ".claude.json")); !os.IsNotExist(err) {
+					t.Error("unregister created ~/.claude.json")
+				}
+			}
+		})
+	}
+}
+
+// TestUnregisterMCP_LeavesForeignEntryAlone — an entry named ccmux that
+// doesn't run ccmux-mcp isn't ccmux's to remove.
+func TestUnregisterMCP_LeavesForeignEntryAlone(t *testing.T) {
+	home := withFakeClaudeHome(t)
+	calls := fakeClaudeCLI(t, home)
+	body := `{"mcpServers": {"ccmux": {"type": "stdio", "command": "/opt/tools/my-ccmux-bridge"}}}`
+	seedUserConfig(t, home, body)
+
+	summary, err := UnregisterMCP(context.Background())
+	if err != nil {
+		t.Fatalf("UnregisterMCP: %v", err)
+	}
+	if len(*calls) != 0 {
+		t.Errorf("claude ran for a foreign entry: %q", *calls)
+	}
+	if raw, _ := os.ReadFile(filepath.Join(home, ".claude.json")); string(raw) != body {
+		t.Errorf("~/.claude.json changed:\n%s", raw)
+	}
+	if !strings.Contains(summary, "my-ccmux-bridge") {
+		t.Errorf("summary should name the foreign command: %q", summary)
+	}
+}
+
+// TestUnregisterMCP_RemovesStaleSettingsEntry — the unused entry older
+// ccmux wrote into ~/.claude/settings.json goes too; other settings stay.
+func TestUnregisterMCP_RemovesStaleSettingsEntry(t *testing.T) {
+	home := withFakeClaudeHome(t)
+	fakeClaudeCLI(t, home)
+	seedUserConfig(t, home, `{"mcpServers": {"ccmux": {"type": "stdio", "command": "ccmux-mcp"}}}`)
+	seedSettings(t, filepath.Join(home, ".claude"), map[string]any{
+		"model": "claude-opus-4-7",
+		"mcpServers": map[string]any{
+			"ccmux":    map[string]any{"type": "stdio", "command": "ccmux-mcp"},
+			"postgres": map[string]any{"type": "stdio", "command": "postgres-mcp"},
+		},
+	})
+
+	if _, err := UnregisterMCP(context.Background()); err != nil {
+		t.Fatalf("UnregisterMCP: %v", err)
+	}
+	s, err := claudeconfig.ReadSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.MCPServers["ccmux"]; ok {
+		t.Error("stale ccmux entry still in ~/.claude/settings.json")
+	}
+	if _, ok := s.MCPServers["postgres"]; !ok || s.Model != "claude-opus-4-7" {
+		t.Errorf("unrelated settings lost: model=%q servers=%v", s.Model, s.MCPServers)
+	}
+}
+
+// TestRegisterThenUnregisterMCP_RoundTrip — register followed by
+// unregister leaves Claude Code with no ccmux server, and a second
+// unregister is a no-op.
+func TestRegisterThenUnregisterMCP_RoundTrip(t *testing.T) {
+	home := withFakeClaudeHome(t)
+	calls := fakeClaudeCLI(t, home)
+	seedUserConfig(t, home, `{"numStartups": 1}`)
+
+	if err := RegisterMCPForCLI(context.Background(), io.Discard, true); err != nil {
+		t.Fatalf("RegisterMCPForCLI: %v", err)
+	}
+	if _, err := UnregisterMCP(context.Background()); err != nil {
+		t.Fatalf("UnregisterMCP: %v", err)
+	}
+	if _, ok, _ := MCPStatus(); ok {
+		t.Fatal("still registered after register + unregister")
+	}
+	before := len(*calls)
+	if _, err := UnregisterMCP(context.Background()); err != nil {
+		t.Fatalf("second UnregisterMCP: %v", err)
+	}
+	if len(*calls) != before {
+		t.Errorf("second unregister ran claude again: %q", (*calls)[before:])
 	}
 }
 

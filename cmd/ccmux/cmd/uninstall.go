@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/skzv/ccmux/internal/daemonservice"
+	"github.com/skzv/ccmux/internal/setupwizard"
 	"github.com/skzv/ccmux/internal/tmux"
 	"github.com/skzv/ccmux/internal/tmuxchrome"
 )
@@ -27,7 +28,8 @@ import (
 //   - Notes under <project>/docs/. Same reason.
 //   - The ~/.claude/ directory. moshi-hook lives there and is a separate
 //     product — uninstall it via `brew uninstall moshi-hook` if you
-//     want to clear it.
+//     want to clear it. (ccmux's own MCP entry in ~/.claude.json IS
+//     removed, see below.)
 //   - The shell-level zsh aliases (cc / mkproj / upgrade-proj). If you
 //     added shim functions pointing at ccmux, remove them by hand.
 //
@@ -39,6 +41,9 @@ import (
 //   - $HOME/.local/share/ccmux/* (snapshots, daemon db)
 //   - $HOME/.config/ccmux/* (config.toml) — unless --keep-config
 //   - tmux chrome overrides on every c-* session — unless --keep-chrome
+//   - the ccmux MCP server registered in Claude Code (~/.claude.json),
+//     which would otherwise point at the deleted ccmux-mcp and fail on
+//     every Claude Code start
 func newUninstallCmd() *cobra.Command {
 	var (
 		yes        bool
@@ -92,11 +97,12 @@ func newUninstallCmd() *cobra.Command {
 // uninstallPlan is the list of paths/actions we'll do, used both for
 // the "preview" block before confirmation and the execute loop.
 type uninstallPlan struct {
-	steps      []string
-	paths      []string
-	resetTmux  bool
-	keepConfig bool
-	leftAlone  []string
+	steps         []string
+	paths         []string
+	resetTmux     bool
+	keepConfig    bool
+	unregisterMCP bool
+	leftAlone     []string
 }
 
 func buildUninstallPlan(keepConfig, keepChrome bool) (*uninstallPlan, error) {
@@ -145,6 +151,16 @@ func buildUninstallPlan(keepConfig, keepChrome bool) (*uninstallPlan, error) {
 		// we mention the action in the preview.
 		p.steps = append(p.steps, "reset tmux status-bar chrome on every c-* session")
 	}
+	// A registration left behind points Claude Code at the ccmux-mcp
+	// removed above, and it reports a failing MCP server on every
+	// start. An unreadable ~/.claude.json is skipped here, not fatal:
+	// it's Claude Code's file, and the rest of the uninstall still
+	// applies.
+	if _, registered, err := setupwizard.MCPStatus(); err == nil && registered {
+		p.unregisterMCP = true
+		p.steps = append(p.steps, "unregister the ccmux MCP server from Claude Code ("+
+			setupwizard.MCPUserConfigPath()+"; backup in ~/.claude/backups/)")
+	}
 	p.steps = append([]string{"stop running ccmuxd (SIGTERM)"}, p.steps...)
 
 	p.leftAlone = []string{
@@ -188,6 +204,10 @@ func runUninstall(plan *uninstallPlan) error {
 	} else {
 		// pkill exits 1 when no matching process; not a failure.
 		report("ccmuxd was not running", nil)
+	}
+
+	if plan.unregisterMCP {
+		uninstallMCPStep(unregisterMCP, report)
 	}
 
 	if plan.resetTmux {
@@ -238,6 +258,19 @@ func uninstallServiceStep(uninstall func() (daemonservice.Status, error), report
 		return
 	}
 	report("disabled autostart service (if any)", nil)
+}
+
+// uninstallMCPStep removes ccmux-mcp's registration from Claude Code and
+// routes the outcome through report. Split out, like
+// uninstallServiceStep, so a test can drive it without a real Claude
+// config.
+func uninstallMCPStep(unregister func(context.Context) (string, error), report func(msg string, err error)) {
+	summary, err := unregister(context.Background())
+	if err != nil {
+		report("unregister ccmux-mcp from Claude Code", err)
+		return
+	}
+	report(summary, nil)
 }
 
 // repoCloneHint guesses where the user probably cloned the repo so the

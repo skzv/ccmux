@@ -337,7 +337,7 @@ bell = true                          # ring local terminal BEL on needs_input
 ### 🔌 MCP server
 
 - `ccmux-mcp` ships alongside ccmux in the same install — a Model Context Protocol server agents can plug into to see and act on every session
-- Wire it into Claude Code with `ccmux mcp register` (also offered by `ccmux setup`), or by hand: `claude mcp add --scope user ccmux -- ccmux-mcp`. Other MCP-aware clients: point a stdio server at the `ccmux-mcp` binary
+- Wire it into Claude Code with `ccmux mcp register` (also offered by `ccmux setup`), or by hand: `claude mcp add --scope user ccmux -- ccmux-mcp`. `ccmux mcp unregister` takes it out again (`ccmux uninstall` does that for you). Other MCP-aware clients: point a stdio server at the `ccmux-mcp` binary
 - Read-only by default: `list_sessions`, `read_pane`, `list_projects`, `list_conversations`, `get_usage`, `list_machines`, notes ones, daemon health
 - `--allow-mutate` exposes `spawn_session`, `send_keys`, `kill_session` — opt-in, hidden from `tools/list` until the flag is on
 - `CCMUX_HOST=mini.tail-xxxxx.ts.net:7474 ccmux-mcp` points it at a tailnet peer's daemon — an agent on the laptop can drive sessions on the Mac mini
@@ -377,7 +377,7 @@ bell = true                          # ring local terminal BEL on needs_input
 - `ccmux setup` — interactive wizard, checks every dep, offers `brew install` for missing pieces; `--yes` runs it non-interactively for scripts, and the first launch on a fresh machine offers to run it for you
 - `ccmux doctor` — non-interactive health check (great for scripting)
 - `ccmux update` — pulls the git checkout, rebuilds, reloads ccmuxd
-- `ccmux uninstall` — clean removal, never touches your projects or `~/.claude/`
+- `ccmux uninstall` — clean removal, never touches your projects; from Claude Code's config it only removes its own MCP entry
 
 ### 🎨 Quality of life
 
@@ -475,12 +475,13 @@ What gets removed:
 - `~/.local/share/ccmux/` (snapshots, daemon db)
 - `~/.config/ccmux/` (unless `--keep-config`)
 - The ccmux-styled tmux status bar on every `c-*` session (unless `--keep-chrome`)
+- The `ccmux` MCP server entry in `~/.claude.json`, if you registered one (backed up to `~/.claude/backups/` first) — otherwise Claude Code keeps trying to start the deleted `ccmux-mcp`
 
 What is **never** touched:
 
 - Your project directories
 - Notes under `<project>/docs/`
-- `~/.claude/` (Claude Code state + moshi-hook entries)
+- `~/.claude/` (Claude Code state + moshi-hook entries), apart from that one MCP entry
 
 To also remove `moshi-hook`: `brew services stop moshi-hook && brew uninstall moshi-hook && brew untap rjyo/moshi`.
 

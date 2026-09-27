@@ -32,9 +32,43 @@ their settings file. Each one's idempotent — re-run them freely.`,
 	}
 	c.AddCommand(
 		newMCPRegisterCmd(),
+		newMCPUnregisterCmd(),
 		newMCPStatusCmd(),
 	)
 	return c
+}
+
+// unregisterMCP removes ccmux-mcp from Claude Code. A seam so tests of
+// `ccmux uninstall`'s step never touch a real Claude config.
+var unregisterMCP = setupwizard.UnregisterMCP
+
+// newMCPUnregisterCmd is `ccmux mcp unregister`, the inverse of
+// register. `ccmux uninstall` runs the same step.
+func newMCPUnregisterCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "unregister",
+		Short: "Remove the ccmux-mcp MCP server from Claude Code",
+		Long: `Removes the user-scope 'ccmux' MCP server from Claude Code — the equivalent of
+
+  claude mcp remove --scope user ccmux
+
+which is what runs when the claude CLI is on PATH. Without it, ccmux deletes
+the entry from the top-level mcpServers object in ~/.claude.json directly
+(every other server and setting is preserved; a timestamped backup is
+written to ~/.claude/backups/ first).
+
+Only an entry that runs ccmux-mcp is removed. Idempotent: with nothing
+registered it changes nothing. ` + "`ccmux uninstall`" + ` does this for you.`,
+		Args: cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			summary, err := unregisterMCP(context.Background())
+			if err != nil {
+				return fmt.Errorf("unregister ccmux-mcp from Claude Code: %w", err)
+			}
+			fmt.Println("✓ " + summary)
+			return nil
+		},
+	}
 }
 
 // newMCPRegisterCmd is `ccmux mcp register [--allow-mutate]`. The

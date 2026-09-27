@@ -3,6 +3,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"net"
 	"os"
 	"path/filepath"
@@ -416,6 +417,69 @@ func TestResume_AgentListCoversEveryAgent(t *testing.T) {
 		if !strings.Contains(bad.stderr, id) {
 			t.Errorf("unknown-agent error doesn't list agent %q: %s", id, bad.stderr)
 		}
+	}
+}
+
+// --- ccmux mcp unregister / uninstall ----------------------------------------
+
+// TestMCPUnregister_RemovesEntryKeepsTheRest — `ccmux mcp unregister`
+// (no claude CLI on PATH, so it edits ~/.claude.json directly) removes
+// only the ccmux server and is a no-op when re-run.
+func TestMCPUnregister_RemovesEntryKeepsTheRest(t *testing.T) {
+	e := newCLIEnv(t)
+	cfgPath := filepath.Join(e.home, ".claude.json")
+	body := `{"numStartups": 5, "mcpServers": {"ccmux": {"type": "stdio", "command": "ccmux-mcp", "args": []}, "pg": {"type": "stdio", "command": "pg-mcp"}}}`
+	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	res := e.run("", "mcp", "unregister")
+	if res.code != 0 {
+		t.Fatalf("mcp unregister exit %d\nstderr: %s", res.code, res.stderr)
+	}
+	raw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		NumStartups int                        `json:"numStartups"`
+		MCPServers  map[string]json.RawMessage `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("~/.claude.json no longer valid JSON: %v\n%s", err, raw)
+	}
+	if _, ok := got.MCPServers["ccmux"]; ok {
+		t.Errorf("ccmux entry still registered:\n%s", raw)
+	}
+	if _, ok := got.MCPServers["pg"]; !ok || got.NumStartups != 5 {
+		t.Errorf("unrelated config lost:\n%s", raw)
+	}
+
+	again := e.run("", "mcp", "unregister")
+	if again.code != 0 || !strings.Contains(again.stdout, "nothing to remove") {
+		t.Errorf("second unregister (exit %d) should be a no-op:\n%s%s", again.code, again.stdout, again.stderr)
+	}
+}
+
+// TestUninstallDryRun_ListsMCPUnregister — the plan printed before the
+// y/N prompt names the MCP cleanup, and --dry-run touches nothing.
+func TestUninstallDryRun_ListsMCPUnregister(t *testing.T) {
+	e := newCLIEnv(t)
+	cfgPath := filepath.Join(e.home, ".claude.json")
+	body := `{"mcpServers": {"ccmux": {"type": "stdio", "command": "ccmux-mcp", "args": []}}}`
+	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	res := e.run("", "uninstall", "--dry-run")
+	if res.code != 0 {
+		t.Fatalf("uninstall --dry-run exit %d\nstderr: %s", res.code, res.stderr)
+	}
+	if !strings.Contains(res.stdout, "unregister the ccmux MCP server from Claude Code") {
+		t.Errorf("uninstall plan doesn't mention the MCP registration:\n%s", res.stdout)
+	}
+	if raw, _ := os.ReadFile(cfgPath); string(raw) != body {
+		t.Errorf("--dry-run modified ~/.claude.json:\n%s", raw)
 	}
 }
 

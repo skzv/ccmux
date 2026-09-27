@@ -149,6 +149,26 @@ func (c *userMCPConfig) setEntry(name string, entry json.RawMessage) error {
 	return nil
 }
 
+// deleteEntry removes the named MCP server entry. Every other server
+// is re-emitted verbatim.
+func (c *userMCPConfig) deleteEntry(name string) error {
+	delete(c.servers, name)
+	servers, err := json.Marshal(c.servers)
+	if err != nil {
+		return err
+	}
+	c.top["mcpServers"] = servers
+	return nil
+}
+
+// runsCCMUXMCP reports whether an MCP entry's command is the ccmux-mcp
+// binary (bare, by path, or with Windows' .exe), i.e. whether the entry
+// is one ccmux wrote rather than someone else's server that happens to
+// be named "ccmux".
+func runsCCMUXMCP(command string) bool {
+	return strings.TrimSuffix(filepath.Base(command), ".exe") == "ccmux-mcp"
+}
+
 // save atomically replaces the file, keeping its permission bits (new
 // files are 0600: the file carries account details).
 func (c *userMCPConfig) save() error {
@@ -274,7 +294,7 @@ func removeStaleSettingsEntry() (bool, error) {
 		return false, err
 	}
 	stale, ok := s.MCPServers[ccmuxMCPName]
-	if !ok || filepath.Base(stale.Command) != "ccmux-mcp" {
+	if !ok || !runsCCMUXMCP(stale.Command) {
 		return false, nil
 	}
 	delete(s.MCPServers, ccmuxMCPName)
@@ -445,6 +465,95 @@ func RegisterMCPForCLI(ctx context.Context, out io.Writer, allowMutate bool) err
 	}
 	fmt.Fprintln(out, "  restart Claude Code so the new MCP server takes effect")
 	return nil
+}
+
+// UnregisterMCP removes ccmux's user-scope MCP server from Claude Code —
+// the inverse of registration, behind `ccmux mcp unregister` and
+// `ccmux uninstall`. Uninstalling used to leave mcpServers.ccmux in
+// ~/.claude.json pointing at a deleted binary, so Claude Code reported a
+// failing MCP server on every start.
+//
+// It prefers `claude mcp remove --scope user ccmux` and falls back to
+// deleting the key from ~/.claude.json directly (backup first, every
+// other key preserved verbatim, atomic write) when the CLI is missing,
+// fails, or leaves the entry behind. The unused entry older ccmux wrote
+// into ~/.claude/settings.json is removed too.
+//
+// Idempotent: with nothing registered it changes nothing and writes no
+// backup. An entry named ccmux that doesn't run ccmux-mcp is someone
+// else's server and is left alone. Returns a one-line summary of what
+// happened, for the caller to print.
+func UnregisterMCP(ctx context.Context) (string, error) {
+	summary, err := unregisterCCMUXMCP(ctx)
+	if err != nil {
+		return "", err
+	}
+	switch removed, serr := removeStaleSettingsEntry(); {
+	case serr != nil:
+		summary += fmt.Sprintf(" (couldn't check ~/.claude/settings.json for the old ccmux entry: %v)", serr)
+	case removed:
+		summary += "; removed the old, unused ccmux entry from ~/.claude/settings.json"
+	}
+	return summary, nil
+}
+
+func unregisterCCMUXMCP(ctx context.Context) (string, error) {
+	cfg, err := readUserMCPConfig()
+	if err != nil {
+		return "", fmt.Errorf("read %s: %w", displayUserConfigPath(), err)
+	}
+	existing, ok := cfg.entry(ccmuxMCPName)
+	if !ok {
+		return "ccmux-mcp is not registered with Claude Code — nothing to remove", nil
+	}
+	if !runsCCMUXMCP(existing.Command) {
+		return fmt.Sprintf("left the %q MCP server in %s alone: it runs %q, not ccmux-mcp",
+			ccmuxMCPName, displayUserConfigPath(), existing.Command), nil
+	}
+	backup, err := backupUserConfig()
+	if err != nil {
+		return "", err
+	}
+	done := func(via string) string {
+		s := "unregistered ccmux-mcp from Claude Code (" + via
+		if backup != "" {
+			s += "; backup at " + backup
+		}
+		return s + ")"
+	}
+
+	var cliErr error
+	if lookClaudeCLI() {
+		out, err := runClaudeMCP(ctx, "mcp", "remove", "--scope", "user", ccmuxMCPName)
+		if err == nil {
+			if _, still, serr := MCPStatus(); serr == nil && !still {
+				return done("claude mcp remove --scope user"), nil
+			}
+			cliErr = errors.New("claude mcp remove succeeded but the entry is still in " + displayUserConfigPath())
+		} else {
+			cliErr = fmt.Errorf("claude mcp remove: %w: %s", err, strings.TrimSpace(string(out)))
+		}
+	}
+
+	// Re-read: the CLI may have rewritten the file (or even removed the
+	// entry) before failing.
+	if cfg, err = readUserMCPConfig(); err != nil {
+		return "", joinErrs(cliErr, err)
+	}
+	via := "claude mcp remove --scope user"
+	if _, ok := cfg.entry(ccmuxMCPName); ok {
+		if err := cfg.deleteEntry(ccmuxMCPName); err != nil {
+			return "", joinErrs(cliErr, err)
+		}
+		if err := cfg.save(); err != nil {
+			return "", joinErrs(cliErr, fmt.Errorf("write %s: %w", cfg.path, err))
+		}
+		via = "edited " + displayUserConfigPath()
+	}
+	if cliErr != nil {
+		via += ", after " + cliErr.Error()
+	}
+	return done(via), nil
 }
 
 // MCPStatus reports whether ccmux-mcp is registered as a user-scope MCP
