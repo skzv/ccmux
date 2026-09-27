@@ -21,6 +21,9 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	i18n.SetLanguage("en")
+	// Never ask a real tmux server which session the test binary runs
+	// in (the kill dialog does); tests that need it stub a name.
+	currentTmuxSession = func() string { return "" }
 	os.Exit(m.Run())
 }
 

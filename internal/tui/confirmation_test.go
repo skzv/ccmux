@@ -2,10 +2,13 @@ package tui
 
 import (
 	"errors"
+	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/tui/styles"
@@ -200,41 +203,118 @@ func TestConfirmation_ArrowFocusEnterAndInputBlocking(t *testing.T) {
 	}
 }
 
+// renderedButton finds a dialog button in the rendered frame, the way a
+// user sees it: the screen row holding its text and the column of the
+// button's middle. Independent of the dialog's layout code on purpose.
+func renderedButton(t *testing.T, frame, label string) (x, y int) {
+	t.Helper()
+	text := " " + label + " "
+	for row, line := range strings.Split(ansi.Strip(frame), "\n") {
+		if i := strings.LastIndex(line, text); i >= 0 && strings.Contains(line, " Cancel ") {
+			return ansi.StringWidth(line[:i]) + ansi.StringWidth(text)/2, row
+		}
+	}
+	t.Fatalf("button %q not found in frame:\n%s", label, ansi.Strip(frame))
+	return 0, 0
+}
+
+func click(t *testing.T, a App, x, y int) (App, tea.Cmd) {
+	t.Helper()
+	m, cmd := a.Update(tea.MouseMsg{X: x, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+	return m.(App), cmd
+}
+
+// TestConfirmation_MouseActions — clicks land on the buttons where they
+// are drawn. The hit-box used to sit one row below the buttons (and
+// further off at 40 columns, where the hint wraps and the dialog grows),
+// so clicking a button did nothing and clicking under it fired it.
 func TestConfirmation_MouseActions(t *testing.T) {
+	for _, size := range [][2]int{{100, 30}, {80, 24}, {40, 20}} {
+		t.Run(fmt.Sprintf("%dx%d", size[0], size[1]), func(t *testing.T) {
+			a := newConfirmationTestApp()
+			a.width, a.height = size[0], size[1]
+
+			a, _ = sendKey(t, a, keyRunes("q"))
+			x, y := renderedButton(t, a.View(), "Cancel")
+			// One row below the button is not the button.
+			if a2, cmd := click(t, a, x, y+1); !a2.confirm.open() || commandContainsQuit(cmd) {
+				t.Fatal("a click below the Cancel button acted on the dialog")
+			}
+			a, cmd := click(t, a, x, y)
+			if a.confirm.open() {
+				t.Fatal("clicking Cancel did not close the dialog")
+			}
+			if commandContainsQuit(cmd) {
+				t.Fatal("clicking Cancel quit")
+			}
+
+			a, _ = sendKey(t, a, keyRunes("q"))
+			x, y = renderedButton(t, a.View(), "Quit")
+			a, cmd = click(t, a, x, y)
+			if a.confirm.open() {
+				t.Fatal("clicking Quit did not close the dialog")
+			}
+			if !commandContainsQuit(cmd) {
+				t.Fatal("clicking Quit did not quit")
+			}
+		})
+	}
+}
+
+// TestConfirmation_KillDialogNarrow — at phone width the kill dialog
+// must fit, keep the session name whole (it used to be hard-wrapped
+// mid-word), and its buttons must still take clicks.
+func TestConfirmation_KillDialogNarrow(t *testing.T) {
+	stubCurrentTmuxSession(t, "")
 	a := newConfirmationTestApp()
-	a, _ = sendKey(t, a, keyRunes("q"))
-	left, top, width, height := a.confirmationBounds()
-	buttonY := top + height - 4
+	a.width, a.height = 40, 20
+	a.sessionsM.SetSessions([]daemon.SessionState{{Name: "c-project-name", Host: "local"}})
+	a, _ = sendKey(t, a, keyRunes("x"))
+	if !a.confirm.open() {
+		t.Fatal("x did not open the kill dialog")
+	}
+	out := a.View()
+	assertNoOverflow(t, out, a.width)
+	if !strings.Contains(ansi.Strip(out), `"c-project-name"`) {
+		t.Errorf("session name broken across lines:\n%s", ansi.Strip(out))
+	}
+	x, y := renderedButton(t, out, "Cancel")
+	if a, _ = click(t, a, x, y); a.confirm.open() {
+		t.Error("clicking Cancel at 40 columns did nothing")
+	}
+}
 
-	m, cmd := a.Update(tea.MouseMsg{
-		X:      left + width/4,
-		Y:      buttonY,
-		Button: tea.MouseButtonLeft,
-		Action: tea.MouseActionPress,
-	})
-	a = m.(App)
-	if a.confirm.open() {
-		t.Fatal("mouse cancel did not close modal")
-	}
-	if commandContainsQuit(cmd) {
-		t.Fatal("mouse cancel returned quit command")
-	}
+func stubCurrentTmuxSession(t *testing.T, name string) {
+	t.Helper()
+	orig := currentTmuxSession
+	currentTmuxSession = func() string { return name }
+	t.Cleanup(func() { currentTmuxSession = orig })
+}
 
-	a, _ = sendKey(t, a, keyRunes("q"))
-	left, top, width, height = a.confirmationBounds()
-	buttonY = top + height - 4
-	m, cmd = a.Update(tea.MouseMsg{
-		X:      left + width*3/4,
-		Y:      buttonY,
-		Button: tea.MouseButtonLeft,
-		Action: tea.MouseActionPress,
+// TestConfirmation_KillOwnSessionWarns — killing the tmux session ccmux
+// itself runs in takes ccmux down too; the dialog must say so, and only
+// for that session.
+func TestConfirmation_KillOwnSessionWarns(t *testing.T) {
+	stubCurrentTmuxSession(t, "c-home")
+	a := newConfirmationTestApp()
+	a.sessionsM.SetSessions([]daemon.SessionState{
+		{Name: "c-home", Host: "local"},
+		{Name: "c-other", Host: "local"},
 	})
-	a = m.(App)
-	if a.confirm.open() {
-		t.Fatal("mouse confirm did not close modal")
+	for _, tc := range []struct {
+		name string
+		warn bool
+	}{{"c-home", true}, {"c-other", false}} {
+		a2, _ := a.openKillSessionConfirmation("local", tc.name)
+		got := strings.Contains(ansi.Strip(a2.View()), "ccmux is running in this session")
+		if got != tc.warn {
+			t.Errorf("kill %s: warning shown = %v, want %v", tc.name, got, tc.warn)
+		}
 	}
-	if !commandContainsQuit(cmd) {
-		t.Fatal("mouse confirm did not return quit command")
+	// A remote session with the same name is not this one.
+	a2, _ := a.openKillSessionConfirmation("mini", "c-home")
+	if strings.Contains(ansi.Strip(a2.View()), "ccmux is running in this session") {
+		t.Error("warned for a same-named session on another host")
 	}
 }
 

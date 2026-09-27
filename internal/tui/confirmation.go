@@ -1,11 +1,16 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
+
+	"github.com/skzv/ccmux/internal/tmuxchrome"
 )
 
 type confirmationKind int
@@ -37,6 +42,9 @@ type confirmationModal struct {
 	// laptop's c-ccmux from the mini's).
 	host  string
 	focus confirmationFocus
+	// self marks a kill of the tmux session ccmux itself runs in: the
+	// dialog warns that ccmux goes down with it.
+	self bool
 }
 
 func newQuitConfirmation() confirmationModal {
@@ -54,36 +62,46 @@ func (m confirmationModal) open() bool {
 func (m confirmationModal) title() string {
 	switch m.kind {
 	case confirmationQuit:
-		return "Quit ccmux?"
+		return tr("Quit ccmux?")
 	case confirmationKillSession:
-		return "Kill session?"
+		return tr("Kill session?")
 	default:
 		return ""
 	}
 }
 
-func (m confirmationModal) body() string {
+// body is the dialog's explanation. target is the session name as it
+// should appear (already shortened to fit, see renderConfirmationOverlay).
+func (m confirmationModal) body(target string) string {
 	switch m.kind {
 	case confirmationQuit:
-		return "Exit ccmux. Managed tmux sessions will keep running."
+		return tr("Exit ccmux. Managed tmux sessions will keep running.")
 	case confirmationKillSession:
 		if m.host != "" {
-			return fmt.Sprintf(tr("Kill tmux session %q on %s. This cannot be undone."), m.target, m.host)
+			return fmt.Sprintf(tr("Kill tmux session %q on %s. This cannot be undone."), target, m.host)
 		}
-		return fmt.Sprintf("Kill tmux session %q. This cannot be undone.", m.target)
+		return fmt.Sprintf(tr("Kill tmux session %q. This cannot be undone."), target)
 	default:
 		return ""
 	}
+}
+
+// warning is an extra line for a kill that takes ccmux down with it.
+func (m confirmationModal) warning() string {
+	if m.kind == confirmationKillSession && m.self {
+		return tr("ccmux is running in this session — it will close too.")
+	}
+	return ""
 }
 
 func (m confirmationModal) confirmLabel() string {
 	switch m.kind {
 	case confirmationQuit:
-		return "Quit"
+		return tr("Quit")
 	case confirmationKillSession:
-		return "Kill"
+		return tr("Kill")
 	default:
-		return "Confirm"
+		return tr("Confirm")
 	}
 }
 
@@ -105,7 +123,16 @@ func (a App) openKillSessionConfirmation(host, name string) (App, tea.Cmd) {
 		host = ""
 	}
 	a.confirm = newKillSessionConfirmation(host, name)
+	a.confirm.self = host == "" && name == currentTmuxSession()
 	return a, nil
+}
+
+// currentTmuxSession names the local tmux session ccmux runs in ("" when
+// it isn't inside tmux). A package var so tests don't need tmux.
+var currentTmuxSession = func() string {
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	return tmuxchrome.CurrentSession(ctx)
 }
 
 func (a App) cancelConfirmation() (App, tea.Cmd) {
@@ -170,49 +197,87 @@ func (a App) updateConfirmationMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	return a.cancelConfirmation()
 }
 
+// confirmationButtonAt maps a click to a dialog button. The hit-boxes
+// come from the rendered dialog itself — the row holding both buttons
+// and their columns in it — rather than from geometry re-derived next to
+// the render: that copy said the buttons sat one row lower than they do,
+// and drifted further once the text wrapped on a narrow terminal.
 func (a App) confirmationButtonAt(x, y int) (confirmationFocus, bool) {
 	if !a.confirm.open() || a.width <= 0 || a.height <= 0 {
 		return confirmationFocusCancel, false
 	}
-	left, top, width, height := a.confirmationBounds()
-	buttonY := top + height - 4
-	if y < buttonY || y > buttonY+1 {
+	cancelText := confirmationButtonText(tr("Cancel"))
+	confirmText := confirmationButtonText(a.confirm.confirmLabel())
+	pair := cancelText + confirmationButtonGap + confirmText
+	lines := strings.Split(ansi.Strip(a.renderConfirmationOverlay(a.width, a.height)), "\n")
+	if y < 0 || y >= len(lines) {
 		return confirmationFocusCancel, false
 	}
-	mid := left + width/2
-	if x >= left+2 && x < mid {
-		return confirmationFocusCancel, true
+	i := strings.Index(lines[y], pair)
+	if i < 0 {
+		return confirmationFocusCancel, false
 	}
-	if x >= mid && x < left+width-2 {
+	cancelX := ansi.StringWidth(lines[y][:i])
+	confirmX := cancelX + ansi.StringWidth(cancelText+confirmationButtonGap)
+	switch {
+	case x >= cancelX && x < cancelX+ansi.StringWidth(cancelText):
+		return confirmationFocusCancel, true
+	case x >= confirmX && x < confirmX+ansi.StringWidth(confirmText):
 		return confirmationFocusConfirm, true
 	}
 	return confirmationFocusCancel, false
 }
 
+// confirmationButtonGap separates the two buttons.
+const confirmationButtonGap = "  "
+
+// confirmationButtonText is a button's visible text: its label padded by
+// one space each side (the filled background spans the padding).
+func confirmationButtonText(label string) string { return " " + label + " " }
+
 func (a App) renderConfirmationOverlay(width, height int) string {
+	st := a.styles
 	modalWidth := confirmationModalWidth(width)
-	contentWidth := maxInt(10, modalWidth-6)
-	title := a.styles.Title.Render(a.confirm.title())
-	body := truncate(a.confirm.body(), contentWidth)
-	hint := a.styles.Muted.Render(tr("y confirm  n/esc cancel  arrows move"))
+	pad := st.Spacing.MD
+	// Text column: the modal less its border and horizontal padding.
+	// Every line is wrapped to it here, word by word, so the box never
+	// re-wraps anything itself (it used to hard-break the session name
+	// mid-word at phone widths).
+	inner := maxInt(8, modalWidth-2-2*pad)
+	wrap := func(s string) string { return lipgloss.NewStyle().Width(inner).Render(s) }
 
-	cancel := a.renderConfirmationButton("Cancel", a.confirm.focus == confirmationFocusCancel)
+	// A session name too long for a line is shortened, not broken.
+	target := a.confirm.target
+	if lipgloss.Width(target) > inner-4 {
+		target = truncate(target, maxInt(4, inner-4))
+	}
+	lines := []string{
+		wrap(st.Title.Render(a.confirm.title())),
+		"",
+		// Break at spaces only: a word wrap also breaks after hyphens,
+		// which split "c-my-project" across two lines.
+		wrapAtSpaces(a.confirm.body(target), inner),
+	}
+	if w := a.confirm.warning(); w != "" {
+		lines = append(lines, "", st.StatusWarning.Render(wrap(w)))
+	}
+
+	cancel := a.renderConfirmationButton(tr("Cancel"), a.confirm.focus == confirmationFocusCancel)
 	confirm := a.renderConfirmationButton(a.confirm.confirmLabel(), a.confirm.focus == confirmationFocusConfirm)
-	buttons := lipgloss.JoinHorizontal(lipgloss.Top, cancel, "  ", confirm)
-	buttons = lipgloss.PlaceHorizontal(contentWidth, lipgloss.Center, buttons)
+	buttons := lipgloss.JoinHorizontal(lipgloss.Top, cancel, confirmationButtonGap, confirm)
+	buttons = strings.Repeat(" ", max0((inner-lipgloss.Width(buttons))/2)) + buttons
 
-	lines := []string{title, "", body, "", buttons, "", hint}
+	lines = append(lines, "", buttons, "", st.Muted.Render(wrap(tr("y confirm  n/esc cancel  arrows move"))))
 	modal := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(a.styles.P.Red).
-		Padding(a.styles.Spacing.SM, a.styles.Spacing.MD).
-		Width(contentWidth).
+		BorderForeground(st.P.Red).
+		Padding(st.Spacing.SM, pad).
 		Render(strings.Join(lines, "\n"))
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, modal)
 }
 
 func (a App) renderConfirmationButton(label string, focused bool) string {
-	text := " " + label + " "
+	text := confirmationButtonText(label)
 	if focused {
 		return lipgloss.NewStyle().
 			Background(a.styles.P.Selected).
@@ -226,14 +291,31 @@ func (a App) renderConfirmationButton(label string, focused bool) string {
 		Render(text)
 }
 
-func (a App) confirmationBounds() (left, top, width, height int) {
-	width = confirmationModalWidth(a.width)
-	height = 11
-	left = max0((a.width - width) / 2)
-	top = max0((a.height - height) / 2)
-	return left, top, width, height
+// wrapAtSpaces wraps plain text to width cells, breaking only between
+// space-separated words. A word wider than width gets a line of its own
+// (callers shorten such words first).
+func wrapAtSpaces(s string, width int) string {
+	var lines []string
+	line := ""
+	for _, word := range strings.Fields(s) {
+		switch {
+		case line == "":
+			line = word
+		case ansi.StringWidth(line)+1+ansi.StringWidth(word) <= width:
+			line += " " + word
+		default:
+			lines = append(lines, line)
+			line = word
+		}
+	}
+	if line != "" {
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
 }
 
+// confirmationModalWidth is the dialog's outer width (border included)
+// on a screenWidth-wide terminal.
 func confirmationModalWidth(screenWidth int) int {
 	if screenWidth <= 0 {
 		return 0
