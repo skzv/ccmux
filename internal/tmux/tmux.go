@@ -52,11 +52,26 @@ func AutoSessionName(prefix string) string {
 // case `-F` output strips tabs (and other non-printable bytes) and replaces
 // them with `_`, breaking our parser. Setting LC_ALL=C.UTF-8 keeps tmux's
 // output bytes intact regardless of the launcher's environment.
+//
+// WaitDelay makes the context actually bound the call. A tmux client
+// hands its stdout/stderr to the server, so with a wedged server (one
+// that's SIGSTOP'd, most plausibly) the pipe's write end stays open
+// after the context kills the client, and Output/CombinedOutput
+// waited for an EOF that only came once the server ran again —
+// stalling the daemon's poll loop and every /v1/sessions request for
+// as long as the server was stopped, whatever their timeouts said.
 func command(ctx context.Context, name string, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Env = withLocale(os.Environ())
+	cmd.WaitDelay = commandWaitDelay
 	return cmd
 }
+
+// commandWaitDelay is how long a tmux call's Wait may keep reading its
+// pipes after the context is done (or after tmux exits): long enough
+// never to cut off a healthy call's output, short enough that a
+// cancelled call returns promptly.
+const commandWaitDelay = 2 * time.Second
 
 // withLocale returns env with LC_ALL=C.UTF-8 appended iff none of
 // LC_ALL / LC_CTYPE / LANG are already set. Pulled out of command() so

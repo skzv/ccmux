@@ -80,6 +80,10 @@ type claudeCLIResult struct {
 // cliFetchTimeout bounds one `claude -p` catalog query.
 const cliFetchTimeout = 90 * time.Second
 
+// cliWaitDelay bounds how long Fetch keeps reading claude's output
+// pipes once the context is done or claude has exited.
+const cliWaitDelay = 2 * time.Second
+
 func (f ClaudeCLIFetcher) Fetch(ctx context.Context) ([]Model, error) {
 	binary := f.Binary
 	if binary == "" {
@@ -114,6 +118,12 @@ func (f ClaudeCLIFetcher) Fetch(ctx context.Context) ([]Model, error) {
 	ctx, cancel := context.WithTimeout(ctx, cliFetchTimeout)
 	defer cancel()
 	cmd := run(ctx, binary, args...)
+	// Cancelling (the timeout, or the daemon shutting down) kills
+	// claude's whole process tree, and WaitDelay stops Run from waiting
+	// on output pipes a straggler might still hold. Without both, a
+	// child that outlived claude kept Run blocked past the timeout.
+	killGroupOnCancel(cmd)
+	cmd.WaitDelay = cliWaitDelay
 	cmd.Stdin = strings.NewReader(claudeCLIPrompt)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
