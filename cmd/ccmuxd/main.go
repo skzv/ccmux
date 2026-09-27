@@ -127,7 +127,9 @@ func main() {
 
 // applyDaemonDefaults fills in poll settings that are unset or make no
 // sense. A negative poll_interval_seconds used to reach time.NewTicker,
-// which panics on a non-positive interval, crash-looping the daemon.
+// which panics on a non-positive interval, crash-looping the daemon —
+// and so did a huge one (10000000000 overflows once multiplied by
+// time.Second), hence the upper clamp.
 func applyDaemonDefaults(d *config.DaemonConfig) {
 	if d.PollIntervalSeconds <= 0 {
 		d.PollIntervalSeconds = 2
@@ -135,10 +137,29 @@ func applyDaemonDefaults(d *config.DaemonConfig) {
 	if d.IdleSecondsForNeedsInput <= 0 {
 		d.IdleSecondsForNeedsInput = 3
 	}
+	d.PollIntervalSeconds = min(d.PollIntervalSeconds, maxDaemonSeconds)
+	d.IdleSecondsForNeedsInput = min(d.IdleSecondsForNeedsInput, maxDaemonSeconds)
+}
+
+// maxDaemonSeconds caps the poll interval and the needs-input idle
+// threshold: an hour is already far past any useful value.
+const maxDaemonSeconds = 3600
+
+// loadConfig reads config.toml for the daemon. A file that can't be
+// read or parsed is logged and replaced by the defaults: it used to be
+// dropped silently, taking the user's sleep mode, notifications, push
+// settings and projects root with it and leaving no trace why.
+func loadConfig() config.Config {
+	cfg, err := config.Load()
+	if err != nil {
+		log.Printf("ccmuxd: ignoring config (%v); running with the default settings until it's fixed and ccmuxd restarts", err)
+		cfg = config.Defaults()
+	}
+	return cfg
 }
 
 func run() error {
-	cfg, _ := config.Load()
+	cfg := loadConfig()
 	applyDaemonDefaults(&cfg.Daemon)
 
 	srv := newServer(cfg)
