@@ -307,6 +307,45 @@ func TestWalkRoot_SubagentRolloutHasNoPrompts(t *testing.T) {
 	}
 }
 
+// TestWalkRoot_RepeatedTokenCountCountedOnce — regression: Codex
+// sometimes writes the same token_count event twice in a row (same
+// total_token_usage, same last_token_usage), and each copy was summed,
+// double-counting that API call. An event whose cumulative total hasn't
+// moved is skipped, including when the copy it repeats sits just
+// before the window.
+func TestWalkRoot_RepeatedTokenCountCountedOnce(t *testing.T) {
+	root := t.TempDir()
+	now := time.Date(2026, 5, 12, 23, 30, 0, 0, time.UTC)
+	ts := func(min int) string {
+		return now.Add(time.Duration(-min) * time.Minute).Format(time.RFC3339Nano)
+	}
+	event := func(ts string, totalIn, totalOut, lastIn, lastOut int) string {
+		return fmt.Sprintf(`{"timestamp":"%s","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":%d,"cached_input_tokens":0,"output_tokens":%d,"reasoning_output_tokens":0,"total_tokens":%d},"last_token_usage":{"input_tokens":%d,"cached_input_tokens":0,"output_tokens":%d,"reasoning_output_tokens":0,"total_tokens":%d}}}}`,
+			ts, totalIn, totalOut, totalIn+totalOut, lastIn, lastOut, lastIn+lastOut)
+	}
+	fixtureRollout(t, root, "repeat",
+		turnContextLine(ts(400), "gpt-5"),
+		event(ts(400), 50, 5, 50, 5), // before the 5h window
+		event(ts(30), 50, 5, 50, 5),  // repeat of the pre-window event
+		event(ts(20), 1050, 105, 1000, 100),
+		event(ts(20), 1050, 105, 1000, 100), // re-emitted copy
+		event(ts(10), 1550, 155, 500, 50),
+	)
+	agg, err := walkRoot(root, 5*time.Hour, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := agg.Total.Input, 1500; got != want {
+		t.Errorf("Total.Input = %d, want %d (a repeated event must count once)", got, want)
+	}
+	if got, want := agg.Total.Output, 150; got != want {
+		t.Errorf("Total.Output = %d, want %d", got, want)
+	}
+	if got, want := agg.Messages, 2; got != want {
+		t.Errorf("Messages = %d, want %d", got, want)
+	}
+}
+
 func TestIsSubagentSource(t *testing.T) {
 	for raw, want := range map[string]bool{
 		``:                                  false,
