@@ -324,13 +324,13 @@ func (m projectsModel) Update(msg tea.Msg) (projectsModel, tea.Cmd) {
 			m.form = &f
 			return m, tea.Batch(textInputBlink())
 		case km.String() == "a":
-			// Switch the selected project's agent. Cycles through
-			// agent.All() in canonical order. Local-host projects
+			// Switch the selected project's agent. Cycles through the
+			// installed agents in canonical order. Local-host projects
 			// only; remote-project switching would require a daemon
 			// endpoint we don't ship today (tracked under Phase 4).
 			if sel := m.Selected(); sel != nil {
 				if projectHost(*sel) == "local" {
-					return m, switchAgentCmd(*sel)
+					return m, switchAgentCmd(*sel, m.agentCommands)
 				}
 				return m, func() tea.Msg {
 					return toastMsg{
@@ -367,17 +367,38 @@ func (m *projectsModel) SetProjectAgent(path string, id agent.ID) {
 	}
 }
 
-// nextAgent returns the next agent in canonical order after `cur`.
-// Used by the projects detail-pane switcher: pressing `a` cycles
-// claude → codex → antigravity → claude.
-func nextAgent(cur agent.ID) agent.ID {
+// nextAgent returns the agent after `cur` among `installed` — the agents
+// this machine can launch, the same set the new-session and new-project
+// pickers offer — walking agent.All()'s canonical order and wrapping.
+// A `cur` that isn't installed (or is unknown) moves to the next
+// installed agent after it. ok is false when there is nothing to switch
+// to: no agent installed, or `cur` is the only one.
+//
+// Cycling every registered agent landed projects on CLIs that aren't
+// installed; the next session then failed with "command not found".
+func nextAgent(cur agent.ID, installed []agent.ID) (agent.ID, bool) {
+	if cur == "" {
+		cur = agent.IDClaude // no sidecar: the project runs Claude
+	}
+	have := make(map[agent.ID]bool, len(installed))
+	for _, id := range installed {
+		have[id] = true
+	}
 	all := agent.All()
+	start := -1
 	for i, a := range all {
 		if a.ID() == cur {
-			return all[(i+1)%len(all)].ID()
+			start = i
+			break
 		}
 	}
-	return all[0].ID()
+	for step := 1; step <= len(all); step++ {
+		id := all[(start+step+len(all))%len(all)].ID()
+		if have[id] && id != cur {
+			return id, true
+		}
+	}
+	return "", false
 }
 
 // switchAgentCmd is the projects-detail-pane "a" action. Writes the
@@ -386,11 +407,22 @@ func nextAgent(cur agent.ID) agent.ID {
 // renderTopToast in app.go) so it doesn't compete with the bottom
 // HelpBar for the user's attention.
 //
+// Only installed agents are offered (see nextAgent); commands carries
+// the setup-pinned executables so an agent outside PATH still counts.
+//
 // Local-only — remote agent switching would need a daemon endpoint
 // (POST /v1/projects/<name>/agent) that we haven't built yet.
-func switchAgentCmd(p project.Project) tea.Cmd {
+func switchAgentCmd(p project.Project, commands agent.Commands) tea.Cmd {
 	return func() tea.Msg {
-		next := nextAgent(p.Agent)
+		installed := availableAgentIDs(commands)
+		next, ok := nextAgent(p.Agent, installed)
+		if !ok {
+			text := tr("agent switch: no agent CLI found on this machine")
+			if len(installed) > 0 {
+				text = fmt.Sprintf(tr("%s: %s is the only agent installed — nothing to switch to"), p.Name, agentDisplayName(installed[0]))
+			}
+			return toastMsg{Text: text, Kind: toastInfo, Until: time.Now().Add(5 * time.Second)}
+		}
 		if err := project.SetAgent(p.Path, next); err != nil {
 			return toastMsg{
 				Text:  tr("agent switch: ") + err.Error(),
@@ -402,13 +434,22 @@ func switchAgentCmd(p project.Project) tea.Cmd {
 			func() tea.Msg { return projectAgentSwitchedMsg{Path: p.Path, Agent: next} },
 			func() tea.Msg {
 				return toastMsg{
-					Text:  fmt.Sprintf(tr("%s: agent → %s (next session uses this)"), p.Name, string(next)),
+					Text:  fmt.Sprintf(tr("%s: agent → %s (next session uses this)"), p.Name, agentDisplayName(next)),
 					Kind:  toastSuccess,
 					Until: time.Now().Add(5 * time.Second),
 				}
 			},
 		)()
 	}
+}
+
+// agentDisplayName is the agent's display name ("Codex"), or the raw ID
+// for one this build doesn't know.
+func agentDisplayName(id agent.ID) string {
+	if parsed, ok := agent.ParseID(string(id)); ok {
+		return agent.ByID(parsed).DisplayName()
+	}
+	return string(id)
 }
 
 func (m projectsModel) View(width, height int) string {

@@ -509,3 +509,5 @@
 "saved ✓" = "保存しました ✓"
 "Kill tmux session %q on %s. This cannot be undone." = "%[2]s の tmux セッション %[1]q を終了します。元に戻せません。"
 "new session: invalid name %q — use only letters, digits, - and _" = "新しいセッション: 無効な名前 %q — 英字・数字・- と _ のみ使用できます"
+"agent switch: no agent CLI found on this machine" = "エージェント切り替え: このマシンにエージェント CLI が見つかりません"
+"%s: %s is the only agent installed — nothing to switch to" = "%s: インストール済みのエージェントは %s だけです — 切り替え先がありません"

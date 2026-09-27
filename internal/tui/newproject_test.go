@@ -1,11 +1,15 @@
 package tui
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/skzv/ccmux/internal/agent"
+	"github.com/skzv/ccmux/internal/project"
 	"github.com/skzv/ccmux/internal/tui/styles"
 )
 
@@ -399,12 +403,16 @@ func TestNewProjectForm_PickerRowsDontConsumeTypedChars(t *testing.T) {
 	}
 }
 
-// TestNextAgent — the cycler used by the Projects-screen `a` key.
-// Going claude → codex → antigravity → cursor → pi → claude must
-// roundtrip through every installed agent. The unknown-current case
-// (someone hand-edits the sidecar) defaults to the first registered
-// agent rather than crashing.
+// TestNextAgent — the cycler used by the Projects-screen `a` key. With
+// every agent installed, going claude → codex → antigravity → cursor →
+// pi → … → claude must roundtrip through all of them. The unknown-current
+// case (someone hand-edits the sidecar) lands on the first agent rather
+// than crashing.
 func TestNextAgent(t *testing.T) {
+	var all []agent.ID
+	for _, a := range agent.All() {
+		all = append(all, a.ID())
+	}
 	cases := []struct {
 		from, to agent.ID
 	}{
@@ -428,15 +436,104 @@ func TestNextAgent(t *testing.T) {
 		{agent.IDKiro, agent.IDMuse},
 		{agent.IDMuse, agent.IDGemini},
 		{agent.IDGemini, agent.IDClaude},
-		// Edge: empty / unknown values land on the first agent.
-		{"", agent.IDClaude},
+		// Edge: "" is a project with no sidecar, i.e. Claude; unknown
+		// values land on the first agent.
+		{"", agent.IDCodex},
 		{agent.ID("imaginary"), agent.IDClaude},
 	}
 	for _, tc := range cases {
 		t.Run(string(tc.from), func(t *testing.T) {
-			if got := nextAgent(tc.from); got != tc.to {
-				t.Errorf("nextAgent(%q) = %q, want %q", tc.from, got, tc.to)
+			if got, ok := nextAgent(tc.from, all); !ok || got != tc.to {
+				t.Errorf("nextAgent(%q) = %q, %v; want %q", tc.from, got, ok, tc.to)
 			}
 		})
+	}
+}
+
+// TestNextAgent_InstalledOnly — `a` must only land on agents this
+// machine can launch (what the new-session / new-project pickers offer).
+// Cycling all registered agents put projects on uninstalled CLIs and the
+// next session died with "command not found: grok".
+func TestNextAgent_InstalledOnly(t *testing.T) {
+	installed := []agent.ID{agent.IDClaude, agent.IDCodex}
+	cases := []struct{ from, to agent.ID }{
+		{agent.IDClaude, agent.IDCodex},
+		{agent.IDCodex, agent.IDClaude},
+		// A project on an agent that isn't installed moves to the next
+		// installed one after it (Grok wraps around to Claude).
+		{agent.IDGrok, agent.IDClaude},
+		{agent.IDAntigravity, agent.IDClaude},
+	}
+	for _, tc := range cases {
+		if got, ok := nextAgent(tc.from, installed); !ok || got != tc.to {
+			t.Errorf("nextAgent(%q, claude+codex) = %q, %v; want %q", tc.from, got, ok, tc.to)
+		}
+	}
+	if got, ok := nextAgent(agent.IDClaude, []agent.ID{agent.IDClaude}); ok {
+		t.Errorf("only Claude installed: nextAgent = %q, true; want no switch", got)
+	}
+	if got, ok := nextAgent(agent.IDClaude, nil); ok {
+		t.Errorf("nothing installed: nextAgent = %q, true; want no switch", got)
+	}
+}
+
+// TestSwitchAgentCmd_OnlyInstalledAgents drives the real `a` command
+// against a PATH holding just claude and codex: from Codex it must go
+// back to Claude (not on to Antigravity), and the toast must name the
+// agent it switched to.
+func TestSwitchAgentCmd_OnlyInstalledAgents(t *testing.T) {
+	bin := t.TempDir()
+	for _, name := range []string{"claude", "codex"} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", bin)
+	dir := t.TempDir()
+	if err := project.SetAgent(dir, agent.IDCodex); err != nil {
+		t.Fatal(err)
+	}
+	p := project.Project{Name: "demo", Path: dir, Agent: agent.IDCodex}
+	msg := switchAgentCmd(p, agent.Commands{})()
+	var switched *projectAgentSwitchedMsg
+	var toast string
+	collect := func(m tea.Msg) {
+		switch v := m.(type) {
+		case projectAgentSwitchedMsg:
+			switched = &v
+		case toastMsg:
+			toast = v.Text
+		}
+	}
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, c := range batch {
+			collect(c())
+		}
+	} else {
+		collect(msg)
+	}
+	if switched == nil || switched.Agent != agent.IDClaude {
+		t.Fatalf("switched = %+v, want Claude (the only other installed agent)", switched)
+	}
+	if got := project.ReadAgent(dir); got != agent.IDClaude {
+		t.Errorf("sidecar = %q, want claude", got)
+	}
+	if !strings.Contains(toast, "Claude") {
+		t.Errorf("toast %q doesn't name the new agent", toast)
+	}
+
+	// With only one agent installed there is nothing to switch to: the
+	// sidecar stays put and the toast says so.
+	if err := os.Remove(filepath.Join(bin, "codex")); err != nil {
+		t.Fatal(err)
+	}
+	p.Agent = agent.IDClaude
+	msg = switchAgentCmd(p, agent.Commands{})()
+	tm, ok := msg.(toastMsg)
+	if !ok || !strings.Contains(tm.Text, "only agent installed") {
+		t.Errorf("single-agent switch returned %T %+v, want an 'only agent installed' toast", msg, msg)
+	}
+	if got := project.ReadAgent(dir); got != agent.IDClaude {
+		t.Errorf("sidecar changed to %q with nothing to switch to", got)
 	}
 }

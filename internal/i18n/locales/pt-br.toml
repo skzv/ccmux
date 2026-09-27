@@ -509,3 +509,5 @@
 "saved ✓" = "salvo ✓"
 "Kill tmux session %q on %s. This cannot be undone." = "Encerrar a sessão tmux %q em %s. Isso não pode ser desfeito."
 "new session: invalid name %q — use only letters, digits, - and _" = "nova sessão: nome inválido %q — use apenas letras, dígitos, - e _"
+"agent switch: no agent CLI found on this machine" = "troca de agente: nenhuma CLI de agente encontrada nesta máquina"
+"%s: %s is the only agent installed — nothing to switch to" = "%s: %s é o único agente instalado — nada para trocar"

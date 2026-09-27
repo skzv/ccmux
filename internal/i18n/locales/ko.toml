@@ -509,3 +509,5 @@
 "saved ✓" = "저장됨 ✓"
 "Kill tmux session %q on %s. This cannot be undone." = "%[2]s의 tmux 세션 %[1]q을(를) 종료합니다. 되돌릴 수 없습니다."
 "new session: invalid name %q — use only letters, digits, - and _" = "새 세션: 잘못된 이름 %q — 문자, 숫자, - 및 _만 사용하세요"
+"agent switch: no agent CLI found on this machine" = "에이전트 전환: 이 컴퓨터에서 에이전트 CLI를 찾을 수 없습니다"
+"%s: %s is the only agent installed — nothing to switch to" = "%s: 설치된 에이전트가 %s뿐입니다 — 전환할 대상이 없습니다"
