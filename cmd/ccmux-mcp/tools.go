@@ -152,10 +152,10 @@ func buildTools(s *Server) map[string]Tool {
 			Mutating: true,
 		}
 		t["send_keys"] = Tool{
-			Description: "Send a literal keystroke string into a session's active pane. tmux interprets named keys (Enter, C-c, Escape, …). Use with care — this is the same as typing into the user's session. Requires ccmux-mcp --allow-mutate.",
+			Description: "Send keystrokes into a session's active pane — the same as typing into the user's session, so use with care. `keys` is one tmux send-keys argument: if the whole string is a tmux key name (Enter, C-c, Escape, Up, Tab, …) that key is pressed; anything else is typed literally, so 'ls Enter' types those eight characters and presses nothing. To type text and submit it, call send_keys twice: first the text, then 'Enter'. Requires ccmux-mcp --allow-mutate.",
 			InputSchema: object(map[string]any{
 				"name": stringSchema("tmux session name (from list_sessions[].name)", true),
-				"keys": stringSchema("keystroke string (e.g. 'hello' or 'C-c'). Use 'Enter' for newline.", true),
+				"keys": stringSchema("either literal text to type (e.g. 'hello') or exactly one tmux key name (e.g. 'Enter', 'C-c', 'Escape') — not both in one call", true),
 			}, []string{"name", "keys"}),
 			Handler:  wrap(s.handleSendKeys),
 			Mutating: true,

@@ -191,12 +191,28 @@ func (rs *runState) prepare(raw []byte, writeSelf bool) call {
 		}
 		return errCall(nullID, errParseError, "parse error: "+err.Error())
 	}
+	// JSON-RPC ids are strings, numbers or null. An object or array id
+	// can't be echoed back meaningfully, so it's an Invalid Request
+	// answered with a null id (it used to be accepted and echoed).
+	if !validID(req.ID) {
+		return errCall(nullID, errInvalidRequest, "invalid request: id must be a string, number or null")
+	}
+	id := req.ID
+	if len(id) == 0 {
+		id = nullID
+	}
 	if req.JSONRPC != "2.0" {
-		id := req.ID
-		if len(id) == 0 {
-			id = nullID
-		}
 		return errCall(id, errInvalidRequest, `jsonrpc must be "2.0"`)
+	}
+	if req.Method == "" {
+		if len(req.Result) > 0 || len(req.Error) > 0 {
+			// A response to a request we never sent: answering it
+			// could only confuse the client. Drop it.
+			return call{}
+		}
+		// A request without a method is malformed (-32600), not a call
+		// to an unknown method (-32601).
+		return errCall(id, errInvalidRequest, "invalid request: method is required")
 	}
 	switch req.Method {
 	case "notifications/cancelled":
@@ -207,6 +223,22 @@ func (rs *runState) prepare(raw []byte, writeSelf bool) call {
 	}
 	resp, isNotification := rs.s.handle(&req)
 	return call{resp: resp, respond: !isNotification}
+}
+
+// validID reports whether a request id is absent (a notification) or a
+// JSON string, number or null.
+func validID(raw json.RawMessage) bool {
+	t := bytes.TrimSpace(raw)
+	if len(t) == 0 {
+		return true
+	}
+	switch c := t[0]; {
+	case c == '"', c == '-', c >= '0' && c <= '9':
+		return true
+	case c == 'n':
+		return bytes.Equal(t, []byte("null"))
+	}
+	return false // object, array, true/false
 }
 
 func errCall(id json.RawMessage, code int, msg string) call {

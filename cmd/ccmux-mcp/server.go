@@ -42,6 +42,12 @@ type rpcRequest struct {
 	ID      json.RawMessage `json:"id,omitempty"`
 	Method  string          `json:"method"`
 	Params  json.RawMessage `json:"params,omitempty"`
+	// Result and Error only appear on a response object — a client
+	// answering a server-to-client request. ccmux-mcp never sends one,
+	// so they're read only to recognize (and drop) such a frame rather
+	// than answer it as a method-less request.
+	Result json.RawMessage `json:"result,omitempty"`
+	Error  json.RawMessage `json:"error,omitempty"`
 }
 
 // rpcResponse is one JSON-RPC 2.0 response frame. Exactly one of
@@ -139,7 +145,9 @@ func (s *Server) Run(ctx context.Context, in io.Reader, out io.Writer) error {
 		var writeErr error
 		if tooLong {
 			writeErr = rs.write(rpcResponse{JSONRPC: "2.0", ID: nullID, Error: &rpcError{Code: errParseError, Message: fmt.Sprintf("parse error: request exceeds %d bytes", maxLine)}})
-		} else if len(line) > 0 {
+		} else if len(bytes.TrimSpace(line)) > 0 {
+			// Blank and whitespace-only lines are keep-alives, not
+			// frames: some clients send them between requests.
 			writeErr = rs.dispatchLine(line)
 		}
 		if writeErr != nil {
@@ -235,11 +243,14 @@ func (s *Server) handle(req *rpcRequest) (rpcResponse, bool) {
 		resp.Result = map[string]any{}
 	case "tools/list":
 		resp.Result = s.handleToolsList()
-	case "resources/list", "prompts/list":
-		// We declare neither capability in initialize, but some
-		// clients still probe. Return empty rather than -32601 so
-		// they don't log a noisy error.
-		resp.Result = map[string]any{"resources": []any{}, "prompts": []any{}}
+	case "resources/list":
+		// We declare neither resources nor prompts in initialize, but
+		// some clients still probe. Return an empty list rather than
+		// -32601 so they don't log a noisy error — each under its own
+		// key only.
+		resp.Result = map[string]any{"resources": []any{}}
+	case "prompts/list":
+		resp.Result = map[string]any{"prompts": []any{}}
 	default:
 		if isNotification {
 			// Unknown notifications are silently dropped per spec.
@@ -362,6 +373,15 @@ func (s *Server) handleToolsCall(ctx context.Context, raw json.RawMessage) (tool
 	args := bytes.TrimSpace(p.Arguments)
 	if len(args) == 0 || bytes.Equal(args, []byte("null")) {
 		args = []byte("{}")
+	}
+	// Anything else must be an object, as every inputSchema says: a
+	// parameterless tool used to run happily on `"arguments":"str"` or
+	// `[]`. Unknown fields inside the object are still tolerated
+	// despite additionalProperties:false — some clients pad calls to
+	// parameterless tools with a dummy argument, and refusing those
+	// would break them for no safety gain.
+	if args[0] != '{' {
+		return toolResult{}, &rpcError{Code: errInvalidParams, Message: p.Name + ": arguments must be a JSON object"}
 	}
 	// Backstop: a tool handler can't be allowed to run forever.
 	timeout := tool.Timeout

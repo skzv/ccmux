@@ -55,7 +55,7 @@ CCMUX_HOST=mini.tail-xxxxx.ts.net:7474 ccmux-mcp
 ccmux-mcp --host mini.tail-xxxxx.ts.net:7474
 ```
 
-When `--host` is set, the server talks to that ccmuxd over HTTP on the tailnet instead of the local Unix socket. Useful when the agent runs on the laptop but should orchestrate sessions on the Mac mini.
+When `--host` is set, the server talks to that ccmuxd over HTTP on the tailnet instead of the local Unix socket. Useful when the agent runs on the laptop but should orchestrate sessions on the Mac mini. The value is `host` or `host:port` (the port defaults to 7474); an `http://` prefix and a trailing `/` are accepted and stripped, while `https://` or a path is refused — ccmuxd serves plain HTTP on the tailnet.
 
 ## Tools
 
@@ -80,7 +80,7 @@ When `--host` is set, the server talks to that ccmuxd over HTTP on the tailnet i
 | ------------------- | ------------------------------------------------------------------------------------------------------------ |
 | `spawn_session`     | start a new agent session in an existing project (same shape as the TUI's Projects → `n` flow)               |
 | `spawn_bare_session`| start a project-less session (just `$SHELL` or an agent at a path)                                           |
-| `send_keys`         | type a literal keystroke string into a session's pane (tmux interprets `Enter`, `C-c`, etc.)                 |
+| `send_keys`         | type into a session's pane: `keys` is either literal text or exactly one tmux key name (`Enter`, `C-c`, …) — type text, then send `Enter` in a second call to submit it |
 | `kill_session`      | terminate a tmux session                                                                                     |
 
 Tools are listed in alphabetical order via `tools/list`. Mutating tools are not just guarded — they're absent from the tools list entirely when `--allow-mutate` is off, so an agent can't surface them in its own UI even if a user toggled the flag in a config file.
@@ -135,7 +135,11 @@ Request:
 }
 ```
 
-`arguments` is optional: a missing or `null` value is treated as `{}`.
+`arguments` is optional: a missing or `null` value is treated as `{}`. Any other non-object value (a string, an array) is `-32602`. Unknown fields inside the object are ignored rather than refused, despite the schemas' `additionalProperties: false`: some clients pad calls to parameterless tools with a dummy argument.
+
+### Request validation
+
+A request without a `method` is `-32600` (Invalid Request), as is one whose `id` is an object, array or boolean (answered with `"id": null`). A response object sent by the client (`result`/`error`, no `method`) is dropped — the server never sends requests, so there is nothing to match it to. Blank and whitespace-only lines are ignored. `resources/list` and `prompts/list` answer `{"resources": []}` and `{"prompts": []}` so clients that probe them don't log errors.
 
 Result: one `content` block of type `text` whose body is the JSON-encoded tool output (pretty-printed). Tool-execution failures are returned as `isError: true` on the result, NOT as a JSON-RPC error — agents distinguish "I called the wrong tool or passed bad arguments" (`error.code = -32602`, per the MCP spec — including an unknown or `--allow-mutate`-gated tool name) from "the tool ran but failed" (`result.isError = true`).
 
