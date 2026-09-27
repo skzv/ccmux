@@ -98,6 +98,11 @@ type notesModel struct {
 	// newNoteSubmitMsg, esc emits newNoteCancelMsg.
 	newNoteForm *newNoteFormModel
 
+	// pendingReveal is the vault-relative path of a note just created
+	// with `n`. The listing that lands after the editor closes opens its
+	// folder and puts the cursor on it.
+	pendingReveal string
+
 	// loadingSpinner animates the "Loading notes…" placeholder so a
 	// slow walk surfaces as motion rather than a static line. Only
 	// rendered while m.loading is true.
@@ -325,26 +330,28 @@ func (m notesModel) projectRoot() string {
 // supplied; otherwise the file is created empty. Errors (collision,
 // permission, etc.) surface as toasts; success chains into
 // openInEditor, which itself dispatches notesReloadMsg on editor
-// close so the new file shows up in the list.
-func (m notesModel) createAndOpenNote(filename, title string) tea.Cmd {
+// close so the new file shows up in the list. created is the new note's
+// vault-relative path ("" when nothing was created), so the listing
+// after the editor closes can select it.
+func (m notesModel) createAndOpenNote(filename, title string) (cmd tea.Cmd, created string) {
 	if m.project == nil {
 		return func() tea.Msg {
 			return toastMsg{Text: tr("no project selected"), Kind: toastError, Until: time.Now().Add(5 * time.Second)}
-		}
+		}, ""
 	}
 	rel, err := notes.CleanRel(filename)
 	if err != nil {
 		msg := err.Error()
 		return func() tea.Msg {
 			return toastMsg{Text: msg, Kind: toastError, Until: time.Now().Add(5 * time.Second)}
-		}
+		}, ""
 	}
 	full := filepath.Join(m.project.Path, filepath.FromSlash(rel))
 	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 		msg := tr("mkdir failed: ") + err.Error()
 		return func() tea.Msg {
 			return toastMsg{Text: msg, Kind: toastError, Until: time.Now().Add(5 * time.Second)}
-		}
+		}, ""
 	}
 	body := ""
 	if title != "" {
@@ -359,9 +366,9 @@ func (m notesModel) createAndOpenNote(filename, title string) tea.Cmd {
 		}
 		return func() tea.Msg {
 			return toastMsg{Text: msg, Kind: toastError, Until: time.Now().Add(5 * time.Second)}
-		}
+		}, ""
 	}
-	return openInEditor(m.editor, full)
+	return openInEditor(m.editor, full), rel
 }
 
 // writeNewFile creates path with data, failing with os.ErrExist if it
@@ -672,7 +679,11 @@ func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
 		return m, cmd
 	case newNoteSubmitMsg:
 		m.newNoteForm = nil
-		return m, m.createAndOpenNote(msg.Filename, msg.Title)
+		cmd, created := m.createAndOpenNote(msg.Filename, msg.Title)
+		if created != "" {
+			m.pendingReveal = created
+		}
+		return m, cmd
 	case newNoteCancelMsg:
 		m.newNoteForm = nil
 		return m, nil
@@ -905,11 +916,77 @@ func (m notesModel) applyEntries(msg notesEntriesLoadedMsg) (notesModel, tea.Cmd
 		return m, m.refreshPreview()
 	}
 	m.deviceErr = ""
+	// A re-list of the project already on screen (the editor closed
+	// after `e` / `n`, or `r`) keeps the reader's place: the folders they
+	// opened stay open and the cursor stays on the same file or folder.
+	// Resetting the folds and keeping the cursor *index* collapsed the
+	// tree and left the cursor on an unrelated row (often a folder, so
+	// the preview read "No selection").
+	reload := m.entries != nil
+	prevSel, hadSel := m.selectedRow()
+	prevKey := ""
+	if hadSel {
+		prevKey = m.rowKey(prevSel)
+	}
 	m.entries = msg.Entries
 	m.entriesCache[m.cacheKey(m.project)] = msg.Entries
-	m.applyDefaultFolds()
+	if !reload {
+		m.applyDefaultFolds()
+	}
+	switch {
+	case m.pendingReveal != "":
+		// A note just created with `n`: open its folder and select it.
+		m.revealNote(m.pendingReveal)
+		m.pendingReveal = ""
+	case prevKey != "":
+		m.selectRowKey(prevKey)
+	}
 	m.clampCursor()
 	return m, m.refreshPreview()
+}
+
+// rowKey identifies a tree row across re-lists: entry indices shift when
+// files are added or removed, paths don't.
+func (m notesModel) rowKey(r noteRow) string {
+	if r.kind == rowFolder {
+		return "d:" + r.dir
+	}
+	if r.entryIdx >= 0 && r.entryIdx < len(m.entries) {
+		return "f:" + m.entries[r.entryIdx].Rel
+	}
+	return ""
+}
+
+// selectRowKey moves the cursor to the visible row with the given
+// rowKey; a no-op when it's gone (the file was deleted meanwhile), which
+// leaves the clamped cursor where it was.
+func (m *notesModel) selectRowKey(key string) {
+	for i, r := range m.visibleRows() {
+		if m.rowKey(r) == key {
+			m.cursor = i
+			return
+		}
+	}
+}
+
+// revealNote expands every folder above the note at rel and selects it.
+func (m *notesModel) revealNote(rel string) {
+	if m.hasActiveSearch() {
+		return
+	}
+	for d := dirOfRel(rel); d != ""; d = parentDir(d) {
+		m.expanded[d] = true
+	}
+	m.selectRowKey("f:" + rel)
+}
+
+// dirOfRel is the folder part of a slash-separated vault-relative path
+// ("" for a root-level note), matching notes.Entry.Dir.
+func dirOfRel(rel string) string {
+	if i := strings.LastIndex(rel, "/"); i >= 0 {
+		return rel[:i]
+	}
+	return ""
 }
 
 // applyPreview lands a note body (notesPreviewLoadedMsg).
@@ -1575,10 +1652,13 @@ func (m notesModel) renderPreview(width, height int) string {
 		separator := m.st.Muted.Render(strings.Repeat("─", m.preview.Width))
 		// Scroll-position indicator like "  35% ↓"
 		pct := int(m.preview.ScrollPercent() * 100)
-		scrollHint := m.st.Muted.Render(fmt.Sprintf(
-			"tab: focus list   j/k: scroll (currently focused: %s)   %d%%",
-			focusLabel(m.focus), pct,
-		))
+		// The hint names what tab and j/k do right now: it used to say
+		// "tab: focus list" even while the list had focus.
+		keys := tr("tab: focus preview · j/k: pick a note")
+		if m.focus == focusPreview {
+			keys = tr("tab: focus list · j/k: scroll")
+		}
+		scrollHint := m.st.Muted.Render(fmt.Sprintf("%s   %d%%", keys, pct))
 		body := lipgloss.JoinVertical(lipgloss.Left, header, separator, m.preview.View(), "", scrollHint)
 		paneStyle := m.st.Pane
 		if m.focus == focusPreview {
@@ -1587,13 +1667,6 @@ func (m notesModel) renderPreview(width, height int) string {
 		return paneStyle.Width(width - 2).Height(height - 2).Render(body)
 	}
 	return m.st.Pane.Width(width - 2).Height(height - 2).Render(m.st.Muted.Render(tr("No selection.")))
-}
-
-func focusLabel(f notesFocus) string {
-	if f == focusPreview {
-		return "preview"
-	}
-	return "list"
 }
 
 func (m notesModel) renderListOnly(width, height int) string {

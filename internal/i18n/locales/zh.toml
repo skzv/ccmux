@@ -519,3 +519,5 @@
 "new session: invalid name %q — use only letters, digits, - and _" = "新建会话：名称 %q 无效——只能使用字母、数字、- 和 _"
 "agent switch: no agent CLI found on this machine" = "切换智能体：本机未找到任何智能体 CLI"
 "%s: %s is the only agent installed — nothing to switch to" = "%s：只安装了 %s——没有可切换的智能体"
+"tab: focus preview · j/k: pick a note" = "tab：聚焦预览 · j/k：选择笔记"
+"tab: focus list · j/k: scroll" = "tab：聚焦列表 · j/k：滚动"

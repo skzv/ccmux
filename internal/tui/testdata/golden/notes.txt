@@ -35,6 +35,6 @@
 │                                      │ │                                                                             │
 │                                      │ │                                                                             │
 │                                      │ │                                                                             │
-│                                      │ │ tab: focus list   j/k: scroll (currently focused: list)   100%              │
+│                                      │ │ tab: focus preview · j/k: pick a note   100%                                │
 ╰──────────────────────────────────────╯ ╰─────────────────────────────────────────────────────────────────────────────╯
 ? help · q quit · enter open · →/← expand/collapse · n new note · e edit · / search · i info · H device                 

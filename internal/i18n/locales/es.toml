@@ -511,3 +511,5 @@
 "new session: invalid name %q — use only letters, digits, - and _" = "nueva sesión: nombre no válido %q — usa solo letras, dígitos, - y _"
 "agent switch: no agent CLI found on this machine" = "cambio de agente: no se encontró ninguna CLI de agente en esta máquina"
 "%s: %s is the only agent installed — nothing to switch to" = "%s: %s es el único agente instalado — no hay a cuál cambiar"
+"tab: focus preview · j/k: pick a note" = "tab: enfocar vista previa · j/k: elegir una nota"
+"tab: focus list · j/k: scroll" = "tab: enfocar lista · j/k: desplazar"
