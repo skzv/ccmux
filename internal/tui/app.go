@@ -861,11 +861,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.projectsM.SetDefaultAgent(a.cfg.Agents.Default)
 		a.projectsM.SetAgentCommands(a.cfg.AgentCommands())
 		a.dashboard.SetVersion(a.version)
-		a.sessionsM.SetSessions(a.sessions)
+		// The list may have moved the selection (a kill, a session that
+		// ended): the preview pane re-captures the new one right away.
+		previewCmd := a.sessionsM.SetSessions(a.sessions)
 		if msg.Err != nil {
 			a.toasts.Set(toastError, tr("refresh: ")+msg.Err.Error(), 5*time.Second)
 		}
-		return a, nil
+		return a, previewCmd
 
 	case projectsLoadedMsg:
 		if msg.Err == nil {
@@ -965,6 +967,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.toasts.Set(toastError, tr("rename failed: ")+msg.Err.Error(), 5*time.Second)
 		} else {
 			a.toasts.Set(toastSuccess, fmt.Sprintf(tr("renamed %s → %s"), sessionDisplayName(msg.Host, msg.OldName), msg.NewName), 3*time.Second)
+			// Keep the cursor on the renamed row: the refresh below
+			// finds the selection by name, which just changed.
+			a.sessionsM.RenameSession(msg.Host, msg.OldName, msg.NewName)
 		}
 		return a, a.refreshSessionsCmd()
 

@@ -80,6 +80,7 @@ type sessionsModel struct {
 	// cached in `preview`. Lets us detect a cursor move and trigger an
 	// immediate re-capture without waiting for the tick.
 	previewSession string
+	previewHost    string
 	preview        string
 	previewLoading bool
 	previewErr     string
@@ -121,7 +122,7 @@ func newSessions(st styles.Styles, km Keymap) sessionsModel {
 	return sessionsModel{st: st, km: km}
 }
 
-func (m *sessionsModel) SetSessions(ss []daemon.SessionState) {
+func (m *sessionsModel) SetSessions(ss []daemon.SessionState) tea.Cmd {
 	// Preserve cursor by session identity across refreshes. Auto-polling
 	// fires every 2s; without this the cursor index silently shifts to
 	// a different session whenever the list order changes (e.g. a
@@ -144,16 +145,65 @@ func (m *sessionsModel) SetSessions(ss []daemon.SessionState) {
 	// renders don't flicker the same set of names.
 	sortByAttention(ss)
 	m.sessions = ss
+	found := false
 	if selected != nil {
 		for i, s := range ss {
 			if sameSession(s.Host, s.Name, selected.Host, selected.Name) {
 				m.cursor = i
-				return
+				found = true
+				break
 			}
 		}
 	}
-	if m.cursor >= len(ss) {
+	if !found && m.cursor >= len(ss) {
 		m.cursor = max0(len(ss) - 1)
+	}
+	return m.previewFollowSelection()
+}
+
+// previewFollowSelection keeps the preview pane on the selected session
+// after the list changed under it (a kill, a rename, a session ending):
+// when the pane holds another session's capture, it is dropped and a
+// fresh capture of the new selection starts right away rather than
+// leaving the dead session's text up until the next tick.
+func (m *sessionsModel) previewFollowSelection() tea.Cmd {
+	if !m.showPreview {
+		return nil
+	}
+	sel := m.Selected()
+	if sel == nil {
+		m.clearPreview()
+		return nil
+	}
+	if m.previewSession != "" && sameSession(m.previewHost, m.previewSession, sel.Host, sel.Name) {
+		return nil
+	}
+	m.clearPreview()
+	m.previewLoading = true
+	return capturePreviewCmd(*sel)
+}
+
+// clearPreview forgets the cached capture.
+func (m *sessionsModel) clearPreview() {
+	m.preview = ""
+	m.previewErr = ""
+	m.previewLoading = false
+	m.previewSession = ""
+	m.previewHost = ""
+}
+
+// RenameSession applies a completed rename to the in-memory list so the
+// cursor stays on the renamed row: the next refresh looks the selection
+// up by (host, name), and under the old name it no longer exists — the
+// cursor used to jump to whichever row slid into its slot.
+func (m *sessionsModel) RenameSession(host, oldName, newName string) {
+	for i, s := range m.sessions {
+		if sameSession(s.Host, s.Name, host, oldName) {
+			m.sessions[i].Name = newName
+		}
+	}
+	if m.previewSession != "" && sameSession(m.previewHost, m.previewSession, host, oldName) {
+		m.previewSession = newName
 	}
 }
 
@@ -216,6 +266,29 @@ func (m *sessionsModel) SetAgentCommands(commands agent.Commands) {
 }
 
 func (m sessionsModel) Update(msg tea.Msg) (sessionsModel, tea.Cmd) {
+	// Preview pane messages flow into the model before any form sees
+	// them — they're scheduled by `p`'s toggle and replenished by each
+	// tick, so they arrive asynchronously. Routed to an open rename or
+	// new-session form they were swallowed, the tick chain died, and
+	// the preview froze for good (even after the form was cancelled).
+	switch msg := msg.(type) {
+	case previewLoadedMsg:
+		return m.applyPreviewLoaded(msg), nil
+	case previewTickMsg:
+		// Tick fired — if the user toggled preview off in the meantime,
+		// or this tick belongs to a superseded chain (off→on re-toggle
+		// bumped the generation while it was in flight), drop it: no
+		// capture, no next tick. Otherwise refresh and schedule the
+		// next tick under the same generation.
+		if !m.showPreview || msg.gen != m.previewGen {
+			return m, nil
+		}
+		if sel := m.Selected(); sel != nil {
+			return m, tea.Batch(capturePreviewCmd(*sel), previewTickCmd(m.previewGen))
+		}
+		return m, previewTickCmd(m.previewGen)
+	}
+
 	// Rename modal: route everything through the rename form except its
 	// own finalizer messages, which App handles.
 	if m.renameForm != nil {
@@ -248,44 +321,6 @@ func (m sessionsModel) Update(msg tea.Msg) (sessionsModel, tea.Cmd) {
 		f, cmd := m.form.Update(msg)
 		m.form = &f
 		return m, cmd
-	}
-
-	// Preview pane messages flow into the model regardless of the key
-	// path below — they're scheduled by `p`'s toggle and replenished by
-	// each tick, so they arrive asynchronously.
-	switch msg := msg.(type) {
-	case previewLoadedMsg:
-		// Stale loads from a previous selection lose to the current one:
-		// if the user moved the cursor while the capture was in flight,
-		// drop the old result silently rather than flashing wrong content.
-		sel := m.Selected()
-		if sel == nil || !sameSession(msg.Host, msg.Session, sel.Host, sel.Name) {
-			m.previewLoading = false
-			return m, nil
-		}
-		m.previewLoading = false
-		if msg.Err != nil {
-			m.previewErr = msg.Err.Error()
-			m.preview = ""
-		} else {
-			m.previewErr = ""
-			m.preview = msg.Content
-		}
-		m.previewSession = msg.Session
-		return m, nil
-	case previewTickMsg:
-		// Tick fired — if the user toggled preview off in the meantime,
-		// or this tick belongs to a superseded chain (off→on re-toggle
-		// bumped the generation while it was in flight), drop it: no
-		// capture, no next tick. Otherwise refresh and schedule the
-		// next tick under the same generation.
-		if !m.showPreview || msg.gen != m.previewGen {
-			return m, nil
-		}
-		if sel := m.Selected(); sel != nil {
-			return m, tea.Batch(capturePreviewCmd(*sel), previewTickCmd(m.previewGen))
-		}
-		return m, previewTickCmd(m.previewGen)
 	}
 
 	if km, ok := msg.(tea.KeyMsg); ok {
@@ -323,10 +358,7 @@ func (m sessionsModel) Update(msg tea.Msg) (sessionsModel, tea.Cmd) {
 			// re-toggle doesn't flash stale text from the previous
 			// selection. The in-flight tick will see !showPreview and
 			// stop scheduling itself.
-			m.preview = ""
-			m.previewErr = ""
-			m.previewLoading = false
-			m.previewSession = ""
+			m.clearPreview()
 			return m, nil
 		case keyMatches(km, m.km.Up):
 			if m.cursor > 0 {
@@ -341,6 +373,28 @@ func (m sessionsModel) Update(msg tea.Msg) (sessionsModel, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+// applyPreviewLoaded lands one capture. Stale loads from a previous
+// selection lose to the current one: if the user moved the cursor while
+// the capture was in flight, the old result is dropped silently rather
+// than flashing wrong content.
+func (m sessionsModel) applyPreviewLoaded(msg previewLoadedMsg) sessionsModel {
+	sel := m.Selected()
+	if sel == nil || !sameSession(msg.Host, msg.Session, sel.Host, sel.Name) {
+		return m
+	}
+	m.previewLoading = false
+	if msg.Err != nil {
+		m.previewErr = msg.Err.Error()
+		m.preview = ""
+	} else {
+		m.previewErr = ""
+		m.preview = msg.Content
+	}
+	m.previewSession = msg.Session
+	m.previewHost = sel.Host
+	return m
 }
 
 // maybeRefreshPreview returns a capture command when the preview is on
@@ -482,10 +536,17 @@ func (m sessionsModel) renderPreview(width, height int) string {
 		)
 	}
 
-	if m.Selected() == nil {
+	sel := m.Selected()
+	if sel == nil {
 		return render("")
 	}
+	// The cached capture belongs to another session (the cursor moved,
+	// or the previewed session was killed and the list moved on): never
+	// show it under this session's name — wait for the fresh capture.
+	stale := m.previewSession == "" || !sameSession(m.previewHost, m.previewSession, sel.Host, sel.Name)
 	switch {
+	case stale:
+		return render(m.st.Muted.Render(tr("capturing…")))
 	case m.previewErr != "":
 		// Show the err verbatim — the remote-not-supported sentinel and
 		// any real tmux error both fit on a couple of lines.
