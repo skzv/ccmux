@@ -6,11 +6,35 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 
 	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/daemon"
 )
+
+// TestCreateProject_RejectsControlCharacters — a project name carrying
+// ESC or another control character was created, and every later listing
+// printed it raw into the user's terminal.
+func TestCreateProject_RejectsControlCharacters(t *testing.T) {
+	logPath := fakeTmuxLog(t)
+	root := t.TempDir()
+	s := &server{cfg: config.Config{Projects: config.ProjectsConfig{Root: root}}}
+	for _, name := range []string{"esc\x1b]0;pwned\x07", "c1\u009b31m", "del\x7f"} {
+		body, _ := json.Marshal(daemon.NewProjectRequest{Name: name})
+		rec := httptest.NewRecorder()
+		s.createProject(rec, httptest.NewRequest(http.MethodPost, "/v1/projects", bytes.NewReader(body)))
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("project %q: status %d, want 400 (%s)", name, rec.Code, rec.Body)
+		}
+	}
+	if entries, _ := os.ReadDir(root); len(entries) != 0 {
+		t.Errorf("directories created for rejected names: %v", entries)
+	}
+	if calls := tmuxCallsWith(t, logPath, "new-session"); len(calls) != 0 {
+		t.Errorf("tmux new-session ran for a rejected name: %q", calls)
+	}
+}
 
 // TestSessionNamesStartingWithDollarAreRejected — tmux reads `=$1:` as
 // session ID $1, so POST /v1/sessions/$1/kill answered 204 after

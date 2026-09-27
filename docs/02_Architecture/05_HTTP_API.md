@@ -563,7 +563,8 @@ for a better UX:
   whitespace is trimmed.
 - **project names** for `POST /v1/projects`, and for `POST /v1/sessions`
   without a `path`, must be a single non-hidden path segment — no `/`, `\`,
-  no leading `.`. A `path` may start with `~/` (the daemon's home).
+  no leading `.`, no control characters (C0, DEL, C1). A `path` may start
+  with `~/` (the daemon's home).
 - **notes file paths** must be project-relative, contain no `..`, and end in
   `.md`.
 - request bodies are capped at **64 KiB**.
