@@ -203,3 +203,39 @@ func TestIntegration_ListNoServerVersusUnreachable(t *testing.T) {
 		t.Errorf("after kill-server: List = %v, %v; want empty, no error", tss, err)
 	}
 }
+
+// TestIntegration_StartDirWithHashIsKeptVerbatim — on a real tmux, a
+// session started in a directory containing `#` must record and run in
+// exactly that directory, not a format-expanded one.
+func TestIntegration_StartDirWithHashIsKeptVerbatim(t *testing.T) {
+	ctx := isolatedServer(t)
+	dir := filepath.Join(t.TempDir(), "with#hash", "x#{session_id}#h")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := New(ctx, "c-hash", dir, "sleep 300"); err != nil {
+		t.Fatal(err)
+	}
+	sessions, err := List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var path string
+	for _, s := range sessions {
+		if s.Name == "c-hash" {
+			path = s.Path
+		}
+	}
+	if path != dir {
+		t.Errorf("session_path = %q, want %q", path, dir)
+	}
+	out, err := exec.CommandContext(ctx, "tmux", "display-message", "-p", "-t", exactPane("c-hash"), "#{pane_current_path}").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// pane_current_path is the resolved cwd (/private/var/… on macOS).
+	want, _ := filepath.EvalSymlinks(dir)
+	if got := strings.TrimSpace(string(out)); got != want {
+		t.Errorf("pane runs in %q, want %q", got, want)
+	}
+}

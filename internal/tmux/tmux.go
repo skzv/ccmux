@@ -226,7 +226,7 @@ func New(ctx context.Context, name, dir, cmdline string) error {
 func NewWithAgent(ctx context.Context, name, dir, cmdline, agentTag string) error {
 	args := []string{"new-session", "-d", "-s", name}
 	if dir != "" {
-		args = append(args, "-c", dir)
+		args = append(args, "-c", escapeFormat(dir))
 	}
 	if cmdline != "" {
 		args = append(args, cmdline)
@@ -241,6 +241,13 @@ func NewWithAgent(ctx context.Context, name, dir, cmdline, agentTag string) erro
 	}
 	return nil
 }
+
+// escapeFormat protects a literal string that tmux format-expands, such
+// as new-session's -c start directory: `##` is tmux's escape for `#`.
+// Unescaped, a project directory "with#hash" started its session in
+// "with<hostname>ash" (#h), which doesn't exist, so the agent ran in
+// $HOME — and "#(…)" in a directory name would run a command.
+func escapeFormat(s string) string { return strings.ReplaceAll(s, "#", "##") }
 
 // Kill terminates the named session.
 func Kill(ctx context.Context, name string) error {

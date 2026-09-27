@@ -153,3 +153,22 @@ func TestList_ExitOneOnlyMeansNoServerWhenTmuxSaysSo(t *testing.T) {
 		})
 	}
 }
+
+// TestNewWithAgent_EscapesFormatInStartDir — tmux format-expands
+// new-session's -c, so a project directory "with#hash" started in
+// "with<hostname>ash" (and the agent in $HOME). The directory goes to
+// tmux with every `#` doubled.
+func TestNewWithAgent_EscapesFormatInStartDir(t *testing.T) {
+	logPath := loggingTmux(t)
+	if err := New(context.Background(), "c-x", "/p/with#hash/#{session_id}#(id)", "zsh"); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "new-session|-d|-s|c-x|-c|/p/with##hash/##{session_id}##(id)|zsh|"
+	if got := strings.TrimSpace(string(raw)); got != want {
+		t.Errorf("tmux call = %q, want %q", got, want)
+	}
+}
