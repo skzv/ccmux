@@ -49,13 +49,6 @@ func TestTOFU_FreshCallbackCatchesMismatchStaleMisses(t *testing.T) {
 		t.Fatalf("first contact should TOFU-accept keyA: %v", err)
 	}
 
-	// The STALE callback's in-memory db was not refreshed by the disk
-	// append, so it still treats the host as unknown and TOFU-accepts a
-	// DIFFERENT key — the exact bug the validation hop suffered.
-	if err := cb1(host, addr, keyB); err != nil {
-		t.Errorf("stale callback unexpectedly rejected keyB (%v); the bug is that it accepts it", err)
-	}
-
 	// Validation hop with the FIX: a fresh callback re-reads the updated
 	// known_hosts and REJECTS the mismatched key.
 	hk2, err := tofuHostKeyConfig(host)
@@ -69,5 +62,16 @@ func TestTOFU_FreshCallbackCatchesMismatchStaleMisses(t *testing.T) {
 	// ...and still accepts the genuinely-recorded key.
 	if err := cb2(host, addr, keyA); err != nil {
 		t.Errorf("fresh callback should accept the recorded key: %v", err)
+	}
+
+	// The STALE callback's in-memory db was not refreshed by the disk
+	// append, so it still treats the host as unknown and TOFU-accepts a
+	// DIFFERENT key — the exact bug the validation hop suffered. This
+	// runs last because accepting keyB appends it to known_hosts, and
+	// current x/crypto knownhosts accepts ANY recorded key of a type, as
+	// OpenSSH does (older releases only checked the first one) — so a
+	// fresh callback built after this line would accept keyB too.
+	if err := cb1(host, addr, keyB); err != nil {
+		t.Errorf("stale callback unexpectedly rejected keyB (%v); the bug is that it accepts it", err)
 	}
 }
