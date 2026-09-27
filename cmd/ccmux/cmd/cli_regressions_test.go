@@ -397,6 +397,29 @@ func TestConversationIDs_TableFormRoundTrips(t *testing.T) {
 	}
 }
 
+// TestResume_TagsSessionInTheCreatingTmuxCall — `ccmux resume` ran
+// `new-session` and then a separate `set-option @ccmux_agent`; a daemon
+// poll tick in between classified the brand-new session with the
+// project's agent. The tag must be part of the new-session invocation
+// (tmux's `;` command separator), with no set-option call of its own.
+func TestResume_TagsSessionInTheCreatingTmuxCall(t *testing.T) {
+	e := newCLIEnv(t)
+	id := "3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b"
+	e.seedClaudeTranscript(id, "fix the login redirect")
+
+	res := e.run("", "resume", id)
+	if res.code != 0 {
+		t.Fatalf("resume exit %d\nstderr: %s", res.code, res.stderr)
+	}
+	name := conversations.ResumeSessionName(id)
+	if !hasCall(e.tmuxCallsWith("new-session"), "-s", name, ";", "set-option", "@ccmux_agent", "claude") {
+		t.Errorf("new-session for %s must carry the agent tag in the same call; tmux calls:\n%s", name, strings.Join(e.tmuxCalls(), "\n"))
+	}
+	if hasCall(e.tmuxCallsWith("set-option"), "@ccmux_agent") {
+		t.Errorf("a separate set-option @ccmux_agent call leaves the session untagged in between; tmux calls:\n%s", strings.Join(e.tmuxCalls(), "\n"))
+	}
+}
+
 // TestResume_AgentListCoversEveryAgent — the --agent help and the
 // unknown-agent error hard-coded seven agents, so every agent added
 // since (gemini, opencode, kiro, …) was missing from both.

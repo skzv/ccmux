@@ -9,29 +9,44 @@ import (
 	"github.com/skzv/ccmux/internal/conversations"
 )
 
+// fakeResumeTmuxState is the in-memory tmux fakeResumeTmux installs:
+// sessions maps a session name to its agent tag, tagCalls counts
+// separate set-option calls.
+type fakeResumeTmuxState struct {
+	sessions map[string]string
+	tagCalls int
+}
+
 // fakeResumeTmux swaps ensureResumeSession's tmux seams for an
 // in-memory session set, so the test never touches a real tmux server.
-func fakeResumeTmux(t *testing.T) map[string]bool {
+func fakeResumeTmux(t *testing.T) *fakeResumeTmuxState {
 	t.Helper()
-	sessions := map[string]bool{}
+	st := &fakeResumeTmuxState{sessions: map[string]string{}}
 	origNew, origHas, origTag, origKill := resumeTmuxNew, resumeTmuxHas, resumeTmuxSetAgent, resumeTmuxKill
 	t.Cleanup(func() {
 		resumeTmuxNew, resumeTmuxHas, resumeTmuxSetAgent, resumeTmuxKill = origNew, origHas, origTag, origKill
 	})
-	resumeTmuxNew = func(_ context.Context, name, _, _ string) error {
-		if sessions[name] {
+	resumeTmuxNew = func(_ context.Context, name, _, _, tag string) error {
+		if _, ok := st.sessions[name]; ok {
 			return errors.New("duplicate session: " + name)
 		}
-		sessions[name] = true
+		st.sessions[name] = tag
 		return nil
 	}
-	resumeTmuxHas = func(_ context.Context, name string) (bool, error) { return sessions[name], nil }
-	resumeTmuxSetAgent = func(context.Context, string, string) error { return nil }
+	resumeTmuxHas = func(_ context.Context, name string) (bool, error) {
+		_, ok := st.sessions[name]
+		return ok, nil
+	}
+	resumeTmuxSetAgent = func(_ context.Context, name, tag string) error {
+		st.tagCalls++
+		st.sessions[name] = tag
+		return nil
+	}
 	resumeTmuxKill = func(_ context.Context, name string) error {
-		delete(sessions, name)
+		delete(st.sessions, name)
 		return nil
 	}
-	return sessions
+	return st
 }
 
 // TestEnsureResumeSession_UUIDv7NeighboursDistinct — regression:
@@ -67,6 +82,26 @@ func TestEnsureResumeSession_UUIDv7NeighboursDistinct(t *testing.T) {
 	}
 }
 
+// TestEnsureResumeSession_TagsInTheCreatingCall — regression: resume
+// created the session untagged and tagged it with a second tmux call,
+// so a daemon tick in between classified a resumed Codex conversation
+// with the project's (Claude) rules. The tag must ride on the call
+// that creates the session, with no separate set-option.
+func TestEnsureResumeSession_TagsInTheCreatingCall(t *testing.T) {
+	st := fakeResumeTmux(t)
+	c := conversations.Conversation{ID: "0198a3c2-1b2c-7d3e-8f9a-0b1c2d3e4f5a", Agent: agent.IDCodex}
+	name, existed, err := ensureResumeSession(context.Background(), c, "codex resume x")
+	if err != nil || existed {
+		t.Fatalf("name=%q existed=%v err=%v", name, existed, err)
+	}
+	if got := st.sessions[name]; got != string(agent.IDCodex) {
+		t.Errorf("session created with tag %q, want %q", got, agent.IDCodex)
+	}
+	if st.tagCalls != 0 {
+		t.Errorf("a new session was tagged by %d separate set-option call(s); the creating call must tag it", st.tagCalls)
+	}
+}
+
 // TestEnsureResumeSession_TagFailureKillsNewSession — when tagging the
 // new session with its agent failed, `ccmux resume` returned the error
 // but left the untagged session running, and the next resume of the
@@ -74,7 +109,13 @@ func TestEnsureResumeSession_UUIDv7NeighboursDistinct(t *testing.T) {
 // created must be killed (as the TUI does); one that was already
 // running must not be.
 func TestEnsureResumeSession_TagFailureKillsNewSession(t *testing.T) {
-	sessions := fakeResumeTmux(t)
+	st := fakeResumeTmux(t)
+	// new-session succeeds but the set-option half of the same tmux
+	// invocation fails; so does a retag.
+	resumeTmuxNew = func(_ context.Context, name, _, _, _ string) error {
+		st.sessions[name] = ""
+		return errors.New("set-option failed")
+	}
 	resumeTmuxSetAgent = func(context.Context, string, string) error { return errors.New("set-option failed") }
 	ctx := context.Background()
 	c := conversations.Conversation{ID: "3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b", Agent: agent.IDClaude}
@@ -83,15 +124,15 @@ func TestEnsureResumeSession_TagFailureKillsNewSession(t *testing.T) {
 	if _, _, err := ensureResumeSession(ctx, c, "claude --resume x"); err == nil {
 		t.Fatal("tagging failed, want an error")
 	}
-	if sessions[name] {
+	if _, ok := st.sessions[name]; ok {
 		t.Errorf("session %s left running after its agent tag failed", name)
 	}
 
-	sessions[name] = true // resumed earlier and still running
+	st.sessions[name] = "" // resumed earlier and still running
 	if _, _, err := ensureResumeSession(ctx, c, "claude --resume x"); err == nil {
 		t.Fatal("tagging failed, want an error")
 	}
-	if !sessions[name] {
+	if _, ok := st.sessions[name]; !ok {
 		t.Errorf("killed %s, a session this call didn't create", name)
 	}
 }
