@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/skzv/ccmux/internal/conversations"
 )
 
 // hasCall reports whether any recorded tmux invocation contains all of
@@ -251,6 +253,53 @@ func TestKill_NothingToKillNamesBothCandidates(t *testing.T) {
 	}
 	if kills := e.tmuxCallsWith("kill-session"); len(kills) != 0 {
 		t.Errorf("no kill-session may be sent for a guessed name: %v", kills)
+	}
+}
+
+// --- conversation IDs --------------------------------------------------------
+
+// seedClaudeTranscript writes a minimal Claude Code transcript for id
+// under $HOME/.claude/projects and returns its path.
+func (e *cliEnv) seedClaudeTranscript(id, prompt string) string {
+	e.t.Helper()
+	dir := e.mkdir(".claude/projects/-work-app")
+	p := filepath.Join(dir, id+".jsonl")
+	body := `{"type":"user","cwd":"/work/app","message":{"role":"user","content":"` + prompt + `"},"timestamp":"2026-09-01T10:00:00.000Z"}` + "\n"
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		e.t.Fatal(err)
+	}
+	return p
+}
+
+// TestConversationIDs_TableFormRoundTrips — list-conversations prints
+// IDs cut to 11 characters plus "…", but resume and delete-conversation
+// took only exact IDs, so pasting what the table showed failed with
+// "no conversation with id".
+func TestConversationIDs_TableFormRoundTrips(t *testing.T) {
+	e := newCLIEnv(t)
+	id := "3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b"
+	path := e.seedClaudeTranscript(id, "fix the login redirect")
+
+	list := e.run("", "list-conversations")
+	short := id[:11] + "…"
+	if list.code != 0 || !strings.Contains(list.stdout, short) {
+		t.Fatalf("list-conversations (exit %d) should show %q:\n%s%s", list.code, short, list.stdout, list.stderr)
+	}
+
+	res := e.run("", "resume", short)
+	if res.code != 0 {
+		t.Fatalf("resume %s exit %d\nstderr: %s", short, res.code, res.stderr)
+	}
+	if !hasCall(e.tmuxCallsWith("new-session"), "-s", conversations.ResumeSessionName(id)) {
+		t.Errorf("resume should start the conversation's session; tmux calls:\n%s", strings.Join(e.tmuxCalls(), "\n"))
+	}
+
+	res = e.run("", "delete-conversation", "--force", short)
+	if res.code != 0 {
+		t.Fatalf("delete-conversation %s exit %d\nstderr: %s", short, res.code, res.stderr)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("transcript still on disk after delete-conversation %s (stat err %v)", short, err)
 	}
 }
 

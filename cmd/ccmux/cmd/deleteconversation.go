@@ -26,7 +26,8 @@ func newDeleteConversationCmd() *cobra.Command {
 
 This is irreversible: the transcript is gone and the conversation can
 no longer be resumed. Use ` + "`ccmux list-conversations`" + ` to find
-the id.
+the id; the shortened form its table prints (or any unique prefix)
+works too.
 
 Prints a confirmation prompt unless --force is given.`,
 		Args: cobra.ExactArgs(1),
@@ -36,9 +37,9 @@ Prints a confirmation prompt unless --force is given.`,
 			if err != nil {
 				return fmt.Errorf("list conversations: %w", err)
 			}
-			target := pickByID(list, id)
-			if target.ID == "" {
-				return fmt.Errorf("no conversation with id %q (use `ccmux list-conversations` to list)", id)
+			target, err := pickByID(list, id)
+			if err != nil {
+				return err
 			}
 
 			if !force {
