@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -60,7 +62,7 @@ func TestCLIHelperProcess(t *testing.T) {
 	}
 	rootCmd.SetArgs(args)
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, "Error:", err)
+		fmt.Fprintln(os.Stderr, "Error:", ErrorMessage(err)) // as main does
 		os.Exit(1)
 	}
 	os.Exit(0)
@@ -161,6 +163,39 @@ func (e *cliEnv) run(dir string, args ...string) cliResult {
 		e.t.Fatalf("run ccmux %v: %v", args, err)
 	}
 	return res
+}
+
+// fakeDaemon serves h as the child's local ccmuxd: an HTTP server on
+// $HOME/.local/state/ccmux/ccmuxd.sock. It moves $HOME under /tmp first
+// — t.TempDir() on macOS is too long for the 104-byte unix-socket path
+// limit — so call it before creating anything else under e.home.
+func (e *cliEnv) fakeDaemon(h http.Handler) {
+	e.t.Helper()
+	home, err := os.MkdirTemp("/tmp", "cxd")
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	e.t.Cleanup(func() { _ = os.RemoveAll(home) })
+	if home, err = filepath.EvalSymlinks(home); err != nil {
+		e.t.Fatal(err)
+	}
+	e.home = home
+	e.env["HOME"] = home
+	e.env["XDG_CONFIG_HOME"] = filepath.Join(home, ".config")
+	e.env["XDG_STATE_HOME"] = filepath.Join(home, ".local", "state")
+	e.env["XDG_DATA_HOME"] = filepath.Join(home, ".local", "share")
+	e.env["XDG_CACHE_HOME"] = filepath.Join(home, ".cache")
+	sockDir := filepath.Join(home, ".local", "state", "ccmux")
+	if err := os.MkdirAll(sockDir, 0o700); err != nil {
+		e.t.Fatal(err)
+	}
+	ln, err := net.Listen("unix", filepath.Join(sockDir, "ccmuxd.sock"))
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	srv := &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second}
+	go func() { _ = srv.Serve(ln) }()
+	e.t.Cleanup(func() { _ = srv.Close() })
 }
 
 // tmuxCalls returns every fake-tmux invocation so far, e.g.

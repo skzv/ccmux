@@ -145,7 +145,7 @@ func pickByID(list []conversations.Conversation, id string) (conversations.Conve
 	var b strings.Builder
 	fmt.Fprintf(&b, "conversation id %q is ambiguous — it matches %d conversations:", id, len(matches))
 	for _, c := range matches {
-		fmt.Fprintf(&b, "\n  %s  %s", c.ID, c.Agent)
+		fmt.Fprintf(&b, "\n  %s  %s", safeField(c.ID), safeField(string(c.Agent)))
 		if c.Preview != "" {
 			fmt.Fprintf(&b, "  %q", truncateRunes(c.Preview, 50))
 		}

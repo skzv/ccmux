@@ -13,7 +13,9 @@ var version = "dev"
 
 func main() {
 	if err := cmd.Execute(version); err != nil {
-		fmt.Fprintln(os.Stderr, "ccmux:", err)
+		// Errors quote external text (daemon responses, file names,
+		// tmux output) — print them terminal-safe.
+		fmt.Fprintln(os.Stderr, "ccmux:", cmd.ErrorMessage(err))
 		os.Exit(1)
 	}
 }

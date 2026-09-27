@@ -93,7 +93,9 @@ func newNotesCmd() *cobra.Command {
 			tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 			fmt.Fprintln(tw, "REL\tDIR\tMODIFIED")
 			for _, e := range entries {
-				fmt.Fprintf(tw, "%s\t%s\t%s\n", e.Rel, e.Dir, e.Modified.Format("2006-01-02 15:04"))
+				// File names come from the (possibly remote) vault:
+				// sanitize them (see safeprint.go).
+				fmt.Fprintf(tw, "%s\t%s\t%s\n", safeField(e.Rel), safeField(e.Dir), e.Modified.Format("2006-01-02 15:04"))
 			}
 			return tw.Flush()
 		},
@@ -115,7 +117,9 @@ func newNotesCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Print(nc.Content)
+			// The daemon strips control sequences from note bodies,
+			// but a peer running an older ccmuxd doesn't.
+			fmt.Print(safeText(nc.Content))
 			return nil
 		},
 	}
@@ -137,7 +141,7 @@ func newNotesCmd() *cobra.Command {
 				return err
 			}
 			for _, h := range hits {
-				fmt.Printf("%s:%d: %s\n", h.Rel, h.LineNum, h.Snippet)
+				fmt.Printf("%s:%d: %s\n", safeField(h.Rel), h.LineNum, safeField(h.Snippet))
 			}
 			return nil
 		},

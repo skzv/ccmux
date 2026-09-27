@@ -116,8 +116,10 @@ shape /v1/models returns).`,
 				if m.ID == currentDefault {
 					marker = "*"
 				}
+				// The catalog comes from `claude -p` / the Models API
+				// via the daemon: sanitize (see safeprint.go).
 				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
-					m.ID, m.DisplayName, formatTokens(m.MaxInput), formatTokens(m.MaxOutput), m.Source, marker)
+					safeField(m.ID), safeField(m.DisplayName), formatTokens(m.MaxInput), formatTokens(m.MaxOutput), safeField(string(m.Source)), marker)
 			}
 			if err := tw.Flush(); err != nil {
 				return err
@@ -130,7 +132,7 @@ shape /v1/models returns).`,
 			if currentDefault == "" {
 				fmt.Fprintln(os.Stdout, "No model pinned. Use `ccmux agents set-default-model <id>` to pin one.")
 			} else {
-				fmt.Fprintf(os.Stdout, "Current pin: %s. Use `ccmux agents set-default-model <id>` to change (empty to clear).\n", currentDefault)
+				fmt.Fprintf(os.Stdout, "Current pin: %s. Use `ccmux agents set-default-model <id>` to change (empty to clear).\n", safeField(currentDefault))
 			}
 			return nil
 		},

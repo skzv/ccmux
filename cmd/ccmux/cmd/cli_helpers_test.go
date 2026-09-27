@@ -162,3 +162,21 @@ func TestTmuxAttachCmd_Selection(t *testing.T) {
 		}
 	}
 }
+
+func TestSafeField(t *testing.T) {
+	cases := map[string]string{
+		"plain.md":                    "plain.md",
+		"n\x1b]52;c;SGVsbG8=\x07x.md": "nx.md",        // OSC 52 clipboard write
+		"c-\x1b[2J\x1b[Hwipe":         "c-wipe",       // CSI clear screen
+		"a\tb\nc":                     "a b c",        // row/column breakers
+		"café → 漢字.md":                "café → 漢字.md", // real text survives
+	}
+	for in, want := range cases {
+		if got := safeField(in); got != want {
+			t.Errorf("safeField(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if got := ErrorMessage(errors.New("line one\nline \x1b]0;t\x07two")); got != "line one\nline two" {
+		t.Errorf("ErrorMessage kept an escape or lost a newline: %q", got)
+	}
+}

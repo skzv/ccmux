@@ -42,7 +42,7 @@ listen_tailnet = true.`,
 			fmt.Println()
 			qrterminal.GenerateHalfBlock(resp.URL, qrterminal.L, os.Stdout)
 			fmt.Println()
-			fmt.Printf("  %s\n\n", resp.URL)
+			fmt.Printf("  %s\n\n", safeField(resp.URL))
 			return nil
 		},
 	}

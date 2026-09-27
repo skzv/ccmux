@@ -299,7 +299,9 @@ func newListCmd() *cobra.Command {
 			tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 			fmt.Fprintln(tw, "NAME\tHOST\tSTATE\tPATH")
 			for _, s := range sessions {
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", s.Name, s.Host, s.State, s.Path)
+				// Session names and paths are whatever tmux (or a
+				// peer's daemon) reports — sanitize (see safeprint.go).
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", safeField(s.Name), safeField(s.Host), safeField(s.State), safeField(s.Path))
 			}
 			return tw.Flush()
 		},
@@ -386,7 +388,7 @@ func printDoctorDetail(detail string) {
 	if detail == "" {
 		return
 	}
-	for _, ln := range strings.Split(detail, "\n") {
+	for _, ln := range strings.Split(safeText(detail), "\n") {
 		fmt.Println("      ↳ " + ln)
 	}
 }
@@ -537,7 +539,7 @@ func runDoctor() error {
 		if who == "" {
 			who = "(login parsed empty, but gh auth status is happy)"
 		}
-		fmt.Printf("  ✓ gh authenticated as %s\n", who)
+		fmt.Printf("  ✓ gh authenticated as %s\n", safeField(who))
 	case ghauth.StateNotAuthed:
 		fmt.Println("  · " + gh.Hint())
 		printDoctorDetail(gh.Detail)
@@ -869,7 +871,7 @@ func newDaemonCmd() *cobra.Command {
 					return nil
 				}
 				fmt.Printf("\nIPC: online (host=%s version=%s sessions=%d sleep_mode=%s)\n",
-					h.Hostname, h.Version, h.Sessions, h.SleepMode)
+					safeField(h.Hostname), safeField(h.Version), h.Sessions, safeField(h.SleepMode))
 				return nil
 			},
 		},
@@ -1069,7 +1071,7 @@ func newHostCmd() *cobra.Command {
 				tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 				fmt.Fprintln(tw, "NAME\tADDRESS\tUSER\tMOSH")
 				for _, h := range cfg.Hosts {
-					fmt.Fprintf(tw, "%s\t%s\t%s\t%v\n", h.Name, h.Address, h.User, h.Mosh)
+					fmt.Fprintf(tw, "%s\t%s\t%s\t%v\n", safeField(h.Name), safeField(h.Address), safeField(h.User), h.Mosh)
 				}
 				return tw.Flush()
 			},

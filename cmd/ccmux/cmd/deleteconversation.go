@@ -43,14 +43,17 @@ Prints a confirmation prompt unless --force is given.`,
 			}
 
 			if !force {
-				fmt.Printf("Delete %s conversation %s?\n", target.Agent, target.ID)
+				// IDs and paths are transcript file names: sanitize
+				// them (see safeprint.go). %q already escapes the
+				// preview.
+				fmt.Printf("Delete %s conversation %s?\n", safeField(string(target.Agent)), safeField(target.ID))
 				if target.Preview != "" {
 					fmt.Printf("  %q\n", target.Preview)
 				}
-				fmt.Printf("  %s\n", target.Path)
+				fmt.Printf("  %s\n", safeField(target.Path))
 				for _, path := range target.Paths {
 					if path != target.Path {
-						fmt.Printf("  %s\n", path)
+						fmt.Printf("  %s\n", safeField(path))
 					}
 				}
 				fmt.Print("This cannot be undone. Type 'yes' to confirm: ")
@@ -65,7 +68,7 @@ Prints a confirmation prompt unless --force is given.`,
 			if err := conversations.Delete(target); err != nil {
 				return err
 			}
-			fmt.Printf("Deleted %s conversation %s\n", target.Agent, target.ID)
+			fmt.Printf("Deleted %s conversation %s\n", safeField(string(target.Agent)), safeField(target.ID))
 			return nil
 		},
 	}

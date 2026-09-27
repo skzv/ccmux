@@ -146,7 +146,7 @@ func runHostSetupSSH(arg string, skipEnumerate bool) error {
 	defer scrub(&password)
 
 	progress := sshsetup.Progress(func(stage, detail string) {
-		fmt.Printf("  · %s: %s\n", stage, detail)
+		fmt.Printf("  · %s: %s\n", safeField(stage), safeField(detail))
 	})
 	// A fresh deadline, started only now that the password is in.
 	installCtx, cancelInstall := sshStepCtx()
@@ -186,9 +186,11 @@ func runHostSetupSSH(arg string, skipEnumerate bool) error {
 	if len(others) == 0 {
 		return nil
 	}
-	fmt.Printf("\nOther users on %s: %s\n", target.Host, strings.Join(others, ", "))
+	// Account names come from the remote host: sanitize them before
+	// they reach the terminal (see safeprint.go).
+	fmt.Printf("\nOther users on %s: %s\n", safeField(target.Host), safeField(strings.Join(others, ", ")))
 	for _, u := range others {
-		if !confirm(fmt.Sprintf("Add %s@%s as a separate host?", u, target.Host)) {
+		if !confirm(fmt.Sprintf("Add %s@%s as a separate host?", safeField(u), safeField(target.Host))) {
 			continue
 		}
 		h := enumeratedHost(u, target)
@@ -197,10 +199,10 @@ func runHostSetupSSH(arg string, skipEnumerate bool) error {
 			return fmt.Errorf("save host: %w", err)
 		}
 		if !added {
-			fmt.Printf("  · %s is already configured — left as is\n", h.Name)
+			fmt.Printf("  · %s is already configured — left as is\n", safeField(h.Name))
 			continue
 		}
-		fmt.Printf("  ✓ added %s\n", h.Name)
+		fmt.Printf("  ✓ added %s\n", safeField(h.Name))
 	}
 	return nil
 }

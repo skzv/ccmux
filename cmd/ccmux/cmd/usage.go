@@ -50,7 +50,7 @@ func writeUsage(w io.Writer, data daemon.AgentUsage, asJSON bool) error {
 		if (s.CostAvailable != nil && *s.CostAvailable) || (s.CostAvailable == nil && s.EstimatedCost > 0) {
 			cost = fmt.Sprintf("$%.2f", s.EstimatedCost)
 		}
-		fmt.Fprintf(tw, "%s\t%d\t%d\t%d\t%d\t%d\t%s\n", row.Agent, s.Prompts, s.InputTokens, s.OutputTokens, s.CachedInputTokens, s.ReasoningTokens, cost)
+		fmt.Fprintf(tw, "%s\t%d\t%d\t%d\t%d\t%d\t%s\n", safeField(row.Agent), s.Prompts, s.InputTokens, s.OutputTokens, s.CachedInputTokens, s.ReasoningTokens, cost)
 	}
 	return tw.Flush()
 }

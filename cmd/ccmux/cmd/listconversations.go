@@ -154,15 +154,17 @@ func printConversationsTable(list []conversations.Conversation) {
 	fmt.Printf("%s\n", repeat("-", 70))
 	for _, c := range list {
 		when := relativeTime(c.LastActivity)
-		idShort := c.ID
+		// IDs come from transcript file names and the preview/project
+		// from their contents: sanitize (see safeprint.go).
+		idShort := safeField(c.ID)
 		if len(idShort) > idW {
 			idShort = idShort[:idW-1] + "…"
 		}
-		preview := c.Preview
+		preview := safeField(c.Preview)
 		if preview == "" {
-			preview = "(" + c.Project + ")"
+			preview = "(" + safeField(c.Project) + ")"
 		}
-		fmt.Printf("%-*s  %-*s  %-*s  %s\n", agentW, c.Agent, whenW, when, idW, idShort, preview)
+		fmt.Printf("%-*s  %-*s  %-*s  %s\n", agentW, safeField(string(c.Agent)), whenW, when, idW, idShort, preview)
 	}
 }
 
