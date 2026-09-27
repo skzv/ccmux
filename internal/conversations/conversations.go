@@ -161,8 +161,12 @@ func (c Conversation) IsHeadless() bool {
 // ValidateResume prevents unresolved Gemini project hashes from becoming a
 // fabricated cwd (or silently resuming in ccmux's own working directory),
 // and refuses a Cursor project directory that doesn't exist — tmux
-// would quietly start the session in $HOME instead.
+// would quietly start the session in $HOME instead. It also refuses an
+// ID that starts with "-" (see ResumeArgsWithCommands).
 func (c Conversation) ValidateResume() error {
+	if strings.HasPrefix(c.ID, "-") {
+		return fmt.Errorf("conversation ID %q starts with '-' and would be read as a command-line flag; refusing to resume", c.ID)
+	}
 	if c.Agent == agent.IDGemini && !filepath.IsAbs(c.Project) {
 		return fmt.Errorf("Gemini project directory is unknown; open this project in Gemini CLI once to register its location")
 	}
@@ -181,7 +185,15 @@ func (c Conversation) ResumeArgs() []string {
 // ResumeArgsWithCommands is ResumeArgs with configured executable path
 // substitution. This keeps the flag dialect owned here while allowing
 // ccmux's setup-time command choice to propagate to resume flows.
+//
+// IDs come from transcript file names, so a crafted name can produce
+// one that starts with "-" (rollout-a--b-c-d-e.jsonl yields
+// "-b-c-d-e"), which the agent would parse as a flag. Those get no
+// argv at all.
 func (c Conversation) ResumeArgsWithCommands(commands agent.Commands) []string {
+	if strings.HasPrefix(c.ID, "-") {
+		return nil
+	}
 	switch c.Agent {
 	case agent.IDGemini:
 		return agent.ResumeArgs(agent.IDGemini, c.ID, commands)

@@ -774,6 +774,35 @@ func TestResumeArgs_AgentDialects(t *testing.T) {
 	}
 }
 
+// TestResumeArgs_RejectsFlagLikeID — regression: IDs come from file
+// names, and a crafted rollout-a--b-c-d-e.jsonl yields the ID
+// "-b-c-d-e", which went straight into the agent's argv where it would
+// be parsed as flags. ValidateResume refuses it and no argv is built.
+func TestResumeArgs_RejectsFlagLikeID(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, ".codex/sessions/2026/05/12/rollout-a--b-c-d-e.jsonl")
+	writeFile(t, path, `{"timestamp":"2026-05-12T10:00:00Z","type":"session_meta","payload":{"originator":"codex-tui","cwd":"/repo"}}`+"\n")
+	got, err := ListCodex(root)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("ListCodex = %+v, %v", got, err)
+	}
+	c := got[0]
+	if c.ID != "-b-c-d-e" {
+		t.Fatalf("fixture ID = %q, want the flag-like -b-c-d-e", c.ID)
+	}
+	if err := c.ValidateResume(); err == nil {
+		t.Error("ValidateResume accepted a flag-like conversation ID")
+	}
+	for _, id := range []agent.ID{agent.IDClaude, agent.IDCodex, agent.IDCursor, agent.IDAntigravity, agent.IDGemini, agent.IDPi, agent.IDMuse} {
+		if argv := (Conversation{ID: "--dangerously-skip-permissions", Agent: id}).ResumeArgs(); argv != nil {
+			t.Errorf("%s: ResumeArgs = %v, want nil for a flag-like ID", id, argv)
+		}
+	}
+	if argv := (Conversation{ID: "a-1", Agent: agent.IDCodex}).ResumeArgs(); len(argv) == 0 {
+		t.Error("an ordinary ID must still resume")
+	}
+}
+
 func TestResumeArgsWithCommands_ConfiguredCommands(t *testing.T) {
 	commands := agent.Commands{
 		Claude:      "/tmp/claude",
