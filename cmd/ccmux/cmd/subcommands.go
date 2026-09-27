@@ -37,11 +37,13 @@ import (
 // whichever agent the project's .ccmux/agent sidecar records.
 func newAttachCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "attach [project|path]",
+		Use:   "attach [session|project|path]",
 		Short: "Attach to a project's agent session (creates one if missing)",
 		Long: `Attach to a project's agent session, creating it if it isn't running.
 
-A bare name (no "/") is a project under the projects root (~/Projects,
+The name of a running session (as ` + "`ccmux list`" + ` prints it, e.g.
+c-shell-1a2b) attaches to that session. Otherwise a bare name (no "/")
+is a project under the projects root (~/Projects,
 projects.root in config, or --projects), so ` + "`ccmux attach auth-redesign`" + `
 works from any directory. Anything with a "/" (./scratch, ../x, /abs/x)
 is a path. With no argument, the current directory is used. A directory
@@ -52,6 +54,21 @@ that doesn't exist is an error — the session is never started elsewhere.`,
 			if len(args) == 1 {
 				arg = args[0]
 			}
+			ctx := context.Background()
+			// A live session's own name — what `ccmux list` prints,
+			// e.g. c-shell-abc — attaches as-is, the way `ccmux kill`
+			// resolves it. Mapped as a project it became c-c-shell-abc
+			// and failed with "no project …".
+			if arg != "" {
+				live, err := tmux.Has(ctx, arg)
+				if err != nil {
+					return err
+				}
+				if live {
+					return attachWithChrome(arg, "", attachDetachOthers())
+				}
+			}
+
 			cfg, _ := config.Load()
 			root, err := cliProjectsRoot(cfg)
 			if err != nil {
@@ -60,7 +77,6 @@ that doesn't exist is an error — the session is never started elsewhere.`,
 			dir, found := resolveAttachDir(arg, root)
 			session := tmux.SessionNameForPath(dir)
 
-			ctx := context.Background()
 			has, err := tmux.Has(ctx, session)
 			if err != nil {
 				return err

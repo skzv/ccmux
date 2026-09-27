@@ -158,7 +158,7 @@ A "Claude" screen in the TUI that surfaces and edits the settings Claude Code it
 | Command                           | Phase | Notes                                                                  |
 | --------------------------------- | ----- | ---------------------------------------------------------------------- |
 | `ccmux`                           | P1    | Launch TUI.                                                            |
-| `ccmux attach [project]`          | P1    | Attach to session for project (default: cwd). Direct shim for `cc`.    |
+| `ccmux attach [project]`          | P1    | Attach to session for project (default: cwd), or a running session by name. Direct shim for `cc`. |
 | `ccmux new <name> [--agent <id>]` | P1    | Create the project directory + start an agent session. No scaffolding. |
 | `ccmux list [--json]`             | P1    | List sessions. JSON for scripting.                                     |
 | `ccmux kill <project>`            | P1    | Kill a session.                                                        |

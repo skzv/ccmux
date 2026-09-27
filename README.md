@@ -412,7 +412,7 @@ That command does two things, and **only** two things:
 
 ccmux does **not** scaffold the project — no `CLAUDE.md`, no `docs/` tree, no `git init`, no GitHub repo. Bootstrapping is the agent's job, done inside the session: run `/init` to have the agent write `CLAUDE.md`, `openspec` to set up specs, `git init` whenever you want version control. ccmux opens the door; what the project becomes is up to you and your agent.
 
-To check on the session without joining the conversation: `ccmux list`. To attach: `ccmux attach auth-redesign`. The session keeps running after you detach.
+To check on the session without joining the conversation: `ccmux list`. To attach: `ccmux attach auth-redesign` (any session name `ccmux list` prints works too). The session keeps running after you detach.
 
 ### 2. Juggling multiple agent sessions (≈2 min)
 

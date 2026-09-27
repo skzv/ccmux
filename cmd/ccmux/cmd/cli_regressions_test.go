@@ -105,6 +105,32 @@ func TestAttach_ProjectsFlagOverridesRoot(t *testing.T) {
 	}
 }
 
+// TestAttach_LiveSessionNameAttachesAsIs — `ccmux attach c-shell-abc`
+// (a name `ccmux list` prints for a non-project session) was mapped as
+// a project to c-c-shell-abc and failed with "no project … create it
+// with `ccmux new`". A live session's name must attach as-is, the way
+// `ccmux kill` resolves it.
+func TestAttach_LiveSessionNameAttachesAsIs(t *testing.T) {
+	for _, name := range []string{"c-shell-abc", "work"} {
+		t.Run(name, func(t *testing.T) {
+			e := newCLIEnv(t)
+			e.mkdir("Projects")
+			e.env["FAKE_TMUX_SESSIONS"] = name
+
+			res := e.run("", "attach", name)
+			if res.code != 0 {
+				t.Fatalf("attach %s exit %d\nstderr: %s", name, res.code, res.stderr)
+			}
+			if !hasCall(e.tmuxCallsWith("attach-session"), "-t", exactTarget(name)) {
+				t.Errorf("attach must target the live session %s; tmux calls:\n%s", name, strings.Join(e.tmuxCalls(), "\n"))
+			}
+			if news := e.tmuxCallsWith("new-session"); len(news) != 0 {
+				t.Errorf("no session may be created for a live session name, got: %v", news)
+			}
+		})
+	}
+}
+
 // --- attach from inside tmux ----------------------------------------------
 
 // TestAttach_InsideTmuxSwitchesClient — from inside a tmux pane,
