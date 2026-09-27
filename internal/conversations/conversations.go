@@ -1994,7 +1994,9 @@ func compactTranscriptPaths(primary string, paths []string) []string {
 //   - Drop "pure-noise" blocks entirely (open tag + content + close).
 //     environment_context / user_instructions are state dumps the CLI
 //     prepends to every session; surfacing them as a "first prompt"
-//     would just show cwd / shell info.
+//     would just show cwd / shell info. task-notification is the
+//     record Claude Code injects as a user turn when a background task
+//     or subagent finishes.
 //   - Drop leading Codex AGENTS.md instruction bundles that are
 //     persisted as user input before the real prompt.
 //   - Drop Claude Code's slash-command bookkeeping: <command-name>,
@@ -2008,6 +2010,10 @@ func compactTranscriptPaths(primary string, paths []string) []string {
 //   - Drop leading skill-invocation wrappers such as
 //     "worktree-openspec-workflow\n/worktree-openspec-workflow …" and
 //     keep only the prompt text after the command token.
+//   - Drop Claude Code's "[Request interrupted by user]" markers.
+//
+// internal/claudeusage excludes the same task-notification and
+// interrupt records from its prompt count (promptKindOf).
 //
 // Returns "" when the input is empty after cleaning — callers should
 // treat that as "skip this message" and continue scanning the
@@ -2021,7 +2027,7 @@ func cleanPromptText(s string) string {
 	if s == "" {
 		return ""
 	}
-	for _, tag := range []string{"environment_context", "user_instructions"} {
+	for _, tag := range []string{"environment_context", "user_instructions", "task-notification"} {
 		s = removeXMLBlock(s, tag)
 	}
 	s = strings.TrimSpace(dropCommandBlocks(s))
@@ -2029,7 +2035,20 @@ func cleanPromptText(s string) string {
 		return ""
 	}
 	s = strings.TrimSpace(stripXMLTags(s))
-	return stripLeadingSkillInvocation(s)
+	s = stripLeadingSkillInvocation(s)
+	if isInterruptMarker(s) {
+		return ""
+	}
+	return s
+}
+
+// isInterruptMarker reports whether s is the whole of a record Claude
+// Code writes when the user interrupts a turn: "[Request interrupted by
+// user]" or "[Request interrupted by user for tool use]". A prompt that
+// merely quotes one is kept.
+func isInterruptMarker(s string) bool {
+	return strings.HasPrefix(s, "[Request interrupted by user") &&
+		strings.HasSuffix(s, "]") && !strings.ContainsRune(s, '\n')
 }
 
 func removeLeadingAgentsInstructions(s string) string {

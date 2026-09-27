@@ -72,6 +72,24 @@ func TestCountMessages_MatchesRecentMessages(t *testing.T) {
 `,
 		},
 	}
+	// Claude Code writes a finished background task and a user
+	// interrupt as type:"user" records. Neither is a turn.
+	cases = append(cases, struct {
+		name  string
+		agent agent.ID
+		file  string
+		body  string
+		want  int
+	}{
+		name: "claude-harness-records", agent: agent.IDClaude, file: "claude.jsonl", want: 3,
+		body: `{"type":"user","message":{"role":"user","content":"<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n<summary>Background command finished</summary>\n</task-notification>"},"origin":{"kind":"task-notification"},"timestamp":"2026-05-01T10:00:00Z"}
+{"type":"user","message":{"role":"user","content":"run the tests"},"timestamp":"2026-05-01T10:00:01Z"}
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]},"timestamp":"2026-05-01T10:00:02Z"}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"x"},{"type":"text","text":"[Request interrupted by user for tool use]"}]},"timestamp":"2026-05-01T10:00:03Z"}
+{"type":"user","message":{"role":"user","content":"why did [Request interrupted by user] show up?"},"timestamp":"2026-05-01T10:00:04Z"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"reply"}]},"timestamp":"2026-05-01T10:00:05Z"}
+`,
+	})
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(dir, tc.name, tc.file)
@@ -92,5 +110,32 @@ func TestCountMessages_MatchesRecentMessages(t *testing.T) {
 				t.Errorf("RecentMessages lists %d, want %d: %+v", len(msgs), tc.want, msgs)
 			}
 		})
+	}
+}
+
+// TestListClaude_PreviewSkipsHarnessRecords — regression: a
+// conversation that opened with a background-task notification (or an
+// interrupt marker) showed that record as its preview, and the reader
+// listed every one as a user turn. The preview is the first real prompt.
+func TestListClaude_PreviewSkipsHarnessRecords(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".claude/projects/-repo/0f5c2a8e-1b2c-4d3e-8f90-a1b2c3d4e5f6.jsonl")
+	writeFile(t, path,
+		`{"type":"user","message":{"role":"user","content":"<task-notification>\n<task-id>b1</task-id>\n<summary>Background command finished</summary>\n</task-notification>"},"timestamp":"2026-05-01T10:00:00Z"}`+"\n"+
+			`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]},"timestamp":"2026-05-01T10:00:01Z"}`+"\n"+
+			`{"type":"user","message":{"role":"user","content":"ship the parser"},"timestamp":"2026-05-01T10:00:02Z"}`+"\n")
+	got, err := ListClaude(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Preview != "ship the parser" {
+		t.Fatalf("preview = %+v, want the first real prompt", got)
+	}
+	msgs, err := RecentMessages(got[0], 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 1 || msgs[0].Content != "ship the parser" {
+		t.Errorf("RecentMessages = %+v, want only the real prompt", msgs)
 	}
 }
