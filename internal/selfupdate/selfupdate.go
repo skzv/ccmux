@@ -47,11 +47,67 @@ var gitRunner = realGit
 
 func realGit(ctx context.Context, dir string, args ...string) (string, error) {
 	full := append([]string{"-C", dir}, args...)
-	out, err := exec.CommandContext(ctx, "git", full...).Output()
+	cmd := exec.CommandContext(ctx, "git", full...)
+	cmd.Env = nonInteractiveGitEnv(os.Environ(), gitConfigSSHCommand(ctx, dir))
+	out, err := cmd.Output()
 	if err != nil {
 		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// nonInteractiveGitEnv returns environ with git and ssh told never to
+// prompt. The check runs in the background at TUI startup, where a
+// credential or passphrase prompt would land on the user's terminal
+// (or, from ssh, on /dev/tty behind the alt-screen) and hang until the
+// fetch timeout. A remote that needs one simply fails the check, which
+// Check reports as "can't tell".
+//
+//   - GIT_TERMINAL_PROMPT=0 stops git's own username/password prompts.
+//   - ssh gets -o BatchMode=yes (no passphrase, password or host-key
+//     prompts), appended to whatever ssh command git would have used:
+//     $GIT_SSH_COMMAND, else core.sshCommand (configSSH), else plain
+//     ssh. Setting GIT_SSH_COMMAND outright would override a
+//     core.sshCommand that picks a key or port. A bare $GIT_SSH (a
+//     program path, possibly not OpenSSH) is left alone.
+func nonInteractiveGitEnv(environ []string, configSSH string) []string {
+	env := make([]string, 0, len(environ)+2)
+	var sshCmd, gitSSH string
+	for _, kv := range environ {
+		switch {
+		case strings.HasPrefix(kv, "GIT_TERMINAL_PROMPT="):
+			continue
+		case strings.HasPrefix(kv, "GIT_SSH_COMMAND="):
+			sshCmd = strings.TrimPrefix(kv, "GIT_SSH_COMMAND=")
+			continue
+		case strings.HasPrefix(kv, "GIT_SSH="):
+			gitSSH = strings.TrimPrefix(kv, "GIT_SSH=")
+		}
+		env = append(env, kv)
+	}
+	env = append(env, "GIT_TERMINAL_PROMPT=0")
+	if sshCmd == "" {
+		sshCmd = configSSH
+	}
+	if sshCmd == "" && gitSSH != "" {
+		return env
+	}
+	if sshCmd == "" {
+		sshCmd = "ssh"
+	}
+	return append(env, "GIT_SSH_COMMAND="+sshCmd+" -o BatchMode=yes")
+}
+
+// gitConfigSSHCommand reads core.sshCommand for the checkout at dir;
+// "" when unset or unreadable. Local config read, no network.
+func gitConfigSSHCommand(ctx context.Context, dir string) string {
+	cmd := exec.CommandContext(ctx, "git", "-C", dir, "config", "--get", "core.sshCommand")
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // Check resolves the ccmux checkout, fetches its upstream, and counts
