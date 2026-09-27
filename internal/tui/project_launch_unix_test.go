@@ -54,7 +54,10 @@ func TestProjectLaunchShellFallback(t *testing.T) {
 				if pathFlavor {
 					launch = launchCmdForProjectPathWithCommands(dir, commands)
 				}
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				// A hang guard, not a performance bound: under heavy
+				// parallel load macOS can take seconds to vet the
+				// freshly written stub executables.
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 				defer cancel()
 				cmd := exec.CommandContext(ctx, "/bin/sh", "-c", launch)
 				cmd.Env = append(os.Environ(), "PATH="+dir)

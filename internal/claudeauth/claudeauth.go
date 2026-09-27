@@ -69,6 +69,11 @@ var (
 	// fetchFn is a seam so tests can fake the `claude auth status`
 	// subprocess.
 	fetchFn = fetch
+	// statusTimeout bounds one `claude auth status` run. A var so tests
+	// that exec a real stub can give it room: on a loaded macOS box the
+	// first exec of a freshly written script can take seconds just to
+	// clear the system's code checks.
+	statusTimeout = 3 * time.Second
 )
 
 // Get returns the current Claude auth status, caching a successful
@@ -129,7 +134,7 @@ func fetch(ctx context.Context) (Status, error) {
 			return Status{}, errors.New("claude not on PATH")
 		}
 	}
-	c, cancel := context.WithTimeout(ctx, 3*time.Second)
+	c, cancel := context.WithTimeout(ctx, statusTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(c, bin, "auth", "status")
 	out, err := cmd.Output()

@@ -249,6 +249,10 @@ func agentIDList() string {
 	return strings.Join(ids, ", ")
 }
 
+// listTmuxTimeout bounds the tmux calls behind `ccmux list`'s daemon-down
+// fallback and `ccmux project`'s session listing — a hang guard.
+const listTmuxTimeout = 15 * time.Second
+
 // newListCmd: `ccmux list [--json]` — list sessions.
 func newListCmd() *cobra.Command {
 	var asJSON bool
@@ -267,8 +271,11 @@ func newListCmd() *cobra.Command {
 			if sessions == nil {
 				// The tmux fallback gets its own budget: a daemon that
 				// accepted the connection and then hung has spent all
-				// of ctx, and reusing it failed the fallback too.
-				tctx, tcancel := context.WithTimeout(context.Background(), 3*time.Second)
+				// of ctx, and reusing it failed the fallback too. It
+				// only guards against a wedged tmux server, so it's
+				// generous: a loaded machine can take seconds just to
+				// start the tmux client, and 3s made `list` fail there.
+				tctx, tcancel := context.WithTimeout(context.Background(), listTmuxTimeout)
 				defer tcancel()
 				ts, err := tmux.List(tctx)
 				if err != nil {

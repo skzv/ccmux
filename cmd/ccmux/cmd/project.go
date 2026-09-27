@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"text/tabwriter"
-	"time"
 
 	"github.com/spf13/cobra"
 
@@ -57,7 +56,7 @@ func runProjectCmd(name string) error {
 
 	fmt.Printf("%s\n%s\n\n", target.Name, target.Path)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), listTmuxTimeout)
 	defer cancel()
 
 	// Running sessions whose working directory is the project folder.

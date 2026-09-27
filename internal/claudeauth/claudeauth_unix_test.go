@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // TestFetch_ExpandsTildeInConfiguredCommand — `[agents.claude] command
@@ -15,6 +16,12 @@ import (
 // auto-detection silently fell back.
 func TestFetch_ExpandsTildeInConfiguredCommand(t *testing.T) {
 	resetCache(t)
+	// The 3s production budget is a hang guard, not a performance
+	// bound; exec'ing a just-written stub under heavy parallel load
+	// (macOS vets new executables first) blew through it and flaked.
+	prevTimeout := statusTimeout
+	statusTimeout = 30 * time.Second
+	t.Cleanup(func() { statusTimeout = prevTimeout })
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	bin := filepath.Join(home, ".local", "bin")
