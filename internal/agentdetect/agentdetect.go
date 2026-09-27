@@ -175,21 +175,15 @@ func ruleMatches(r *Rule, in Input) bool {
 	if r.Match.hasCompiled {
 		return r.Match.match(region)
 	}
-	spec := MatchSpec{
-		Contains:  r.Contains,
-		Regex:     r.Regex,
-		LineRegex: r.LineRegex,
-		Any:       r.Any,
-		All:       r.All,
-		Not:       r.Not,
-	}
+	spec := r.spec()
 	return spec.match(region)
 }
 
 // extractRegion pulls the substring of the input that the rule wants
 // to scrutinize. Unknown region names return an empty string, which
-// fails every match — so a typo in a rule file makes the rule a
-// no-op rather than a panic.
+// fails every positive match rather than panicking; the loader rejects
+// such rules up front (validateRule), so a typo in a rule file is a
+// load error, not a silently disabled rule.
 func extractRegion(name string, in Input) string {
 	switch {
 	case name == "osc_title":
@@ -204,6 +198,32 @@ func extractRegion(name string, in Input) string {
 		return lastNonEmptyLines(in.Pane, 1)
 	}
 	return ""
+}
+
+// validRegion reports whether extractRegion understands name exactly —
+// the fixed names, or bottom_non_empty_lines(N) with N a positive
+// decimal integer. parseRegionArg quietly turns a malformed N into 1,
+// so `bottom_non_empty_lines(x)` is rejected here rather than read as
+// the last line only.
+func validRegion(name string) bool {
+	switch name {
+	case "", "whole_recent", "last_line", "osc_title", "osc_progress":
+		return true
+	}
+	arg, ok := strings.CutPrefix(name, "bottom_non_empty_lines(")
+	if !ok {
+		return false
+	}
+	arg, ok = strings.CutSuffix(arg, ")")
+	if !ok || arg == "" || arg[0] == '0' {
+		return false
+	}
+	for _, ch := range arg {
+		if ch < '0' || ch > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // parseRegionArg returns the N inside a `name(N)` region string, with
