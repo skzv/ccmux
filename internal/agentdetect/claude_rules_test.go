@@ -5,14 +5,17 @@ import (
 	"testing"
 )
 
-// TestClaudeRules_PromptFrameRequiresTwoDistinctGlyphs — finding: the
-// old claude_prompt_frame encoding let one rounded glyph satisfy both
-// the top-level regex AND the `any` block, so a capture racing a
-// partial frame redraw (a lone `╰` on the last line) classified
-// blocked and fired a spurious bell/push. The rule must mirror
-// looksLikeClaudePrompt's contract: one rounded corner AND a second
-// DISTINCT glyph from {╭╮╰╯│─>}.
-func TestClaudeRules_PromptFrameRequiresTwoDistinctGlyphs(t *testing.T) {
+// TestClaudeRules_PromptFrameRequiresARealBorder — two findings on
+// claude_prompt_frame. First, one rounded glyph could satisfy the whole
+// rule, so a capture racing a partial frame redraw (a lone `╰` on the
+// last line) classified blocked and fired a spurious bell/push. Then
+// "a rounded corner plus any second frame glyph" still matched the
+// shell prompt a crashed session falls back to: powerlevel10k's framed
+// `╰─❯ ` and oh-my-zsh bira's `╰─$ ` rang the bell as needs_input
+// instead of showing the crash. The line must start with a real border
+// — a left corner and then a 3+ `─` run, or a corner pair joined only
+// by `─` — mirroring looksLikeClaudePrompt.
+func TestClaudeRules_PromptFrameRequiresARealBorder(t *testing.T) {
 	rules := RulesFor("claude")
 	if len(rules) == 0 {
 		t.Fatal("no rules loaded for claude")
@@ -25,9 +28,18 @@ func TestClaudeRules_PromptFrameRequiresTwoDistinctGlyphs(t *testing.T) {
 		{"lone rounded corner (partial redraw)", "output\n╰", false},
 		{"same rounded glyph repeated", "output\n╰╰", false},
 		{"real frame bottom", "output\n╰──────────╯", true},
-		{"corner plus caret", "output\n╭ >", true},
+		{"real frame top", "output\n╭──────────╮", true},
+		{"indented frame bottom", "output\n  ╰──────────╯  ", true},
+		{"border run, closing corner not drawn yet", "output\n╰────", true},
 		{"two distinct rounded corners", "output\n╰╯", true},
+		{"corner pair joined by a short rule", "output\n╰─╯", true},
+		{"corner plus caret", "output\n╭ >", false},
+		{"corner plus vertical", "output\n│ > ╯", false},
 		{"frame glyphs but no rounded corner", "output\n│ plain box │", false},
+		{"p10k framed prompt", "output\n╭─ ~/Projects/demo  main ⇡1 ········ ✔  10:42:17\n╰─❯ ", false},
+		{"p10k full frame, right side closed", "output\n╭─ ~/Projects/demo  main ······ ─╮\n╰─❯                              ─╯", false},
+		{"oh-my-zsh bira prompt", "output\n╭─dev@mbp ~/Projects/demo ‹main›\n╰─$ ", false},
+		{"two left corners", "output\n╭╰", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -66,14 +78,15 @@ func TestEvaluate_PropagatesRequireIdle(t *testing.T) {
 // load time.
 func TestLoadCache_PrecompilesNestedSpecs(t *testing.T) {
 	rules := RulesFor("claude")
-	var frame *Rule
+	var dialog *Rule
 	for i := range rules {
-		if rules[i].ID == "claude_prompt_frame" {
-			frame = &rules[i]
+		// claude_dialog_v2 nests an `all` inside its `any` block.
+		if rules[i].ID == "claude_dialog_v2" {
+			dialog = &rules[i]
 		}
 	}
-	if frame == nil {
-		t.Fatal("claude_prompt_frame rule not found")
+	if dialog == nil {
+		t.Fatal("claude_dialog_v2 rule not found")
 	}
 	var walk func(t *testing.T, spec *MatchSpec, path string)
 	walk = func(t *testing.T, spec *MatchSpec, path string) {
@@ -93,10 +106,10 @@ func TestLoadCache_PrecompilesNestedSpecs(t *testing.T) {
 			walk(t, &spec.Not[i], path+".Not")
 		}
 	}
-	if len(frame.Match.Any) == 0 {
-		t.Fatal("expected nested Any specs on claude_prompt_frame")
+	if len(dialog.Match.Any) == 0 {
+		t.Fatal("expected nested Any specs on claude_dialog_v2")
 	}
-	walk(t, &frame.Match, "Match")
+	walk(t, &dialog.Match, "Match")
 }
 
 // TestClassifyAgent_ConcurrentIsRaceFree — run under -race. Before the

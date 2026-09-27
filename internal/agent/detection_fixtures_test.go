@@ -24,6 +24,9 @@ import (
 //   - claude_v2_permission.txt      tool-permission dialog ("Do you want to proceed?")
 //   - claude_v2_trust.txt           workspace trust dialog ("Enter to confirm · Esc to cancel")
 //   - claude_crashed_shell.txt      claude died, zsh prompt at the tail
+//   - claude_crashed_p10k.txt       claude died mid-session, powerlevel10k framed prompt (`╰─❯ `)
+//   - claude_crashed_starship.txt   the same crash, starship's two-line prompt (`❯ `)
+//   - claude_crashed_ohmyzsh.txt    the same crash, oh-my-zsh's default `➜  demo git:(main) ✗ `
 //   - opencode_networking_working.txt the real OpenCode capture with its running footer
 func readPaneFixture(t *testing.T, name string) string {
 	t.Helper()
@@ -74,6 +77,15 @@ func TestDetectionFixtures(t *testing.T) {
 		// A real shell prompt at the tail is still a crash.
 		{"claude_crashed_shell.txt", IDClaude, "", true, StateError},
 		{"claude_crashed_shell.txt", IDClaude, "", false, StateError},
+		// … including the modern prompt themes. p10k's `╰─❯ ` read as
+		// Claude's v1 frame (needs_input + a bell); starship's `❯ ` and
+		// oh-my-zsh's `➜` line read as merely idle.
+		{"claude_crashed_p10k.txt", IDClaude, "", true, StateError},
+		{"claude_crashed_p10k.txt", IDClaude, "", false, StateError},
+		{"claude_crashed_starship.txt", IDClaude, "", true, StateError},
+		{"claude_crashed_starship.txt", IDClaude, "", false, StateError},
+		{"claude_crashed_ohmyzsh.txt", IDClaude, "", true, StateError},
+		{"claude_crashed_ohmyzsh.txt", IDClaude, "", false, StateError},
 
 		// OpenCode (and its fork Kilo): a cwd containing "working"
 		// must not pin the session active forever.

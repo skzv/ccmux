@@ -34,6 +34,9 @@ func FuzzClassify(f *testing.F) {
 		"────────────\n❯ \n────────────\n  ⏵⏵ auto mode on · Context left until auto-compact: 7%",
 		" Do you want to proceed?\n ❯ 1. Yes\n   2. No",
 		"skz$ \n",
+		"Node.js v22.22.3\n\n╭─ ~/Projects/demo  main ⇡1 ···· ✔  10:42:17\n╰─❯ ", // p10k framed prompt
+		"Node.js v22.22.3\n\ndemo on main via go\n❯ ",                            // starship
+		"Node.js v22.22.3\n➜  demo git:(main) ✗ ",                                // oh-my-zsh
 		"\x00\x00\x00",
 		"\xff\xfe garbage utf-8",
 		"line\nline\nline\n", // many lines, none look like a prompt

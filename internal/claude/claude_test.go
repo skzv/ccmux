@@ -71,19 +71,27 @@ func TestLooksLikeClaudePrompt(t *testing.T) {
 		line string
 		want bool
 	}{
-		// Realistic Claude frame: corners + horizontal + vertical.
+		// Realistic Claude frame borders: a corner, a `─` run, a corner.
 		{"╭───╮", true},
-		// A line with a corner glyph plus the > cursor.
-		{"│ > ╯", true},
-		// Single rounded corner glyph at the bottom of the box.
 		{"╰─────╯", true},
+		{"  ╰──────────╯  ", true},
+		{"╰────", true}, // border run, closing corner not drawn yet
+		{"╰╯", true},    // corner pair
 		{"plain text", false},
-		{"╭", false},        // only 1 hit, even with a corner
+		{"╭", false},        // a lone corner is a partial redraw
+		{"╰╰", false},       // the same corner twice is still one glyph
+		{"│ > ╯", false},    // a corner plus stray frame glyphs is not a border
 		{"│ > $", false},    // no corner — would false-positive on tree/gh/bat
 		{"├── file", false}, // tree uses sharp corners, not rounded
 		{"│ status │", false},
 		{"$ ls -la", false},
 		{"", false},
+		// Shell prompts a crashed session falls back to: a corner, ONE
+		// `─`, then the prompt glyph.
+		{"╰─❯ ", false}, // powerlevel10k framed
+		{"╰─❯                              ─╯", false}, // p10k full frame
+		{"╰─$ ", false}, // oh-my-zsh bira
+		{"╭─ ~/Projects/demo  main ⇡1 ···· ✔", false},
 	}
 	for _, tc := range cases {
 		if got := looksLikeClaudePrompt(tc.line); got != tc.want {
@@ -107,6 +115,18 @@ func TestLooksLikeShellPrompt(t *testing.T) {
 		{"│ > ╯", false},
 		{"plain text", false},
 		{"", false},
+		// Modern prompt themes.
+		{"❯ ", true},                                  // starship / pure / p10k lean
+		{"❯", true},                                   // pure, no trailing space
+		{"╰─❯ ", true},                                // powerlevel10k framed
+		{"╰─$ ", true},                                // oh-my-zsh bira
+		{"➜  demo git:(main) ✗ ", true},               // oh-my-zsh default, dirty
+		{"➜  demo git:(feature/x) ", true},            // oh-my-zsh default, clean
+		{"➜  ~ ", true},                               // oh-my-zsh default, no repo
+		{"➜  demo git:(main) ✗ go test ./...", false}, // typing a command
+		{"❯ fix the flaky poll test", false},          // Claude v2 transcript line
+		{"poll ➜ classify ➜ bell", false},
+		{"╰──────────╯", false}, // Claude's own frame
 	}
 	for _, tc := range cases {
 		if got := looksLikeShellPrompt(tc.line); got != tc.want {
@@ -153,6 +173,32 @@ func TestClassify_PercentFooterIsNotAShell(t *testing.T) {
 	shell := "Error: Cannot find module 'cli.js'\n\nNode.js v22.22.3\nuser@host ~ % "
 	if got := Classify(shell, time.Now(), 3*time.Second); got != StateError {
 		t.Errorf("real zsh prompt = %v, want error", got)
+	}
+}
+
+// TestClassify_CrashedToModernShellPrompt — after a crash ccmux's
+// launch chain drops the pane into the user's shell. With a
+// powerlevel10k framed prompt the `╰─❯ ` tail read as Claude's v1 frame
+// (needs_input); with starship or oh-my-zsh it read as idle. All three
+// are a crash. The fixtures are shared with internal/agent.
+func TestClassify_CrashedToModernShellPrompt(t *testing.T) {
+	for _, name := range []string{"claude_crashed_p10k.txt", "claude_crashed_starship.txt", "claude_crashed_ohmyzsh.txt"} {
+		b, err := os.ReadFile(filepath.Join("..", "agent", "testdata", "panes", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, lastChange := range []time.Time{time.Now(), time.Now().Add(-10 * time.Minute)} {
+			if got := Classify(string(b), lastChange, 3*time.Second); got != StateError {
+				t.Errorf("%s (lastChange %s ago) = %v, want error",
+					name, time.Since(lastChange).Round(time.Second), got)
+			}
+		}
+	}
+	// p10k with a "solid" connection draws a `─` run across its first
+	// line; that is not Claude's v2 input-box rule.
+	solid := "Node.js v22.22.3\n\n╭─ ~/Projects/demo  main ──────────────────────────── ✔  10:42:17\n╰─❯ "
+	if got := Classify(solid, time.Now(), 3*time.Second); got != StateError {
+		t.Errorf("p10k solid-connection prompt = %v, want error", got)
 	}
 }
 

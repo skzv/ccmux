@@ -161,6 +161,63 @@ func TestClaudeShellPrompt_IgnoresPercentFooter(t *testing.T) {
 	}
 }
 
+// TestClaudeShellPrompt_ModernPromptThemes — a crashed Claude session
+// falls through its launch chain to the user's shell, and modern prompt
+// themes don't end in `$`/`#`/`%`. powerlevel10k's framed `╰─❯ ` read as
+// Claude's v1 frame (a false needs_input + bell), and starship/pure's
+// bare `❯ ` and oh-my-zsh's `➜  demo git:(main) ✗ ` read as idle because
+// `❯` vetoed the shell rule and `➜` lines weren't recognised. Each must
+// classify error; Claude's own `❯` input line, which always sits
+// between `────` rules, must not.
+func TestClaudeShellPrompt_ModernPromptThemes(t *testing.T) {
+	rule := strings.Repeat("─", 80)
+	crash := "Error: Cannot find module '/usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js'\n\nNode.js v22.22.3\n"
+	cases := []struct {
+		name  string
+		pane  string
+		error bool
+	}{
+		{"p10k framed", crash + "\n╭─ ~/Projects/demo  main ⇡1 ······························ ✔  10:42:17\n╰─❯ ", true},
+		{"p10k framed, solid connection", crash + "\n╭─ ~/Projects/demo  main ──────────────────────────── ✔  10:42:17\n╰─❯ ", true},
+		{"p10k lean", crash + "\n~/Projects/demo main ⇡1\n❯ ", true},
+		{"starship", crash + "\ndemo on  main [!?] via 🐹 v1.26.0\n❯ ", true},
+		{"pure", crash + "\n~/Projects/demo main*\n❯", true},
+		{"oh-my-zsh, dirty repo", crash + "➜  demo git:(main) ✗ ", true},
+		{"oh-my-zsh, clean repo", crash + "➜  demo git:(feature/poll-fix) ", true},
+		{"oh-my-zsh, no repo", crash + "➜  ~ ", true},
+		{"oh-my-zsh bira", crash + "\n╭─dev@mbp ~/Projects/demo ‹main›\n╰─$ ", true},
+
+		{"v2 input box", "out\n" + rule + "\n❯ \n" + rule + "\n  ? for shortcuts", false},
+		{"v2 input box, capture before the closing rule", "out\n" + rule + "\n❯ ", false},
+		{"v2 transcript prompt line", "⏺ Done.\n\n❯ fix the flaky poll test", false},
+		{"oh-my-zsh, command being typed", crash + "➜  demo git:(main) ✗ go test ./...", false},
+		{"arrow mid-line", "the call graph: poll ➜ classify ➜ bell", false},
+	}
+	var shellRule []Rule
+	for _, r := range RulesFor("claude") {
+		if r.ID == "claude_shell_prompt" {
+			shellRule = append(shellRule, r)
+		}
+	}
+	if len(shellRule) != 1 {
+		t.Fatal("claude_shell_prompt rule not found")
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := Evaluate(shellRule, Input{Pane: tc.pane}).MatchedRuleID != ""; got != tc.error {
+				t.Errorf("claude_shell_prompt matched=%v, want %v", got, tc.error)
+			}
+			res, err := ClassifyAgent("claude", Input{Pane: tc.pane})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := res.State == StateError; got != tc.error {
+				t.Errorf("state %q (rule %q), want error=%v", res.State, res.MatchedRuleID, tc.error)
+			}
+		})
+	}
+}
+
 // TestClaudeV2Rules — Claude Code v2 draws its input box as a `❯` line
 // between two `────` rules, above a footer; the v1 rounded-corner rule
 // never matched it, so needs_input never fired on current Claude Code.
@@ -179,7 +236,8 @@ func TestClaudeV2Rules(t *testing.T) {
 		{"permission cursor moved", "out\n" + rule + "\n Edit file\n   1. Yes\n ❯ 2. Yes, allow all edits\n   3. No", "claude_dialog_v2"},
 		{"trust dialog", "out\n Accessing workspace:\n ❯ No, exit\n   Yes, I trust this folder\n Enter to confirm · Esc to cancel", "claude_dialog_v2"},
 		{"rule lines without a prompt", "out\n" + rule + "\n plain text\n" + rule, ""},
-		{"prompt glyph without rules", "~/Projects/api main\n❯ ", ""},
+		// A `❯` with no rules around it is a shell prompt (starship,
+		// pure, p10k) — see TestClaudeShellPrompt_ModernPromptThemes.
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

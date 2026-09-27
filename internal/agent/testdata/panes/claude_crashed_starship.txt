@@ -1,0 +1,31 @@
+
+ ▐▛███▛█   Claude Code v2.1.281
+▝▜██████▀  Opus 5.5 with xhigh effort · Claude Max
+  ▝▝ ▝▝    ~/Projects/demo
+
+❯ fix the flaky poll test
+
+⏺ Reading cmd/ccmuxd/poll.go and its test.
+
+⏺ Read(cmd/ccmuxd/poll.go)
+  ⎿  Read 212 lines
+
+⏺ Bash(go test ./cmd/ccmuxd/ -run TestPoll -count=50)
+  ⎿  Running…
+
+<--- Last few GCs --->
+
+[48213:0x130008000]  4125330 ms: Mark-Compact 4046.2 (4130.1) -> 4032.7 (4131.4) MB, 1854.21 / 0.00 ms  (average mu = 0.124, current mu = 0.031) allocation failure; scavenge might not succeed
+
+FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory
+node:internal/modules/cjs/loader:1228
+  throw err;
+  ^
+
+Error: Cannot find module '/usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js'
+    at Module._resolveFilename (node:internal/modules/cjs/loader:1225:15)
+
+Node.js v22.22.3
+
+demo on  main [!?] via 🐹 v1.26.0 took 1h8m45s
+❯
