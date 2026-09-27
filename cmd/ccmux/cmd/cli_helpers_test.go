@@ -16,6 +16,18 @@ import (
 // Unit tests for the helpers behind the CLI fixes; the end-to-end
 // regressions live in cli_regressions_test.go / cli_units_test.go.
 
+// exactTarget is the exact-match tmux target the tmux package builds
+// for a session name ("=name", or "=name:" which also resolves dotted
+// names). Derived from tmux.AttachArgs so these tests follow the
+// package instead of pinning one spelling. It lives here, untagged,
+// because both this file and the !windows CLI harness use it —
+// defined only in the harness, `GOOS=windows go vet` failed to
+// type-check this file.
+func exactTarget(name string) string {
+	args := tmux.AttachArgs(name, false)
+	return args[len(args)-1]
+}
+
 func TestParseSince(t *testing.T) {
 	day := 24 * time.Hour
 	ok := map[string]time.Duration{

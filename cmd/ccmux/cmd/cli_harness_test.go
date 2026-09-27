@@ -14,8 +14,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/skzv/ccmux/internal/tmux"
 )
 
 // The CLI harness runs the real cobra tree in a child process (the test
@@ -163,15 +161,6 @@ func (e *cliEnv) run(dir string, args ...string) cliResult {
 		e.t.Fatalf("run ccmux %v: %v", args, err)
 	}
 	return res
-}
-
-// exactTarget is the exact-match tmux target the tmux package builds
-// for a session name ("=name", or "=name:" which also resolves dotted
-// names). Derived from tmux.AttachArgs so these tests follow the
-// package instead of pinning one spelling.
-func exactTarget(name string) string {
-	args := tmux.AttachArgs(name, false)
-	return args[len(args)-1]
 }
 
 // tmuxCalls returns every fake-tmux invocation so far, e.g.
