@@ -451,7 +451,7 @@ all against a real, isolated tmux server.
 |---|---|---|
 | List conversations | `ccmux list-conversations` / TUI Conversations screen | past transcripts are listed sorted by recency with project + agent |
 | Resume a conversation | `ccmux resume [id]` / TUI Conversations Enter | a tmux session is created for the conversation's project + agent |
-| Delete a conversation | `ccmux delete-conversation <id>` / TUI Conversations `x` | the transcript file is removed |
+| Delete a conversation | `ccmux delete-conversation <id>` / TUI Conversations `x` | the transcript files are removed, and for Claude the session's `<uuid>/` directory (tool-results, subagents, workflows) too |
 
 ### Daemon
 
