@@ -145,3 +145,59 @@ func TestApp_WindowSizeReachesAgentsBrowsers(t *testing.T) {
 		}
 	}
 }
+
+// TestAgentBrowser_WheelAndKeysScrollPreview pins the preview's scroll
+// bindings: the mouse wheel moves three lines regardless of focus, a
+// wheel release is ignored, and with the preview focused j/k move one
+// line and pgdown/pgup half a page.
+func TestAgentBrowser_WheelAndKeysScrollPreview(t *testing.T) {
+	b := newAgentBrowser(styles.Default())
+	b.SetSections("test", longMarkdownSections(60))
+	b.SetSize(80, 14)
+
+	wheel := func(btn tea.MouseButton, action tea.MouseAction) {
+		t.Helper()
+		var handled bool
+		b, _, handled = b.Update(tea.MouseMsg{Button: btn, Action: action})
+		if action == tea.MouseActionPress && !handled {
+			t.Fatalf("wheel %v press not handled", btn)
+		}
+	}
+	key := func(k string) {
+		t.Helper()
+		b, _, _ = b.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)})
+	}
+
+	wheel(tea.MouseButtonWheelDown, tea.MouseActionPress)
+	if b.preview.YOffset != 3 {
+		t.Fatalf("wheel down: YOffset = %d, want 3", b.preview.YOffset)
+	}
+	wheel(tea.MouseButtonWheelDown, tea.MouseActionRelease)
+	if b.preview.YOffset != 3 {
+		t.Fatalf("wheel release moved the preview: YOffset = %d, want 3", b.preview.YOffset)
+	}
+	wheel(tea.MouseButtonWheelUp, tea.MouseActionPress)
+	if b.preview.YOffset != 0 {
+		t.Fatalf("wheel up: YOffset = %d, want 0", b.preview.YOffset)
+	}
+
+	b, _, _ = b.Update(tea.KeyMsg{Type: tea.KeyEnter}) // focus the preview
+	key("j")
+	key("j")
+	if b.preview.YOffset != 2 {
+		t.Fatalf("j j: YOffset = %d, want 2", b.preview.YOffset)
+	}
+	key("k")
+	if b.preview.YOffset != 1 {
+		t.Fatalf("k: YOffset = %d, want 1", b.preview.YOffset)
+	}
+	half := b.preview.Height / 2
+	b, _, _ = b.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+	if b.preview.YOffset != 1+half {
+		t.Fatalf("pgdown: YOffset = %d, want %d", b.preview.YOffset, 1+half)
+	}
+	b, _, _ = b.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	if b.preview.YOffset != 1 {
+		t.Fatalf("pgup: YOffset = %d, want 1", b.preview.YOffset)
+	}
+}

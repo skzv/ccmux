@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -75,7 +74,3 @@ func Run(version string, projectsOverride string, expandNotes bool) error {
 	}
 	return nil
 }
-
-// nowFunc is the time source used for relative-time renderings. Override in
-// tests.
-var nowFunc = func() time.Time { return time.Now() }

@@ -169,12 +169,15 @@ func (b agentBrowser) Update(msg tea.Msg) (agentBrowser, tea.Cmd, bool) {
 	// pointing at the right pane without first having tabbed into
 	// it, so we don't gate on focus.
 	if mm, ok := msg.(tea.MouseMsg); ok {
-		switch mm.Type {
-		case tea.MouseWheelUp:
-			b.preview.LineUp(3)
+		if mm.Action != tea.MouseActionPress {
+			return b, nil, false
+		}
+		switch mm.Button {
+		case tea.MouseButtonWheelUp:
+			b.preview.ScrollUp(3)
 			return b, nil, true
-		case tea.MouseWheelDown:
-			b.preview.LineDown(3)
+		case tea.MouseButtonWheelDown:
+			b.preview.ScrollDown(3)
 			return b, nil, true
 		}
 		return b, nil, false
@@ -192,21 +195,21 @@ func (b agentBrowser) Update(msg tea.Msg) (agentBrowser, tea.Cmd, bool) {
 		return b, nil, true
 	case "down", "j":
 		if b.focus == agentBrowserFocusPreview {
-			b.preview.LineDown(1)
+			b.preview.ScrollDown(1)
 			return b, nil, true
 		}
 		b.moveCursor(+1)
 		return b, nil, true
 	case "up", "k":
 		if b.focus == agentBrowserFocusPreview {
-			b.preview.LineUp(1)
+			b.preview.ScrollUp(1)
 			return b, nil, true
 		}
 		b.moveCursor(-1)
 		return b, nil, true
 	case "pgdown", "ctrl+f":
 		if b.focus == agentBrowserFocusPreview {
-			b.preview.HalfViewDown()
+			b.preview.HalfPageDown()
 			return b, nil, true
 		}
 		for i := 0; i < 5; i++ {
@@ -215,7 +218,7 @@ func (b agentBrowser) Update(msg tea.Msg) (agentBrowser, tea.Cmd, bool) {
 		return b, nil, true
 	case "pgup", "ctrl+b":
 		if b.focus == agentBrowserFocusPreview {
-			b.preview.HalfViewUp()
+			b.preview.HalfPageUp()
 			return b, nil, true
 		}
 		for i := 0; i < 5; i++ {

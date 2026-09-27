@@ -98,7 +98,7 @@ func TestAgents_ThinkingModeKeysAreScopedToActiveAgent(t *testing.T) {
 	}
 
 	m = switchAgentsSubtab(t, m, agent.IDAntigravity)
-	m, _ = m.Update(keyMsg("r"))
+	_, _ = m.Update(keyMsg("r"))
 	codexSettings, err = codexconfig.ReadSettings()
 	if err != nil {
 		t.Fatal(err)

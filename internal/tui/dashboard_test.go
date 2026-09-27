@@ -305,7 +305,6 @@ func buildDashboardGoldenApp() App {
 	a.dashboard = newDashboard(st, km)
 	a.dashboard.SetConfig(cfg)
 	a.dashboard.SetVersion(goldenVersion)
-	a.dashboard.SetNow(fixedClock)
 
 	a.sessionsM = newSessions(st, km)
 

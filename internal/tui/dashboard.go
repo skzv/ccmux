@@ -65,26 +65,6 @@ type dashboardModel struct {
 	// renders no row; Enabled=true with ErrMsg shows why the figure is
 	// missing instead of a silent blank.
 	openRouter daemon.OpenRouterSpend
-
-	// now is a deterministic clock injection used by golden tests so
-	// the wall-clock render in statsPanel doesn't vary by run. Zero
-	// value falls back to time.Now() — production code never sets it.
-	now time.Time
-}
-
-// SetNow injects a deterministic clock so the dashboard renders the
-// same output across runs. Tests set this before snapshotting; the
-// production launch path leaves it zero and the dashboard falls back
-// to time.Now().
-func (m *dashboardModel) SetNow(t time.Time) { m.now = t }
-
-// clock returns the dashboard's current time — the injected value if
-// set, else time.Now(). Internal helper for time-dependent renders.
-func (m dashboardModel) clock() time.Time {
-	if m.now.IsZero() {
-		return time.Now()
-	}
-	return m.now
 }
 
 func newDashboard(st styles.Styles, km Keymap) dashboardModel {

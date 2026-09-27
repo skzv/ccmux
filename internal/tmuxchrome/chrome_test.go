@@ -62,7 +62,7 @@ func TestInTmux_RespectsTmuxEnv(t *testing.T) {
 // TestApply_RejectsEmptySession is the one explicit error path Apply
 // has. Everything else is best-effort tmux calls we deliberately ignore.
 func TestApply_RejectsEmptySession(t *testing.T) {
-	if err := Apply(nil, "", "label", false, false); err == nil {
+	if err := Apply(context.Background(), "", "label", false, false); err == nil {
 		t.Fatal("expected error for empty session name, got nil")
 	}
 }

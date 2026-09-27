@@ -1817,13 +1817,6 @@ func geminiMessageRole(t string) string {
 	}
 }
 
-func shortHash(s string) string {
-	if len(s) <= 12 {
-		return s
-	}
-	return s[:12]
-}
-
 func mergeConversations(list []Conversation) []Conversation {
 	if len(list) < 2 {
 		return list

@@ -147,7 +147,7 @@ func TestApp_ProjectsC_EmitsDrillDownMsg(t *testing.T) {
 }
 
 // TestApp_EnterConversations_TriggersResume — Enter on a populated
-// Conversations screen must dispatch through resumeSelectedConversation,
+// Conversations screen must dispatch through resumeConversationCmd,
 // which fires a cmd. We don't run the cmd (it'd spawn real tmux) —
 // we just assert the cmd is non-nil, proving Enter is wired through.
 func TestApp_EnterConversations_TriggersResume(t *testing.T) {

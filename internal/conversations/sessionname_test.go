@@ -29,13 +29,13 @@ func TestResumeSessionName_UUIDv7SharedPrefixDistinct(t *testing.T) {
 // characters tmux rewrites in session names never appear.
 func TestResumeSessionName_StableAndTmuxSafe(t *testing.T) {
 	id := "chat.v2:abc"
-	if ResumeSessionName(id) != ResumeSessionName(id) {
-		t.Fatal("ResumeSessionName is not deterministic")
-	}
-	if ResumeSessionName(id) != ResumeSessionName("  "+id+" ") {
-		t.Error("surrounding whitespace should not change the name")
-	}
 	n := ResumeSessionName(id)
+	if again := ResumeSessionName(id); again != n {
+		t.Fatalf("ResumeSessionName is not deterministic: %q then %q", n, again)
+	}
+	if padded := ResumeSessionName("  " + id + " "); padded != n {
+		t.Errorf("surrounding whitespace changed the name: %q vs %q", padded, n)
+	}
 	if strings.ContainsAny(n, ".: ") {
 		t.Errorf("name %q contains characters tmux rewrites", n)
 	}

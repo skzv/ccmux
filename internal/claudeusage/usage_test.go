@@ -413,11 +413,14 @@ func TestAlreadyCounted(t *testing.T) {
 	if alreadyCounted(seen, "m1", "r2") {
 		t.Error("same message id under a new requestId is a new pair")
 	}
-	if alreadyCounted(seen, "", "r1") || alreadyCounted(seen, "", "r1") {
-		t.Error("missing message id must never dedup")
-	}
-	if alreadyCounted(seen, "m1", "") || alreadyCounted(seen, "m1", "") {
-		t.Error("missing requestId must never dedup")
+	// Each call below is made twice on purpose: a pair missing either
+	// half must not be remembered, so the repeat can't dedup either.
+	for _, pair := range [][2]string{{"", "r1"}, {"m1", ""}} {
+		first := alreadyCounted(seen, pair[0], pair[1])
+		second := alreadyCounted(seen, pair[0], pair[1])
+		if first || second {
+			t.Errorf("pair %q must never dedup (first=%v, second=%v)", pair, first, second)
+		}
 	}
 }
 

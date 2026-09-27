@@ -64,7 +64,6 @@ type testServer struct {
 type sessionLog struct {
 	cmd     string
 	stdin   string
-	exit    int
 	user    string
 	method  string
 	startAt time.Time

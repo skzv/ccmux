@@ -4,8 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
-
 	"github.com/skzv/ccmux/internal/tui/styles"
 )
 
@@ -44,18 +42,6 @@ func openSessionsFormApp(t *testing.T, hosts []hostStatus) App {
 	form := newNewSessionForm(st, hosts, "", "")
 	a.sessionsM.form = &form
 	return a
-}
-
-// submitForm drives the app through an Enter press and executes the returned
-// command. Returns the updated App and the tea.Msg from the command.
-func submitForm(t *testing.T, a App) (App, tea.Msg) {
-	t.Helper()
-	m, cmd := a.Update(keyMsg("enter"))
-	a2 := m.(App)
-	if cmd == nil {
-		return a2, nil
-	}
-	return a2, cmd()
 }
 
 // ---------------------------------------------------------------------------

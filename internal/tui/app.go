@@ -2682,11 +2682,12 @@ func shortConversationID(id string) string {
 	return id
 }
 
-// resumeSelectedConversation spawns a new tmux session running the
-// agent that owns the highlighted conversation, with the agent's
-// per-CLI --resume flag pointed at this conversation's ID. The
-// command produces a conversationResumedMsg the App handler turns
-// into an attach + toast + sessions refresh.
+// resumeConversationCmd spawns a fresh tmux session running the agent
+// that owns conversation `c`, with the agent's per-CLI --resume flag
+// pointed at its ID, and emits a conversationResumedMsg the App
+// handler turns into an attach + toast + sessions refresh. Shared by
+// the Conversations screen's Enter handler and the project menu's
+// "resume" rows.
 //
 // Session naming: conversations.ResumeSessionName (c-resume-<short-id>
 // -<hash>) rather than the usual c-<project>, so a resume never lands
@@ -2698,19 +2699,6 @@ func shortConversationID(id string) string {
 // the agent's working directory matches what it had originally —
 // otherwise the user falls into $HOME and `/file edit some.go`
 // completions break.
-func (a App) resumeSelectedConversation() tea.Cmd {
-	sel := a.conversationsM.Selected()
-	if sel == nil {
-		return nil
-	}
-	return a.resumeConversationCmd(*sel)
-}
-
-// resumeConversationCmd spawns a fresh tmux session that resumes
-// conversation `c` and emits a conversationResumedMsg. Shared by the
-// Conversations screen's Enter handler and the project menu's "resume"
-// rows. See resumeSelectedConversation's doc for the naming/cwd
-// rationale.
 func (a App) resumeConversationCmd(c conversations.Conversation) tea.Cmd {
 	return func() tea.Msg {
 		if err := c.ValidateResume(); err != nil {

@@ -306,22 +306,6 @@ func (m cursorAgentModel) renderUsageSection() []string {
 	return lines
 }
 
-// renderConfigSection produces the "Config files" sub-section —
-// where Cursor stores its settings on disk. Useful as a pointer
-// even though ccmux doesn't manage Cursor's settings directly.
-func (m cursorAgentModel) renderConfigSection() []string {
-	st := m.st
-	home, _ := os.UserHomeDir()
-	configRoot := agent.Cursor{}.ConfigRoot(home)
-	transcriptsRoot := agent.Cursor{}.TranscriptsRoot(home)
-	return []string{
-		st.Subtitle.Render(tr("Config files")),
-		"  " + st.Muted.Render(tr("config: ")) + summarizePath(configRoot),
-		"  " + st.Muted.Render(tr("transcripts: ")) + summarizePath(transcriptsRoot),
-		"  " + st.Muted.Render(tr("tracking db: ")) + summarizePath(m.dbPath),
-	}
-}
-
 // browserSections builds the Configured browser sections for the
 // Cursor sub-tab. Cursor's globally-scoped configurables are Hooks
 // (~/.cursor/hooks.json) and Skills (~/.cursor/skills-cursor/*). MCP

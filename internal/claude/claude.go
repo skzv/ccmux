@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/skzv/ccmux/internal/tmux"
 )
@@ -60,11 +61,8 @@ func classifyTitle(title string) (State, bool) {
 	// canonical "I am working" broadcast. The unicode block
 	// U+2800..U+28FF covers every braille pattern; any of them in
 	// the leading position is a working-spinner frame, full stop.
-	for _, r := range t {
-		if r >= 0x2800 && r <= 0x28FF {
-			return StateActive, true
-		}
-		break // only inspect the first rune
+	if r, _ := utf8.DecodeRuneInString(t); r >= 0x2800 && r <= 0x28FF {
+		return StateActive, true
 	}
 	return StateUnknown, false
 }

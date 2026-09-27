@@ -179,9 +179,7 @@ func (m tourModel) View(w, h int) string {
 	lines = append(lines, "")
 
 	// Body.
-	for _, b := range step.Body {
-		lines = append(lines, b)
-	}
+	lines = append(lines, step.Body...)
 	if len(step.Bullets) > 0 && len(step.Body) > 0 {
 		lines = append(lines, "")
 	}
