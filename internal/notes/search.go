@@ -103,7 +103,8 @@ func ripgrepArgs(query, root string) []string {
 func (v Vault) searchRipgrep(ctx context.Context, query string, limit int) ([]SearchHit, error) {
 	searchCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	cmd := exec.CommandContext(searchCtx, "rg", ripgrepArgs(query, v.Root)...)
+	walk := v.walkRoot()
+	cmd := exec.CommandContext(searchCtx, "rg", ripgrepArgs(query, walk)...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.StdoutPipe()
@@ -141,7 +142,7 @@ func (v Vault) searchRipgrep(ctx context.Context, query string, limit int) ([]Se
 		if rec.Type != "match" {
 			continue
 		}
-		hits = append(hits, hitFor(v.Root, rec.Data.Path.Text, rec.Data.LineNumber, rec.Data.Lines.Text))
+		hits = append(hits, v.hitFor(walk, rec.Data.Path.Text, rec.Data.LineNumber, rec.Data.Lines.Text))
 	}
 	scanErr := sc.Err()
 	if len(hits) >= limit || scanErr != nil {
@@ -192,7 +193,8 @@ func (v Vault) searchRipgrep(ctx context.Context, query string, limit int) ([]Se
 func (v Vault) searchFallback(ctx context.Context, query string, limit int) ([]SearchHit, error) {
 	needle := strings.ToLower(query)
 	var hits []SearchHit
-	err := filepath.WalkDir(v.Root, func(path string, d os.DirEntry, err error) error {
+	walk := v.walkRoot() // a symlinked project root is followed, like List
+	err := filepath.WalkDir(walk, func(path string, d os.DirEntry, err error) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -203,7 +205,7 @@ func (v Vault) searchFallback(ctx context.Context, query string, limit int) ([]S
 			return nil
 		}
 		if d.IsDir() {
-			if path != v.Root && skipDir(d.Name()) {
+			if path != walk && skipDir(d.Name()) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -229,7 +231,7 @@ func (v Vault) searchFallback(ctx context.Context, query string, limit int) ([]S
 			line := sc.Text()
 			if strings.Contains(strings.ToLower(line), needle) {
 				// Skipped (oversized) lines still occupy a line number.
-				hits = append(hits, hitFor(v.Root, path, read+sc.Skipped(), line))
+				hits = append(hits, v.hitFor(walk, path, read+sc.Skipped(), line))
 				perFile++
 			}
 		}
@@ -242,6 +244,28 @@ func (v Vault) searchFallback(ctx context.Context, query string, limit int) ([]S
 	// The walk only fails when ctx ends; the hits found until then are
 	// returned with that error (see Search).
 	return hits, err
+}
+
+// hitFor is the package hitFor for a match found under the vault's walk
+// root (Root with symlinks resolved, see walkRoot): Rel is relative to
+// that root and Path is spelled under Root, the way List reports it.
+func (v Vault) hitFor(walk, absPath string, line int, snippet string) SearchHit {
+	// A backend may spell the path under either root (rg echoes the
+	// root it was given; a symlink in between is not undone).
+	for _, root := range []string{walk, v.Root} {
+		if rel, err := filepath.Rel(root, absPath); err == nil && !escapesRoot(rel) {
+			h := hitFor(root, absPath, line, snippet)
+			h.Path = v.pathFor(h.Rel)
+			return h
+		}
+	}
+	return hitFor(v.Root, absPath, line, snippet)
+}
+
+// escapesRoot reports whether a filepath.Rel result climbs out of its
+// base directory.
+func escapesRoot(rel string) bool {
+	return rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // hitFor builds a SearchHit from raw rg/fallback fields, normalizing

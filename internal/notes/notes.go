@@ -55,7 +55,8 @@ func (v Vault) List() ([]Entry, error) {
 		return nil, err
 	}
 	var out []Entry
-	err := filepath.WalkDir(v.Root, func(path string, d os.DirEntry, err error) error {
+	walk := v.walkRoot()
+	err := filepath.WalkDir(walk, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			// Skip unreadable entries (mode-000 dir, dangling mount)
 			// instead of aborting the whole listing — same behavior
@@ -63,7 +64,7 @@ func (v Vault) List() ([]Entry, error) {
 			return nil
 		}
 		if d.IsDir() {
-			if path != v.Root && skipDir(d.Name()) {
+			if path != walk && skipDir(d.Name()) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -71,21 +72,22 @@ func (v Vault) List() ([]Entry, error) {
 		if !strings.EqualFold(filepath.Ext(d.Name()), ".md") {
 			return nil
 		}
-		rel, relErr := filepath.Rel(v.Root, path)
+		rel, relErr := filepath.Rel(walk, path)
 		if relErr != nil {
 			return nil
 		}
 		rel = filepath.ToSlash(rel)
+		abs := v.pathFor(rel)
 		info, _ := d.Info()
 		var mod time.Time
 		if info != nil {
 			mod = info.ModTime()
 		}
 		out = append(out, Entry{
-			Path:     path,
+			Path:     abs,
 			Rel:      rel,
 			Dir:      dirOf(rel),
-			Display:  displayFor(rel, path, mod),
+			Display:  displayFor(rel, abs, mod),
 			Modified: mod,
 		})
 		return nil
@@ -105,6 +107,27 @@ func (v Vault) List() ([]Entry, error) {
 		return out[i].Rel < out[j].Rel
 	})
 	return out, nil
+}
+
+// walkRoot is the directory the vault walks start from: Root with any
+// symlinks resolved. filepath.WalkDir does not follow a symlinked root —
+// it reports the link itself as a non-directory entry and stops — so a
+// project that is a symlink (~/Projects/x -> elsewhere) listed no notes
+// at all. Only the root is resolved: symlinks inside the tree are still
+// not followed, so the walk can't be led outside the project. Falls back
+// to Root when it can't be resolved (the walk then reports what it can).
+func (v Vault) walkRoot() string {
+	if resolved, err := filepath.EvalSymlinks(v.Root); err == nil {
+		return resolved
+	}
+	return v.Root
+}
+
+// pathFor is the absolute on-disk path of a vault-relative note, spelled
+// under Root as the user knows it (through the project symlink, if the
+// project is one) rather than under the resolved walk root.
+func (v Vault) pathFor(rel string) string {
+	return filepath.Join(v.Root, filepath.FromSlash(rel))
 }
 
 // Read returns the content of the file at `rel` (a slash-separated
