@@ -100,7 +100,7 @@ func TestProjectLaunchCmd_HonorsSidecar(t *testing.T) {
 			if err := project.SetAgent(dir, a.ID()); err != nil {
 				t.Fatal(err)
 			}
-			got := projectLaunchCmd(dir, true, agent.Commands{})
+			_, got := projectLaunchCmd(dir, "", true, agent.Commands{})
 			want := a.LaunchCmd(true)
 			if got != want {
 				t.Errorf("projectLaunchCmd(%q sidecar=%q) = %q, want %q",
@@ -124,7 +124,7 @@ func TestProjectLaunchCmd_HonorsSidecar(t *testing.T) {
 // follows.
 func TestProjectLaunchCmd_MissingSidecarFallsBackToClaude(t *testing.T) {
 	dir := t.TempDir() // no .ccmux written
-	got := projectLaunchCmd(dir, true, agent.Commands{})
+	_, got := projectLaunchCmd(dir, "", true, agent.Commands{})
 	want := agent.Claude{}.LaunchCmd(true)
 	if got != want {
 		t.Errorf("projectLaunchCmd(no sidecar) = %q, want %q", got, want)
@@ -154,7 +154,7 @@ func TestProjectLaunchCmd_ConfiguredCommands(t *testing.T) {
 			if err := project.SetAgent(dir, tt.id); err != nil {
 				t.Fatal(err)
 			}
-			if got := projectLaunchCmd(dir, true, commands); got != tt.want {
+			if _, got := projectLaunchCmd(dir, "", true, commands); got != tt.want {
 				t.Errorf("configured launch = %q, want %q", got, tt.want)
 			}
 		})

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,15 +11,42 @@ import (
 	"github.com/skzv/ccmux/internal/tmux"
 )
 
-// projectLaunchCmd resolves the launch command for a project's tmux
-// session from its .ccmux/agent sidecar. Pure helper so a test can
-// pin "Antigravity project → agy launch" without standing up tmux.
+// projectLaunchCmd resolves which agent a new project session runs and
+// the command that launches it: the agent the request named, else the
+// project's .ccmux/agent sidecar (Claude when there is none). Pure
+// helper so a test can pin "Antigravity project → agy launch" without
+// standing up tmux.
+//
+// The requested agent wins outright rather than being written to the
+// sidecar and read back: when the sidecar couldn't be written (a
+// read-only project, a file in its place) a {"agent":"codex"} request
+// launched claude.
 //
 // continueFlag=true matches the existing UX: every "attach to known
 // project" path passes --continue so the user resumes their prior
 // conversation; only fresh scaffolds start without --continue.
-func projectLaunchCmd(projectPath string, continueFlag bool, commands agent.Commands) string {
-	return agent.LaunchCmd(project.ReadAgent(projectPath), continueFlag, commands)
+func projectLaunchCmd(projectPath string, requested agent.ID, continueFlag bool, commands agent.Commands) (agent.ID, string) {
+	id := requested
+	if id == "" {
+		id = project.ReadAgent(projectPath)
+	}
+	return id, agent.LaunchCmd(id, continueFlag, commands)
+}
+
+// requestAgent parses the optional agent id of a create request: ""
+// means none was given, a known id (or alias) is that agent, and
+// anything else is an error the handler answers with 400. An unknown
+// id used to be ignored, silently launching the default agent in place
+// of a mistyped one.
+func requestAgent(raw string) (agent.ID, error) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return "", nil
+	}
+	if id, ok := agent.ParseID(s); ok {
+		return id, nil
+	}
+	return "", fmt.Errorf("unknown agent %q", s)
 }
 
 // bareSessionLaunchCmd resolves which command tmux new-session runs

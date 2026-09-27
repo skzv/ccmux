@@ -72,8 +72,14 @@ func assertTaggedAtCreation(t *testing.T, logPath, session, tag string) {
 	if !strings.HasSuffix(creates[0], want) {
 		t.Errorf("new-session call %q doesn't set the agent tag itself (want suffix %q)", creates[0], want)
 	}
-	if tags := tmuxCallsWith(t, logPath, "@ccmux_agent"); len(tags) != 1 {
-		t.Errorf("tmux calls touching @ccmux_agent = %q, want only the new-session call", tags)
+	var writes []string
+	for _, call := range tmuxCallsWith(t, logPath, "@ccmux_agent") {
+		if !strings.HasPrefix(call, "list-sessions|") { // reading the tags is fine
+			writes = append(writes, call)
+		}
+	}
+	if len(writes) != 1 {
+		t.Errorf("tmux calls setting @ccmux_agent = %q, want only the new-session call", writes)
 	}
 }
 

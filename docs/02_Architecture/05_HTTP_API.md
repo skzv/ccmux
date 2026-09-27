@@ -95,7 +95,9 @@ Status conventions across the API:
 | `401` | invalid or expired pairing token (`/v1/pair` only) |
 | `404` | not found — or **this daemon predates the endpoint** |
 | `405` | wrong HTTP method |
+| `409` | conflict: the session name is taken (by a session in another directory, or on rename) |
 | `500` | server / tmux / scaffold failure |
+| `502` | a session was created but its agent exited at once (binary missing or broken) |
 | `503` | feature unavailable (e.g. `/v1/pair-token` with `listen_tailnet` off) |
 
 > **Forward/backward compatibility:** the API evolves by *adding* JSON
@@ -145,20 +147,29 @@ List every tmux session this daemon manages, with daemon-derived state.
 
 #### `POST /v1/sessions`
 Create-or-attach a **project-bound** agent session (idempotent on the tmux
-session name). Persists the chosen agent to `<project>/.ccmux/agent`.
+session name). Runs the requested `agent` (else the project's recorded one,
+else Claude), tags the session with it, and — once it has started — persists
+a requested agent to `<project>/.ccmux/agent`.
 - **Request:** `NewSessionRequest` — `project` required.
-- **Response `200`:** `SessionState` for the created/existing session.
-- **Errors:** `400` missing `project` / bad name / decode error; `404`
-  project path not found; `500` tmux failure.
+- **Response `200`:** `SessionState`. For a session that already runs in the
+  requested directory: its real state, agent and path; nothing is started.
+- **Errors:** `400` missing `project` / bad name / unknown `agent` / path not
+  a directory / decode error; `404` project path not found; `409` a session
+  of that name runs in a different directory; `500` tmux failure; `502` the
+  agent exited right after starting (e.g. not installed).
 - `path` defaults to `<projects_root>/<project>` **on the daemon host**.
 
 #### `POST /v1/sessions/bare`
 Create a **shell-only** tmux session not tied to any project (no scaffold).
 - **Request:** `NewBareSessionRequest`.
-- **Response `200`:** `NewBareSessionResponse`.
+- **Response `200`:** `NewBareSessionResponse` (for an existing session of
+  that name, the directory it really runs in).
 - `path` empty resolves to `sessions.default_dir` or `$HOME` **on the daemon
   host** (never the client's home). `agent` empty falls back to
-  `sessions.default_agent` then `$SHELL`; `"shell"` means no agent.
+  `sessions.default_agent` then `$SHELL`; `"shell"` means no agent; any
+  other value must be a known agent id (`400` otherwise).
+- **Errors:** as `POST /v1/sessions`; `409` only when `path` is given and an
+  existing session of that name runs elsewhere.
 
 #### `POST /v1/sessions/{name}/kill`
 Kill a session by name. Emits a `killed` SSE event.
@@ -212,9 +223,14 @@ the daemon's hostname.
 Create a brand-new project (**directory only** — no `CLAUDE.md`/`docs/`/git)
 under the projects root, and start an agent session inside it.
 - **Request:** `NewProjectRequest` — `name` required.
-- **Response `200`:** `NewProjectResponse`.
+- **Response `200`:** `NewProjectResponse`. Idempotent like
+  `POST /v1/sessions`: if the project's session already runs, it is returned
+  and nothing is started.
 - **Errors:** `400` if `name` isn't a single non-hidden path segment (no
-  `/`, `\`, no leading `.`) — a directory-escape guard for tailnet peers.
+  `/`, `\`, no leading `.`, no control characters) — a directory-escape
+  guard for tailnet peers — or `agent` isn't a known agent id; `409` the
+  project's session name is taken by a session in another directory; `502`
+  the agent exited right after starting.
 
 ---
 

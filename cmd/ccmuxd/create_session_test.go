@@ -14,11 +14,11 @@ import (
 	"github.com/skzv/ccmux/internal/daemon"
 )
 
-// postNewSession drives createSession against a server whose session
-// already exists (so nothing new is started) and a logging fake tmux.
+// postNewSession drives createSession against the logging fake tmux
+// (fakeTmuxLog): it lists no sessions, so the request starts one, and
+// every tmux call is only recorded.
 func postNewSession(t *testing.T, s *server, req daemon.NewSessionRequest) *httptest.ResponseRecorder {
 	t.Helper()
-	s.has = func(context.Context, string) (bool, error) { return true, nil }
 	body, _ := json.Marshal(req)
 	rec := httptest.NewRecorder()
 	s.createSession(rec, httptest.NewRequest(http.MethodPost, "/v1/sessions", bytes.NewReader(body)))

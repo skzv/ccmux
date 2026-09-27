@@ -98,6 +98,9 @@ func TestCreateSession_DefaultDerivedName(t *testing.T) {
 // attach pick the same agent.
 func TestCreateSession_AgentPersistsSidecar(t *testing.T) {
 	dir := pollSandbox(t)
+	// A codex that stays up: the daemon now reports a session whose
+	// agent exits at once (not installed here) as a failed start.
+	stubAgentPath(t, "codex")
 	projDir := filepath.Join(dir, "proj")
 	if err := os.MkdirAll(projDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -198,10 +201,10 @@ func TestTmuxMangledSessionNamesAreRejected(t *testing.T) {
 	}
 }
 
-// TestCreateSession_InvalidAgentIgnored — sending an unrecognized
-// agent string mustn't 500 or panic; the daemon just falls through to
-// the project's default (claude, with no sidecar) for the launch.
-func TestCreateSession_InvalidAgentIgnored(t *testing.T) {
+// TestCreateSession_InvalidAgentRejected — an unrecognized agent string
+// is a 400 (it used to fall through to the project's default, silently
+// launching claude in place of a mistyped agent), and nothing starts.
+func TestCreateSession_InvalidAgentRejected(t *testing.T) {
 	dir := pollSandbox(t)
 	projDir := filepath.Join(dir, "proj")
 	if err := os.MkdirAll(projDir, 0o755); err != nil {
@@ -219,8 +222,11 @@ func TestCreateSession_InvalidAgentIgnored(t *testing.T) {
 		Agent:   "not-an-agent",
 	})
 	resp := mustPost(t, httpSrv, "/v1/sessions", body)
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("status %d, want 200", resp.StatusCode)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status %d, want 400", resp.StatusCode)
+	}
+	if sessionExists(t, "c-proj") {
+		t.Error("a session started for an invalid agent")
 	}
 	// No sidecar written, because the agent string didn't parse.
 	if _, err := os.Stat(filepath.Join(projDir, ".ccmux", "agent")); err == nil {
