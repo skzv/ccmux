@@ -140,7 +140,16 @@ printf '%s\n' "$help_out" | sed -n '1,6p'
 
 echo
 echo "== ccmuxd --version:"
-"$brew_ccmuxd" --version 2>&1 || echo "(no --version flag — checking the binary runs at all)"
+# Before 0.6.2 ccmuxd ignored its arguments, so this line started a
+# whole daemon. It only "passed" because the sandbox socket path was
+# over macOS's 104-byte limit and the bind failed; with a shorter
+# $TMPDIR the script would have hung here. Now it must print a version.
+ccmuxd_ver="$("$brew_ccmuxd" --version 2>&1)"
+echo "$ccmuxd_ver"
+case "$ccmuxd_ver" in
+  "ccmuxd "*) ;;
+  *) echo "brew-test: unexpected ccmuxd --version output" >&2; exit 1 ;;
+esac
 
 echo
 echo "== ccmux doctor (sandboxed HOME=$HOME):"

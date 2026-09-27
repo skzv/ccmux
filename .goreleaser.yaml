@@ -104,6 +104,7 @@ brews:
     test: |
       system "#{bin}/ccmux", "--help"
       system "#{bin}/ccmux-mcp", "--version"
+      assert_match "ccmuxd", shell_output("#{bin}/ccmuxd --version")
 
 release:
   draft: false

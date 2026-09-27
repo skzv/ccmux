@@ -92,6 +92,9 @@ func decodeJSONBodyWithin(w http.ResponseWriter, r *http.Request, v any, d time.
 var errPeerAlreadyServing = errors.New("another ccmuxd is already serving")
 
 func main() {
+	if exit, code := handleArgs(os.Args[1:], os.Stdout, os.Stderr); exit {
+		os.Exit(code)
+	}
 	if err := run(); err != nil {
 		if errors.Is(err, errPeerAlreadyServing) {
 			log.Printf("ccmuxd: %v — exiting cleanly", err)
