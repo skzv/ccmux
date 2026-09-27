@@ -8,7 +8,7 @@ import (
 	"os"
 	"os/user"
 	"strings"
-	"syscall"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -65,6 +65,30 @@ Examples:
 	return c
 }
 
+// sshStepTimeout bounds each network step of setup-ssh (probe, key
+// install, user enumeration) on its own. It deliberately doesn't cover
+// the password prompt: sharing one deadline with it meant a user who
+// took a while to type the password got "context deadline exceeded"
+// from the install that followed.
+var sshStepTimeout = 60 * time.Second
+
+// The sshsetup calls and the password prompt runHostSetupSSH makes —
+// package-level seams so tests can drive the flow without a network or
+// a terminal.
+var (
+	sshProbe          = sshsetup.Probe
+	sshEnsureLocalKey = sshsetup.EnsureLocalKey
+	sshInstallKey     = sshsetup.InstallKeyViaPassword
+	sshEnumerateUsers = sshsetup.EnumerateUsers
+	sshReadPassword   = readPassword
+)
+
+// sshStepCtx returns a fresh sshStepTimeout context for one network
+// step.
+func sshStepCtx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), sshStepTimeout)
+}
+
 // runHostSetupSSH is the meat. Split out so we can unit-test the
 // arg-parsing / branching without spawning a real cobra root.
 func runHostSetupSSH(arg string, skipEnumerate bool) error {
@@ -82,11 +106,10 @@ func runHostSetupSSH(arg string, skipEnumerate bool) error {
 		return err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-
 	fmt.Printf("Probing %s … ", target.String())
-	res := sshsetup.Probe(ctx, target)
+	probeCtx, cancelProbe := sshStepCtx()
+	res := sshProbe(probeCtx, target)
+	cancelProbe()
 	fmt.Println(res.String())
 
 	switch res {
@@ -110,13 +133,13 @@ func runHostSetupSSH(arg string, skipEnumerate bool) error {
 	}
 
 	fmt.Println("Loading local key …")
-	lk, err := sshsetup.EnsureLocalKey()
+	lk, err := sshEnsureLocalKey()
 	if err != nil {
 		return fmt.Errorf("local key: %w", err)
 	}
 	fmt.Printf("  using %s\n", lk.PrivatePath)
 
-	password, err := readPassword(fmt.Sprintf("SSH password for %s: ", target.String()))
+	password, err := sshReadPassword(fmt.Sprintf("SSH password for %s: ", target.String()))
 	if err != nil {
 		return err
 	}
@@ -125,7 +148,11 @@ func runHostSetupSSH(arg string, skipEnumerate bool) error {
 	progress := sshsetup.Progress(func(stage, detail string) {
 		fmt.Printf("  · %s: %s\n", stage, detail)
 	})
-	if err := sshsetup.InstallKeyViaPassword(ctx, target, password, lk, progress); err != nil {
+	// A fresh deadline, started only now that the password is in.
+	installCtx, cancelInstall := sshStepCtx()
+	err = sshInstallKey(installCtx, target, password, lk, progress)
+	cancelInstall()
+	if err != nil {
 		if errors.Is(err, sshsetup.ErrWrongPassword) {
 			return fmt.Errorf("password rejected — re-run when ready")
 		}
@@ -146,7 +173,9 @@ func runHostSetupSSH(arg string, skipEnumerate bool) error {
 	if skipEnumerate {
 		return nil
 	}
-	others, err := sshsetup.EnumerateUsers(ctx, target, lk)
+	enumCtx, cancelEnum := sshStepCtx()
+	others, err := sshEnumerateUsers(enumCtx, target, lk)
+	cancelEnum()
 	if err != nil {
 		// Don't fail the whole command on enumeration trouble —
 		// the key is already installed, which is the important
@@ -348,6 +377,13 @@ func writeBackUserIfMissing(name, user string) error {
 	return config.Save(cfg)
 }
 
+// promptReader returns the one buffered reader over stdin that every
+// setup-ssh prompt shares (the piped-password read and each confirm).
+// A bufio.Reader reads ahead, so building a fresh one per prompt
+// swallowed the answers piped after the first. A var so tests can feed
+// it answers.
+var promptReader = sync.OnceValue(func() *bufio.Reader { return bufio.NewReader(os.Stdin) })
+
 // readPassword prompts on stderr and reads a line from /dev/tty (or
 // stdin if no TTY is attached, with echo on — used by tests).
 //
@@ -367,8 +403,7 @@ func readPassword(prompt string) (string, error) {
 		return string(pw), nil
 	}
 	// Pipe / file backing stdin (tests, automation). Read a line.
-	r := bufio.NewReader(os.Stdin)
-	line, err := r.ReadString('\n')
+	line, err := promptReader().ReadString('\n')
 	if err != nil && line == "" {
 		return "", err
 	}
@@ -378,8 +413,7 @@ func readPassword(prompt string) (string, error) {
 // confirm reads y/n from stdin. Default is no.
 func confirm(prompt string) bool {
 	fmt.Fprintf(os.Stderr, "%s [y/N] ", prompt)
-	r := bufio.NewReader(os.Stdin)
-	line, _ := r.ReadString('\n')
+	line, _ := promptReader().ReadString('\n')
 	line = strings.TrimSpace(strings.ToLower(line))
 	return line == "y" || line == "yes"
 }
@@ -395,7 +429,3 @@ func scrub(s *string) {
 	}
 	*s = ""
 }
-
-// syscall is referenced only so the IDE doesn't strip the import
-// when we add interrupt handling later. Harmless.
-var _ = syscall.SIGINT
