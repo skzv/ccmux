@@ -3,9 +3,11 @@
 package cmd
 
 import (
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/skzv/ccmux/internal/agent"
@@ -226,6 +228,70 @@ func TestListJSON_EmptyIsArray(t *testing.T) {
 	}
 	if got := strings.TrimSpace(res.stdout); got != "[]" {
 		t.Errorf("list --json with no sessions = %q, want []", got)
+	}
+}
+
+// TestList_HungDaemonFallsBackToTmux — a daemon that accepts the
+// connection but never answers used up list's whole 3s context, and the
+// tmux fallback then ran on that expired context and failed too, so
+// `ccmux list` errored instead of listing the local sessions.
+func TestList_HungDaemonFallsBackToTmux(t *testing.T) {
+	e := newCLIEnv(t)
+	// The socket lives under $HOME; keep the path under the 104-byte
+	// unix-socket limit, which t.TempDir() on macOS exceeds.
+	home, err := os.MkdirTemp("/tmp", "cxl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(home) })
+	e.env["HOME"] = home
+	sockDir := filepath.Join(home, ".local", "state", "ccmux")
+	if err := os.MkdirAll(sockDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("unix", filepath.Join(sockDir, "ccmuxd.sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var (
+		mu    sync.Mutex
+		conns []net.Conn
+	)
+	t.Cleanup(func() {
+		_ = ln.Close()
+		mu.Lock()
+		defer mu.Unlock()
+		for _, c := range conns {
+			_ = c.Close()
+		}
+	})
+	go func() { // a wedged daemon: accept, never respond
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			conns = append(conns, c)
+			mu.Unlock()
+		}
+	}()
+	e.writeExe("tmux", `case "$1" in
+list-sessions)
+  case "$3" in
+  *session_created*) printf 'c-alive\t1700000000\t1700000000\t0\t1\t/work/alive\n' ;;
+  *) printf 'c-alive\t\n' ;;
+  esac ;;
+esac
+exit 0
+`)
+
+	res := e.run("", "list", "--json")
+	if res.code != 0 {
+		t.Fatalf("list --json with a hung daemon exit %d\nstderr: %s", res.code, res.stderr)
+	}
+	if !strings.Contains(res.stdout, `"c-alive"`) {
+		t.Errorf("list should fall back to tmux's sessions, got:\n%s", res.stdout)
 	}
 }
 

@@ -265,7 +265,12 @@ func newListCmd() *cobra.Command {
 				}
 			}
 			if sessions == nil {
-				ts, err := tmux.List(ctx)
+				// The tmux fallback gets its own budget: a daemon that
+				// accepted the connection and then hung has spent all
+				// of ctx, and reusing it failed the fallback too.
+				tctx, tcancel := context.WithTimeout(context.Background(), 3*time.Second)
+				defer tcancel()
+				ts, err := tmux.List(tctx)
 				if err != nil {
 					return err
 				}
