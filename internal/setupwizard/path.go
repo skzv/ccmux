@@ -58,13 +58,19 @@ func pathContains(pathEnv, dir string) bool {
 // Mac-specific note: zsh on macOS reads ~/.zshrc for both login and
 // interactive shells (Terminal.app launches zsh as a login shell, so
 // ~/.zprofile is also valid, but ~/.zshrc is what most users edit and
-// what every guide tells people to use). We commit to ~/.zshrc.
-func detectShellRC(home, shellEnv string) (rcPath, exportLine string) {
+// what every guide tells people to use). We commit to .zshrc — in
+// $ZDOTDIR (zdotdir) when that's set, because zsh then reads its rc
+// files from there and never looks at ~/.zshrc.
+func detectShellRC(home, shellEnv, zdotdir string) (rcPath, exportLine string) {
 	shell := filepath.Base(shellEnv)
 	binDir := filepath.Join(home, ccmuxInstallDir)
 	switch shell {
 	case "zsh":
-		return filepath.Join(home, ".zshrc"),
+		dir := home
+		if zdotdir != "" {
+			dir = zdotdir
+		}
+		return filepath.Join(dir, ".zshrc"),
 			fmt.Sprintf(`export PATH="%s:$PATH"`, binDir)
 	case "bash":
 		// bash on macOS runs login shells (Terminal.app), which read a
@@ -178,7 +184,7 @@ func ensureCcmuxOnPath(out io.Writer) error {
 		return err
 	}
 	binDir := filepath.Join(home, ccmuxInstallDir)
-	rcPath, exportLine := detectShellRC(home, os.Getenv("SHELL"))
+	rcPath, exportLine := detectShellRC(home, os.Getenv("SHELL"), os.Getenv("ZDOTDIR"))
 
 	fmt.Fprintln(out, stWarn.Render("⚠ ")+binDir+" isn't on your PATH yet, so `ccmux` won't resolve.")
 	fmt.Fprintln(out, "  Run "+stEmphasis.Render(filepath.Join(binDir, "ccmux"))+" to launch right now.")

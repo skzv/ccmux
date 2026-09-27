@@ -52,7 +52,7 @@ func TestDetectShellRC(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.shell, func(t *testing.T) {
-			rc, line := detectShellRC(home, tc.shell)
+			rc, line := detectShellRC(home, tc.shell, "")
 			if rc != tc.wantPath {
 				t.Errorf("rc path = %q, want %q", rc, tc.wantPath)
 			}
@@ -60,6 +60,23 @@ func TestDetectShellRC(t *testing.T) {
 				t.Errorf("export line = %q, want %q", line, tc.wantSyntax)
 			}
 		})
+	}
+}
+
+// TestDetectShellRC_HonorsZDOTDIR — with $ZDOTDIR set, zsh reads
+// $ZDOTDIR/.zshrc and never ~/.zshrc, so the PATH block written to
+// ~/.zshrc did nothing. Other shells ignore ZDOTDIR.
+func TestDetectShellRC_HonorsZDOTDIR(t *testing.T) {
+	home := "/Users/test"
+	rc, line := detectShellRC(home, "/bin/zsh", "/Users/test/.config/zsh")
+	if rc != "/Users/test/.config/zsh/.zshrc" {
+		t.Errorf("zsh rc with ZDOTDIR = %q, want /Users/test/.config/zsh/.zshrc", rc)
+	}
+	if line != `export PATH="/Users/test/.local/bin:$PATH"` {
+		t.Errorf("export line = %q, want the ~/.local/bin export", line)
+	}
+	if rc, _ := detectShellRC(home, "/usr/local/bin/fish", "/Users/test/.config/zsh"); rc != "/Users/test/.config/fish/config.fish" {
+		t.Errorf("fish rc = %q, ZDOTDIR must only affect zsh", rc)
 	}
 }
 
