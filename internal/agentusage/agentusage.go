@@ -24,10 +24,13 @@ package agentusage
 
 import (
 	"encoding/json"
+	"errors"
 	"github.com/skzv/ccmux/internal/jsonl"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -45,17 +48,25 @@ type Summary struct {
 // record is the union of the fields we look for across both usage
 // shapes plus the turn-role markers. All optional — a line that has
 // none contributes nothing.
+//
+// The timestamp and marker fields are raw JSON because agents disagree
+// on their types: a timestamp can be an RFC3339 string or epoch
+// seconds/milliseconds, and some agents nest objects under `time` or
+// `type`. Typing them as strings made json.Unmarshal fail on those
+// lines, which dropped their tokens.
 type record struct {
 	// Timestamp candidates. Different agents use different keys; we try
-	// each. RFC3339 string forms are parsed; absent → the file mtime
-	// gate (applied by the caller) is the only time filter.
-	Timestamp string `json:"timestamp"`
-	Time      string `json:"time"`
-	CreatedAt string `json:"created_at"`
+	// each (see parseWhen). Absent or unrecognized → the record is
+	// undated, and the file mtime gate (applied by the caller) is the
+	// only time filter.
+	Timestamp json.RawMessage `json:"timestamp"`
+	Time      json.RawMessage `json:"time"`
+	CreatedAt json.RawMessage `json:"created_at"`
 
-	// Role/type markers used to count user turns.
-	Role string `json:"role"`
-	Type string `json:"type"`
+	// Role/type markers used to count user turns. Only string values
+	// mean anything.
+	Role json.RawMessage `json:"role"`
+	Type json.RawMessage `json:"type"`
 
 	Usage *usageBlock `json:"usage"`
 
@@ -165,7 +176,13 @@ func scanFile(path string, cutoff time.Time, sum *Summary) {
 		}
 		var r record
 		if err := json.Unmarshal(line, &r); err != nil {
-			continue
+			// A token field of an unexpected type is left zero and the
+			// rest of the record still counts; only malformed JSON is
+			// skipped.
+			var typeErr *json.UnmarshalTypeError
+			if !errors.As(err, &typeErr) {
+				continue
+			}
 		}
 		ts, dated := r.when()
 		if !dated {
@@ -198,18 +215,56 @@ func scanFile(path string, cutoff time.Time, sum *Summary) {
 
 // when extracts a message timestamp from whichever key the agent used.
 func (r record) when() (time.Time, bool) {
-	for _, s := range []string{r.Timestamp, r.Time, r.CreatedAt} {
-		if s == "" {
-			continue
-		}
-		if t, err := time.Parse(time.RFC3339, s); err == nil {
-			return t, true
-		}
-		if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+	for _, raw := range []json.RawMessage{r.Timestamp, r.Time, r.CreatedAt} {
+		if t, ok := parseWhen(raw); ok {
 			return t, true
 		}
 	}
 	return time.Time{}, false
+}
+
+// parseWhen decodes one timestamp field: an RFC3339 string, or a Unix
+// epoch in seconds or milliseconds, as a JSON number or a numeric
+// string. Anything else (null, an object) is not a timestamp.
+func parseWhen(raw json.RawMessage) (time.Time, bool) {
+	if len(raw) == 0 {
+		return time.Time{}, false
+	}
+	var n float64
+	var s string
+	switch {
+	case json.Unmarshal(raw, &n) == nil:
+	case json.Unmarshal(raw, &s) == nil:
+		if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+			return t, true
+		}
+		f, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
+		if err != nil {
+			return time.Time{}, false
+		}
+		n = f
+	default:
+		return time.Time{}, false
+	}
+	if n <= 0 || math.IsInf(n, 0) || math.IsNaN(n) {
+		return time.Time{}, false
+	}
+	// Epoch seconds stay below 1e11 until the year 5138; epoch
+	// milliseconds passed 1e11 in 1973.
+	if n >= 1e11 {
+		return time.UnixMilli(int64(n)), true
+	}
+	sec, frac := math.Modf(n)
+	return time.Unix(int64(sec), int64(frac*1e9)), true
+}
+
+// jsonString returns raw's value when it is a JSON string, else "".
+func jsonString(raw json.RawMessage) string {
+	var s string
+	if json.Unmarshal(raw, &s) != nil {
+		return ""
+	}
+	return s
 }
 
 // isUserTurn reports whether this record represents a user-initiated
@@ -217,8 +272,8 @@ func (r record) when() (time.Time, bool) {
 // role/type markers; tool-result follow-ups (role=tool / type=tool_*)
 // are deliberately excluded.
 func (r record) isUserTurn() bool {
-	role := strings.ToLower(strings.TrimSpace(r.Role))
-	typ := strings.ToLower(strings.TrimSpace(r.Type))
+	role := strings.ToLower(strings.TrimSpace(jsonString(r.Role)))
+	typ := strings.ToLower(strings.TrimSpace(jsonString(r.Type)))
 	if role == "user" {
 		return true
 	}

@@ -1,8 +1,10 @@
 package agentusage
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -209,5 +211,63 @@ func TestWalk_FullyUndatedFileCountsWhole(t *testing.T) {
 	}
 	if s.Prompts != 1 || s.InputTokens != 4 {
 		t.Errorf("got prompts=%d in=%d, want 1/4", s.Prompts, s.InputTokens)
+	}
+}
+
+// TestWalk_LenientFieldTypes — regression: timestamp/time/created_at
+// and role/type were typed as strings, so a line with a numeric epoch
+// timestamp (or an object under `time`) failed to unmarshal and its
+// tokens were silently dropped. Epoch seconds and milliseconds (number
+// or numeric string) now place the record in time; other shapes leave
+// it undated; a mistyped token field doesn't sink the rest of the line.
+func TestWalk_LenientFieldTypes(t *testing.T) {
+	now := time.Now()
+	recent := now.Add(-10 * time.Minute)
+	old := now.Add(-10 * time.Hour)
+	sec := strconv.FormatInt(recent.Unix(), 10)
+	ms := strconv.FormatInt(recent.UnixMilli(), 10)
+	oldMS := strconv.FormatInt(old.UnixMilli(), 10)
+	root := t.TempDir()
+	write(t, filepath.Join(root, "s.jsonl"),
+		`{"role":"user","timestamp":`+sec+`}`,
+		`{"role":"assistant","timestamp":`+sec+`.5,"usage":{"input_tokens":1,"output_tokens":1}}`,
+		`{"role":"assistant","created_at":`+ms+`,"usage":{"input_tokens":2,"output_tokens":2}}`,
+		`{"role":"assistant","time":"`+ms+`","usage":{"input_tokens":4,"output_tokens":4}}`,
+		`{"role":"assistant","time":{"created":`+ms+`},"type":{"kind":"reply"},"usage":{"input_tokens":8,"output_tokens":8}}`,
+		`{"role":"assistant","usage":{"input_tokens":16,"output_tokens":16},"prompt_tokens":"n/a"}`,
+	)
+	write(t, filepath.Join(root, "old.jsonl"),
+		`{"role":"user","timestamp":`+oldMS+`}`,
+		`{"role":"assistant","timestamp":`+oldMS+`,"usage":{"input_tokens":1000,"output_tokens":1000}}`,
+	)
+	s, err := Walk(root, 5*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Prompts != 1 || s.InputTokens != 31 || s.OutputTokens != 31 {
+		t.Errorf("got prompts=%d in=%d out=%d, want 1/31/31", s.Prompts, s.InputTokens, s.OutputTokens)
+	}
+}
+
+func TestParseWhen(t *testing.T) {
+	want := time.Date(2026, 5, 12, 23, 17, 43, 0, time.UTC)
+	for raw, ok := range map[string]bool{
+		`"2026-05-12T23:17:43Z"`:     true,
+		`"2026-05-12T23:17:43.000Z"`: true,
+		`1778627863`:                 true,
+		`1778627863000`:              true,
+		`"1778627863000"`:            true,
+		`""`:                         false,
+		`null`:                       false,
+		`0`:                          false,
+		`-5`:                         false,
+		`{"created":1}`:              false,
+		`"yesterday"`:                false,
+		`true`:                       false,
+	} {
+		got, gotOK := parseWhen(json.RawMessage(raw))
+		if gotOK != ok || (ok && !got.Equal(want)) {
+			t.Errorf("parseWhen(%s) = %v, %v; want ok=%v", raw, got, gotOK, ok)
+		}
 	}
 }
