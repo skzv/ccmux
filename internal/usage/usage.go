@@ -263,6 +263,8 @@ func WalkMuse(home string, window time.Duration) AgentSummary {
 
 // WalkGemini totals native per-message counters after JSONL updates and
 // rewinds have been applied. Subscription/API costs cannot be inferred here.
+// A subagent session's "user" messages are the parent agent's
+// instructions, not prompts; its tokens are still real usage.
 func WalkGemini(home string, window time.Duration) AgentSummary {
 	unavailable := false
 	out := AgentSummary{Window: window, CostAvailable: &unavailable}
@@ -272,12 +274,13 @@ func WalkGemini(home string, window time.Duration) AgentSummary {
 	}
 	cutoff := time.Now().Add(-window)
 	for _, s := range sessions {
+		subagent := s.Kind == "subagent"
 		for _, m := range s.Messages {
 			ts, err := time.Parse(time.RFC3339Nano, m.Timestamp)
 			if window > 0 && (err != nil || ts.Before(cutoff)) {
 				continue
 			}
-			if m.Type == "user" {
+			if m.Type == "user" && !subagent {
 				out.Prompts++
 				out.HasData = true
 			}

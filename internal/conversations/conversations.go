@@ -45,6 +45,7 @@ import (
 	"time"
 
 	"github.com/skzv/ccmux/internal/agent"
+	"github.com/skzv/ccmux/internal/codexusage"
 	"github.com/skzv/ccmux/internal/gemini"
 	"github.com/skzv/ccmux/internal/jsonl"
 	"github.com/skzv/ccmux/internal/muse"
@@ -1252,15 +1253,10 @@ type codexEventPayload struct {
 }
 
 // isSubagent reports whether payload.source is the {"subagent": …}
-// object Codex writes for guardian reviews and spawned threads.
+// object Codex writes for guardian reviews and spawned threads. The
+// usage walker applies the same rule to prompt counts.
 func (p codexEventPayload) isSubagent() bool {
-	var src struct {
-		Subagent json.RawMessage `json:"subagent"`
-	}
-	if len(p.Source) == 0 || p.Source[0] != '{' || json.Unmarshal(p.Source, &src) != nil {
-		return false
-	}
-	return len(src.Subagent) > 0 && string(src.Subagent) != "null"
+	return codexusage.IsSubagentSource(p.Source)
 }
 
 func (e codexEvent) Metadata() codexEventPayload {
