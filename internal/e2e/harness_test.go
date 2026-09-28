@@ -70,6 +70,27 @@ func buildBinaries() error {
 	return nil
 }
 
+// stubAgentMaxSeconds caps a stub agent's life: well past the suite's
+// -timeout (180s in the Makefile), so no test sees its session end early.
+const stubAgentMaxSeconds = 300
+
+// stubAgentScript is the stub agent: %s is extra per-agent output,
+// %d the lifetime cap in seconds.
+const stubAgentScript = `#!/bin/sh
+# ccmux e2e stub agent: announce which agent ran (so a test can assert
+# which agent a session launched), then stay alive like an agent
+# awaiting input so the tmux session persists — but only while the
+# process that started it lives, and never past the cap, so a test run
+# that dies before its cleanup can't leave the stub behind.
+echo "ccmux-stub-agent=$(basename "$0")"
+%sparent=$PPID
+i=0
+while [ "$i" -lt %d ] && kill -0 "$parent" 2>/dev/null; do
+	sleep 1
+	i=$((i + 1))
+done
+`
+
 // installStubAgents writes stub `claude`, `codex`, and `agy`
 // (antigravity), and `gemini` executables into a temp dir. ccmux launches
 // the configured agent by bare name ("claude" / "codex" / "agy"), which
@@ -82,24 +103,26 @@ func buildBinaries() error {
 // input. newEnv prepends stubBinDir to PATH so every spawned session
 // resolves these, making the suite hermetic instead of silently
 // depending on the dev's PATH.
+//
+// The stub must not outlive the test that started it. It used to
+// `exec sleep 86400`: when a run died before its cleanup killed the
+// sandbox tmux server (a -timeout panic, ^C), the sleeps lived on for a
+// day, and they piled up across runs (21 of them, cwd /private/tmp/ccme…,
+// after one day of test runs). Now it waits in one-second steps while
+// the process that started it (the pane's shell or the tmux server) is
+// alive, and gives up after stubAgentMaxSeconds regardless.
 func installStubAgents() error {
 	dir, err := os.MkdirTemp("", "ccmux-e2e-agents")
 	if err != nil {
 		return err
 	}
 	stubBinDir = dir
-	const stub = `#!/bin/sh
-# ccmux e2e stub agent: announce which agent ran (so a test can assert
-# which agent a session launched), then stay alive like an agent
-# awaiting input so the tmux session persists.
-echo "ccmux-stub-agent=$(basename "$0")"
-exec sleep 86400
-`
 	for _, name := range []string{"claude", "codex", "agy", "cursor-agent", "pi", "gemini"} {
-		script := stub
+		extra := ""
 		if name == "gemini" {
-			script = strings.Replace(stub, "exec sleep", "echo \"ccmux-stub-args=$*\"\necho \"ccmux-stub-cwd=$PWD\"\nexec sleep", 1)
+			extra = "echo \"ccmux-stub-args=$*\"\necho \"ccmux-stub-cwd=$PWD\"\n"
 		}
+		script := fmt.Sprintf(stubAgentScript, extra, stubAgentMaxSeconds)
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(script), 0o755); err != nil {
 			return err
 		}
@@ -204,6 +227,12 @@ func newEnv(t *testing.T) *Env {
 	// suppress the launch-time "run setup?" nudge — otherwise it would
 	// intercept the PTY TUI tests' input.
 	t.Setenv("CCMUX_NO_SETUP_NUDGE", "1")
+	// The TUI's Moshi probe runs `brew services list` in the background;
+	// a brew still running when the test removed the sandbox re-created
+	// $HOME/Library/Caches/Homebrew under it, leaving one /tmp/ccme…
+	// directory behind per TUI test (hundreds after a day of runs).
+	// Point Homebrew's cache outside the sandbox.
+	t.Setenv("HOMEBREW_CACHE", filepath.Join(os.TempDir(), "ccmux-e2e-homebrew-cache"))
 	root := filepath.Join(home, "Projects")
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatalf("mkdir projects root: %v", err)
@@ -211,7 +240,37 @@ func newEnv(t *testing.T) *Env {
 	e := &Env{t: t, Home: home, Root: root}
 	e.writeConfig(e.defaultConfig())
 	t.Cleanup(e.cleanup)
+	startSandboxWatchdog(t, home)
 	return e
+}
+
+// sandboxWatchdog ($0 = the sandbox $HOME) waits for the test binary
+// ($PPID) to die, then kills the sandbox's tmux server and removes the
+// sandbox. t.Cleanup never runs when a run dies early (a -timeout
+// panic, ^C): the sandbox tmux server, its sessions and the /tmp/ccme…
+// directory used to outlive the run for good.
+const sandboxWatchdog = `while kill -0 "$PPID" 2>/dev/null; do
+	sleep 1 & wait $!
+done
+TMUX_TMPDIR="$0" tmux kill-server >/dev/null 2>&1
+rm -rf "$0"
+`
+
+// startSandboxWatchdog runs sandboxWatchdog for home until the test
+// ends; a normal cleanup stops it (the test binary lives on). Its own
+// process group keeps a ^C aimed at the test from killing it first.
+func startSandboxWatchdog(t *testing.T, home string) {
+	t.Helper()
+	cmd := exec.Command("sh", "-c", sandboxWatchdog, home)
+	cmd.Env = os.Environ() // the sandbox TMUX_TMPDIR, TMUX unset
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start sandbox watchdog: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		_, _ = cmd.Process.Wait()
+	})
 }
 
 // defaultConfig returns the baseline config for a fixture: defaults,
@@ -341,7 +400,27 @@ func (e *Env) capturePane(name string) string {
 	return out
 }
 
-// daemonProc is a running ccmuxd child process under an Env.
+// daemonWatchdog runs ccmuxd ($0) for startDaemon and ties its life to
+// the test binary's. A run that died before its cleanup (a -timeout
+// panic, ^C) left the sandbox daemon running for good — and with it the
+// `claude -p` model-catalog fetch it starts in its own process group,
+// which nothing then signalled: those were the orphaned stub agents
+// that piled up under /private/tmp/ccme…. The loop stops the daemon
+// once the test binary ($PPID) is gone; SIGTERM from stop() is passed
+// on. `sleep 1 & wait` keeps the trap prompt (a foreground sleep would
+// delay it).
+const daemonWatchdog = `"$0" & d=$!
+trap 'kill -TERM "$d" 2>/dev/null; wait "$d"; exit' TERM INT
+while kill -0 "$PPID" 2>/dev/null && kill -0 "$d" 2>/dev/null; do
+	sleep 1 & wait $!
+done
+kill -TERM "$d" 2>/dev/null
+wait "$d"
+`
+
+// daemonProc is a running ccmuxd child process under an Env: cmd is the
+// watchdog shell (daemonWatchdog), leader of a process group that holds
+// the daemon too.
 type daemonProc struct {
 	cmd *exec.Cmd
 	log *safeBuffer
@@ -351,7 +430,8 @@ type daemonProc struct {
 // a health probe (or fails the test on timeout).
 func (e *Env) startDaemon() *daemonProc {
 	e.t.Helper()
-	cmd := exec.Command(builtCcmuxd)
+	cmd := exec.Command("sh", "-c", daemonWatchdog, builtCcmuxd)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Dir = e.Home
 	cmd.Env = envWithEnglish()
 	logBuf := &safeBuffer{}
@@ -384,13 +464,16 @@ func (d *daemonProc) stop() {
 	if d == nil || d.cmd == nil || d.cmd.Process == nil {
 		return
 	}
-	_ = d.cmd.Process.Signal(syscall.SIGTERM)
+	// Signal the whole group — the watchdog and the daemon — so the
+	// daemon gets SIGTERM directly, as when it was started bare.
+	pgid := -d.cmd.Process.Pid
+	_ = syscall.Kill(pgid, syscall.SIGTERM)
 	done := make(chan struct{})
 	go func() { _, _ = d.cmd.Process.Wait(); close(done) }()
 	select {
 	case <-done:
 	case <-time.After(3 * time.Second):
-		_ = d.cmd.Process.Kill()
+		_ = syscall.Kill(pgid, syscall.SIGKILL)
 		<-done
 	}
 }
