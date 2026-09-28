@@ -49,7 +49,7 @@ type pollTrack struct {
 	// follow: the session has no agent of its own (a shell, or one the
 	// user made outside ccmux), so tracked.agentID is whatever agent runs
 	// in its foreground this tick — shellAgentID when none does. See
-	// sessionAgent.
+	// fixedAgent.
 	follow bool
 	// listed is the session's list-sessions row as of the last tick
 	// (attached, windows, created — for sessionState).
@@ -960,7 +960,7 @@ const ccmuxSessionPrefix = "c-"
 
 // noteSessionLocked folds this tick's list-sessions row into t: its
 // project (recomputed only when its path changes — it stats the
-// filesystem) and what runs there (see sessionAgent). Caller holds s.mu.
+// filesystem) and what runs there (see fixedAgent). Caller holds s.mu.
 func (s *server) noteSessionLocked(t *tracked, ts tmux.Session) {
 	if !t.projectKnown || t.projectOf != ts.Path {
 		t.project, t.projectOf, t.projectKnown = s.sessionProject(ts.Path), ts.Path, true

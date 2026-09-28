@@ -445,12 +445,12 @@ type tracked struct {
 	lastChange  time.Time // when content last changed
 	state       agent.State
 	promptCount int
-	// agentID is the AI agent this session is running, sourced from
-	// <project>/.ccmux/agent and refreshed by the poll loop. The
-	// classifier for state detection is `agent.ByID(agentID).Classify(…)`
-	// — that's what lets Codex and Antigravity sessions get their own
-	// heuristics instead of borrowing Claude's box-drawing prompt
-	// detector.
+	// agentID is the AI agent this session is running — its tag, its
+	// project's sidecar, or the agent in its foreground (see
+	// fixedAgent in poll.go); shellAgentID for none. The classifier for
+	// state detection is `agent.ByID(agentID)`'s — that's what lets
+	// Codex and Antigravity sessions get their own heuristics instead
+	// of borrowing Claude's box-drawing prompt detector.
 	agentID agent.ID
 	// projectPath is the working directory of the tmux session, used
 	// to resolve the agent sidecar.
