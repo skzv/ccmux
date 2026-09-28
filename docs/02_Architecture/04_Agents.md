@@ -49,16 +49,36 @@ writes nothing and leaves `ReadAgent` to fall back to Claude.
 
 ## How the daemon dispatches
 
-`cmd/ccmuxd/main.go` `pollOnce` walks every tmux session each tick. For
-each, it lazily resolves the project's agent via `project.ReadAgent(ts.Path)`
-and caches the result on the `tracked` struct so the second tick onward
-is one-pointer-deep:
+`cmd/ccmuxd/poll.go` `pollOnce` walks every tmux session each tick and
+resolves what runs in it (`sessionAgent`):
+
+1. The session's `@ccmux_agent` tag, when it has one — `shell` for a bare
+   shell, or the agent of a resumed conversation / bare agent session.
+   Read every tick, so a changed tag is followed.
+2. Otherwise, for a session ccmux created (named with the `c-` prefix) or
+   one in a project directory (under the projects root, or outside it with
+   a `.ccmux/agent` sidecar), the project's agent via
+   `project.ReadAgent(ts.Path)` — Claude when nothing is recorded.
+3. Anything else — a tmux session the user made themselves, somewhere
+   that isn't a project — is a plain shell and is never classified.
+
+An untagged session's agent is resolved when the daemon first sees it and
+cached on the `tracked` struct for the session's lifetime: switching a
+project's agent (Projects → `a`) applies to its next session, and doesn't
+reclassify the one already running.
 
 ```go
-t.agentID = project.ReadAgent(ts.Path)        // first sight
-…
-newState := agent.ByID(t.agentID).Classify(pane, t.lastChange, idleNeeds)
+newState := agent.ClassifyStateFrom(agent.ByID(t.agentID), prev, pane, title, lastChange, idleNeeds)
 ```
+
+The pane classified is the agent's own — the session's oldest pane, kept
+while it exists — not whichever pane is active, so a shell window opened
+next to the agent doesn't hide it. A working-spinner OSC title counts only
+while the pane shows signs of life (tmux keeps the title of a program that
+exited), and a pane resize is a redraw, not activity. The bell, push and
+prompt count fire only at the end of a real turn — see `decideAttention`
+and `turn` in `poll.go`, and "Push behavior" in
+[05_HTTP_API.md](05_HTTP_API.md).
 
 The `State` enum is shared (`agent.State` mirrors `internal/claude`'s
 values exactly) so the bell-trigger comparison, sleep-manager active

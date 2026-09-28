@@ -3,9 +3,12 @@ package main
 import (
 	"context"
 	"log"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/daemon"
@@ -23,7 +26,85 @@ type pollSnap struct {
 	prevSt   agent.State
 	agentID  agent.ID
 	baseline bool
+	pane     paneMemory
 }
+
+// pollTrack is the poll loop's per-session memory beyond the wire
+// state, embedded in tracked.
+type pollTrack struct {
+	pane paneMemory
+	turn
+	// project is the session's project (sessionProject) as of the path
+	// projectOf; projectKnown once it has been worked out.
+	project      string
+	projectOf    string
+	projectKnown bool
+	// agentTagged: tracked.agentID came from the session's @ccmux_agent
+	// tag rather than being resolved (see noteSessionLocked).
+	agentTagged bool
+	// listed is the session's list-sessions row as of the last tick
+	// (attached, windows, created — for sessionState).
+	listed tmux.Session
+}
+
+// paneMemory is what the poll loop remembers between ticks about the
+// pane it reads for a session. Phase 2 updates a copy (no lock held)
+// and Phase 3 stores it back.
+type paneMemory struct {
+	// id is the tmux id of the pane read last tick — the pane the agent
+	// runs in, resolved on first sight and kept while it exists (see
+	// agentPane) — or "" when the read fell back to the active pane.
+	id       string
+	observed bool // a tick has read the session at all
+	// width and height are the pane's size last tick (0 when unknown),
+	// and redrawTicks how many more ticks a body change still counts
+	// as a redraw after a resize or pane switch (see track).
+	width, height int
+	redrawTicks   int
+	// title is the pane's OSC title last tick, and titleChange when it
+	// last changed: with the body's last change, the evidence that a
+	// working-spinner title belongs to a live agent (see liveTitle).
+	title       string
+	titleChange time.Time
+}
+
+// redrawGraceTicks is how many ticks after a resize or pane switch a
+// body change is still taken for a redraw. The agent repaints on
+// SIGWINCH a moment after tmux reflows the pane, so the capture that
+// sees the new size can precede the repaint that the next one sees.
+const redrawGraceTicks = 1
+
+// track folds one tick's pane identity and size into m and reports
+// whether a body change this tick is a redraw rather than the agent's
+// own output: the pane was resized (a client of another size attached,
+// `tmux resize-window`) or a different pane was read — this tick or
+// within redrawGraceTicks before it.
+//
+// A redraw is not activity. Counted as a change, a resize reflowing a
+// session that sat waiting for input made it "active" and, a few
+// seconds later, "needs input" again: a second bell and push, another
+// prompt counted and the session marked unreviewed, for a prompt the
+// user had already seen.
+func (m *paneMemory) track(obs observation) (redraw bool) {
+	switched := m.observed && obs.paneID != m.id
+	resized := m.width > 0 && obs.width > 0 && (obs.width != m.width || obs.height != m.height)
+	switch {
+	case switched || resized:
+		redraw, m.redrawTicks = true, redrawGraceTicks
+	case m.redrawTicks > 0:
+		redraw = true
+		m.redrawTicks--
+	}
+	m.id, m.observed = obs.paneID, true
+	if obs.width > 0 && obs.height > 0 {
+		m.width, m.height = obs.width, obs.height
+	}
+	return redraw
+}
+
+// captureLines is how much scrollback each poll tick reads above the
+// visible screen.
+const captureLines = 60
 
 // freshSessionWindow is how recently a session must have been created
 // (while this daemon is running) for its first observation to count as
@@ -56,9 +137,9 @@ func (s *server) pollLoop(ctx context.Context) {
 //
 //   - Phase 1 (lock): seed missing tracked entries, snapshot per-session
 //     state for the classifier.
-//   - Phase 2 (no lock): shell out to capture-pane for every session
-//     and classify. This is the slow part — used to run under the
-//     lock and stall every IPC handler.
+//   - Phase 2 (no lock): shell out to list each session's panes and
+//     capture the agent's (observe), and classify. This is the slow
+//     part — used to run under the lock and stall every IPC handler.
 //   - Phase 3 (lock): fold the captures back into tracked state, decide
 //     bell + events + push transitions, garbage-collect dead sessions.
 //   - Phase 4 (no lock): fire bell shell-out, publish events, dispatch
@@ -111,13 +192,10 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 		}
 		live[ts.Name] = true
 		t, ok := s.seen[ts.Name]
-		agentID := s.sessionAgent(ts)
 		if !ok {
 			t = &tracked{
-				lastChange:  now,
-				state:       agent.StateUnknown,
-				agentID:     agentID,
-				projectPath: ts.Path,
+				lastChange: now,
+				state:      agent.StateUnknown,
 				// Newly-discovered session has produced no output the
 				// user could have missed yet — start at reviewed.
 				seen:     true,
@@ -128,16 +206,19 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 				// classification is the real steady state rather than
 				// "active because the content just changed from nothing".
 				t.lastChange = now.Add(-idleNeeds - time.Second)
+			} else {
+				// Created while we watched: its startup isn't a turn.
+				t.startup = true
 			}
 			s.seen[ts.Name] = t
+		}
+		s.noteSessionLocked(t, ts)
+		if !ok {
 			createdEvents = append(createdEvents, daemon.SessionEvent{
 				At:      now,
 				Kind:    "created",
 				Session: t.sessionState(ts.Name),
 			})
-		} else {
-			t.agentID = agentID
-			t.projectPath = ts.Path
 		}
 		snaps = append(snaps, pollSnap{
 			ts:       ts,
@@ -146,6 +227,7 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 			prevSt:   t.state,
 			agentID:  t.agentID,
 			baseline: t.baseline,
+			pane:     t.pane,
 		})
 	}
 	s.mu.Unlock()
@@ -158,26 +240,31 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 	type result struct {
 		name     string
 		pane     string
+		lastCh   time.Time // when the body last changed, redraws aside
+		mem      paneMemory
 		newState agent.State
+		spinning bool // a live working-spinner title (see liveTitle)
 	}
 	results := make([]result, 0, len(snaps))
+	staleAfter := spinnerStaleAfter(idleNeeds)
 	for _, sn := range snaps {
-		pane, err := s.capture(ctx, sn.ts.Name, 60)
+		mem := sn.pane
+		obs, err := s.observe(ctx, sn.ts.Name, mem.id)
 		if err != nil {
 			log.Printf("ccmuxd: capture-pane %s: %v", sn.ts.Name, err)
 			continue
 		}
-		// Read the OSC-set pane title alongside the body. tmux.PaneTitle
-		// swallows session-gone errors as "" so it never aborts a poll
-		// tick — body classification still runs the same.
-		title := ""
-		if s.paneTitle != nil {
-			title, _ = s.paneTitle(ctx, sn.ts.Name)
-		}
+		now := time.Now()
+		redraw := mem.track(obs)
+		pane := obs.body
 		lastCh := sn.lastCh
-		if pane != sn.prevLast && !sn.baseline {
-			lastCh = time.Now()
+		if pane != sn.prevLast && !sn.baseline && !redraw {
+			lastCh = now
 		}
+		if obs.title != mem.title {
+			mem.title, mem.titleChange = obs.title, now
+		}
+		title := liveTitle(obs.title, later(lastCh, mem.titleChange), now, staleAfter)
 		// ClassifyStateFrom routes through ClassifyWithTitle when the
 		// agent implements TitleAwareAgent, otherwise falls back to the
 		// legacy body-only Classify. So agents that don't implement
@@ -185,10 +272,12 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 		// takes the previous state, which a skip_state_update rule
 		// (a transient overlay) keeps instead of reclassifying.
 		newSt := agent.StateIdle // a plain shell has no agent state to detect
+		spinning := false
 		if sn.agentID != shellAgentID {
 			newSt = agent.ClassifyStateFrom(agent.ByID(sn.agentID), sn.prevSt, pane, title, lastCh, idleNeeds)
+			spinning = isSpinnerTitle(title)
 		}
-		results = append(results, result{name: sn.ts.Name, pane: pane, newState: newSt})
+		results = append(results, result{name: sn.ts.Name, pane: pane, lastCh: lastCh, mem: mem, newState: newSt, spinning: spinning})
 	}
 
 	// Phase 3.
@@ -208,6 +297,7 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 			continue
 		}
 		ts, _ := lookupTmuxSession(snaps, r.name)
+		t.pane = r.mem
 		if t.baseline {
 			// First look at a pre-existing session: record where it
 			// stands, with no bell, push or prompt count. It keeps its
@@ -216,43 +306,37 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 			t.last = r.pane
 			t.state = r.newState
 			t.seen = ts.Attached || r.newState != agent.StateNeedsInput
+			if r.spinning {
+				// Caught mid-turn: its end is news.
+				t.spinnerSeen, t.worked = true, true
+			}
 			stateEvents = append(stateEvents, daemon.SessionEvent{
-				At:   time.Now(),
-				Kind: "state_change",
-				Session: daemon.SessionState{
-					Name: r.name, Host: "local", State: string(r.newState),
-					Path: ts.Path,
-					Seen: t.seen,
-				},
+				At:      time.Now(),
+				Kind:    "state_change",
+				Session: t.sessionState(r.name),
 			})
 			if r.newState == agent.StateActive {
 				anyActive = true
 			}
 			continue
 		}
-		if r.pane != t.last {
-			t.last = r.pane
-			t.lastChange = time.Now()
-		}
-		decision := decideAttention(t.state, r.newState, t.seen, ts.Attached)
+		t.last = r.pane
+		t.lastChange = r.lastCh
+		decision := t.attend(t.state, r.newState, r.spinning, t.seen, ts.Attached)
 		t.seen = decision.NewSeen
-		if decision.IncPromptCount {
-			t.promptCount++
-		}
 		if decision.RingBell {
 			bellNames = append(bellNames, r.name)
 		}
 		prev := t.state
 		t.state = r.newState
+		if decision.IncPromptCount {
+			t.promptCount++
+		}
 		if decision.EmitStateEvent {
 			stateEvents = append(stateEvents, daemon.SessionEvent{
-				At:   time.Now(),
-				Kind: decision.StateEventKind,
-				Session: daemon.SessionState{
-					Name: r.name, Host: "local", State: string(r.newState),
-					Path: ts.Path,
-					Seen: t.seen,
-				},
+				At:      time.Now(),
+				Kind:    decision.StateEventKind,
+				Session: t.sessionState(r.name),
 			})
 		}
 		if decision.SendPush {
@@ -275,7 +359,7 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 			stateEvents = append(stateEvents, daemon.SessionEvent{
 				At:      time.Now(),
 				Kind:    "killed",
-				Session: daemon.SessionState{Name: name, Host: "local"},
+				Session: t.sessionState(name), // as last seen
 			})
 		}
 	}
@@ -294,6 +378,121 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 		s.maybePushForStateTransition(p.name, p.prev, p.next)
 	}
 	s.sleeper.SetActive(anyActive)
+}
+
+// observation is one tick's reading of a session's agent pane.
+type observation struct {
+	body   string
+	title  string // the pane's OSC-set title (#{pane_title})
+	paneID string // "" when read through the session's active pane
+	// width and height are the pane's size; 0 when read through the
+	// active pane.
+	width, height int
+}
+
+// observe reads the pane a session's agent runs in: its body and the
+// OSC title the agent sets (a second, higher-quality signal — a
+// braille spinner while working).
+//
+// A bare session target means its *active* pane, the active pane of
+// the active window. With the agent in window 0 and the user in a
+// shell window opened next to it, the daemon read the shell: the
+// session showed as a crashed agent (error) and the agent's turns
+// ended unnoticed. So the agent pane is resolved from the session's
+// pane list (agentPane) and read by id. When that fails — or the seams
+// aren't wired — the active pane is read as before.
+func (s *server) observe(ctx context.Context, name, paneID string) (observation, error) {
+	if s.panes != nil && s.capturePane != nil {
+		if panes, err := s.panes(ctx, name); err == nil {
+			if p, ok := agentPane(panes, paneID); ok {
+				if body, err := s.capturePane(ctx, p.ID, captureLines); err == nil {
+					return observation{body: body, title: p.Title, paneID: p.ID, width: p.Width, height: p.Height}, nil
+				}
+			}
+		}
+	}
+	body, err := s.capture(ctx, name, captureLines)
+	if err != nil {
+		return observation{}, err
+	}
+	// tmux.PaneTitle swallows session-gone errors as "" so it never
+	// aborts a poll tick — body classification still runs the same.
+	title := ""
+	if s.paneTitle != nil {
+		title, _ = s.paneTitle(ctx, name)
+	}
+	return observation{body: body, title: title}, nil
+}
+
+// agentPane picks the pane the session's agent runs in: the one read
+// last tick while it still exists, else the session's oldest pane —
+// the pane it was created with, which for a session ccmux started is
+// the agent's, whatever windows and splits the user added since
+// (tmux.OldestPane). Sticking to the resolved pane keeps a later
+// `split-window -b` or window swap from moving the daemon's eye.
+func agentPane(panes []tmux.Pane, last string) (tmux.Pane, bool) {
+	if last != "" {
+		for _, p := range panes {
+			if p.ID == last {
+				return p, true
+			}
+		}
+	}
+	return tmux.OldestPane(panes)
+}
+
+// spinnerStaleFloor is the shortest time a working-spinner title is
+// believed without a sign of life; a variable so tests can shorten it.
+var spinnerStaleFloor = 10 * time.Second
+
+// spinnerStaleAfter is how long a working-spinner title is believed
+// after the last sign of life in its pane — a few idle thresholds, and
+// never less than spinnerStaleFloor. A working agent repaints far more
+// often than that: Claude's elapsed-time counter ticks every second and
+// its title spinner animates.
+func spinnerStaleAfter(idle time.Duration) time.Duration {
+	return max(spinnerStaleFloor, 3*idle)
+}
+
+// liveTitle is the title to classify a pane by. Every agent's rules
+// read a braille spinner at the start of the OSC title as "working",
+// ahead of any body rule. But tmux keeps #{pane_title} after the
+// program that set it exits, so an agent that crashed mid-turn left
+// its spinner behind: the session read as active forever, over the
+// shell prompt its launch chain fell back to, and the sleep lock was
+// never released.
+//
+// So a spinner only counts while there is evidence of life — the pane
+// body or the title itself changed within staleAfter of now (lastLife).
+// Past that, the pane is classified as if the title carried no spinner,
+// and the body decides (a shell prompt: the agent crashed).
+func liveTitle(title string, lastLife, now time.Time, staleAfter time.Duration) string {
+	if now.Sub(lastLife) < staleAfter {
+		return title
+	}
+	// Past indentation too: claude.ClassifyWithTitle trims before it looks.
+	if r, _ := utf8.DecodeRuneInString(strings.TrimLeftFunc(title, unicode.IsSpace)); !isBraille(r) {
+		return title
+	}
+	return strings.TrimLeftFunc(title, func(r rune) bool { return unicode.IsSpace(r) || isBraille(r) })
+}
+
+// isSpinnerTitle reports whether title opens with a braille spinner
+// glyph: what the title_spinner_working rule in every agent's rule file
+// matches (`^[\x{2800}-\x{28FF}]`).
+func isSpinnerTitle(title string) bool {
+	r, _ := utf8.DecodeRuneInString(title)
+	return isBraille(r)
+}
+
+func isBraille(r rune) bool { return r >= 0x2800 && r <= 0x28FF }
+
+// later returns the later of two times.
+func later(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
+	}
+	return b
 }
 
 // ensureClipboard re-applies the tmux clipboard setup once per tmux
@@ -339,50 +538,131 @@ type attentionDecision struct {
 	StateEventKind string // "state_change" or "needs_input"
 }
 
+// attentionInput is one session's poll tick as decideAttention sees it.
+type attentionInput struct {
+	Prev, Next agent.State
+	PrevSeen   bool // the reviewed flag before this tick
+	Attached   bool // a tmux client is attached
+	// Work is whether this tick shows the agent working, and Worked
+	// whether it has worked since the session last entered needs_input
+	// (this tick included) — see turn.
+	Work, Worked bool
+}
+
 // decideAttention computes the per-session decision for one poll
-// tick. Encodes the Phase 2 rules:
+// tick:
 //
-//   - Seen bit: an attached user is by definition watching → seen=true.
-//     A state change while NOT attached produces output the user
-//     should review → seen=false — except a new session's first
-//     classification (out of Unknown), which only counts when it lands
-//     on needs_input. Otherwise the previous seen value is preserved.
-//   - Bell: rings on EVERY fresh needs_input transition, attached or
-//     not. Delivery self-limits: tmux.RingBell writes BEL only to the
-//     clients attached to that session, so an unattached session is a
-//     natural no-op. Gating on !attached here (as PR #156 did) made
-//     the ring condition and the delivery set mutually exclusive —
-//     the bell never reached anyone.
-//   - Push suppression: a push is dispatched ONLY when the state
-//     changes AND the user isn't already attached (an attached user is
-//     watching; their phone doesn't need to buzz). The dashboard event
-//     is still emitted so the TUI updates instantly.
-//   - PromptCount: incremented on every fresh needs_input transition
-//     (attached or not — it's a lifetime count, not a "did we notify"
-//     count). Drives the usage/quota panel.
-func decideAttention(prev, next agent.State, prevSeen, attached bool) attentionDecision {
-	d := attentionDecision{NewSeen: prevSeen}
-	if attached {
-		d.NewSeen = true
+//   - Event: every state change is published (state_change, or
+//     needs_input for a change into needs_input), news or not, so
+//     dashboards always show the current state.
+//   - News: whether the change is something to tell the user about —
+//     see isNews. Only news has the side effects below. A redraw, the
+//     user typing into the input box, or a new session settling after
+//     startup changes the state but is not a turn of the agent's.
+//   - Bell and prompt count: on news that enters needs_input, attached
+//     or not. Bell delivery self-limits: tmux.RingBell writes BEL only
+//     to the clients attached to that session, so ringing an
+//     unattached one is a no-op. (Gating on !attached, as PR #156 did,
+//     made the ring condition and the delivery set mutually exclusive:
+//     the bell never reached anyone.) The prompt count is a lifetime
+//     count of the agent's turns ending in a prompt.
+//   - Push and seen: on news while nobody is attached, the push is
+//     sent (maybePushForStateTransition picks the transitions worth a
+//     notification: needs_input, active → idle) and the session is
+//     marked unreviewed. An attached user is watching: no push, and
+//     the session counts as reviewed.
+func decideAttention(in attentionInput) attentionDecision {
+	d := attentionDecision{NewSeen: in.PrevSeen || in.Attached}
+	if in.Next == in.Prev {
+		return d
 	}
-	if next == agent.StateNeedsInput && prev != agent.StateNeedsInput {
-		d.IncPromptCount = true
+	d.EmitStateEvent = true
+	d.StateEventKind = "state_change"
+	if in.Next == agent.StateNeedsInput {
+		d.StateEventKind = "needs_input"
+	}
+	if !isNews(in) {
+		return d
+	}
+	if in.Next == agent.StateNeedsInput {
 		d.RingBell = true
+		d.IncPromptCount = true
 	}
-	if next != prev {
-		d.EmitStateEvent = true
-		d.StateEventKind = "state_change"
-		if next == agent.StateNeedsInput {
-			d.StateEventKind = "needs_input"
-		}
-		// Leaving Unknown is a new session's first classification, not
-		// a change the user missed: it keeps its "reviewed" mark unless
-		// it is already waiting for input.
-		firstLook := prev == agent.StateUnknown && next != agent.StateNeedsInput
-		if !attached && !firstLook {
-			d.NewSeen = false
-			d.SendPush = true
-		}
+	if !in.Attached {
+		d.NewSeen = false
+		d.SendPush = true
+	}
+	return d
+}
+
+// isNews reports whether a state change tells the user something:
+//
+//   - Into needs_input or idle — the agent stopped: only after it
+//     worked (Worked). A waiting session that "comes back" to its
+//     prompt after a redraw or the user's typing, and a new session
+//     whose startup output settles, haven't done anything.
+//   - Out of unknown — a new session's first classification: never
+//     on its own (into needs_input, as above: only after work).
+//   - Into active: only when this tick is work (Work).
+//   - Anything else — into error (the agent crashed to a shell), or
+//     back to unknown (the pane emptied) — always.
+func isNews(in attentionInput) bool {
+	switch {
+	case in.Next == agent.StateNeedsInput, in.Next == agent.StateIdle && in.Prev != agent.StateUnknown:
+		return in.Worked
+	case in.Prev == agent.StateUnknown:
+		return false
+	case in.Next == agent.StateActive:
+		return in.Work
+	default:
+		return true
+	}
+}
+
+// turn is a session's turn bookkeeping: what decides whether the agent
+// did real work since the user last heard from it, so that only the
+// end of a real turn notifies.
+//
+// Evidence of work:
+//
+//   - A live working-spinner title (see liveTitle) — the agent itself
+//     broadcasting that it's working. Once a session has shown one
+//     (spinnerSeen), it is the only evidence that counts: the agent is
+//     known to announce its turns, so a body change without it is the
+//     user typing into the input box, or a redraw.
+//   - Otherwise (agents that don't set a title, or a session that
+//     hasn't shown a spinner yet), the session classifying as active —
+//     except during startup: a session created while the daemon
+//     watched is in startup until it first settles (needs_input, idle
+//     or error), and its startup output is not a turn. A spinner does
+//     count during startup: an agent launched with a first prompt is
+//     working on it.
+type turn struct {
+	spinnerSeen bool
+	worked      bool
+	startup     bool
+}
+
+// attend folds one classified tick into the bookkeeping and decides the
+// attention side effects. spinning reports a live working-spinner
+// title this tick.
+func (tn *turn) attend(prev, next agent.State, spinning, prevSeen, attached bool) attentionDecision {
+	work := spinning
+	if spinning {
+		tn.spinnerSeen = true
+	} else if !tn.spinnerSeen && !tn.startup {
+		work = next == agent.StateActive
+	}
+	tn.worked = tn.worked || work
+	d := decideAttention(attentionInput{
+		Prev: prev, Next: next, PrevSeen: prevSeen, Attached: attached,
+		Work: work, Worked: tn.worked,
+	})
+	if next == agent.StateNeedsInput && prev != agent.StateNeedsInput {
+		tn.worked = false // the turn ended: the next prompt needs new work
+	}
+	if next == agent.StateNeedsInput || next == agent.StateIdle || next == agent.StateError {
+		tn.startup = false
 	}
 	return d
 }
@@ -418,12 +698,15 @@ func (s *server) renameTracked(oldName, newName string) daemon.SessionState {
 
 // forgetKilled drops a session the daemon just killed from tracking and
 // tombstones its name, so a poll tick that listed it before the kill
-// doesn't bring it back.
-func (s *server) forgetKilled(name string) {
+// doesn't bring it back. It returns the session as last seen, for the
+// "killed" event.
+func (s *server) forgetKilled(name string) daemon.SessionState {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	last := s.trackedStateLocked(name)
 	delete(s.seen, name)
 	s.buryLocked(name, time.Now())
+	return last
 }
 
 // tombstoneTTL is how long a killed or renamed-away name stays
@@ -459,17 +742,25 @@ func (s *server) trackedStateLocked(name string) daemon.SessionState {
 	return daemon.SessionState{Name: name, Host: "local", State: string(agent.StateUnknown), Seen: true}
 }
 
-// sessionState is the wire view of a tracked session, for events.
+// sessionState is the wire view of a tracked session: what the daemon
+// knows of it plus the list-sessions row it was last seen with. Every
+// event — created, state_change, needs_input, killed (the session as
+// last seen) — carries it, so an event-stream client gets the same
+// fields GET /v1/sessions reports rather than a name and a bare state.
 func (t *tracked) sessionState(name string) daemon.SessionState {
 	st := t.state
 	if st == "" {
 		st = agent.StateUnknown
 	}
+	path := t.projectPath
+	if path == "" {
+		path = t.listed.Path
+	}
 	return daemon.SessionState{
-		Name: name, Host: "local", Path: t.projectPath,
-		State: string(st), Agent: string(t.agentID),
-		LastChange: t.lastChange, PromptCount: t.promptCount,
-		Seen: t.seen,
+		Name: name, Host: "local", Project: t.project, Path: path,
+		State: string(st), Attached: t.listed.Attached, Windows: t.listed.Windows,
+		Created: t.listed.Created, LastChange: t.lastChange, PromptCount: t.promptCount,
+		Agent: string(t.agentID), Seen: t.seen,
 	}
 }
 
@@ -478,17 +769,116 @@ func (t *tracked) sessionState(name string) daemon.SessionState {
 // check for it before classifying.
 const shellAgentID agent.ID = tmux.ShellAgentTag
 
-// sessionAgent resolves what runs in a session: its explicit
-// @ccmux_agent tag (a resumed conversation's agent, or "shell" for a
-// bare shell), else the project's .ccmux/agent sidecar.
+// ccmuxSessionPrefix starts the name of every session ccmux creates:
+// a project's (tmux.SessionNameForBase) and a bare shell's ("c-shell-…").
+const ccmuxSessionPrefix = "c-"
+
+// noteSessionLocked folds this tick's list-sessions row into t: its
+// project (recomputed only when its path changes — it stats the
+// filesystem) and what runs there (see sessionAgent). Caller holds s.mu.
+func (s *server) noteSessionLocked(t *tracked, ts tmux.Session) {
+	if !t.projectKnown || t.projectOf != ts.Path {
+		t.project, t.projectOf, t.projectKnown = s.sessionProject(ts.Path), ts.Path, true
+	}
+	t.projectPath = ts.Path
+	t.listed = ts
+	// The agent is resolved once and kept for the tracked session's
+	// lifetime unless the session is tagged: the sidecar names the agent
+	// a project's NEXT session starts with, and rewriting it (the
+	// Projects screen's `a`) used to reclassify the sessions already
+	// running there by another agent's rules — a Claude session shown as
+	// a Codex one waiting for input. A tag names what runs in this very
+	// session, so it is read every tick and may change.
+	if id, ok := taggedAgent(ts); ok {
+		t.agentID, t.agentTagged = id, true
+	} else if t.agentID == "" || t.agentTagged {
+		t.agentID, t.agentTagged = s.agentFor(ts, t.project), false
+	}
+}
+
+// sessionAgent resolves what runs in a session:
+//
+//   - Its explicit @ccmux_agent tag: "shell" for a bare shell, or the
+//     agent a resumed conversation or a bare agent session runs.
+//   - Otherwise, for a session ccmux created (named with the "c-"
+//     prefix) or one in a project directory (see sessionProject), the
+//     project's .ccmux/agent sidecar — Claude when there is none, the
+//     back-compat default for projects that predate the sidecar.
+//   - Anything else is a tmux session the user made outside ccmux, in
+//     a directory that isn't a project: a plain shell, never classified.
+//     ccmux can't know what runs there, and judging it by Claude's rules
+//     turned a log tail into an active/idle flapper that pushed on every
+//     line, and a zsh prompt into a "crashed" error.
 func (s *server) sessionAgent(ts tmux.Session) agent.ID {
+	return s.agentFor(ts, s.sessionProject(ts.Path))
+}
+
+// agentFor is sessionAgent with the session's project already known.
+func (s *server) agentFor(ts tmux.Session, project string) agent.ID {
+	if id, ok := taggedAgent(ts); ok {
+		return id
+	}
+	if strings.HasPrefix(ts.Name, ccmuxSessionPrefix) || project != "" {
+		return s.projectAgent(ts.Path)
+	}
+	return shellAgentID
+}
+
+// taggedAgent is a session's explicit @ccmux_agent tag, if it has one.
+func taggedAgent(ts tmux.Session) (agent.ID, bool) {
 	if strings.TrimSpace(ts.Agent) == tmux.ShellAgentTag {
-		return shellAgentID
+		return shellAgentID, true
 	}
-	if explicit, ok := agent.ParseID(ts.Agent); ok {
-		return explicit
+	return agent.ParseID(ts.Agent)
+}
+
+// sessionProject names the project a session at path belongs to, the
+// way list_projects, the TUI and the CLI name projects
+// (project.Discover): the non-hidden directory directly under the
+// projects root that contains path. A path outside the root counts only
+// when it carries a .ccmux/agent sidecar (a session ccmux started at an
+// explicit path), and is named by its basename. Anything else: "".
+func (s *server) sessionProject(path string) string {
+	return projectName(project.ResolveRoot(s.cfg.Projects.Root), path)
+}
+
+func projectName(root, path string) string {
+	if path == "" {
+		return ""
 	}
-	return s.projectAgent(ts.Path)
+	if name, ok := dirUnder(root, path); ok {
+		return name
+	}
+	// Either side may reach the same directory through a symlink (a
+	// root on an external drive, macOS's /tmp → /private/tmp).
+	if r, err := filepath.EvalSymlinks(root); err == nil {
+		if p, err := filepath.EvalSymlinks(path); err == nil {
+			if name, ok := dirUnder(r, p); ok {
+				return name
+			}
+		}
+	}
+	if fi, err := os.Stat(project.AgentSidecarPath(path)); err == nil && fi.Mode().IsRegular() {
+		return filepath.Base(filepath.Clean(path))
+	}
+	return ""
+}
+
+// dirUnder returns the first path element of path below root, when
+// path is inside root and that element is a project name (non-hidden).
+func dirUnder(root, path string) (string, bool) {
+	if root == "" || !filepath.IsAbs(root) || !filepath.IsAbs(path) {
+		return "", false
+	}
+	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
+	if err != nil || rel == "." {
+		return "", false
+	}
+	first, _, _ := strings.Cut(rel, string(filepath.Separator))
+	if first == ".." || strings.HasPrefix(first, ".") {
+		return "", false
+	}
+	return first, true
 }
 
 func (s *server) projectAgent(projectPath string) agent.ID {

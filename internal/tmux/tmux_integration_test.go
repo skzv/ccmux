@@ -239,3 +239,59 @@ func TestIntegration_StartDirWithHashIsKeptVerbatim(t *testing.T) {
 		t.Errorf("pane runs in %q, want %q", got, want)
 	}
 }
+
+// TestIntegration_ListPanesFindsTheOriginalPane — with a second window
+// active and a split made in front of the original pane, the session's
+// bare target reads the wrong pane; ListPanes + OldestPane must still
+// find the pane the session was created with, report its OSC title and
+// size, and CapturePaneID must read it.
+func TestIntegration_ListPanesFindsTheOriginalPane(t *testing.T) {
+	ctx := isolatedServer(t)
+	agentCmd := `printf '\033]2;agent title\007'; echo AGENT-PANE; exec sleep 300`
+	if err := New(ctx, "c-panes", os.TempDir(), agentCmd); err != nil {
+		t.Fatal(err)
+	}
+	tmuxRun := func(args ...string) {
+		t.Helper()
+		if out, err := command(ctx, "tmux", args...).CombinedOutput(); err != nil {
+			t.Fatalf("tmux %v: %v (%s)", args, err, out)
+		}
+	}
+	tmuxRun("split-window", "-d", "-b", "-t", "=c-panes:", "sh -c 'echo SPLIT-PANE; exec sleep 300'")
+	tmuxRun("new-window", "-t", "=c-panes:", "sh -c 'echo SHELL-WINDOW; exec sleep 300'")
+
+	var panes []Pane
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var err error
+		if panes, err = ListPanes(ctx, "c-panes"); err != nil {
+			t.Fatal(err)
+		}
+		if p, ok := OldestPane(panes); ok && p.Title == "agent title" || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if len(panes) != 3 {
+		t.Fatalf("ListPanes = %+v, want 3 panes", panes)
+	}
+	agentP, ok := OldestPane(panes)
+	if !ok || agentP.Title != "agent title" || agentP.Width <= 0 || agentP.Height <= 0 {
+		t.Fatalf("OldestPane = %+v (panes %+v), want the agent pane with its title and size", agentP, panes)
+	}
+	if agentP.Index == 0 || agentP.Active {
+		t.Errorf("setup: agent pane %+v should have been pushed off index 0 and deactivated", agentP)
+	}
+	body, err := CapturePaneID(ctx, agentP.ID, 10)
+	if err != nil || !strings.Contains(body, "AGENT-PANE") {
+		t.Errorf("CapturePaneID(%s) = %q, %v; want the agent pane's output", agentP.ID, body, err)
+	}
+	active, err := CapturePane(ctx, "c-panes", 10)
+	if err != nil || strings.Contains(active, "AGENT-PANE") {
+		t.Errorf("setup: the session target should read the active shell window, got %q (%v)", active, err)
+	}
+
+	if _, err := ListPanes(ctx, "c-pan"); err == nil {
+		t.Error("ListPanes matched a session by prefix")
+	}
+}

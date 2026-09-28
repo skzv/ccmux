@@ -145,7 +145,11 @@ picker without the client needing the `tailscale` CLI.
 List every tmux session this daemon manages, with daemon-derived state.
 - **Response `200`:** `[]SessionState` (see Types). `host` is always
   `"local"` from the daemon's own perspective; `state` ∈
-  `active | idle | needs_input | error | unknown`.
+  `active | idle | needs_input | error | unknown`. `project` is the
+  project the session's directory belongs to — its top-level directory
+  under the projects root, as `GET /v1/projects` names it, or the
+  directory's name when it carries a `.ccmux/agent` sidecar outside the
+  root — and `""` for a session anywhere else.
 
 #### `POST /v1/sessions`
 Create-or-attach a **project-bound** agent session (idempotent on the tmux
@@ -181,8 +185,9 @@ Kill a session by name. Emits a `killed` SSE event.
 #### `POST /v1/sessions/{name}/rename`
 Rename a session. `{name}` is the **current** name; the body carries the new
 one.
-- **Request:** `RenameRequest`. **Response `200`:** `SessionState`
-  (`{name: <newName>, host: "local"}`).
+- **Request:** `RenameRequest`. **Response `200`:** `SessionState` of the
+  renamed session under its new name (state `unknown` if the daemon hadn't
+  picked the session up yet).
 - **Errors:** `400` bad name; `404` no such session; `409` another session
   already has the new name.
 
@@ -339,6 +344,11 @@ grouping in pickers.
 Stream of session lifecycle/state events; subscribe to live-update a view.
 - **Response `200`:** `text/event-stream`. Each `data:` frame is a JSON
   `SessionEvent`; `kind` ∈ `created | killed | state_change | needs_input`.
+- Every event's `session` is the full `SessionState`, the same fields
+  `GET /v1/sessions` reports (`project`, `agent`, `attached`, `windows`,
+  `created`, `last_change`, `prompt_count`, `seen`, …) as of the event.
+  A `killed` event carries the session as it was last seen (`state` is
+  its last state, `unknown` if it was never classified).
 - `killed` is sent for every session that disappears, however it ended
   (this API, a `tmux kill` from the TUI/CLI, the agent exiting). A rename
   arrives as `killed` for the old name followed by `created` for the new.
@@ -405,8 +415,14 @@ Send a verification push to the device registered for a given SSH public key.
   device is registered for that key.
 
 **Push behavior:** pushes fire on two transitions — a session entering
-`needs_input`, and `active → idle` ("agent finished"). The push's session id
-is `local/<sessionName>`. Both APNs and FCM are **off by default** and need
+`needs_input`, and `active → idle` ("agent finished") — and only when they
+end a real turn of the agent's: it showed a working-spinner title since it
+last entered `needs_input` (for agents that set one), or, for agents that
+don't, it was active for a reason other than a new session's startup. A
+pane resize or redraw, the user typing into the input box, or a new session
+settling after it starts still changes the state (and sends the SSE event)
+but pushes nothing, rings no bell and doesn't count toward `prompt_count`.
+The push's session id is `local/<sessionName>`. Both APNs and FCM are **off by default** and need
 server-side config (`[apns]` / `[fcm]` in `config.toml`). FCM routing exists
 but real Android delivery isn't wired yet.
 

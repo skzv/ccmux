@@ -476,6 +476,9 @@ type tracked struct {
 	// touched after the tick's Phase-1 live-set snapshot, so a rename
 	// racing a tick can't wipe the renamed session's tracked state.
 	touched time.Time
+	// pollTrack is the rest of the poll loop's per-session memory
+	// (poll.go).
+	pollTrack
 }
 
 type server struct {
@@ -555,6 +558,12 @@ type server struct {
 	paneTitle func(ctx context.Context, name string) (string, error)
 	bell      func(ctx context.Context, name string) error
 	readAgent func(projectPath string) agent.ID
+	// panes lists a session's panes and capturePane reads one pane by
+	// id: the poll loop's way to read the agent's own pane rather than
+	// whichever one is active (see observe in poll.go). Either left nil
+	// falls back to capture/paneTitle on the session's active pane.
+	panes       func(ctx context.Context, session string) ([]tmux.Pane, error)
+	capturePane func(ctx context.Context, paneID string, lines int) (string, error)
 
 	// Session-handler seams, defaulted to tmux.Has / tmux.Kill /
 	// tmux.Rename so the create/kill/rename handlers' bookkeeping is
@@ -643,6 +652,8 @@ func newServer(cfg config.Config) *server {
 		capture:         tmux.CapturePane,
 		pollBudget:      10 * time.Second,
 		paneTitle:       tmux.PaneTitle,
+		panes:           tmux.ListPanes,
+		capturePane:     tmux.CapturePaneID,
 		detectMoshi:     moshi.Detect,
 		bell:            notificationBell(cfg.Notifications),
 		readAgent:       project.ReadAgent,
@@ -776,8 +787,12 @@ func (s *server) listSessions(w http.ResponseWriter, r *http.Request) {
 		if agentID == "" {
 			agentID = s.sessionAgent(ts)
 		}
+		proj := t.project
+		if !t.projectKnown {
+			proj = s.sessionProject(ts.Path)
+		}
 		out = append(out, daemon.SessionState{
-			Name: ts.Name, Host: "local", Path: ts.Path,
+			Name: ts.Name, Host: "local", Project: proj, Path: ts.Path,
 			Attached: ts.Attached, Windows: ts.Windows,
 			Created: ts.Created, LastChange: t.lastChange,
 			State: string(t.state), PromptCount: t.promptCount,
@@ -1236,8 +1251,8 @@ func (s *server) handleKill(w http.ResponseWriter, r *http.Request, name string)
 		writeTmuxError(w, err)
 		return
 	}
-	s.forgetKilled(name)
-	s.events.Publish(daemon.SessionEvent{At: time.Now(), Kind: "killed", Session: daemon.SessionState{Name: name, Host: "local"}})
+	last := s.forgetKilled(name)
+	s.events.Publish(daemon.SessionEvent{At: time.Now(), Kind: "killed", Session: last})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -1284,7 +1299,9 @@ func (s *server) handleRename(w http.ResponseWriter, r *http.Request, name strin
 	// There is no "renamed" event kind (the mobile apps decode a fixed
 	// set), so report a rename as the old name going away and the new
 	// one appearing — with the state it had, not a blank "unseen" row.
-	s.events.Publish(daemon.SessionEvent{At: time.Now(), Kind: "killed", Session: daemon.SessionState{Name: name, Host: "local"}})
+	gone := renamed
+	gone.Name = name
+	s.events.Publish(daemon.SessionEvent{At: time.Now(), Kind: "killed", Session: gone})
 	s.events.Publish(daemon.SessionEvent{At: time.Now(), Kind: "created", Session: renamed})
 	writeJSON(w, renamed)
 }
