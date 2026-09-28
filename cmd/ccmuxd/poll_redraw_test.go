@@ -28,7 +28,7 @@ func waitingSession(t *testing.T, s *server, attached bool) (*fakeTmux, *fakePan
 	f := newFakeTmux()
 	f.addSession(tmux.Session{Name: "c-wait", Path: "/tmp", Attached: attached, Created: time.Now().Add(-time.Hour)}, p)
 	f.wire(s)
-	pollNTimes(s, 1)
+	pollNTimes(s, 2) // the first look joins it; the second sees it settled (turn.joined)
 	f.update(func() { p.body, p.Title = working, "⠋ Fix flaky poll test" })
 	pollNTimes(s, 2)
 	f.update(func() { p.body, p.Title = idle, "✳ Fix flaky poll test" })

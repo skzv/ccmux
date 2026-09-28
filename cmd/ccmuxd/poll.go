@@ -313,6 +313,14 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 		if id != shellAgentID {
 			a := agent.ByID(id)
 			view := agent.ReadTurn(a, pane)
+			if sn.baseline && view.Busy {
+				// The first look at a session the daemon joined backdates
+				// its last change, taking the pane for settled (Phase 1).
+				// A body that shows a turn running says otherwise: Claude's
+				// status line over a live input box read as waiting for
+				// input, and unreviewed, while it worked.
+				lastCh = now
+			}
 			life := mem.titleChange
 			if view.Busy {
 				life = now
@@ -364,12 +372,16 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 			// "reviewed" mark unless it is sitting waiting for input.
 			t.baseline = false
 			t.last = r.pane
+			t.lastChange = r.lastCh
 			t.state = r.newState
 			t.seen = ts.Attached || r.newState != agent.StateNeedsInput
 			// Whatever it is in the middle of — a turn, a startup — is not
-			// news: until it first settles, nothing it does notifies.
+			// news: nothing it does notifies until the daemon has seen it
+			// settle (see turn). One capture can't tell a turn in flight
+			// from a session waiting, so that holds whatever this one
+			// classified as.
+			t.joined, t.joinedAt = true, time.Now()
 			t.spinnerSeen = r.ev.spinning
-			t.joined = !settled(r.newState)
 			stateEvents = append(stateEvents, daemon.SessionEvent{
 				At:      time.Now(),
 				Kind:    "state_change",
@@ -388,8 +400,17 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 			// one did carries over.
 			t.turn = turn{startup: true}
 		}
+		// Still: the pane hasn't changed for a whole idle window the
+		// daemon watched itself — since its last change, and since the
+		// first look at a session it joined, whose last change before
+		// that it could only guess.
+		ev, quietSince := r.ev, r.lastCh
+		if t.joinedAt.After(quietSince) {
+			quietSince = t.joinedAt
+		}
+		ev.still = time.Since(quietSince) >= idleNeeds
 		prevSeen := t.seen
-		decision := t.attend(t.state, r.newState, r.ev, t.seen, ts.Attached)
+		decision := t.attend(t.state, r.newState, ev, t.seen, ts.Attached)
 		t.seen = decision.NewSeen
 		if decision.RingBell {
 			bellNames = append(bellNames, r.name)
@@ -749,6 +770,10 @@ type evidence struct {
 	// (agent.TurnReader), and output reports new output above its input
 	// area since last tick.
 	separated, output bool
+	// still: the pane body hasn't changed for a whole idle window of the
+	// daemon's own watching — since its last change and, for a session it
+	// joined, since its first look (see turn.joined).
+	still bool
 }
 
 // turn is a session's turn bookkeeping: what decides whether the agent
@@ -781,9 +806,22 @@ type evidence struct {
 //
 // A session the daemon joined — one it first saw already running, after
 // a restart or a rename done straight through tmux — is recorded as it
-// stands (the baseline) and stays joined until it first settles.
-// Nothing is news until then: not the end of a turn it was caught in
-// the middle of, and not a crash. Its next turn is.
+// stands (the baseline) and stays joined until the daemon has seen it
+// settle: settled, with its pane still (evidence.still) for a whole idle
+// window since the first look (joinedAt). Nothing is news until then:
+// not the end of a turn it was caught in the middle of, and not a crash.
+// Its next turn is.
+//
+// Settled on the first look is not enough. That look backdates the
+// pane's last change so a session found waiting shows needs_input at
+// once, and one capture can't tell that from a turn in flight whose
+// only signs are a spinner title (a first look doesn't believe one: it
+// may be a dead agent's leftover) or output still to come: both read as
+// settled. Joined ended there, the rest of the turn counted as new, and
+// its end notified — every turn a restart caught, unless Claude showed
+// both its spinner title and its status line. The price is that a turn
+// started within an idle window of the first look isn't announced
+// either: the daemon can't tell it from one already running.
 //
 // Each notification needs a turn of its own: worked is cleared whenever
 // the session settles into needs_input, idle or error, whether or not
@@ -796,6 +834,7 @@ type turn struct {
 	worked      bool
 	startup     bool
 	joined      bool
+	joinedAt    time.Time // when the daemon first looked at a session it joined
 }
 
 // settled reports whether st is a state a turn ends in.
@@ -819,7 +858,10 @@ func (tn *turn) attend(prev, next agent.State, ev evidence, prevSeen, attached b
 			// its own.
 			tn.worked = false
 		}
-		tn.startup, tn.joined = false, false
+		tn.startup = false
+		if ev.still {
+			tn.joined = false
+		}
 	}
 	return d
 }

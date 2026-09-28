@@ -479,9 +479,17 @@ agent starting up (a session created while the daemon runs, or an agent
 started by hand in a shell session — see `GET /v1/sessions`' `agent`),
 or relaunching a crashed agent. A session the daemon first sees already
 running — after a daemon restart, or renamed directly in tmux — is
-recorded as it stands and stays quiet until it first settles: the end of
-a turn it was caught in the middle of, or a crash, is published but not
-announced. Its next turn is.
+recorded as it stands (a session waiting for input shows `needs_input`
+from that first look; one whose body shows a turn running, `active`) and
+stays quiet until the daemon has seen it settle: in `needs_input`,
+`idle` or `error`, with its pane unchanged for a whole idle threshold
+since that first look. The end of a turn it was caught in the middle
+of, or a crash, is published but not announced. That holds even when
+the first look reads as settled: one capture can't tell a turn in
+flight whose only signs are a spinner title (not believed on a first
+look) or output still to come from a session waiting, so a turn started
+within an idle threshold of the first look isn't announced either. Its
+next turn is.
 
 ---
 

@@ -163,7 +163,7 @@ func TestPollOnce_TypingAfterAFinishedTurnDoesNotNotify(t *testing.T) {
 	f := newFakeTmux()
 	f.addSession(tmux.Session{Name: "c-codex", Path: "/tmp", Agent: "codex", Created: time.Now().Add(-time.Hour)}, p)
 	f.wire(s)
-	pollNTimes(s, 1)
+	pollNTimes(s, 2) // the first look joins it; the second sees it settled (turn.joined)
 
 	f.update(func() { p.body, p.Title = codexPane("> fix it\n\n• Working"), "⠋ codex" })
 	pollNTimes(s, 1)

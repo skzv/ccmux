@@ -33,7 +33,7 @@ func TestPollOnce_ReadsAgentPaneNotActivePane(t *testing.T) {
 	f.addSession(tmux.Session{Name: "c-multi", Path: "/tmp", Created: time.Now().Add(-time.Hour)}, agentP, shellP)
 	f.wire(s)
 
-	pollNTimes(s, 1)
+	pollNTimes(s, 2) // the first look joins it; the second sees it settled (turn.joined)
 	f.update(func() { agentP.body, agentP.Title = working, "⠋ Fix flaky poll test" })
 	pollNTimes(s, 2)
 	if st := s.seen["c-multi"].state; st != agent.StateActive {
