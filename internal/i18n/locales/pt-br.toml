@@ -398,7 +398,7 @@
 "[space] toggle  [a] all  [n] none  [Enter] done  [Esc] skip" = "[espaço] alternar [a] todos [n] nenhum [Enter] concluído [Esc] pular"
 "Spawn a tmux session running the picked agent (or a bare shell) on the picked device." = "Gere uma sessão tmux executando o agente escolhido (ou um shell simples) no dispositivo escolhido."
 "ssh" = "ssh"
-"tab: next field   ←/→: pick device/agent   enter: create   esc: cancel" = "aba: próximo campo ←/→: escolha dispositivo/agente enter: crie esc: cancele"
+"tab: next field   ←/→: pick device/agent   enter: create   esc: cancel" = "Tab: próximo campo   ←/→: escolher dispositivo/agente   Enter: criar   Esc: cancelar"
 "[Tab] switch field   [Enter] continue   [Esc] cancel" = "[Tab] campo de comutação [Enter] continuar [Esc] cancelar"
 "   (Tab to edit if non-default)" = "   (Tab para editar se não for padrão)"
 "tailscale status" = "status do tailscale"

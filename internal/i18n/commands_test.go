@@ -105,6 +105,54 @@ func TestCatalogs_KeepCommandsVerbatim(t *testing.T) {
 	}
 }
 
+// keyLabels are the accepted names of a key in a translated key hint:
+// the key's own label, or the label a local keyboard prints on it
+// (French "Entrée"/"Échap", Spanish "Intro"), never a word that means
+// something else — "tab:" came out as a browser tab ("Registerkarte",
+// "pestaña", "onglet", "вкладка") and "enter:" as the verb ("ingresar",
+// "eingeben", "saisir").
+var keyLabels = map[string][]string{
+	"tab":   {"tab"},
+	"enter": {"enter", "entrée", "intro", "eingabetaste", "ввод", "엔터"},
+	"esc":   {"esc", "échap"},
+}
+
+// TestCatalogs_KeyHintsNameTheKeys — in a hint like "tab: next field
+// enter: create", every key named before a colon must still be named in
+// the translation (see keyLabels).
+func TestCatalogs_KeyHintsNameTheKeys(t *testing.T) {
+	hint := regexp.MustCompile(`(?i)\b(tab|enter|esc)\s*:`)
+	for _, language := range Languages() {
+		if language.Code == LangEn {
+			continue
+		}
+		t.Run(string(language.Code), func(t *testing.T) {
+			table := map[string]string{}
+			b, err := localesFS.ReadFile("locales/" + string(language.Code) + ".toml")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tomlDecode(string(b), &table); err != nil {
+				t.Fatal(err)
+			}
+			for key, value := range table {
+				lower := strings.ToLower(value)
+				for _, m := range hint.FindAllStringSubmatch(key, -1) {
+					named := false
+					for _, label := range keyLabels[strings.ToLower(m[1])] {
+						if strings.Contains(lower, label) {
+							named = true
+						}
+					}
+					if !named {
+						t.Errorf("key %q not named in %q => %q", m[1], key, value)
+					}
+				}
+			}
+		})
+	}
+}
+
 // containsCommand reports whether translation carries cmd verbatim. A
 // <placeholder> in the command (`ssh -t <host>`) names what the user
 // fills in, so it may be translated; everything else must match.
