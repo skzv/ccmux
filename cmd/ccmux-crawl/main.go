@@ -32,22 +32,35 @@ var rootCmd = &cobra.Command{
 	Long: `ccmux-crawl drives the ccmux Bubble Tea model with random
 tea.Msg inputs (KeyMsg, WindowSizeMsg) for N iterations, catching
 panics from any model under test. Crash reports land under
-docs/03_Agent_Logs/crawl-<date>-<mode>-<runid>.md with the exact
-input sequence that triggered the panic so it's reproducible.
+docs/03_Agent_Logs/crawl-<date>-<mode>-<runid>.md (in a ccmux checkout;
+else the system temp dir) with the exact input sequence that triggered
+the panic so it's reproducible.
+
+The TUI writes what its screens edit, so every run gets a throwaway
+$HOME (and XDG dirs, agent config dirs and tmux socket dir) under the
+system temp dir, printed at start and removed on exit. Pass
+--use-real-home to crawl your real config instead.
 
 This is a developer tool, not part of the shipped CLI.`,
 	SilenceUsage:  true,
 	SilenceErrors: true,
+	PersistentPreRunE: func(c *cobra.Command, _ []string) error {
+		return setupSandbox(c.ErrOrStderr())
+	},
 }
 
 func main() {
+	rootCmd.PersistentFlags().BoolVar(&useRealHome, "use-real-home", false,
+		"crawl against your real $HOME and config (random keys can rewrite ~/.config/ccmux, ~/.claude, ~/.codex)")
 	rootCmd.AddCommand(
 		newTUICmd(),
 		newFormCmd(),
 		newResizeCmd(),
 		newScenarioCmd(),
 	)
-	if err := rootCmd.Execute(); err != nil {
+	err := rootCmd.Execute()
+	sandboxCleanup()
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "ccmux-crawl:", err)
 		os.Exit(1)
 	}

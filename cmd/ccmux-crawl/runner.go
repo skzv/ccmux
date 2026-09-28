@@ -99,13 +99,13 @@ func runCrawlWithPreamble(iters int, preamble []Input, gen generator, viewWidth,
 }
 
 // reportCrash writes the panic details to a markdown file under
-// docs/03_Agent_Logs/ (falling back to /tmp if the docs dir isn't
-// available — e.g. when running from somewhere outside the repo).
-// Returns the path written, or "" on failure.
+// docs/03_Agent_Logs/ (falling back to the system temp dir if the docs
+// dir isn't available — e.g. when running from somewhere outside the
+// repo). Returns the path written, or "" on failure.
 func reportCrash(mode string, res driveResult) string {
 	dir := filepath.Join("docs", "03_Agent_Logs")
 	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
-		dir = "/tmp"
+		dir = os.TempDir()
 	}
 	runID := time.Now().UnixMilli()
 	stamp := time.Now().UTC().Format("2006-01-02")
