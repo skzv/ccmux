@@ -58,9 +58,7 @@ func commandsIn(key string, words map[string]bool) []string {
 			out = append(out, cmd)
 		}
 	}
-	for _, bin := range regexp.MustCompile(`\bccmux(?:d|-mcp)\b`).FindAllString(key, -1) {
-		out = append(out, bin)
-	}
+	out = append(out, regexp.MustCompile(`\bccmux(?:d|-mcp)\b`).FindAllString(key, -1)...)
 	for _, m := range regexp.MustCompile("`([^`]+)`").FindAllStringSubmatch(key, -1) {
 		if strings.Contains(m[1], " ") {
 			out = append(out, m[1])
