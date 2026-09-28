@@ -183,3 +183,60 @@ func TestPollOnce_ReviewSurvivesRestartOnRealTmux(t *testing.T) {
 		t.Errorf("the restart or the rename notified: pushes=%d bells=%d", got, *bells)
 	}
 }
+
+// TestPollOnce_TurnEndedWhileDaemonDownStaysUnreviewedOnRealTmux — QA's
+// repro on a real (isolated) tmux: a prompt sent to a Codex session
+// nobody is attached to leaves `@ccmux_seen 0 @ccmux_state active` on
+// it. The daemon stops mid-turn and the turn ends (Codex's caret: idle)
+// while it is down. The restarted daemon — a fresh server struct over
+// the same tmux server — marked the session reviewed and rewrote
+// @ccmux_seen to 1, although nobody had seen the result. It stays
+// unreviewed, and the restart still notifies nothing.
+func TestPollOnce_TurnEndedWhileDaemonDownStaysUnreviewedOnRealTmux(t *testing.T) {
+	dir := pollSandbox(t)
+	const name = "c-codex"
+	panes := &scriptedPanes{byPane: map[string]string{}}
+	mustTmux(t, "new-session", "-d", "-s", name, "-c", dir, "sleep 300")
+	mustTmux(t, "set-option", "-t", "="+name+":", "@ccmux_agent", "codex")
+	paneID := tmuxOut(t, "display-message", "-p", "-t", "="+name+":", "#{pane_id}")
+	title := func(s string) { mustTmux(t, "select-pane", "-t", "="+name+":", "-T", s) }
+	record := func() string {
+		return tmuxOut(t, "display-message", "-p", "-t", "="+name+":", "#{@ccmux_seen} #{@ccmux_prompts} #{@ccmux_state}")
+	}
+	panes.set(paneID, codexPane(""))
+	title("codex")
+
+	srv := newServer(testDaemonCfg(dir))
+	srv.startSleepManager()
+	srv.startedAt = time.Now().Add(-time.Minute) // the session was made while it ran
+	panes.wire(srv)
+	pollNTimes(srv, 2)
+	panes.set(paneID, codexPane("> fix it\n\n• Working"))
+	title("⠋ codex")
+	pollNTimes(srv, 1)
+	title("⠙ codex")
+	pollNTimes(srv, 1)
+	if got := record(); got != "0 0 active" {
+		t.Fatalf("setup: the record mid-turn: %q, want %q", got, "0 0 active")
+	}
+
+	// The daemon stops; the turn ends while it is down.
+	panes.set(paneID, codexPane("> fix it\n\n• Done."))
+	title("codex")
+
+	srv2 := newServer(testDaemonCfg(dir))
+	srv2.startSleepManager()
+	panes.wire(srv2)
+	pushes := countPushes(t, srv2)
+	bells := countBells(srv2)
+	pollNTimes(srv2, 3)
+	if got := review(srv2, name); got != "prompts=0 seen=false" {
+		t.Errorf("after the restart: %s, want prompts=0 seen=false", got)
+	}
+	if got := record(); got != "0 0 idle" {
+		t.Errorf("the record after the restart: %q, want %q", got, "0 0 idle")
+	}
+	if got := pushes(); got != 0 || *bells != 0 {
+		t.Errorf("the restart notified: pushes=%d bells=%d", got, *bells)
+	}
+}

@@ -160,11 +160,19 @@ List every tmux session this daemon manages, with daemon-derived state.
   `@ccmux_prompts` and `@ccmux_state` (the state they were written in),
   rewritten only when one of them changes. Its first look at a session
   reads them back: the prompt count as recorded, and the reviewed flag as
-  recorded while the session is still in that state. A session whose
-  state changed while no daemon watched it (a turn that was running when
-  the daemon stopped has ended since) is judged as it stands instead:
-  waiting for input means unreviewed. A plain shell session with nothing
-  to remember gets no record.
+  follows. A session a client is attached to is reviewed. One recorded
+  as unreviewed stays unreviewed, whatever it is doing now: a result
+  nobody has seen — a turn that ended while the daemon was down, or one
+  still running — isn't marked seen by a restart. One recorded as
+  reviewed stays reviewed while it is still in the recorded state; if
+  it has since settled, with no daemon watching, where a watching daemon
+  would have notified — `needs_input`, `error`, or `idle` for an agent
+  whose turns end at a bare prompt rather than an input box (Codex's
+  caret, not Claude Code) — it comes back unreviewed. None of this rings
+  the bell or sends a push. A session with no record (or one recorded in
+  state `unknown`) is judged as it stands: waiting for input means
+  unreviewed. A plain shell session with nothing to remember gets no
+  record.
 
 #### `POST /v1/sessions`
 Create-or-attach a **project-bound** agent session (idempotent on the tmux

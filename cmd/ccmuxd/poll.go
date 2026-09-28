@@ -377,23 +377,13 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 		t.agentID = r.agentID
 		if t.baseline {
 			// First look at a pre-existing session: record where it
-			// stands, with no bell, push or prompt count. It keeps its
-			// "reviewed" mark unless it is sitting waiting for input —
-			// or, when the session carries the review record of a daemon
-			// that watched it before (see reviewDue), what that record
-			// says, as long as the session is still where the record
-			// left it. One that has moved on since (a turn that was
-			// running when the daemon went away has ended) is judged as
-			// if there were no record: a prompt nobody has looked at
-			// through a daemon isn't marked reviewed.
+			// stands, with no bell, push or prompt count, and whether
+			// its latest result has been reviewed (firstLookSeen).
 			t.baseline = false
 			t.last = r.pane
 			t.lastChange = r.lastCh
 			t.state = r.newState
-			t.seen = ts.Attached || r.newState != agent.StateNeedsInput
-			if rec := ts.Review; rec.Recorded && rec.State == string(r.newState) {
-				t.seen = ts.Attached || rec.Seen
-			}
+			t.seen = firstLookSeen(ts.Review, ts.Attached, r.agentID, r.newState)
 			// What an earlier daemon learned by watching, the session
 			// keeps (see spinnerMarkDue).
 			marked := ts.Spinner != "" && ts.Spinner == string(r.agentID)
@@ -580,8 +570,8 @@ func (t *tracked) reviewDue(ts tmux.Session) (tmux.Review, bool) {
 // see reviewDue) says into a session the daemon is tracking for the
 // first time: its prompt count, and whether its latest prompt has been
 // reviewed — as it stood when the record was written, or reviewed now if
-// a client is attached. The baseline first look re-checks the reviewed
-// flag against the session's state (pollOnce, Phase 3).
+// a client is attached. The baseline first look settles the reviewed
+// flag against where the session stands now (firstLookSeen).
 func (t *tracked) restoreReview(ts tmux.Session) {
 	rec := ts.Review
 	if !rec.Recorded {
@@ -589,6 +579,66 @@ func (t *tracked) restoreReview(ts tmux.Session) {
 	}
 	t.promptCount = rec.Prompts
 	t.seen = rec.Seen || ts.Attached
+}
+
+// firstLookSeen is the reviewed flag the daemon's first look at a
+// session it joined — after a restart, or a rename done straight
+// through tmux — gives it: id is the agent the session was classified
+// as, now the state that look found it in, rec the review record an
+// earlier daemon left on it (see reviewDue). The first look never
+// notifies, whatever it decides; this only sets the flag the dashboard
+// and /v1/sessions show.
+//
+//   - A client is attached: the user is looking at it. Reviewed.
+//   - The record says unreviewed: a result nobody has seen stays unseen,
+//     whatever the session is doing now. Judging it by its state instead
+//     took a Codex turn that ended while the daemon was down (idle, the
+//     "finished" push the daemon never got to send) for reviewed, and
+//     rewrote the record to say so; and one caught mid-turn, read as
+//     idle on that first look, lost its mark and was never announced.
+//   - The record says reviewed and the session is where it left it:
+//     reviewed.
+//   - The record says reviewed and the session has since settled into a
+//     state a watching daemon would have notified about (settleNotifies)
+//     — a turn that ended, a crash — while nobody watched: unreviewed.
+//   - No record (a session from before records were kept, or a plain
+//     shell), or one whose state says nothing about where the session
+//     was (unknown): it is judged as it stands — a session waiting for
+//     input is unreviewed.
+func firstLookSeen(rec tmux.Review, attached bool, id agent.ID, now agent.State) bool {
+	switch {
+	case attached:
+		return true
+	case rec.Recorded && !rec.Seen:
+		return false
+	case rec.Recorded && rec.State == string(now):
+		return true
+	case rec.Recorded && rec.State != "" && rec.State != string(agent.StateUnknown):
+		return !settleNotifies(id, now)
+	default:
+		return now != agent.StateNeedsInput
+	}
+}
+
+// settleNotifies reports whether a session of agent id settling into st
+// after a turn is something a watching daemon notifies about: waiting
+// for input, a crash (error), or — for an agent with no input box of its
+// own, whose turns end at a bare prompt (Codex's caret) — idle, the
+// "finished" push. An agent with an input box (Claude Code) ends its
+// turns waiting for input; idle there is only a quiet pane. A plain
+// shell has no turns.
+func settleNotifies(id agent.ID, st agent.State) bool {
+	switch st {
+	case agent.StateNeedsInput, agent.StateError:
+		return true
+	case agent.StateIdle:
+		if id == shellAgentID {
+			return false
+		}
+		_, inputBox := agent.ByID(id).(agent.TurnReader)
+		return !inputBox
+	}
+	return false
 }
 
 // spinnerMark is a session whose agent the poll tick records as
