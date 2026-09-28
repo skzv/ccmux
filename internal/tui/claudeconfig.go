@@ -629,26 +629,62 @@ func (m claudeModel) viewPicker(width, height int) string {
 			rows = append(rows, pickerRow{Label: o.Label, Desc: o.Desc})
 		}
 	}
-	lines := []string{
-		st.Emphasis.Render(title),
-		st.Subtitle.Render(subtitle),
-	}
-	// When the user's SHELL exports ANTHROPIC_MODEL, it sits above
-	// settings.json in Claude Code's precedence — so a settings.json
-	// pick alone would do nothing. The unified picker also writes the
-	// ccmux pin (which ccmux re-exports at launch, overriding the
-	// shell value for ccmux sessions), so a pick DOES take effect here.
-	// We still surface the shell var so the user knows to unset it if
-	// they want the change to apply everywhere, not just ccmux sessions.
-	if m.picker == pickerModel && m.modelSource == "$ANTHROPIC_MODEL" {
-		lines = append(lines,
-			st.StatusWarning.Render("⚠ Your shell exports ANTHROPIC_MODEL="+m.model+"."),
-			st.Muted.Render(tr("  Your pick is pinned for ccmux sessions (takes effect here).")),
-			st.Muted.Render("  To change it everywhere, unset ANTHROPIC_MODEL in your shell (e.g. ~/.zshrc)."),
-		)
-	}
-	lines = append(lines, "")
+	// pickerW is the pane's text column (its width less the horizontal
+	// padding). The text lines are wrapped to it here so their rendered
+	// height is known: the list budget below counted the subtitle as
+	// one line, but it wraps on a narrow terminal, and the extra rows
+	// pushed the hint and the bottom border off the screen.
 	pickerW := minInt(96, width-4) - 2
+	wrap := func(style lipgloss.Style, s string) string {
+		return style.Width(maxInt(1, pickerW)).Render(s)
+	}
+	hint := wrap(st.Muted, tr("↑↓ navigate  enter: choose  esc: cancel"))
+	// header is everything above the list. On a terminal too short for
+	// it and three options, the explanation goes first (level 1), then
+	// the spacer rows (level 2): the options, hint and border stay.
+	header := func(level int) []string {
+		lines := []string{wrap(st.Emphasis, title)}
+		if level < 1 {
+			lines = append(lines, wrap(st.Subtitle, subtitle))
+			// When the user's SHELL exports ANTHROPIC_MODEL, it sits
+			// above settings.json in Claude Code's precedence — so a
+			// settings.json pick alone would do nothing. The unified
+			// picker also writes the ccmux pin (which ccmux re-exports
+			// at launch, overriding the shell value for ccmux sessions),
+			// so a pick DOES take effect here. We still surface the
+			// shell var so the user knows to unset it if they want the
+			// change to apply everywhere, not just ccmux sessions.
+			if m.picker == pickerModel && m.modelSource == "$ANTHROPIC_MODEL" {
+				lines = append(lines,
+					wrap(st.StatusWarning, "⚠ Your shell exports ANTHROPIC_MODEL="+m.model+"."),
+					wrap(st.Muted, tr("  Your pick is pinned for ccmux sessions (takes effect here).")),
+					wrap(st.Muted, "  To change it everywhere, unset ANTHROPIC_MODEL in your shell (e.g. ~/.zshrc)."),
+				)
+			}
+		}
+		if level < 2 {
+			lines = append(lines, "")
+		}
+		return lines
+	}
+	// A list taller than the terminal scrolls with the cursor. Its
+	// budget is what the rendered header, the hint (with the blank line
+	// above it, except at level 2) and the pane's two border rows leave.
+	var lines []string
+	budget, spaced := 0, true
+	for level := 0; level <= 2; level++ {
+		lines = header(level)
+		spaced = level < 2
+		chromeH := lipgloss.Height(strings.Join(lines, "\n")) + lipgloss.Height(hint) + 2
+		if spaced {
+			chromeH++
+		}
+		budget = height - chromeH
+		if budget >= minInt(3, len(rows)) {
+			break
+		}
+	}
+	budget = maxInt(1, budget)
 	// One row per option, always: the label column is only as wide as
 	// the longest label, and whatever doesn't fit is cut with "…" —
 	// rows used to wrap mid-line into the next option at 80 columns.
@@ -658,17 +694,16 @@ func (m claudeModel) viewPicker(width, height int) string {
 	}
 	labelW = minInt(labelW, maxInt(8, pickerW/2))
 	rowW := pickerW - 2 // RenderListRow's selection bar
-	// A list taller than the terminal scrolls with the cursor.
-	budget := maxInt(3, height-len(lines)-4)
 	start, end := windowAroundCursor(m.pickerCursor, len(rows), budget)
 	for i := start; i < end; i++ {
 		o := rows[i]
 		row := padLabel(truncate(o.Label, labelW), labelW) + " " + st.Muted.Render(o.Desc)
 		lines = append(lines, components.RenderListRow(st, truncate(row, rowW), i == m.pickerCursor, pickerW))
 	}
-	lines = append(lines, "",
-		st.Muted.Render(tr("↑↓ navigate  enter: choose  esc: cancel")),
-	)
+	if spaced {
+		lines = append(lines, "")
+	}
+	lines = append(lines, hint)
 	modal := st.PaneFocused.Width(minInt(96, width-4)).Render(strings.Join(lines, "\n"))
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, modal)
 }
