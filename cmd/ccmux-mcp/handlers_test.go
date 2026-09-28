@@ -374,6 +374,46 @@ func TestHandleGetUsage_PassThrough(t *testing.T) {
 	}
 }
 
+// TestGetUsage_ClaudeBlock — get_usage carries the daemon's claude_block
+// (Claude's current 5-hour session block, as the TUI's quota bar counts
+// it) through to the MCP client alongside the rolling-window summaries,
+// so an agent asking "when does my quota reset" gets the TUI's answer.
+func TestGetUsage_ClaudeBlock(t *testing.T) {
+	start := time.Date(2026, 9, 28, 13, 0, 0, 0, time.UTC)
+	fake := &fakeClient{usage: daemon.AgentUsage{
+		Claude: daemon.UsageSummary{HasData: true, WindowSeconds: 18000, Prompts: 30},
+		ClaudeBlock: &daemon.ClaudeBlock{
+			Active: true, Start: start, ResetAt: start.Add(5 * time.Hour), BlockSeconds: 18000,
+			Prompts: 6, Messages: 9, InputTokens: 60, OutputTokens: 12, CacheReadTokens: 6000, EstimatedCost: 0.5,
+		},
+	}}
+	srv := newTestServer(false, fake)
+	r := decodeOne(t, runRaw(t, srv, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_usage","arguments":{}}}`+"\n"))
+	if r.Error != nil {
+		t.Fatalf("get_usage: %+v", r.Error)
+	}
+	var result struct {
+		Content []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	raw, _ := json.Marshal(r.Result)
+	if err := json.Unmarshal(raw, &result); err != nil || len(result.Content) == 0 {
+		t.Fatalf("get_usage result %s: %v", raw, err)
+	}
+	var got daemon.AgentUsage
+	if err := json.Unmarshal([]byte(result.Content[0].Text), &got); err != nil {
+		t.Fatalf("get_usage text isn't AgentUsage JSON: %v\n%s", err, result.Content[0].Text)
+	}
+	b := got.ClaudeBlock
+	if b == nil || !b.Active || !b.ResetAt.Equal(start.Add(5*time.Hour)) || b.Prompts != 6 || b.CacheReadTokens != 6000 {
+		t.Errorf("claude_block over MCP: %+v", b)
+	}
+	if got.Claude.Prompts != 30 {
+		t.Errorf("the rolling-window claude summary: %+v", got.Claude)
+	}
+}
+
 // TestGetUsageRejectsWindow — get_usage has no window parameter (it
 // always reports the daemon's default rolling window), but it silently
 // accepted any: "-5h", "0s" and "24h" alike returned five hours of

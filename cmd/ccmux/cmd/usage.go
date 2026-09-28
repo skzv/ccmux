@@ -85,5 +85,45 @@ func writeUsage(w io.Writer, data daemon.AgentUsage, asJSON bool) error {
 		}
 		fmt.Fprintf(tw, "%s\t%d\t%d\t%d\t%d\t%d\t%s\n", safeField(row.Agent), s.Prompts, s.InputTokens, s.OutputTokens, s.CachedInputTokens, s.ReasoningTokens, cost)
 	}
+	if err := tw.Flush(); err != nil {
+		return err
+	}
+	return writeClaudeBlock(w, data.ClaudeBlock, time.Now())
+}
+
+// writeClaudeBlock prints Claude's current 5-hour session block, the
+// one the dashboard's quota bar and "resets in" line show. The table
+// above covers a rolling window instead, so its Claude row differs.
+// Nothing is printed for a daemon too old to report the block.
+func writeClaudeBlock(w io.Writer, b *daemon.ClaudeBlock, now time.Time) error {
+	if b == nil {
+		return nil
+	}
+	if !b.Active {
+		_, err := fmt.Fprintln(w, "\nCLAUDE 5-HOUR BLOCK  none running; the next message starts one")
+		return err
+	}
+	fmt.Fprintf(w, "\nCLAUDE 5-HOUR BLOCK  started %s, resets %s (%s)\n",
+		b.Start.Local().Format("15:04"), b.ResetAt.Local().Format("15:04"), untilReset(b.ResetAt.Sub(now)))
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "PROMPTS\tMESSAGES\tINPUT\tOUTPUT\tCACHE WRITE\tCACHE READ\tEST. COST")
+	fmt.Fprintf(tw, "%d\t%d\t%d\t%d\t%d\t%d\t$%.2f\n", b.Prompts, b.Messages, b.InputTokens, b.OutputTokens,
+		b.CacheCreationTokens, b.CacheReadTokens, b.EstimatedCost)
 	return tw.Flush()
+}
+
+// untilReset says how long until a block resets: "in 3h05m", "in 42m",
+// "in <1m", or "resetting now" once it is due.
+func untilReset(d time.Duration) string {
+	if d <= 0 {
+		return "resetting now"
+	}
+	if d < time.Minute {
+		return "in <1m"
+	}
+	d = d.Round(time.Minute)
+	if h, m := int(d/time.Hour), int(d%time.Hour/time.Minute); h > 0 {
+		return fmt.Sprintf("in %dh%02dm", h, m)
+	}
+	return fmt.Sprintf("in %dm", int(d/time.Minute))
 }

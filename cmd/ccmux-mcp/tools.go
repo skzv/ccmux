@@ -89,7 +89,7 @@ func buildTools(s *Server) map[string]Tool {
 			Handler:     wrap(s.handleListConversations),
 		},
 		"get_usage": {
-			Description: "Get aggregated per-agent token + estimated cost over the daemon's rolling 5-hour window (fixed: takes no arguments). Returns per-agent prompt counts, input/output tokens, and a USD estimate from published API rates.",
+			Description: "Get aggregated per-agent token + estimated cost over the daemon's rolling 5-hour window (fixed: takes no arguments). Returns per-agent prompt counts, input/output tokens, and a USD estimate from published API rates, plus claude_block: Claude's current 5-hour subscription session block as the ccmux dashboard's quota bar counts it (active, start, reset_at, prompts, tokens, estimated_cost). Use claude_block for 'how much of my Claude quota is used / when does it reset'.",
 			InputSchema: emptySchema(),
 			Handler:     wrap(s.handleGetUsage),
 		},

@@ -67,7 +67,7 @@ When `--host` is set, the server talks to that ccmuxd over HTTP on the tailnet i
 | `read_pane`         | last N lines of the pane a session's agent runs in (default 24, max 500)                                             |
 | `list_projects`     | every project under the configured root, with agent assignment and a few metadata bits                               |
 | `list_conversations`| past Claude / Codex / Antigravity / Cursor / Pi / Grok transcripts, sorted by recency, with the resumable agent ID   |
-| `get_usage`         | aggregated per-agent token + cost over the daemon's rolling 5-hour window — Claude / Codex / Antigravity, the second-wave agents that have usage, and OpenRouter account spend when configured. Takes no arguments; a `window` is refused with `-32602` |
+| `get_usage`         | aggregated per-agent token + cost over the daemon's rolling 5-hour window — Claude / Codex / Antigravity, the second-wave agents that have usage, and OpenRouter account spend when configured — plus `claude_block`, Claude's current 5-hour session block exactly as the TUI's quota bar counts it (start, `reset_at`, prompts, tokens, estimated cost; `active: false` when none is running). Takes no arguments; a `window` is refused with `-32602` |
 | `list_machines`     | tailnet peers, whether each runs ccmuxd                                                                              |
 | `list_notes`        | every markdown note in a project, grouped by directory                                                               |
 | `read_note`         | one note's full contents                                                                                             |

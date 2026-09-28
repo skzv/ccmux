@@ -72,7 +72,8 @@ func (s *Server) handleListConversations(ctx context.Context, _ json.RawMessage)
 }
 
 // handleGetUsage reports the daemon's default rolling window (5 hours;
-// window_seconds in each summary). It takes no window argument, but a
+// window_seconds in each summary), and Claude's current session block
+// (claude_block) as the daemon reports it. It takes no window argument, but a
 // "rolling window" invites one and unknown arguments are tolerated, so
 // "window":"-5h", "0s" and "24h" alike used to return five hours of
 // data as if asked for. A window is refused instead of silently

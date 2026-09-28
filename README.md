@@ -61,7 +61,7 @@ That's ccmux. The same session, the same TUI, on every device. No host config, n
 <img src="docs/vhs/out/cuj02_dashboard.gif" alt="ccmux dashboard showing parallel sessions color-coded by state (active / idle / needs_input), Devices panel listing every machine on the tailnet, and Claude's 5-hour usage panel." width="900" />
 </div>
 
-Color-coded by state — **active**, **idle**, **needs your input**. The Devices panel shows every other ccmux-running machine on your tailnet right next to it. The usage panel tallies Claude's 5-hour quota and per-agent prompt counts. Live updates as each session moves through states.
+Color-coded by state — **active**, **idle**, **needs your input**. The Devices panel shows every other ccmux-running machine on your tailnet right next to it. The usage panel tallies Claude's 5-hour quota and per-agent prompt counts. `ccmux usage` prints the same 5-hour block, and the daemon's API serves it to phones as `claude_block`. Live updates as each session moves through states.
 
 ---
 
