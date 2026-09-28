@@ -48,6 +48,24 @@ const attachReadLimit = 1 << 20
 // Killing the spawned `tmux attach` process only detaches that client;
 // the tmux session itself keeps running.
 func (s *server) handleAttach(w http.ResponseWriter, r *http.Request, name string) {
+	// Check the session exists while a plain HTTP error can still say
+	// so: attaching to a missing one used to upgrade (101) and then
+	// stream tmux's "can't find session" into the terminal.
+	has := s.has
+	if has == nil {
+		has = tmux.Has
+	}
+	hctx, hcancel := context.WithTimeout(r.Context(), 3*time.Second)
+	exists, err := has(hctx, name)
+	hcancel()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !exists {
+		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	}
 	// Default AcceptOptions: a request with no Origin (every native
 	// client) is accepted, and a browser's cross-origin upgrade is
 	// refused. The tailnet listener also drops browser requests

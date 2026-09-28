@@ -86,15 +86,24 @@ func decodeJSONBody(w http.ResponseWriter, r *http.Request, v any) error {
 // the handler either. On failure the deadline stays armed: the server
 // drains the unread body before replying, and a stalled client would
 // otherwise hold that drain open forever.
+//
+// The tail may only be whitespace: a second value or trailing garbage
+// ({"name":"a"}{"name":"b"}, {} x) is a malformed body, not a valid one
+// with noise to ignore.
 func decodeJSONBodyWithin(w http.ResponseWriter, r *http.Request, v any, d time.Duration) error {
 	rc := http.NewResponseController(w)
 	_ = rc.SetReadDeadline(time.Now().Add(d))
 	body := http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)
-	if err := json.NewDecoder(body).Decode(v); err != nil {
+	dec := json.NewDecoder(body)
+	if err := dec.Decode(v); err != nil {
 		return err
 	}
-	if _, err := io.Copy(io.Discard, body); err != nil {
+	tail, err := io.ReadAll(io.MultiReader(dec.Buffered(), body))
+	if err != nil {
 		return err
+	}
+	if strings.Trim(string(tail), " \t\r\n") != "" {
+		return errors.New("unexpected data after the JSON value")
 	}
 	_ = rc.SetReadDeadline(time.Time{})
 	return nil
@@ -703,6 +712,10 @@ func (s *server) localOnlyRoutes(mux *http.ServeMux) {
 }
 
 func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	host, _ := os.Hostname()
 	s.mu.Lock()
 	n := len(s.seen)
@@ -738,7 +751,8 @@ func (s *server) listSessions(w http.ResponseWriter, r *http.Request) {
 	// server) and hiding it made the dashboard silently empty.
 	tss, err := s.list(ctx)
 	if err != nil {
-		http.Error(w, "tmux list-sessions: "+err.Error(), http.StatusInternalServerError)
+		// tmux.List's error already names the command.
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -1219,7 +1233,7 @@ func (s *server) handleKill(w http.ResponseWriter, r *http.Request, name string)
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 	if err := s.kill(ctx, name); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeTmuxError(w, err)
 		return
 	}
 	s.forgetKilled(name)
@@ -1252,7 +1266,11 @@ func (s *server) handleRename(w http.ResponseWriter, r *http.Request, name strin
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 	if err := s.rename(ctx, name, req.Name); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		if strings.Contains(err.Error(), "duplicate session") {
+			http.Error(w, fmt.Sprintf("a session named %q already exists", req.Name), http.StatusConflict)
+			return
+		}
+		writeTmuxError(w, err)
 		return
 	}
 	renamed := s.renameTracked(name, req.Name)
@@ -1284,10 +1302,33 @@ func (s *server) handleSendKeys(w http.ResponseWriter, r *http.Request, name str
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 	if err := tmux.SendKeys(ctx, name, req.Keys); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeTmuxError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// sessionNotFound reports whether a tmux error means the targeted
+// session doesn't exist — including there being no tmux server at all.
+// internal/tmux folds tmux's stderr into its errors (a bare
+// exec.ExitError says only "exit status 1").
+func sessionNotFound(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "can't find session") ||
+		strings.Contains(msg, "no current session") ||
+		strings.Contains(msg, "no server running") ||
+		(strings.Contains(msg, "error connecting to") && strings.Contains(msg, "No such file or directory"))
+}
+
+// writeTmuxError answers a failed tmux call on a named session: 404
+// when the session doesn't exist (kill/rename/send-keys used to answer
+// 500 for that, indistinguishable from a real failure), else 500.
+func writeTmuxError(w http.ResponseWriter, err error) {
+	if sessionNotFound(err) {
+		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	}
+	http.Error(w, err.Error(), http.StatusInternalServerError)
 }
 
 // handleNotes serves both list and read for a project's markdown
@@ -1441,17 +1482,9 @@ func (s *server) handlePreview(w http.ResponseWriter, r *http.Request, name stri
 	// mapping below is unit-testable with an injected failure.
 	out, err := s.capture(ctx, name, lines)
 	if err != nil {
-		// tmux exits non-zero when the session is gone, and internal/
-		// tmux folds the stderr diagnostic into the wrapped error (a
-		// bare exec.ExitError stringifies as just "exit status 1", so
-		// matching on err.Error() alone never fired); map it to 404 so
-		// clients can distinguish "no session" from other errors.
-		if strings.Contains(err.Error(), "can't find session") ||
-			strings.Contains(err.Error(), "no current session") {
-			http.Error(w, "session not found", http.StatusNotFound)
-			return
-		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		// tmux exits non-zero when the session is gone; map that to 404
+		// so clients can distinguish "no session" from other errors.
+		writeTmuxError(w, err)
 		return
 	}
 	writeJSON(w, daemon.PreviewResponse{Lines: lines, Content: lastLines(out, lines)})
@@ -1646,6 +1679,10 @@ func (s *server) handleConversations(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")

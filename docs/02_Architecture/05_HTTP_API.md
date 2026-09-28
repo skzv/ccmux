@@ -39,7 +39,9 @@ If Tailscale isn't running, the tailnet listener silently doesn't start
 - **No TLS.** Tailscale's WireGuard tunnel is the encryption + identity
   boundary; the HTTP listener is plain HTTP bound to the tailnet IP.
 - Request bodies are capped at **64 KiB**; larger bodies fail to decode
-  (`400`).
+  (`400`), and so does anything but whitespace after the JSON value.
+- `GET` endpoints answer `405` to other methods (`/v1/health` also takes
+  `HEAD`).
 
 ---
 
@@ -173,19 +175,22 @@ Create a **shell-only** tmux session not tied to any project (no scaffold).
 
 #### `POST /v1/sessions/{name}/kill`
 Kill a session by name. Emits a `killed` SSE event.
-- **Request:** none. **Response:** `204`. **Errors:** `400` missing name;
-  `500` tmux failure.
+- **Request:** none. **Response:** `204`. **Errors:** `400` missing or bad
+  name; `404` no such session; `500` tmux failure.
 
 #### `POST /v1/sessions/{name}/rename`
 Rename a session. `{name}` is the **current** name; the body carries the new
 one.
 - **Request:** `RenameRequest`. **Response `200`:** `SessionState`
   (`{name: <newName>, host: "local"}`).
+- **Errors:** `400` bad name; `404` no such session; `409` another session
+  already has the new name.
 
 #### `POST /v1/sessions/{name}/send-keys`
 Send raw keystrokes/text into the session's active pane (e.g. type a reply +
 Enter). Passed through to `tmux send-keys`.
-- **Request:** `SendKeysRequest`. **Response:** `204`.
+- **Request:** `SendKeysRequest`. **Response:** `204`. `404` if the session
+  doesn't exist.
 
 #### `GET /v1/sessions/{name}/preview`
 Last N lines of the active pane as plain text (ANSI stripped) — exactly N
@@ -198,7 +203,8 @@ output. A lightweight "peek" without opening the attach socket.
 Upgrade to a WebSocket bridged to a real `tmux attach-session` in a PTY: a
 true interactive terminal (live output, input, resize). This is how a mobile
 client gives a full terminal **without** ssh/mosh.
-- **Upgrade:** `GET` → `101 Switching Protocols`.
+- **Upgrade:** `GET` → `101 Switching Protocols`; `404` (no upgrade) if the
+  session doesn't exist.
 - **After upgrade** (uses `github.com/coder/websocket` framing):
   - **client → server, binary frame:** raw stdin bytes (keystrokes).
   - **client → server, text frame:** JSON `{"cols":N,"rows":N}` to resize.
@@ -381,8 +387,10 @@ Redeem a pairing token: install the device's SSH public key into
 Register/refresh a push token on an already-paired host (after the user
 grants notifications, or the OS rotates the token).
 - **Request:** `RegisterDeviceRequest`.
-- **Response:** `204`. `400` for a missing token or a bad `provider`/`env`;
-  `403` if `public_key` isn't in the host's `~/.ssh/authorized_keys` (i.e.
+- **Response:** `204`. `400` for a missing or malformed token (printable
+  ASCII only; at most 200 characters for APNs, 4096 for FCM) or a bad
+  `provider`/`env`; `403` if `public_key` isn't in the host's
+  `~/.ssh/authorized_keys` (i.e.
   the device never paired); `500` if the registration couldn't be saved (it
   isn't kept).
 - The device is identified by the SSH `public_key` it paired with (stored

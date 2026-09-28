@@ -160,6 +160,9 @@ func (s *DeviceStore) RegisterWithProvider(publicKey, token, provider, env strin
 	default:
 		return fmt.Errorf("%w: unknown provider %q", ErrInvalidRegistration, provider)
 	}
+	if err := checkPushToken(token, provider); err != nil {
+		return err
+	}
 	hash := HashPublicKey(publicKey)
 	reg := DeviceRegistration{
 		PublicKeyHash: hash,
@@ -185,6 +188,32 @@ func (s *DeviceStore) RegisterWithProvider(publicKey, token, provider, env strin
 		}
 		s.mu.Unlock()
 		return fmt.Errorf("devicestore: save registration: %w", err)
+	}
+	return nil
+}
+
+// Push token length caps. An APNs device token is 32 bytes (64 hex
+// characters) today and Apple reserves room for it to grow, so up to
+// 100 bytes' worth of hex is accepted; FCM registration tokens run to
+// ~160 characters. Uncapped, a 60 KB "token" was stored, rewritten to
+// disk on every registration and sent with every push.
+const (
+	maxAPNsTokenLen = 200
+	maxFCMTokenLen  = 4096
+)
+
+// checkPushToken rejects a token no gateway would issue: longer than
+// the provider's cap, or containing anything but printable ASCII.
+func checkPushToken(token, provider string) error {
+	limit := maxAPNsTokenLen
+	if provider == ProviderFCM {
+		limit = maxFCMTokenLen
+	}
+	if len(token) > limit {
+		return fmt.Errorf("%w: %s token is %d bytes, over the %d-byte limit", ErrInvalidRegistration, provider, len(token), limit)
+	}
+	if strings.ContainsFunc(token, func(r rune) bool { return r <= ' ' || r > '~' }) {
+		return fmt.Errorf("%w: token must be printable ASCII without spaces", ErrInvalidRegistration)
 	}
 	return nil
 }

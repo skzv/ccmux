@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -465,6 +466,39 @@ func TestRegister_InvalidInputIsMarked(t *testing.T) {
 		if err := s.RegisterWithProvider(tc.key, tc.token, tc.provider, tc.env); !errors.Is(err, ErrInvalidRegistration) {
 			t.Errorf("RegisterWithProvider(%+v) = %v, want ErrInvalidRegistration", tc, err)
 		}
+	}
+}
+
+// TestRegister_CapsTokens — any token was stored: a 60 KB "APNs token"
+// was accepted, persisted and sent with every push. Tokens are capped
+// per provider and must be printable ASCII.
+func TestRegister_CapsTokens(t *testing.T) {
+	s, err := OpenDeviceStore(filepath.Join(t.TempDir(), "devices.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	apns := strings.Repeat("ab", 32) // a real-sized APNs token
+	fcm := "fGx1:APA91b" + strings.Repeat("Z", 150)
+	for _, tc := range []struct{ token, provider, env string }{
+		{strings.Repeat("a", 60*1024), ProviderAPNs, "production"},
+		{strings.Repeat("a", 201), ProviderAPNs, "production"}, // over 100 bytes of hex
+		{strings.Repeat("a", 4097), ProviderFCM, ""},
+		{apns[:10] + " " + apns[10:], ProviderAPNs, "production"},
+		{apns + "\n", ProviderAPNs, "production"},
+		{"tök", ProviderFCM, ""},
+	} {
+		if err := s.RegisterWithProvider(testPubKey, tc.token, tc.provider, tc.env); !errors.Is(err, ErrInvalidRegistration) {
+			t.Errorf("%s token of %d bytes: err = %v, want ErrInvalidRegistration", tc.provider, len(tc.token), err)
+		}
+	}
+	if n := len(s.All()); n != 0 {
+		t.Fatalf("store holds %d registrations after rejected tokens", n)
+	}
+	if err := s.RegisterWithProvider(testPubKey, apns, ProviderAPNs, "production"); err != nil {
+		t.Errorf("real APNs token rejected: %v", err)
+	}
+	if err := s.RegisterWithProvider(testPubKey, fcm, ProviderFCM, ""); err != nil {
+		t.Errorf("real-shaped FCM token rejected: %v", err)
 	}
 }
 
