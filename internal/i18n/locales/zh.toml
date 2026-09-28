@@ -548,3 +548,5 @@
 "prompt" = "提示"
 "msg" = "消息"
 "%s already exists — esc, then open it from the list" = "%s 已存在——按 esc，然后在列表中打开它"
+"~ (daemon's $HOME if blank)" = "~（留空则为守护进程的 $HOME）"
+"%s (from sessions.default_dir; edit to override)" = "%s（来自 sessions.default_dir；可编辑覆盖）"

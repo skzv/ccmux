@@ -258,13 +258,14 @@ func (m newProjectFormModel) View(width int) string {
 	title := st.Emphasis.Render(tr("New project"))
 	hint := st.Subtitle.Render(tr("ccmux creates the directory and starts your agent — nothing else. Run /init or openspec yourself."))
 
-	const labelW = 10
-	nameLabel := st.Muted.Render(padLabel(tr("name"), labelW))
-	hostLabel := st.Muted.Render(padLabel(tr("device"), labelW))
-	agentLabel := st.Muted.Render(padLabel(tr("agent"), labelW))
 	// Keep every row on one line after its label (see the new-session
 	// form): at phone widths the rows wrapped under the label column.
 	textW := width - 4 // the pane's border + padding
+	labels := []string{tr("name"), tr("device"), tr("agent")}
+	labelW := labelColumn(10, textW/2, labels...)
+	nameLabel := st.Muted.Render(columnLabel(labels[0], labelW))
+	hostLabel := st.Muted.Render(columnLabel(labels[1], labelW))
+	agentLabel := st.Muted.Render(columnLabel(labels[2], labelW))
 	fieldW := maxInt(4, textW-labelW-2)
 	narrow := textW < 60
 	m.name.Width = maxInt(1, minInt(m.name.Width, fieldW-1))

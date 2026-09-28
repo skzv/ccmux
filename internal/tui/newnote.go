@@ -117,10 +117,19 @@ func (m newNoteFormModel) View(width int) string {
 	title := st.Emphasis.Render(tr("New note"))
 	hint := st.Subtitle.Render(tr("Creates the file under the project and opens it in $EDITOR."))
 
-	filenameLabel := st.Muted.Render(padLabel(tr("filename"), 10))
-	titleLabel := st.Muted.Render(padLabel(tr("title"), 10))
-	filenameField := m.filename.View()
-	titleField := m.title.View()
+	// One line per row, as in the new-session form: the label column
+	// fits the translated labels, and the inputs shrink to what is left
+	// (a 60-cell input after a German label wrapped the filename).
+	textW := width - 4 // the pane's border + padding
+	labels := []string{tr("filename"), tr("title")}
+	labelW := labelColumn(10, textW/2, labels...)
+	filenameLabel := st.Muted.Render(columnLabel(labels[0], labelW))
+	titleLabel := st.Muted.Render(columnLabel(labels[1], labelW))
+	fieldW := maxInt(4, textW-labelW-2)
+	m.filename.Width = maxInt(1, minInt(m.filename.Width, fieldW-1))
+	m.title.Width = maxInt(1, minInt(m.title.Width, fieldW-1))
+	filenameField := truncate(m.filename.View(), fieldW)
+	titleField := truncate(m.title.View(), fieldW)
 
 	rows := []*string{&filenameField, &titleField}
 	for i, r := range rows {

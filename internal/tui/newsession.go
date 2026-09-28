@@ -149,9 +149,9 @@ func indexOfDefaultAgent(agents []sessionAgentChoice, configDefault string) int 
 // default cases render symmetrically.
 func defaultDirPlaceholder(defaultDir string) string {
 	if strings.TrimSpace(defaultDir) == "" {
-		return "~ (daemon's $HOME if blank)"
+		return tr("~ (daemon's $HOME if blank)")
 	}
-	return defaultDir + " (from sessions.default_dir; edit to override)"
+	return fmt.Sprintf(tr("%s (from sessions.default_dir; edit to override)"), defaultDir)
 }
 
 // nsFocusCount is the row count for the form's focus cycling:
@@ -262,16 +262,17 @@ func (m newSessionFormModel) View(width int) string {
 	title := st.Emphasis.Render(tr("New session"))
 	hint := st.Subtitle.Render(tr("Spawn a tmux session running the picked agent (or a bare shell) on the picked device."))
 
-	const labelW = 12
-	nameLabel := st.Muted.Render(padLabel(tr("name"), labelW))
-	workLabel := st.Muted.Render(padLabel(tr("working dir"), labelW))
-	hostLabel := st.Muted.Render(padLabel(tr("device"), labelW))
-	agentLabel := st.Muted.Render(padLabel(tr("agent"), labelW))
-
 	// Each row must fit on one line after its label and the focus
 	// marker; at phone widths the rows used to wrap back under the
-	// label column and push the form off the screen.
+	// label column and push the form off the screen. The label column
+	// fits the translated labels (capped at half the row).
 	textW := width - 4 // the pane's border + padding
+	labels := []string{tr("name"), tr("working dir"), tr("device"), tr("agent")}
+	labelW := labelColumn(12, textW/2, labels...)
+	nameLabel := st.Muted.Render(columnLabel(labels[0], labelW))
+	workLabel := st.Muted.Render(columnLabel(labels[1], labelW))
+	hostLabel := st.Muted.Render(columnLabel(labels[2], labelW))
+	agentLabel := st.Muted.Render(columnLabel(labels[3], labelW))
 	fieldW := maxInt(4, textW-labelW-2)
 	narrow := textW < 60
 	m.name.Width = maxInt(1, minInt(m.name.Width, fieldW-1))
