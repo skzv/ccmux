@@ -1,9 +1,9 @@
 // Package usage is the per-agent token-usage walker layer:
 //
 //   - Claude: delegates to internal/claudeusage.WalkRolling (the rich
-//     walker; the dashboard's main Claude panel uses that package's
-//     Walk directly for its 5h session-block quota bar + per-project
-//     drill-down).
+//     walker). The dashboard's main Claude panel reads the 5h session
+//     block for its quota bar + per-project drill-down through
+//     WalkClaudeBlock, the same walk the daemon reports as claude_block.
 //   - Codex: internal/codexusage. Antigravity, Gemini, Muse: their own
 //     walkers below. The remaining agents go through the generic
 //     JSONL walker in internal/agentusage (WalkOthers).

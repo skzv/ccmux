@@ -1670,10 +1670,11 @@ func peerInfos(scan tailnet.Scan, port int) []daemon.PeerInfo {
 }
 
 // handleUsage returns per-agent token + cost activity over a rolling
-// window (default 5 hours, override via ?window=2h, 24h, 30m, …). The
-// walkers are best-effort: a missing or corrupt transcript on one
-// agent doesn't sink the others. iOS uses this for its dashboard
-// usage card.
+// window (default 5 hours, override via ?window=2h, 24h, 30m, …), plus
+// Claude's current 5-hour session block (claude_block), which the
+// window doesn't change. The walkers are best-effort: a missing or
+// corrupt transcript on one agent doesn't sink the others. iOS uses
+// this for its dashboard usage card.
 func (s *server) handleUsage(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -1686,11 +1687,13 @@ func (s *server) handleUsage(w http.ResponseWriter, r *http.Request) {
 	var (
 		wg                 sync.WaitGroup
 		claude, codex, ant usage.AgentSummary
+		block              *daemon.ClaudeBlock
 		others             []usage.NamedSummary
 		orSpend            daemon.OpenRouterSpend
 	)
-	wg.Add(5)
+	wg.Add(6)
 	go func() { defer wg.Done(); claude, _ = usage.WalkClaude(window) }()
+	go func() { defer wg.Done(); block = claudeBlock() }()
 	go func() { defer wg.Done(); codex, _ = usage.WalkCodex(window) }()
 	go func() { defer wg.Done(); ant, _ = usage.WalkAntigravity(window) }()
 	go func() { defer wg.Done(); others = usage.WalkOthers(window) }()
@@ -1702,7 +1705,34 @@ func (s *server) handleUsage(w http.ResponseWriter, r *http.Request) {
 		Antigravity: toUsageSummary(ant),
 		OpenRouter:  orSpend,
 		Others:      toOtherUsage(others),
+		ClaudeBlock: block,
 	})
+}
+
+// claudeBlock reads Claude's current session block the way the TUI's
+// usage panel does (usage.WalkClaudeBlock), for /v1/usage: the phone's
+// usage card and `ccmux usage` showed a rolling window that disagreed
+// with the TUI's quota bar about tokens, cost and the reset time. nil
+// when the transcripts can't be read.
+func claudeBlock() *daemon.ClaudeBlock {
+	agg, err := usage.WalkClaudeBlock()
+	if err != nil {
+		return nil
+	}
+	b := usage.ClaudeBlockOf(agg)
+	return &daemon.ClaudeBlock{
+		Active:              b.Active,
+		Start:               b.Start,
+		ResetAt:             b.ResetAt,
+		BlockSeconds:        int(b.Length / time.Second),
+		Prompts:             b.Prompts,
+		Messages:            b.Messages,
+		InputTokens:         b.Tokens.Input,
+		OutputTokens:        b.Tokens.Output,
+		CacheCreationTokens: b.Tokens.CacheCreation,
+		CacheReadTokens:     b.Tokens.CacheRead,
+		EstimatedCost:       b.EstimatedCost,
+	}
 }
 
 // toOtherUsage maps the generic per-agent summaries to the wire shape.

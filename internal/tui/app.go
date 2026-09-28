@@ -21,7 +21,6 @@ import (
 	"github.com/skzv/ccmux/internal/ccusage"
 	"github.com/skzv/ccmux/internal/claude"
 	"github.com/skzv/ccmux/internal/claudeauth"
-	"github.com/skzv/ccmux/internal/claudeusage"
 	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/conversations"
 	"github.com/skzv/ccmux/internal/daemon"
@@ -456,7 +455,7 @@ func detectMoshiCmd() tea.Cmd {
 	}
 }
 
-// usageTick fires every 15s — claudeusage.Walk scans the transcript
+// usageTick fires every 15s — usage.WalkClaudeBlock scans the transcript
 // tree which can be several MB, so we don't want it on every 2s heart-
 // beat. The dashboard happily shows the previous value while the next
 // walk runs in the background.
@@ -466,12 +465,12 @@ func usageTick() tea.Cmd {
 
 func (a App) refreshUsageCmd() tea.Cmd {
 	return func() tea.Msg {
-		// 5h matches Anthropic's subscription rolling-window. We pull
-		// the full window once for Claude (the rich panel uses every
-		// field) and the same for Codex/Antigravity (their summaries
-		// are today always zero — stub walkers, see internal/usage).
+		// Claude's rich panel reads the active 5-hour session block
+		// (every field of it), through the same walk the daemon reports
+		// to phones and `ccmux usage` as claude_block. The other agents'
+		// rows cover a plain rolling window of the same length.
 		const window = 5 * time.Hour
-		agg, claudeErr := claudeusage.Walk(window)
+		agg, claudeErr := usage.WalkClaudeBlock()
 		codex, _ := usage.WalkCodex(window)
 		antigravity, _ := usage.WalkAntigravity(window)
 		others := usage.WalkOthers(window)

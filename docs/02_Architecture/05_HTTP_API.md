@@ -279,11 +279,33 @@ daemon's home dir, most-recent first. Headless/SDK runs excluded.
   you'd pass to its `--resume`).
 
 #### `GET /v1/usage`
-Per-agent token + cost activity over a rolling window.
+Per-agent token + cost activity over a rolling window, plus Claude's current
+5-hour session block.
 - **Query:** `?window=<Go duration>` e.g. `2h`, `24h`, `30m` (default `5h`,
-  clamped to `744h` / 31 days).
+  clamped to `744h` / 31 days). It sizes the per-agent summaries only.
 - **Response `200`:** `AgentUsage`. Best-effort per agent; `estimated_cost`
   is USD at published API rates.
+- `claude_block` is the block the TUI's quota bar and "resets in" line
+  show: Anthropic's Pro/Max "5-hour limit", computed the way ccusage
+  computes it. A block starts at the hour its first message fell in
+  (floored to the UTC hour), lasts `block_seconds` (18000), and a message
+  more than that after its start opens the next one. `reset_at` is when
+  the quota resets. The `claude` summary next to it covers the plain
+  rolling window instead, so it reports different prompts, tokens and
+  cost, and has no reset time. `active: false` means no block is running
+  (idle for 5 hours, or the last block ran out): `start` and `reset_at`
+  are omitted, everything is 0, and the next message opens a new block.
+  `claude_block` is absent when the transcripts can't be read, and from
+  daemons older than this field.
+
+```json
+"claude_block": {
+  "active": true, "start": "2026-09-28T13:00:00Z", "reset_at": "2026-09-28T18:00:00Z",
+  "block_seconds": 18000, "prompts": 6, "messages": 14,
+  "input_tokens": 60, "output_tokens": 12, "cache_creation_tokens": 600, "cache_read_tokens": 6000,
+  "estimated_cost": 0.03
+}
+```
 
 #### `GET /v1/notes`
 List a project's markdown vault, or (with `&file=`) read one file.
@@ -618,9 +640,25 @@ type Conversation struct {
 
 // GET /v1/usage
 type AgentUsage struct {
-	Claude      UsageSummary `json:"claude"`
-	Codex       UsageSummary `json:"codex"`
-	Antigravity UsageSummary `json:"antigravity"`
+	Claude      UsageSummary    `json:"claude"`
+	Codex       UsageSummary    `json:"codex"`
+	Antigravity UsageSummary    `json:"antigravity"`
+	OpenRouter  OpenRouterSpend `json:"openrouter"`
+	Others      []OtherUsage    `json:"others,omitempty"`
+	ClaudeBlock *ClaudeBlock    `json:"claude_block,omitempty"` // Claude's 5-hour session block
+}
+type ClaudeBlock struct {
+	Active              bool      `json:"active"`
+	Start               time.Time `json:"start,omitzero"`    // hour-floored block start
+	ResetAt             time.Time `json:"reset_at,omitzero"` // block end: the quota resets
+	BlockSeconds        int       `json:"block_seconds"`
+	Prompts             int       `json:"prompts"`  // what the TUI's quota bar counts
+	Messages            int       `json:"messages"` // assistant responses
+	InputTokens         int       `json:"input_tokens"`
+	OutputTokens        int       `json:"output_tokens"`
+	CacheCreationTokens int       `json:"cache_creation_tokens"`
+	CacheReadTokens     int       `json:"cache_read_tokens"`
+	EstimatedCost       float64   `json:"estimated_cost"` // USD
 }
 type UsageSummary struct {
 	HasData       bool    `json:"has_data"`
