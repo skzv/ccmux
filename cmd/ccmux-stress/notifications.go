@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -30,11 +31,11 @@ import (
 //     per-session counter exactly once; a race would either double-
 //     count or miss bells.
 //
-// How it triggers needs_input: we send Claude's prompt frame
-// characters (`╭ │ > ╯`) into each pane via `tmux send-keys`, then
-// wait for the daemon's idle threshold to elapse and probe
-// /v1/sessions to watch state transitions. Detection latency is the
-// time from send-keys to the daemon reporting needs_input.
+// How it triggers needs_input: each pane is respawned into a script
+// that draws Claude Code v2's idle input box (claudeV2InputBox) and
+// holds it, then we wait for the daemon's idle threshold to elapse and
+// probe /v1/sessions to watch state transitions. Detection latency is
+// the time from the respawn to the daemon reporting needs_input.
 func newNotificationsCmd() *cobra.Command {
 	var (
 		count int
@@ -53,10 +54,9 @@ This exercises the daemon's bell-injection pipeline + the moshi
 detection cache + per-session prompt_count accounting under
 simultaneous load. The spec's default is 50 sessions / 5s burst.
 
-State transitions are driven by sending Claude's prompt-frame
-characters into each pane via tmux send-keys — the daemon's
-classifier looks for box-drawing chars + a quiet pane, so sessions
-flip to needs_input automatically once content stops changing.`,
+State transitions are driven by respawning each pane into a script
+that draws Claude Code v2's idle input box and holds it — the
+daemon's classifier reads that box on a quiet pane as needs_input.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runNotifications(cmd.Context(), count, burst, wait)
 		},
@@ -67,16 +67,27 @@ flip to needs_input automatically once content stops changing.`,
 	return c
 }
 
-// claudePromptScript is the shell command we run via `tmux
-// respawn-pane` to push a session into needs_input. It has to
-// satisfy two things:
+// claudeV2InputBox is the screen the notifications profile puts in each
+// pane: Claude Code v2's idle input box — a `❯` line (with the
+// non-breaking space real captures have) between two `─` rules, and
+// the mode footer below — shaped after
+// internal/agent/testdata/panes/claude_v2_idle.txt. The rules are 40
+// columns so they fit the default 80-column pane without wrapping.
 //
-//  1. After it runs, the pane's LAST non-empty line must contain the
-//     box-drawing characters the classifier counts (`╭╮╰╯│─>`, two
-//     or more).
-//  2. The pane must STAY at that content — otherwise the shell
-//     prompt `$` reappears on the bottom row and the classifier
-//     treats the pane as `StateError`.
+// The old payload, `│ > waiting for input │`, was Claude Code v1's
+// frame; detection moved to the v2 shapes, so it no longer classified
+// as needs_input and the profile measured nothing.
+const claudeV2InputBox = "\n\n\n" +
+	"────────────────────────────────────────\n" +
+	"❯ \n" +
+	"────────────────────────────────────────\n" +
+	"  ⏵⏵ auto mode on (shift+tab to cycle)"
+
+// claudePromptScript is the shell command we run via `tmux
+// respawn-pane` to push a session into needs_input: print the input
+// box and stay there. The pane must KEEP that content — otherwise a
+// shell prompt reappears on the bottom row and the classifier treats
+// the pane as `StateError` — so `sleep 9999` holds it.
 //
 // First implementation used `send-keys` against a running shell,
 // which got mangled — the shell's line-buffered input processing
@@ -84,12 +95,12 @@ flip to needs_input automatically once content stops changing.`,
 // arrived out of sequence with `&&` operators splitting up). Switched
 // to `respawn-pane -k`, which kills the existing pane process and
 // replaces it with our script. No shell-routing involved.
-//
-// `printf` (no trailing newline) puts the prompt on the bottom row;
-// `sleep 9999` keeps the process alive so the row stays put.
-// `│ > … │` has three matches (`│`, `>`, `│`) — clears the 2-hit
-// threshold with margin.
-const claudePromptScript = `printf '\n\n\n│ > waiting for input │' ; sleep 9999`
+var claudePromptScript = "printf '%s' " + shellQuote(claudeV2InputBox) + " ; sleep 9999"
+
+// shellQuote single-quotes s for sh.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
 
 func runNotifications(ctx context.Context, count int, burst, wait time.Duration) error {
 	if count <= 0 {
@@ -110,8 +121,10 @@ func runNotifications(ctx context.Context, count int, burst, wait time.Duration)
 	}
 	defer os.RemoveAll(staged)
 
+	// A closure, so cleanup sees the sessions appended below (see
+	// runSessions).
 	spawned := []string{}
-	defer cleanupSessions(spawned)
+	defer func() { cleanupSessions(spawned) }()
 
 	fmt.Printf("→ spawning %d sessions…\n", count)
 	for i := 0; i < count; i++ {
@@ -147,7 +160,11 @@ func runNotifications(ctx context.Context, count int, burst, wait time.Duration)
 
 	// Give the daemon a tick to discover the new sessions so we don't
 	// race the spawn against the first probe.
-	time.Sleep(2 * time.Second)
+	select {
+	case <-time.After(2 * time.Second):
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 
 	// 2. Burst phase. Space the N send-keys calls evenly across the
 	//    burst window so we hit the daemon under simultaneous (but
@@ -214,9 +231,7 @@ func runNotifications(ctx context.Context, count int, burst, wait time.Duration)
 	fmt.Printf("✓ detected %d / %d transitions\n", len(seen), len(spawned))
 	rpt := buildNotifReport(runID, count, burst, wait, seen, len(spawned))
 	fmt.Println(rpt)
-	if err := writeReport("notifications", runID, rpt); err != nil {
-		fmt.Printf("⚠ couldn't write report: %v\n", err)
-	}
+	reportWritten(writeReport("notifications", runID, rpt))
 	return nil
 }
 

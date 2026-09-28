@@ -56,9 +56,10 @@ Exits non-zero if the spec's leak thresholds trip:
   - end-RSS > 150 MB absolute
   - end-RSS > 3× start-RSS AND >30 MB delta
 
-The report is appended to as the run progresses so a mid-run crash
-still leaves usable evidence under
-docs/03_Agent_Logs/stress-<date>-longhaul-<runid>.md.
+The report (stress-<date>-longhaul-<runid>.md, in the directory the
+global --report-dir help describes; its path is printed at the start)
+is appended to as the run progresses, so a mid-run crash still leaves
+usable evidence.
 
 Intended deployment: a launchd job on the always-on Mac mini per
 docs/01_Specs/03_Testing_And_CI.md — GHA-hosted runners cap at
@@ -105,8 +106,10 @@ func runLonghaul(ctx context.Context, duration time.Duration, count int, sample 
 	}
 	defer os.RemoveAll(staged)
 
+	// A closure, so cleanup sees the sessions appended below (see
+	// runSessions).
 	spawned := []string{}
-	defer cleanupSessions(spawned)
+	defer func() { cleanupSessions(spawned) }()
 
 	for i := 0; i < count; i++ {
 		name := fmt.Sprintf("%s-%d", prefix, i)
@@ -133,9 +136,9 @@ func runLonghaul(ctx context.Context, duration time.Duration, count int, sample 
 	if err != nil {
 		return 2, fmt.Errorf("connect to daemon: %w", err)
 	}
-	pid := findCcmuxd()
-	if pid == 0 {
-		return 2, fmt.Errorf("can't locate ccmuxd via pgrep")
+	pid, err := findCcmuxd()
+	if err != nil {
+		return 2, err
 	}
 	fmt.Printf("→ daemon pid=%d, starting %v soak…\n", pid, duration)
 
@@ -215,12 +218,8 @@ func checkLonghaulThresholds(startRSS, endRSS int) string {
 // path. Returns "" + error when the docs dir isn't available; the
 // caller logs and continues without a report file.
 func openLonghaulReport(runID int64, startRSS, count int, duration, sample time.Duration) (string, error) {
-	dir := filepath.Join("docs", "03_Agent_Logs")
-	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
-		dir = "/tmp"
-	}
-	stamp := time.Now().UTC().Format("2006-01-02")
-	path := filepath.Join(dir, fmt.Sprintf("stress-%s-longhaul-%d.md", stamp, runID))
+	path := reportPath("longhaul", runID)
+	fmt.Printf("report: %s\n", path)
 	header := fmt.Sprintf(`# Stress run: longhaul (runid=%d)
 
 - Date: %s

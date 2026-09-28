@@ -75,8 +75,11 @@ func runSessions(ctx context.Context, count int, duration, probe time.Duration) 
 	}
 	defer os.RemoveAll(stagedDir)
 
+	// A closure, so cleanup sees every session appended below: a plain
+	// `defer cleanupSessions(spawned)` evaluates its argument right
+	// here — the empty slice — and leaked every session.
 	spawned := []string{}
-	defer cleanupSessions(spawned)
+	defer func() { cleanupSessions(spawned) }()
 
 	fmt.Printf("→ spawning %d sessions…\n", count)
 	for i := 0; i < count; i++ {
@@ -107,19 +110,18 @@ func runSessions(ctx context.Context, count int, duration, probe time.Duration) 
 	fmt.Printf("✓ spawned %d sessions\n", len(spawned))
 
 	// 2. Sample the daemon. We need a local client to /v1/sessions
-	//    and a way to read RSS. ccmuxd's pid comes from pgrep; if
-	//    not found, we still drive load (the API still works against
-	//    whoever is bound to the socket) but skip RSS sampling.
+	//    and the pid of the daemon behind that same socket for RSS.
+	//    Without the pid the run can't measure what it exists to
+	//    measure, so that's an error rather than a quiet skip.
 	cli, err := daemon.LocalClient()
 	if err != nil {
 		return fmt.Errorf("connect to daemon: %w", err)
 	}
-	pid := findCcmuxd()
-	if pid == 0 {
-		fmt.Println("⚠ couldn't locate ccmuxd pid via pgrep — proceeding without RSS samples")
-	} else {
-		fmt.Printf("→ daemon pid=%d\n", pid)
+	pid, err := findCcmuxd()
+	if err != nil {
+		return err
 	}
+	fmt.Printf("→ daemon pid=%d\n", pid)
 
 	// 3. Probe loop: every `probe` interval, call /v1/sessions and
 	//    record the latency. In parallel, sample RSS / FD on a slower
@@ -148,10 +150,8 @@ func runSessions(ctx context.Context, count int, duration, probe time.Duration) 
 			}
 			latencies = append(latencies, time.Since(start))
 		case <-rssTicker.C:
-			if pid != 0 {
-				if rss := readRSS(pid); rss > 0 {
-					rssSamples = append(rssSamples, rss)
-				}
+			if rss := readRSS(pid); rss > 0 {
+				rssSamples = append(rssSamples, rss)
 			}
 		}
 	}
@@ -160,22 +160,8 @@ func runSessions(ctx context.Context, count int, duration, probe time.Duration) 
 	fmt.Println("✓ done; writing report")
 	rpt := buildReport(runID, count, duration, probe, latencies, rssSamples)
 	fmt.Println(rpt)
-	if err := writeReport("sessions", runID, rpt); err != nil {
-		fmt.Printf("⚠ couldn't write report: %v\n", err)
-	}
+	reportWritten(writeReport("sessions", runID, rpt))
 	return nil
-}
-
-// findCcmuxd returns the pid of the running ccmuxd or 0 if none.
-// macOS-aware (pgrep is fine on darwin + linux).
-func findCcmuxd() int {
-	out, err := quickOutput("pgrep", "-x", "ccmuxd")
-	if err != nil {
-		return 0
-	}
-	var pid int
-	fmt.Sscanf(string(out), "%d", &pid)
-	return pid
 }
 
 // readRSS returns the resident set size of pid in KB. Returns 0 on
@@ -191,10 +177,12 @@ func readRSS(pid int) int {
 }
 
 // cleanupSessions kills every session we spawned. Idempotent — a
-// kill against a session that the user already killed is fine.
+// kill against a session that the user already killed is fine. The
+// "=" target matches the exact name only, so a prefix can never reach
+// some other session.
 func cleanupSessions(names []string) {
 	for _, name := range names {
-		_, _ = quickOutput("tmux", "kill-session", "-t", name)
+		_, _ = quickOutput("tmux", "kill-session", "-t", "="+name)
 	}
 }
 
@@ -293,22 +281,46 @@ func minMax(xs []int) (min, max int) {
 	return
 }
 
-// writeReport drops the report under docs/03_Agent_Logs/. The dir is
-// expected to exist in any ccmux checkout; if it doesn't (someone
-// running ccmux-stress outside the repo) we fall back to /tmp.
-func writeReport(profile string, runID int64, body string) error {
-	dirs := []string{
-		filepath.Join("docs", "03_Agent_Logs"),
-		filepath.Join("/tmp"),
+// reportDirFlag is the persistent --report-dir flag.
+var reportDirFlag string
+
+// agentLogsDir is where reports go when ccmux-stress runs from the root
+// of a ccmux checkout.
+var agentLogsDir = filepath.Join("docs", "03_Agent_Logs")
+
+// reportDir picks where a report goes: --report-dir when given, else
+// docs/03_Agent_Logs/ when the current directory is a ccmux checkout
+// (that directory exists), else the system temp dir. The help says the
+// same; it used to promise docs/03_Agent_Logs unconditionally.
+func reportDir() string {
+	if reportDirFlag != "" {
+		return reportDirFlag
 	}
+	if fi, err := os.Stat(agentLogsDir); err == nil && fi.IsDir() {
+		return agentLogsDir
+	}
+	return os.TempDir()
+}
+
+// reportPath is the file a report for profile/runID is written to.
+func reportPath(profile string, runID int64) string {
 	stamp := time.Now().UTC().Format("2006-01-02")
-	for _, d := range dirs {
-		if fi, err := os.Stat(d); err == nil && fi.IsDir() {
-			fname := filepath.Join(d, fmt.Sprintf("stress-%s-%s-%d.md", stamp, profile, runID))
-			return os.WriteFile(fname, []byte(body), 0o644)
-		}
+	return filepath.Join(reportDir(), fmt.Sprintf("stress-%s-%s-%d.md", stamp, profile, runID))
+}
+
+// writeReport writes the report and returns where it went.
+func writeReport(profile string, runID int64, body string) (string, error) {
+	path := reportPath(profile, runID)
+	return path, os.WriteFile(path, []byte(body), 0o644)
+}
+
+// reportWritten tells the user where the report landed (or why not).
+func reportWritten(path string, err error) {
+	if err != nil {
+		fmt.Printf("⚠ couldn't write report %s: %v\n", path, err)
+		return
 	}
-	return fmt.Errorf("no writable output dir for report")
+	fmt.Printf("report: %s\n", path)
 }
 
 // quickOutput runs a short probe (ps/pgrep/tmux) under a timeout so a

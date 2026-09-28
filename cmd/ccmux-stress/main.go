@@ -12,14 +12,17 @@
 //	longhaul       slow cadence over hours, fail on the 150 MB / 3×
 //	                RSS thresholds from the spec. Stage 5.
 //
-// All subcommands write a markdown report to
-// docs/03_Agent_Logs/stress-<date>.md so the historical signal
-// accumulates with the rest of the project's daily logs.
+// Subcommands write a markdown report — to docs/03_Agent_Logs/ when run
+// from a ccmux checkout, else to the system temp dir, or wherever
+// --report-dir says — and print its path.
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/spf13/cobra"
 )
@@ -31,22 +34,37 @@ var rootCmd = &cobra.Command{
 load profiles described in docs/01_Specs/03_Testing_And_CI.md. It is
 NOT distributed to end users.
 
-Run against the local daemon. Each subcommand spawns its own tmux
-sessions under a recognizable name prefix (c-stress-<runid>-N) and
-cleans them up at exit. A markdown report lands in
-docs/03_Agent_Logs/stress-<date>.md.`,
+Run against the local daemon — the one behind
+$HOME/.local/state/ccmux/ccmuxd.sock; its pid is read from that socket,
+so point HOME at a sandbox to measure a sandbox daemon. Each subcommand
+spawns its own tmux sessions under a recognizable name prefix
+(c-stress-…-<runid>-N) and kills them when it exits, including on
+Ctrl-C.
+
+A markdown report, stress-<date>-<profile>-<runid>.md, lands in
+--report-dir; by default that's docs/03_Agent_Logs/ when run from the
+root of a ccmux checkout, else the system temp dir. The path is
+printed.`,
 	SilenceUsage:  true,
 	SilenceErrors: true,
 }
 
 func main() {
+	rootCmd.PersistentFlags().StringVar(&reportDirFlag, "report-dir", "",
+		"directory for the markdown report (default: docs/03_Agent_Logs in a ccmux checkout, else the system temp dir)")
 	rootCmd.AddCommand(
 		newSessionsCmd(),
 		newNotificationsCmd(),
 		newLonghaulCmd(),
 		newBareSessionsCmd(),
 	)
-	if err := rootCmd.Execute(); err != nil {
+	// Ctrl-C / SIGTERM cancel the run's context instead of killing the
+	// process outright, so each profile's deferred cleanup still kills
+	// the tmux sessions it spawned.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	err := rootCmd.ExecuteContext(ctx)
+	stop()
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "ccmux-stress:", err)
 		os.Exit(1)
 	}
