@@ -208,7 +208,7 @@ func (a App) confirmationButtonAt(x, y int) (confirmationFocus, bool) {
 	}
 	cancelText := confirmationButtonText(tr("Cancel"))
 	confirmText := confirmationButtonText(a.confirm.confirmLabel())
-	pair := cancelText + confirmationButtonGap + confirmText
+	pair := a.confirmationButtonPair()
 	lines := strings.Split(ansi.Strip(a.renderConfirmationOverlay(a.width, a.height)), "\n")
 	if y < 0 || y >= len(lines) {
 		return confirmationFocusCancel, false
@@ -235,7 +235,55 @@ const confirmationButtonGap = "  "
 // one space each side (the filled background spans the padding).
 func confirmationButtonText(label string) string { return " " + label + " " }
 
+// renderConfirmationOverlay is the whole frame while a dialog is open:
+// the dialog centred on a width×height screen, never taller than the
+// screen. It is also the hit-test source (confirmationButtonAt), so a
+// click maps to exactly what is drawn. Bubble Tea shows only the last
+// `height` lines of a taller frame, while clicks were tested against
+// the whole dialog: every row was off by the overflow, and a click on
+// the blank row under "Kill" killed the session.
 func (a App) renderConfirmationOverlay(width, height int) string {
+	modal := a.renderConfirmationModal(width, false)
+	if height > 0 && lipgloss.Height(modal) > height {
+		// Too tall: drop the vertical padding, the spacer rows and the
+		// key hint (the buttons say the same) before clipping anything.
+		modal = a.renderConfirmationModal(width, true)
+	}
+	frame := lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, modal)
+	return clipConfirmationFrame(frame, height, a.confirmationButtonPair())
+}
+
+// clipConfirmationFrame cuts a frame taller than height down to height
+// lines, choosing the window so the row holding the buttons stays on
+// screen (with the row under it, the dialog's bottom edge, when there
+// is room). A frame that fits is returned unchanged.
+func clipConfirmationFrame(frame string, height int, buttons string) string {
+	lines := strings.Split(frame, "\n")
+	if height <= 0 || len(lines) <= height {
+		return frame
+	}
+	start := 0
+	for i, line := range lines {
+		if strings.Contains(ansi.Strip(line), buttons) {
+			if i+2 > height {
+				start = minInt(i+2-height, len(lines)-height)
+			}
+			break
+		}
+	}
+	return strings.Join(lines[start:start+height], "\n")
+}
+
+// confirmationButtonPair is the buttons row's visible text.
+func (a App) confirmationButtonPair() string {
+	return confirmationButtonText(tr("Cancel")) + confirmationButtonGap +
+		confirmationButtonText(a.confirm.confirmLabel())
+}
+
+// renderConfirmationModal renders the dialog box itself. compact drops
+// the vertical padding, the spacer rows and the key hint, for screens
+// too short for the full dialog.
+func (a App) renderConfirmationModal(width int, compact bool) string {
 	st := a.styles
 	modalWidth := confirmationModalWidth(width)
 	pad := st.Spacing.MD
@@ -245,21 +293,24 @@ func (a App) renderConfirmationOverlay(width, height int) string {
 	// mid-word at phone widths).
 	inner := maxInt(8, modalWidth-2-2*pad)
 	wrap := func(s string) string { return lipgloss.NewStyle().Width(inner).Render(s) }
+	spaced := func(lines []string) []string {
+		if compact {
+			return lines
+		}
+		return append(lines, "")
+	}
 
 	// A session name too long for a line is shortened, not broken.
 	target := a.confirm.target
 	if lipgloss.Width(target) > inner-4 {
 		target = truncate(target, maxInt(4, inner-4))
 	}
-	lines := []string{
-		wrap(st.Title.Render(a.confirm.title())),
-		"",
-		// Break at spaces only: a word wrap also breaks after hyphens,
-		// which split "c-my-project" across two lines.
-		wrapAtSpaces(a.confirm.body(target), inner),
-	}
+	lines := spaced([]string{wrap(st.Title.Render(a.confirm.title()))})
+	// Break at spaces only: a word wrap also breaks after hyphens,
+	// which split "c-my-project" across two lines.
+	lines = append(lines, wrapAtSpaces(a.confirm.body(target), inner))
 	if w := a.confirm.warning(); w != "" {
-		lines = append(lines, "", st.StatusWarning.Render(wrap(w)))
+		lines = append(spaced(lines), st.StatusWarning.Render(wrap(w)))
 	}
 
 	cancel := a.renderConfirmationButton(tr("Cancel"), a.confirm.focus == confirmationFocusCancel)
@@ -267,13 +318,17 @@ func (a App) renderConfirmationOverlay(width, height int) string {
 	buttons := lipgloss.JoinHorizontal(lipgloss.Top, cancel, confirmationButtonGap, confirm)
 	buttons = strings.Repeat(" ", max0((inner-lipgloss.Width(buttons))/2)) + buttons
 
-	lines = append(lines, "", buttons, "", st.Muted.Render(wrap(tr("y confirm  n/esc cancel  arrows move"))))
-	modal := lipgloss.NewStyle().
+	lines = append(spaced(lines), buttons)
+	padY := st.Spacing.XS
+	if !compact {
+		padY = st.Spacing.SM
+		lines = append(lines, "", st.Muted.Render(wrap(tr("y confirm  n/esc cancel  arrows move"))))
+	}
+	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(st.P.Red).
-		Padding(st.Spacing.SM, pad).
+		Padding(padY, pad).
 		Render(strings.Join(lines, "\n"))
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, modal)
 }
 
 func (a App) renderConfirmationButton(label string, focused bool) string {
