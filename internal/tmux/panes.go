@@ -126,3 +126,18 @@ func CapturePaneID(ctx context.Context, paneID string, lines int) (string, error
 	}
 	return string(out), nil
 }
+
+// SendKeysPane is SendKeys for one specific pane, by its tmux pane id
+// (Pane.ID) rather than a session's active pane. As with
+// CapturePaneID, anything but a pane id is refused, so the target can
+// never be read as a session or window spec.
+func SendKeysPane(ctx context.Context, paneID, keys string) error {
+	if !validPaneID(paneID) {
+		return fmt.Errorf("%w: %q", errBadPaneID, paneID)
+	}
+	// "--" as in SendKeys: keys starting with "-" are typed, not parsed.
+	if out, err := command(ctx, "tmux", "send-keys", "-t", paneID, "--", keys).CombinedOutput(); err != nil {
+		return fmt.Errorf("tmux send-keys: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}

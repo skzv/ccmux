@@ -68,7 +68,7 @@ func buildTools(s *Server) map[string]Tool {
 			Handler:     wrap(s.handleListSessions),
 		},
 		"read_pane": {
-			Description: "Return the last N lines of a session's active tmux pane (default 24, max 500). Lets you inspect a session's current screen content without attaching. Useful for 'what is this session doing right now?'",
+			Description: "Return the last N lines of a session's agent pane — the pane its agent runs in, even when another window is active (default 24, max 500). Lets you inspect a session's current screen content without attaching. Useful for 'what is this session doing right now?'",
 			InputSchema: object(map[string]any{
 				"name": stringSchema("tmux session name (from list_sessions[].name)", true),
 				"lines": numberSchema(
@@ -152,7 +152,7 @@ func buildTools(s *Server) map[string]Tool {
 			Mutating: true,
 		}
 		t["send_keys"] = Tool{
-			Description: "Send keystrokes into a session's active pane — the same as typing into the user's session, so use with care. `keys` is one tmux send-keys argument: if the whole string is a tmux key name (Enter, C-c, Escape, Up, Tab, …) that key is pressed; anything else is typed literally, so 'ls Enter' types those eight characters and presses nothing. To type text and submit it, call send_keys twice: first the text, then 'Enter'. Requires ccmux-mcp --allow-mutate.",
+			Description: "Send keystrokes into the pane a session's agent runs in (even when the user has another window active) — the same as typing into the user's session, so use with care. `keys` is one tmux send-keys argument: if the whole string is a tmux key name (Enter, C-c, Escape, Up, Tab, …) that key is pressed; anything else is typed literally, so 'ls Enter' types those eight characters and presses nothing. To type text and submit it, call send_keys twice: first the text, then 'Enter'. Requires ccmux-mcp --allow-mutate.",
 			InputSchema: object(map[string]any{
 				"name": stringSchema("tmux session name (from list_sessions[].name)", true),
 				"keys": stringSchema("either literal text to type (e.g. 'hello') or exactly one tmux key name (e.g. 'Enter', 'C-c', 'Escape') — not both in one call", true),

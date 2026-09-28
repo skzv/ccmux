@@ -24,6 +24,10 @@ type fakeTmux struct {
 	session  map[string]tmux.Session
 	order    []string
 	reads    []string // pane ids capturePane was asked for, in order
+	// sent records every send-keys as "<pane id>=<keys>" — the pane the
+	// keys landed in, whether targeted by id or through a session's
+	// active pane.
+	sent []string
 }
 
 type fakePane struct {
@@ -142,6 +146,35 @@ func (f *fakeTmux) wire(s *server) {
 		}
 		return p.Title, nil
 	}
+	s.sendKeysPane = func(_ context.Context, id, keys string) error {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		for _, ps := range f.sessions {
+			for _, p := range ps {
+				if p.ID == id {
+					f.sent = append(f.sent, id+"="+keys)
+					return nil
+				}
+			}
+		}
+		return errors.New("can't find pane: " + id)
+	}
+	s.sendKeys = func(_ context.Context, name, keys string) error {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		p, err := active(name)
+		if err != nil {
+			return err
+		}
+		f.sent = append(f.sent, p.ID+"="+keys)
+		return nil
+	}
+}
+
+func (f *fakeTmux) sentKeys() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.sent...)
 }
 
 // readFixture returns a pane fixture from internal/agent/testdata/panes.

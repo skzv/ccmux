@@ -57,5 +57,8 @@ func TestCapturePaneID_RefusesNonPaneTargets(t *testing.T) {
 		if _, err := CapturePaneID(context.Background(), id, 10); !errors.Is(err, errBadPaneID) {
 			t.Errorf("CapturePaneID(%q) err = %v, want errBadPaneID", id, err)
 		}
+		if err := SendKeysPane(context.Background(), id, "y"); !errors.Is(err, errBadPaneID) {
+			t.Errorf("SendKeysPane(%q) err = %v, want errBadPaneID", id, err)
+		}
 	}
 }

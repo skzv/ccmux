@@ -441,6 +441,38 @@ func agentPane(panes []tmux.Pane, last string) (tmux.Pane, bool) {
 	return tmux.OldestPane(panes)
 }
 
+// agentPaneID resolves the pane a request meant for a session's agent
+// must reach (/send-keys, /preview): the pane the poll loop classifies
+// — the one it read last tick while that pane is still in the session,
+// else the one agentPane picks from the session's panes (a session no
+// tick has read yet). "" when it can't be resolved — the panes seam is
+// unset or list-panes failed, usually because there is no such session
+// — for the caller to fall back to the session target.
+//
+// The pane list is read even when the poll loop remembers an id: pane
+// ids are unique only while the tmux server lives, so a remembered id
+// is used only once the session's own list confirms it.
+func (s *server) agentPaneID(ctx context.Context, name string) string {
+	if s.panes == nil {
+		return ""
+	}
+	var last string
+	s.mu.Lock()
+	if t := s.seen[name]; t != nil {
+		last = t.pane.id
+	}
+	s.mu.Unlock()
+	panes, err := s.panes(ctx, name)
+	if err != nil {
+		return ""
+	}
+	p, ok := agentPane(panes, last)
+	if !ok {
+		return ""
+	}
+	return p.ID
+}
+
 // spinnerStaleFloor is the shortest time a working-spinner title is
 // believed without a sign of life; a variable so tests can shorten it.
 var spinnerStaleFloor = 10 * time.Second

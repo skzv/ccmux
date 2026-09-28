@@ -564,6 +564,13 @@ type server struct {
 	// falls back to capture/paneTitle on the session's active pane.
 	panes       func(ctx context.Context, session string) ([]tmux.Pane, error)
 	capturePane func(ctx context.Context, paneID string, lines int) (string, error)
+	// sendKeysPane types into one pane by id, sendKeys into a session's
+	// active pane (tmux.SendKeysPane / tmux.SendKeys; nil means those):
+	// /send-keys reaches the agent's pane through the first and falls
+	// back to the second only when that pane can't be resolved (see
+	// agentPaneID).
+	sendKeysPane func(ctx context.Context, paneID, keys string) error
+	sendKeys     func(ctx context.Context, name, keys string) error
 
 	// Session-handler seams, defaulted to tmux.Has / tmux.Kill /
 	// tmux.Rename so the create/kill/rename handlers' bookkeeping is
@@ -654,6 +661,8 @@ func newServer(cfg config.Config) *server {
 		paneTitle:       tmux.PaneTitle,
 		panes:           tmux.ListPanes,
 		capturePane:     tmux.CapturePaneID,
+		sendKeysPane:    tmux.SendKeysPane,
+		sendKeys:        tmux.SendKeys,
 		detectMoshi:     moshi.Detect,
 		bell:            notificationBell(cfg.Notifications),
 		readAgent:       project.ReadAgent,
@@ -1318,11 +1327,37 @@ func (s *server) handleSendKeys(w http.ResponseWriter, r *http.Request, name str
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	if err := tmux.SendKeys(ctx, name, req.Keys); err != nil {
+	if err := s.sendKeysToAgent(ctx, name, req.Keys); err != nil {
 		writeTmuxError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// sendKeysToAgent types keys into the pane the session's agent runs in
+// — the pane the poll loop classifies (agentPaneID) — rather than the
+// session's active pane. A bare session target means the active pane of
+// the active window, so with the agent in window 0 and the user in a
+// shell window, a phone's or an MCP client's reply to the agent ("y",
+// "Enter", a prompt) was typed into the shell and run there.
+//
+// The session's active pane is used only when the agent's pane can't
+// be resolved at all (list-panes failed: typically no such session,
+// which the fallback then reports as such). Once resolved, a failed
+// send is an error, never a retry on the active pane.
+func (s *server) sendKeysToAgent(ctx context.Context, name, keys string) error {
+	if id := s.agentPaneID(ctx, name); id != "" {
+		send := s.sendKeysPane
+		if send == nil {
+			send = tmux.SendKeysPane
+		}
+		return send(ctx, id, keys)
+	}
+	send := s.sendKeys
+	if send == nil {
+		send = tmux.SendKeys
+	}
+	return send(ctx, name, keys)
 }
 
 // sessionNotFound reports whether a tmux error means the targeted
@@ -1471,11 +1506,13 @@ func (s *server) handleNotesSearch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, out)
 }
 
-// handlePreview returns the last N lines of the session's active pane
-// as plain text. Read-only — the daemon's poll loop captures the pane
-// every few seconds anyway, so this just adds a "give me current
-// content" hook for clients that don't want to open the WebSocket
-// PTY just to take a peek. Used by the iOS app's session detail view
+// handlePreview returns the last N lines of the session's agent pane
+// — the pane the poll loop classifies and /send-keys types into (see
+// agentPaneID), not whichever pane happens to be active — as plain
+// text. Read-only — the daemon's poll loop captures the pane every few
+// seconds anyway, so this just adds a "give me current content" hook
+// for clients that don't want to open the WebSocket PTY just to take a
+// peek. Used by the iOS app's session detail view (and MCP read_pane)
 // to show "what's on screen right now" without committing to a full
 // terminal attach.
 func (s *server) handlePreview(w http.ResponseWriter, r *http.Request, name string) {
@@ -1495,9 +1532,7 @@ func (s *server) handlePreview(w http.ResponseWriter, r *http.Request, name stri
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
-	// Via the capture seam (default tmux.CapturePane) so the 404
-	// mapping below is unit-testable with an injected failure.
-	out, err := s.capture(ctx, name, lines)
+	out, err := s.previewCapture(ctx, name, lines)
 	if err != nil {
 		// tmux exits non-zero when the session is gone; map that to 404
 		// so clients can distinguish "no session" from other errors.
@@ -1505,6 +1540,22 @@ func (s *server) handlePreview(w http.ResponseWriter, r *http.Request, name stri
 		return
 	}
 	writeJSON(w, daemon.PreviewResponse{Lines: lines, Content: lastLines(out, lines)})
+}
+
+// previewCapture reads the session's agent pane by id. When that pane
+// can't be resolved or read (it exited, or the session is gone), it
+// reads the session target instead — through the capture seam (default
+// tmux.CapturePane), so a missing session still maps to 404 and the
+// mapping stays unit-testable with an injected failure.
+func (s *server) previewCapture(ctx context.Context, name string, lines int) (string, error) {
+	if s.capturePane != nil {
+		if id := s.agentPaneID(ctx, name); id != "" {
+			if out, err := s.capturePane(ctx, id, lines); err == nil {
+				return out, nil
+			}
+		}
+	}
+	return s.capture(ctx, name, lines)
 }
 
 // lastLines keeps the last n lines of a capture-pane dump, ignoring the

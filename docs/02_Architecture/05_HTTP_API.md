@@ -192,13 +192,16 @@ one.
   already has the new name.
 
 #### `POST /v1/sessions/{name}/send-keys`
-Send raw keystrokes/text into the session's active pane (e.g. type a reply +
-Enter). Passed through to `tmux send-keys`.
+Send raw keystrokes/text into the pane the session's agent runs in (e.g. type
+a reply + Enter) — the pane the daemon classifies, even when the user has
+another window or split active, so a reply meant for the agent is never typed
+into a shell. Passed through to `tmux send-keys`.
 - **Request:** `SendKeysRequest`. **Response:** `204`. `404` if the session
   doesn't exist.
 
 #### `GET /v1/sessions/{name}/preview`
-Last N lines of the active pane as plain text (ANSI stripped) — exactly N
+Last N lines of the agent's pane (the one `send-keys` types into) as plain
+text (ANSI stripped) — exactly N
 when the pane has that many, not counting the blank rows below the last
 output. A lightweight "peek" without opening the attach socket.
 - **Query:** `?lines=N` (default `24`; values above `500` are clamped to `500`).
@@ -219,6 +222,9 @@ client gives a full terminal **without** ssh/mosh.
   teardown.
 - A request with an `Origin` header is refused (native clients send none).
 - Closing the socket only **detaches**; the tmux session keeps running.
+- Input goes to the pane the terminal shows (the session's current window),
+  as for any tmux client — attaching doesn't switch windows, which would move
+  every other client of the session too.
 
 > For an interactive terminal, prefer this over polling `/preview`.
 

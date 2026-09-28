@@ -47,6 +47,16 @@ const attachReadLimit = 1 << 20
 //
 // Killing the spawned `tmux attach` process only detaches that client;
 // the tmux session itself keeps running.
+//
+// Unlike /send-keys and /preview, attach stays session-level and does
+// not select the agent's pane: keystrokes go to the pane the attached
+// client shows (the session's current window), as for any terminal
+// attached to the session. That is safe because the user sees where
+// they type — /send-keys is blind, which is why it resolves the agent's
+// pane. Selecting that pane on attach (`attach-session -t %N`,
+// select-window) would change the current window for every client of
+// the session, switching the window under someone working at the Mac;
+// the phone user moves between windows with tmux's own keys instead.
 func (s *server) handleAttach(w http.ResponseWriter, r *http.Request, name string) {
 	// Check the session exists while a plain HTTP error can still say
 	// so: attaching to a missing one used to upgrade (101) and then

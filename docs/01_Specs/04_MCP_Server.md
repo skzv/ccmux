@@ -64,7 +64,7 @@ When `--host` is set, the server talks to that ccmuxd over HTTP on the tailnet i
 | Tool                | Returns                                                                                                              |
 | ------------------- | -------------------------------------------------------------------------------------------------------------------- |
 | `list_sessions`     | every session known to the daemon, with state / agent / project / host / last-change                                 |
-| `read_pane`         | last N lines of a session's active tmux pane (default 24, max 500)                                                   |
+| `read_pane`         | last N lines of the pane a session's agent runs in (default 24, max 500)                                             |
 | `list_projects`     | every project under the configured root, with agent assignment and a few metadata bits                               |
 | `list_conversations`| past Claude / Codex / Antigravity / Cursor / Pi / Grok transcripts, sorted by recency, with the resumable agent ID   |
 | `get_usage`         | aggregated per-agent token + cost over a rolling window — Claude / Codex / Antigravity, the second-wave agents that have usage, and OpenRouter account spend when configured |
@@ -80,7 +80,7 @@ When `--host` is set, the server talks to that ccmuxd over HTTP on the tailnet i
 | ------------------- | ------------------------------------------------------------------------------------------------------------ |
 | `spawn_session`     | start a new agent session in an existing project (same shape as the TUI's Projects → `n` flow)               |
 | `spawn_bare_session`| start a project-less session (just `$SHELL` or an agent at a path)                                           |
-| `send_keys`         | type into a session's pane: `keys` is either literal text or exactly one tmux key name (`Enter`, `C-c`, …) — type text, then send `Enter` in a second call to submit it |
+| `send_keys`         | type into the pane a session's agent runs in: `keys` is either literal text or exactly one tmux key name (`Enter`, `C-c`, …) — type text, then send `Enter` in a second call to submit it |
 | `kill_session`      | terminate a tmux session                                                                                     |
 
 Tools are listed in alphabetical order via `tools/list`. Mutating tools are not just guarded — they're absent from the tools list entirely when `--allow-mutate` is off, so an agent can't surface them in its own UI even if a user toggled the flag in a config file.
