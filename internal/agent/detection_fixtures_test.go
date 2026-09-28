@@ -28,6 +28,10 @@ import (
 //   - claude_crashed_p10k.txt       claude died mid-session, powerlevel10k framed prompt (`╰─❯ `)
 //   - claude_crashed_starship.txt   the same crash, starship's two-line prompt (`❯ `)
 //   - claude_crashed_ohmyzsh.txt    the same crash, oh-my-zsh's default `➜  demo git:(main) ✗ `
+//   - claude_crashed_frozen_frame.txt      claude killed mid-turn: its last frame (status
+//     line, input box, footer) frozen above a short relaunch error and a zsh prompt
+//   - claude_crashed_frozen_frame_bare.txt the same, a one-line relaunch error
+//   - claude_crashed_frozen_frame_long.txt the same, a long stack trace
 //   - opencode_networking_working.txt the real OpenCode capture with its running footer
 //
 // Capturing a new one from a live session S — the same capture the
@@ -112,6 +116,16 @@ func TestDetectionFixtures(t *testing.T) {
 		{"claude_crashed_starship.txt", IDClaude, "", false, StateError},
 		{"claude_crashed_ohmyzsh.txt", IDClaude, "", true, StateError},
 		{"claude_crashed_ohmyzsh.txt", IDClaude, "", false, StateError},
+		// Killed mid-turn: the last frame stays on screen and the launch
+		// chain prints under it. With a short error the frozen input box
+		// was still in the prompt region and read as waiting for input (a
+		// bell and a "needs input" push); a long one pushes it out.
+		{"claude_crashed_frozen_frame.txt", IDClaude, "", true, StateError},
+		{"claude_crashed_frozen_frame.txt", IDClaude, "", false, StateError},
+		{"claude_crashed_frozen_frame_bare.txt", IDClaude, "", true, StateError},
+		{"claude_crashed_frozen_frame_bare.txt", IDClaude, "", false, StateError},
+		{"claude_crashed_frozen_frame_long.txt", IDClaude, "", true, StateError},
+		{"claude_crashed_frozen_frame_long.txt", IDClaude, "", false, StateError},
 
 		// OpenCode (and its fork Kilo): a cwd containing "working"
 		// must not pin the session active forever.

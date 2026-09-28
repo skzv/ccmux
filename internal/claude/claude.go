@@ -94,7 +94,7 @@ func Classify(pane string, lastChange time.Time, idleNeedsInput time.Duration) S
 			return StateNeedsInput
 		}
 		return StateActive
-	case looksLikeShellPrompt(tail) && !hasClaudeChrome(lastN(bottom, shellRegionLines)):
+	case looksLikeShellPrompt(tail) && !hasLiveClaudeChrome(lastN(bottom, shellRegionLines)):
 		return StateError
 	default:
 		if time.Since(lastChange) >= idleNeedsInput {
@@ -167,18 +167,26 @@ var ruleLinePrefix = strings.Repeat("─", 10)
 var numberedChoiceRE = regexp.MustCompile(`^[\s\x{00A0}]*❯[\s\x{00A0}]*\d+\.[\s\x{00A0}]`)
 
 // looksLikeClaudeV2Prompt reports whether the bottom lines show Claude
-// Code v2's input box: a `❯` (or `>`) line sandwiched between two
+// Code v2's live input box: a `❯` (or `>`) line sandwiched between two
 // `────` rules, with any number of typed continuation lines before the
-// closing rule. v2 has no rounded corners, and its last line is a
+// closing rule, and nothing after that rule but Claude's own footer
+// (footerLine). v2 has no rounded corners, and its last line is a
 // footer (`⏵⏵ auto mode on …`, `? for shortcuts`), so the single-line
 // looksLikeClaudePrompt never sees it.
+//
+// The footer condition is what tells a live box from a frozen one.
+// Claude killed mid-turn leaves its last frame on screen, and its launch
+// chain (`claude --continue || claude || zsh`) prints under it: the
+// relaunch's error and the shell's prompt, at column 0. A short error
+// kept the old box in this region, so a crashed session read as waiting
+// for input — a bell and a "needs input" push instead of the crash.
 func looksLikeClaudeV2Prompt(lines []string) bool {
 	for i := 0; i+2 < len(lines); i++ {
 		if !isRuleLine(lines[i]) || !isInputLine(lines[i+1]) {
 			continue
 		}
-		for _, l := range lines[i+2:] {
-			if isRuleLine(l) {
+		for j := i + 2; j < len(lines); j++ {
+			if isRuleLine(lines[j]) && footerOnly(lines[j+1:]) {
 				return true
 			}
 		}
@@ -205,21 +213,28 @@ func looksLikeClaudeV2Dialog(lines []string) bool {
 	return false
 }
 
-// hasClaudeChrome reports whether any line carries Claude UI furniture —
-// a v1 frame border, a v2 `────` input-box rule, or the `⏵⏵` mode
-// footer. Claude's own footer or a statusline can end in `%`
+// hasLiveClaudeChrome reports whether a line carries Claude UI
+// furniture — a v1 frame border, a v2 `────` input-box rule, or the
+// `⏵⏵` mode footer — with nothing after it but Claude's own footer
+// lines (footerLine). Claude's own footer or a statusline can end in `%`
 // (`Context left until auto-compact: 7%`), so a shell-looking tail only
-// means a crash when none of this is on screen. Mirrors the `not` block
-// of claude_shell_prompt.
+// means a crash when no live chrome is on screen. Mirrors the `not`
+// block of claude_shell_prompt.
 //
 // The checks are line shapes, not bare glyphs: a crashed session's
 // fallback shell can draw rounded corners and `─` runs of its own
 // (powerlevel10k's `╭─ ~/demo  main ───── ✔` / `╰─❯ `), and the `❯`
 // prompt char is shared by starship, pure and p10k. Claude's v2 `❯`
 // input line always sits between two rules, so the rule check covers it.
-func hasClaudeChrome(lines []string) bool {
-	for _, l := range lines {
-		if looksLikeClaudePrompt(l) || isRuleLine(l) || strings.ContainsRune(l, '⏵') {
+//
+// Chrome with anything else under it is a frozen frame, not a live one:
+// Claude was killed and its launch chain printed under its last screen —
+// a relaunch error, then the shell prompt, at column 0. That chrome
+// vetoed the crash, so a short error left the session idle or waiting
+// instead of error.
+func hasLiveClaudeChrome(lines []string) bool {
+	for i, l := range lines {
+		if (looksLikeClaudePrompt(l) || isRuleLine(l) || strings.ContainsRune(l, '⏵')) && footerOnly(lines[i+1:]) {
 			return true
 		}
 	}

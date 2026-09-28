@@ -202,6 +202,65 @@ func TestClassify_CrashedToModernShellPrompt(t *testing.T) {
 	}
 }
 
+// TestClassify_FrozenFrameIsACrash — Claude killed mid-turn leaves its
+// last frame on screen (status line, input box, footer), and its launch
+// chain prints under it: the relaunch's error, then the shell's prompt.
+// With a short error the old box stayed within the bottom twelve lines,
+// read as a live prompt, and the crash rang the bell and pushed "needs
+// input"; with the rule or the footer in the bottom four the shell
+// prompt was vetoed too. A box or chrome with anything but Claude's own
+// footer under it is frozen: the pane is a crash, however short the
+// error. The fixtures are shared with internal/agent.
+func TestClassify_FrozenFrameIsACrash(t *testing.T) {
+	working := paneFixture(t, "claude_v2_working.txt")
+	panes := map[string]string{
+		"node error, zsh prompt": paneFixture(t, "claude_crashed_frozen_frame.txt"),
+		"one-line error":         paneFixture(t, "claude_crashed_frozen_frame_bare.txt"),
+		"long stack trace":       paneFixture(t, "claude_crashed_frozen_frame_long.txt"),
+		"prompt right under it":  working + "user@host ~ % ",
+		"bash, killed":           working + "bash: line 1: 48213 Killed: 9               claude --continue\nsasha@laptop:~/projects/foo$ ",
+		"starship":               working + "zsh:1: command not found: claude\n\ndemo on  main [!?] via 🐹 v1.26.0\n❯ ",
+		"p10k":                   working + "zsh:1: command not found: claude\n\n╭─ ~/Projects/demo  main ⇡1 ········· ✔  10:42:17\n╰─❯ ",
+		"oh-my-zsh":              working + "zsh:1: command not found: claude\n➜  demo git:(main) ✗ ",
+		"frozen v1 frame":        "done.\n" + claudeFrame + "\n  ? for shortcuts\nzsh:1: command not found: claude\nuser@host ~ % ",
+	}
+	for name, pane := range panes {
+		for _, lastChange := range []time.Time{time.Now(), time.Now().Add(-10 * time.Minute)} {
+			if got := Classify(pane, lastChange, 3*time.Second); got != StateError {
+				t.Errorf("%s (lastChange %s ago) = %v, want error",
+					name, time.Since(lastChange).Round(time.Second), got)
+			}
+		}
+	}
+}
+
+// TestClassify_LiveBoxWithTaskList — what Claude draws under its footer
+// is its own: the background-task list, whose rows open with two
+// spaces, or with the `❯` pointer on the row the user selected. A box
+// with that under it is live, whatever the rows end in.
+func TestClassify_LiveBoxWithTaskList(t *testing.T) {
+	rule := strings.Repeat("─", 80)
+	box := "done\n" + rule + "\n❯ \n" + rule + "\n  ⏵⏵ auto mode on (shift+tab to cycle)\n"
+	for name, pane := range map[string]string{
+		"rows":              box + "\n  ○ main\n  ○ Explore the poll loop   12s · ↓ 1.2k tokens",
+		"a row selected":    box + "\n  ○ main\n❯ ○ Explore the poll loop   12s · ↓ 1.2k tokens",
+		"selected at 45%":   box + "\n  ○ main\n❯ ○ refactor workflow   ████░░░░ 45%",
+		"typed, statusline": "done\n" + rule + "\n❯ raise coverage to 90%\n" + rule + "\n  opus · ctx 42%",
+	} {
+		if got := Classify(pane, time.Now().Add(-10*time.Minute), 3*time.Second); got != StateNeedsInput {
+			t.Errorf("%s: quiet = %v, want needs_input", name, got)
+		}
+		if got := Classify(pane, time.Now(), 3*time.Second); got != StateActive {
+			t.Errorf("%s: fresh = %v, want active", name, got)
+		}
+	}
+	// A box whose closing rule isn't drawn yet (a capture racing a
+	// redraw) isn't a shell prompt either, whatever was typed.
+	if got := Classify("done\n"+rule+"\n❯ raise coverage to 90%", time.Now(), 3*time.Second); got == StateError {
+		t.Error("half-drawn box read as a crash")
+	}
+}
+
 func TestLooksLikeClaudeV2Dialog(t *testing.T) {
 	cases := []struct {
 		lines []string

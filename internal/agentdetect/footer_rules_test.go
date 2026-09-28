@@ -130,6 +130,14 @@ func TestClaudeShellPrompt_IgnoresPercentFooter(t *testing.T) {
 		{"v2 context footer", "done\n" + rule + "\n❯ \n" + rule + "\n  ⏵⏵ auto mode on (shift+tab to cycle)     Context left until auto-compact: 7%", false},
 		{"v2 statusline", "done\n" + rule + "\n❯ \n" + rule + "\n  ? for shortcuts\n  opus · ~/Projects/ccmux · ctx 42%", false},
 		{"v1 frame with footer", "done\n╭──────────╮\n│ >        │\n╰──────────╯\n  ? for shortcuts   Context left until auto-compact: 7%", false},
+		{"long typed prompt, box opening out of the region", "  line 9\n  line 10\n" + rule + "\n  ? for shortcuts\n  opus · ctx 42%", false},
+		{"selected task row at 45%", "done\n" + rule + "\n  ⏵⏵ auto mode on (shift+tab to cycle)\n  ○ main\n❯ ○ refactor workflow   ████░░ 45%", false},
+		{"box half drawn, typed text ends in %", "done\n" + rule + "\n❯ raise coverage to 90%", false},
+		// Chrome with a column-0 line under it is a frozen frame: Claude
+		// was killed and its launch chain printed under its last screen.
+		{"frozen footer over a one-line error", rule + "\n❯ \n" + rule + "\n  ⏵⏵ auto mode on (shift+tab to cycle)\nzsh:1: command not found: claude\nuser@host ~ % ", true},
+		{"frozen statusline, prompt right under it", rule + "\n  ? for shortcuts\n  opus · ctx 42%\nuser@host ~ % ", true},
+		{"frozen v1 frame", "╭──────────╮\n│ >        │\n╰──────────╯\nuser@host ~ % ", true},
 		{"zsh prompt", "Error: Cannot find module 'cli.js'\n\nNode.js v22.22.3\nuser@host ~ % ", true},
 		{"bash prompt", "Segmentation fault\nsasha@laptop:~/projects/foo$", true},
 		{"root prompt", "killed\nroot@host:/#", true},
@@ -236,6 +244,15 @@ func TestClaudeV2Rules(t *testing.T) {
 		{"permission cursor moved", "out\n" + rule + "\n Edit file\n   1. Yes\n ❯ 2. Yes, allow all edits\n   3. No", "claude_dialog_v2"},
 		{"trust dialog", "out\n Accessing workspace:\n ❯ No, exit\n   Yes, I trust this folder\n Enter to confirm · Esc to cancel", "claude_dialog_v2"},
 		{"rule lines without a prompt", "out\n" + rule + "\n plain text\n" + rule, ""},
+		// What Claude draws under its footer: the background-task list,
+		// the row the user selected opening with the `❯` pointer.
+		{"task list under the footer", "out\n" + rule + "\n❯ \n" + rule + "\n  ? for shortcuts\n\n  ○ main\n❯ ○ Explore the poll loop   ████░░ 45%", "claude_prompt_frame_v2"},
+		// Claude killed mid-turn: its last frame stays on screen and the
+		// launch chain prints under it at column 0. That box is frozen;
+		// the pane is a crash.
+		{"frozen box, relaunch error, zsh", "✻ Cogitating… (12s · esc to interrupt)\n" + rule + "\n❯ \n" + rule + "\n  ⏵⏵ auto mode on (shift+tab to cycle)\nzsh:1: command not found: claude\nuser@host ~ % ", "claude_shell_prompt"},
+		{"frozen box, prompt right under it", "out\n" + rule + "\n❯ \n" + rule + "\n  ? for shortcuts\nuser@host ~ % ", "claude_shell_prompt"},
+		{"frozen box, starship", "out\n" + rule + "\n❯ \n" + rule + "\n  ? for shortcuts\nzsh:1: command not found: claude\ndemo on  main via 🐹 v1.26.0\n❯ ", "claude_shell_prompt"},
 		// A `❯` with no rules around it is a shell prompt (starship,
 		// pure, p10k) — see TestClaudeShellPrompt_ModernPromptThemes.
 	}
@@ -248,7 +265,7 @@ func TestClaudeV2Rules(t *testing.T) {
 			if res.MatchedRuleID != tc.wantID {
 				t.Fatalf("matched %q (%+v), want %q", res.MatchedRuleID, res, tc.wantID)
 			}
-			if tc.wantID != "" && (res.State != StateNeedsInput || !res.RequireIdle) {
+			if tc.wantID != "" && tc.wantID != "claude_shell_prompt" && (res.State != StateNeedsInput || !res.RequireIdle) {
 				t.Errorf("%q must be blocked + require_idle, got %+v", tc.wantID, res)
 			}
 		})

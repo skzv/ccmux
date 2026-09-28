@@ -47,13 +47,26 @@ regex = ['^[ \t]*[╭╰](?:─{3,}|─*[╮╯])']
 # sits above it), so require_idle is what separates "working" from
 # "waiting": the spinner's elapsed-time counter repaints every second,
 # which keeps the pane from ever going quiet mid-turn.
+#
+# Only a LIVE box counts: nothing may follow its closing rule but
+# Claude's own footer lines, to the end of the region (mirrored by
+# footerLine in internal/claude). Those are indented — the mode line,
+# hints and a user statusline sit in a footer padded two columns in
+# from the edge, whatever the statusline prints (`ctx 42%` included) —
+# or a `❯` line, the selected row of the background-task list drawn
+# under the footer. Claude killed mid-turn leaves its last frame on
+# screen and its launch chain prints under it at column 0: the
+# relaunch's error (`zsh:1: command not found: claude`, a node stack)
+# and the shell prompt. A short error kept that frozen box in the
+# region, so the crash read as needs_input, with a bell and a push
+# (testdata/panes/claude_crashed_frozen_frame*.txt).
 [[rules]]
 id = "claude_prompt_frame_v2"
 state = "blocked"
 priority = 900
 region = "bottom_non_empty_lines(12)"
 require_idle = true
-regex = ['(?m)^[ \t]*─{10,}[^\n]*\n[ \t]*[❯>](?:[ \t\x{00A0}][^\n]*)?\n(?:[^\n]*\n)*?[ \t]*─{10,}']
+regex = ['(?m)^[ \t]*─{10,}[^\n]*\n[ \t]*[❯>](?:[ \t\x{00A0}][^\n]*)?\n(?:[^\n]*\n)*?[ \t]*─{10,}[^\n]*(?:\n(?:[ \t\x{00A0}][^\n]*|[❯>](?:[ \t\x{00A0}][^\n]*)?))*\z']
 
 # Claude Code v2.x dialogs that replace the input box: tool permission
 # prompts ("Do you want to proceed?" over a numbered `❯ 1. Yes`
@@ -98,6 +111,14 @@ any = [
 #
 # `❯` alone no longer vetoes. Claude's v2 input line always sits between
 # two of those rules, so a `❯` with no rule next to it is a shell prompt.
+#
+# And chrome vetoes only while it is live: when nothing follows it but
+# Claude's own footer lines — indented, or a `❯` line (the same set
+# claude_prompt_frame_v2 allows under its box; footerLine in
+# internal/claude). A frozen frame — Claude killed, its relaunch error
+# and the shell prompt printed under its last screen at column 0 —
+# vetoed the crash when the error was short enough to leave the old
+# rule or footer in this region.
 [[rules]]
 id = "claude_shell_prompt"
 state = "error"
@@ -109,7 +130,7 @@ any = [
   { regex = ['(?m)^[ \t]*➜[ \t]+(?:\S+(?:[ \t]+git:\([^)\n]*\))?(?:[ \t]+✗)?)?\s*\z'] },
 ]
 not = [
-  { regex = ['(?m)^[ \t]*[╭╰](?:─{3,}|─*[╮╯])'] },
-  { regex = ['(?m)^[ \t]*─{10,}'] },
-  { regex = ['⏵'] },
+  { regex = ['(?m)^[ \t]*[╭╰](?:─{3,}|─*[╮╯])[^\n]*(?:\n(?:[ \t\x{00A0}][^\n]*|[❯>](?:[ \t\x{00A0}][^\n]*)?))*\z'] },
+  { regex = ['(?m)^[ \t]*─{10,}[^\n]*(?:\n(?:[ \t\x{00A0}][^\n]*|[❯>](?:[ \t\x{00A0}][^\n]*)?))*\z'] },
+  { regex = ['⏵[^\n]*(?:\n(?:[ \t\x{00A0}][^\n]*|[❯>](?:[ \t\x{00A0}][^\n]*)?))*\z'] },
 ]

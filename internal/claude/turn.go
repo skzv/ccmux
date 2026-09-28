@@ -180,19 +180,33 @@ func inputArea(lines []string) (start, closing, below int, ok bool) {
 var v1FrameBottomRE = regexp.MustCompile(`^[ \t]*╰(?:─{3,}|─*╯)`)
 
 // footerOnly reports whether lines — what follows the input box's
-// closing rule, or a dialog's opening one — are Claude's own: every
-// line indented, as Claude draws its mode line, hints, statusline and
-// dialog text. A line at column 0 is something else printed after
-// Claude's last frame — the shell prompt and error of a Claude that was
-// killed — so the frame above it, status line included, is frozen, not
-// live.
+// closing rule, or a dialog's opening one — are all Claude's own (see
+// footerLine). Anything else was printed after Claude's last frame —
+// the relaunch error and shell prompt of a Claude that was killed — so
+// the frame above it, status line included, is frozen, not live. The
+// classifier draws the same line (looksLikeClaudeV2Prompt,
+// hasLiveClaudeChrome), so a frozen box reads neither as a prompt
+// waiting for input nor as a turn running.
 func footerOnly(lines []string) bool {
 	for _, l := range lines {
-		if strings.TrimSpace(l) != "" && !indented(l) {
+		if !footerLine(l) {
 			return false
 		}
 	}
 	return true
+}
+
+// footerLine reports whether l is a line Claude Code v2 draws under its
+// input box, or a line of a dialog that replaced the box: blank, or
+// indented — its mode line, hints and statusline sit in a footer padded
+// two columns in from the edge (a user statusline too, whatever it
+// prints), a dialog's text one column in, and the rows of its
+// background-task list below the footer open with two spaces — or a `❯`
+// line: the task row the user has selected in that list, which opens
+// with the pointer instead. A line at column 0 that is none of these was
+// printed after Claude's last frame.
+func footerLine(l string) bool {
+	return strings.TrimSpace(l) == "" || indented(l) || isInputLine(l)
 }
 
 // indented reports whether l starts with a space, tab or non-breaking

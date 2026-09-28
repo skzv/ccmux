@@ -1,0 +1,28 @@
+
+ ▐▛███▛█   Claude Code v2.1.281
+▝▜██████▀  Opus 5.5 with xhigh effort · Claude Max
+  ▝▝ ▝▝    ~/Projects/ccmux/.claude/worktrees/agent-ad241f8efa5f0d51d
+
+❯ fix the flaky poll test
+
+⏺ Reading cmd/ccmuxd/poll.go and its test.
+
+⏺ Read(cmd/ccmuxd/poll.go)
+  ⎿  Read 212 lines
+
+✻ Cogitating… (12s · ↓ 1.2k tokens · esc to interrupt)
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents
+node:internal/modules/cjs/loader:1228
+  throw err;
+  ^
+
+Error: Cannot find module '/usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js'
+    at Module._resolveFilename (node:internal/modules/cjs/loader:1225:15)
+
+Node.js v22.22.3
+dev@mbp ~/Projects/demo % 

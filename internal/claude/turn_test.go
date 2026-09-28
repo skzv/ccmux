@@ -48,6 +48,10 @@ func TestReadTurn(t *testing.T) {
 		{"frozen frame above a shell prompt", working + "\nzsh: killed     claude\nuser@host ~ % ", false, false, ""},
 		{"frozen dialog above a shell prompt", paneFixture(t, "claude_v2_permission.txt") + "\nuser@host ~ % ", false, false, ""},
 		{"v1 frame with output after it", "done.\n╭──────────╮\n│ > hi     │\n╰──────────╯\nuser@host ~ % ", false, false, ""},
+		{"frozen frame, relaunch error", paneFixture(t, "claude_crashed_frozen_frame.txt"), false, false, ""},
+		// The background-task list under the footer is Claude's own; the
+		// row the user selected opens with the `❯` pointer.
+		{"task list, a row selected", working + "\n  ○ main\n❯ ○ Explore the poll loop   12s", true, true, "✻ Cogitating… (12s · ↓ 1.2k tokens · esc to interrupt)"},
 		{"interrupt hint in the footer", typed(idle, "") + "\n  esc to interrupt", true, true, "  Get to finished work sooner with Opus 5.5. Switch anytime with /model."},
 		{"todo list between status line and box", strings.Replace(working, "esc to interrupt)\n", "esc to interrupt)\n  ⎿  ☐ Fix the test\n     ☐ Run it\n", 1), true, true, "     ☐ Run it"},
 		// Relaunched over a killed Claude: the old screen, status line and

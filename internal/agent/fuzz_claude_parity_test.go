@@ -42,6 +42,9 @@ func FuzzClaudeRulesAgreeWithFallback(f *testing.F) {
 		"Node.js v22.22.3\n\ndemo on main via go\n❯ ",
 		"Node.js v22.22.3\n➜  demo git:(main) ✗ ",
 		"╭─dev@mbp ~/Projects/demo ‹main›\n╰─$ ",
+		"out\n" + rule + "\n❯ \n" + rule + "\n  ⏵⏵ auto mode on\nzsh:1: command not found: claude\nuser@host ~ % ",
+		"out\n" + rule + "\n❯ \n" + rule + "\n  ? for shortcuts\n  ○ main\n❯ ○ refactor   45%",
+		"out\n" + rule + "\n❯ 90%",
 	} {
 		f.Add(seed)
 	}

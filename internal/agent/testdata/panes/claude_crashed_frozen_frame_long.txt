@@ -1,0 +1,42 @@
+
+ ▐▛███▛█   Claude Code v2.1.281
+▝▜██████▀  Opus 5.5 with xhigh effort · Claude Max
+  ▝▝ ▝▝    ~/Projects/ccmux/.claude/worktrees/agent-ad241f8efa5f0d51d
+
+❯ fix the flaky poll test
+
+⏺ Reading cmd/ccmuxd/poll.go and its test.
+
+⏺ Read(cmd/ccmuxd/poll.go)
+  ⎿  Read 212 lines
+
+✻ Cogitating… (12s · ↓ 1.2k tokens · esc to interrupt)
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents
+node:internal/process/promises:394
+    triggerUncaughtException(err, true /* fromPromise */);
+    ^
+
+Error: EMFILE: too many open files, watch '/Users/dev/Projects/demo'
+    at FSWatcher.<computed> (node:internal/fs/watchers:247:19)
+    at Object.watch (node:fs:2491:36)
+    at file:///usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js:1432:18211
+    at new Promise (<anonymous>)
+    at Dv1 (file:///usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js:1432:17990)
+    at async Promise.all (index 3)
+    at async Ow2 (file:///usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js:1433:2201)
+    at async file:///usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js:2887:1104 {
+  errno: -24,
+  syscall: 'watch',
+  code: 'EMFILE',
+  path: '/Users/dev/Projects/demo',
+  filename: '/Users/dev/Projects/demo'
+}
+
+Node.js v22.22.3
+zsh:1: command not found: claude
+dev@mbp ~/Projects/demo % 

@@ -101,7 +101,13 @@ The pane classified is the agent's own — the session's oldest pane, kept
 while it exists — not whichever pane is active, so a shell window opened
 next to the agent doesn't hide it. A working-spinner OSC title counts only
 while the daemon sees signs of life (tmux keeps the title of a program
-that exited), and a pane resize is a redraw, not activity. The bell, push
+that exited), and a pane resize is a redraw, not activity. Likewise
+Claude's input box counts as a prompt only while it is the live bottom of
+the pane — nothing under it but Claude's own footer (indented lines, or
+the `❯` row selected in its background-task list): a Claude killed
+mid-turn leaves its last frame on screen with the relaunch error and the
+shell prompt printed under it, and that pane is `error`, not waiting for
+input, however short the error. The bell, push
 and prompt count fire only at the end of a real turn — see `turn`,
 `decideAttention` and `agent.ReadTurn`, and "What counts as a turn" in
 [05_HTTP_API.md](05_HTTP_API.md). An agent can help the daemon tell its
