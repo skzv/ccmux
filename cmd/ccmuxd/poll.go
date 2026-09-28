@@ -609,14 +609,6 @@ func isSpinnerTitle(title string) bool {
 
 func isBraille(r rune) bool { return r >= 0x2800 && r <= 0x28FF }
 
-// later returns the later of two times.
-func later(a, b time.Time) time.Time {
-	if a.After(b) {
-		return a
-	}
-	return b
-}
-
 // ensureClipboard re-applies the tmux clipboard setup once per tmux
 // server. At login ccmuxd usually starts before any tmux server exists,
 // so the startup attempt fails; and a server that exits takes the
