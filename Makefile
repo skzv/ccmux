@@ -181,7 +181,9 @@ FUZZ_TARGETS := \
 	./internal/tui:FuzzRenderSessionLine_DegenerateInputs \
 	./internal/tui:FuzzDialTarget \
 	./internal/jsonl:FuzzScanner \
-	./internal/termsafe:FuzzString
+	./internal/termsafe:FuzzString \
+	./internal/tomlpatch:FuzzPatch \
+	./internal/tomlpatch:FuzzPatchArbitrary
 
 fuzz: check-go
 	@for pair in $(FUZZ_TARGETS); do \

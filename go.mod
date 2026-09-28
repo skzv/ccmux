@@ -14,6 +14,7 @@ require (
 	github.com/creack/pty v1.1.24
 	github.com/mdp/qrterminal/v3 v3.2.1
 	github.com/muesli/termenv v0.16.0
+	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/sideshow/apns2 v0.25.0
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/crypto v0.57.0
