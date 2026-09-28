@@ -1,10 +1,12 @@
 package cmd
 
 import (
+	"os/exec"
 	"strings"
 	"testing"
 
 	"github.com/skzv/ccmux/internal/agent"
+	"github.com/skzv/ccmux/internal/tmux"
 )
 
 // TestDefaultPort — tiny helper but the wrong default would route
@@ -54,8 +56,55 @@ func TestShellAttachCommandsOmitDetachFlag(t *testing.T) {
 	if strings.Contains(remote, " -d ") {
 		t.Errorf("remote shell attach should not pass -d: %q", remote)
 	}
-	if !strings.Contains(remote, " tmux attach-session -t 'c-foo'") {
-		t.Errorf("remote shell attach should use mirror attach: %q", remote)
+	if !strings.Contains(remote, " tmux attach-session -t '=c-foo:'") {
+		t.Errorf("remote shell attach should use mirror attach on the exact target: %q", remote)
+	}
+}
+
+// TestRemoteShellTmuxAttach_ExactTarget — the remote attach sent a bare
+// `-t '%1'`, which tmux reads as pane %1: a session named "%1" (the
+// daemon allows it) attached to whichever session held that pane. It
+// must use the exact `=name:` form, as the TUI's remote attach does.
+func TestRemoteShellTmuxAttach_ExactTarget(t *testing.T) {
+	for _, name := range []string{"%1", "@1", "c-foo"} {
+		got := remoteShellTmuxAttach(name)
+		if want := " tmux attach-session -t " + shellQuote(tmux.ExactSession(name)); !strings.HasSuffix(got, want) {
+			t.Errorf("remoteShellTmuxAttach(%q) = %q, want it to end in %q", name, got, want)
+		}
+	}
+}
+
+// TestRemoteAttachHint_SurvivesBothShells — the printed hint is parsed
+// twice: by the user's shell, then (ssh joins its arguments) by the
+// remote login shell. Both passes must leave tmux the exact target.
+func TestRemoteAttachHint_SurvivesBothShells(t *testing.T) {
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh")
+	}
+	words := func(cmdline string) []string {
+		t.Helper()
+		out, err := exec.Command(sh, "-c", `for w in `+cmdline+`; do printf '%s\n' "$w"; done`).Output()
+		if err != nil {
+			t.Fatalf("sh parse %q: %v", cmdline, err)
+		}
+		return strings.Split(strings.TrimSuffix(string(out), "\n"), "\n")
+	}
+	for _, name := range []string{"c-shell-1", "%1", "@work", "a b", "it's", "a$HOME", "x`id`"} {
+		hint := remoteAttachHint("me@mini", name)
+		local := words(hint)
+		if len(local) != 4 || local[0] != "ssh" || local[1] != "-t" || local[2] != "me@mini" {
+			t.Errorf("hint %q parses locally as %q; want ssh -t me@mini <one remote command>", hint, local)
+			continue
+		}
+		remote := words(local[3])
+		want := []string{"tmux", "attach-session", "-t", tmux.ExactSession(name)}
+		if strings.Join(remote, "\x00") != strings.Join(want, "\x00") {
+			t.Errorf("hint %q runs %q remotely, want %q", hint, remote, want)
+		}
+	}
+	if got := remoteAttachHint("me@mini", "c-shell-1"); got != `ssh -t me@mini "tmux attach-session -t '=c-shell-1:'"` {
+		t.Errorf("common-case hint = %s; want it readable", got)
 	}
 }
 

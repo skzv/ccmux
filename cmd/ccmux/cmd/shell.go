@@ -169,8 +169,8 @@ func runShellRemote(ctx context.Context, name, path, host, agentFlag string) err
 		if hostCfg.User != "" {
 			dial = hostCfg.User + "@" + dial
 		}
-		fmt.Printf("created %s on %s; attach from a terminal with: ssh -t %s tmux attach-session -t %s\n",
-			safeField(res.Session), safeField(host), shellWord(dial), shellWord(res.Session))
+		fmt.Printf("created %s on %s; attach from a terminal with: %s\n",
+			safeField(res.Session), safeField(host), remoteAttachHint(dial, res.Session))
 		return nil
 	}
 	// nocontext: foreground interactive ssh; it ends when the user detaches.
@@ -184,12 +184,33 @@ func runShellRemote(ctx context.Context, name, path, host, agentFlag string) err
 // remoteShellTmuxAttach builds the remote command for `ccmux shell --host`.
 // The session was just created, so attach in mirror mode and preserve any
 // other tmux clients on that remote server.
+//
+// The target is the exact `=name:` form, as in the TUI's remote attach:
+// a bare `-t %1` or `-t @1` is read as a pane or window ID, so a
+// session named "%1" (which the daemon allows) attached to whichever
+// session held pane %1.
 func remoteShellTmuxAttach(session string) string {
 	return fmt.Sprintf(
 		`%s tmux attach-session -t %s`,
 		remoteShellAttachPath,
-		shellQuote(session),
+		shellQuote(tmux.ExactSession(session)),
 	)
+}
+
+// remoteAttachHint is the command `ccmux shell --host` prints for
+// attaching later from a terminal. It targets the session exactly, as
+// remoteShellTmuxAttach does, and quotes for both shells that parse it:
+// this one, and the remote login shell ssh hands the joined command to.
+// Unquoted there, "=name:" would also trip zsh's `=cmd` expansion.
+func remoteAttachHint(dial, session string) string {
+	session = safeField(session)
+	target := tmux.ExactSession(session)
+	if strings.Trim(session, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-@%+,") == "" {
+		// Nothing a shell expands, even inside double quotes: keep
+		// the common case readable.
+		return fmt.Sprintf(`ssh -t %s "tmux attach-session -t '%s'"`, shellWord(dial), target)
+	}
+	return fmt.Sprintf("ssh -t %s %s", shellWord(dial), shellQuote("tmux attach-session -t "+shellQuote(target)))
 }
 
 // shellAttachCmd builds the foreground tmux attach for a freshly-created
