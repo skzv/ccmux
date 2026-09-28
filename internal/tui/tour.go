@@ -12,14 +12,34 @@ import (
 	"github.com/skzv/ccmux/internal/tui/styles"
 )
 
-// tourStep is one slide. Body lines render as-is; bullets get a styled
-// bullet glyph automatically.
+// tourStep is one slide: paragraphs (and command rows), then bullets,
+// which get a styled bullet glyph automatically.
 type tourStep struct {
 	Title   string
-	Body    []string
+	Body    []tourPara
 	Bullets []string
 	KeyHint string // a one-line "press X to do Y" footer; empty allowed
 }
+
+// tourPara is one block of a slide's body. Text is a whole paragraph:
+// the layout wraps it at the card's width, so the copy must not be
+// broken into lines by hand (hard breaks wrapped a second time made
+// ragged "…Mosh, and" / "Tailscale." lines). "" is a blank line.
+//
+// When Cmd is set the block is a command row instead: Cmd is printed
+// verbatim, since it is what the user types, and Text describes it.
+// Only Text is translated — the tour once told German users to run
+// "ccmux-Host hinzufügen".
+type tourPara struct {
+	Text string
+	Cmd  string
+}
+
+// para is a plain paragraph block.
+func para(text string) tourPara { return tourPara{Text: text} }
+
+// cmdRow is a command block: cmd verbatim, desc its (translated) gloss.
+func cmdRow(cmd, desc string) tourPara { return tourPara{Cmd: cmd, Text: desc} }
 
 // defaultTourSteps is the script the first-run tour runs through. Each
 // slide is anchored to one of ccmux's core ideas. Keep each body
@@ -32,19 +52,17 @@ func defaultTourSteps() []tourStep {
 	steps := []tourStep{
 		{
 			Title: tr("Welcome to ccmux"),
-			Body: []string{
-				tr("ccmux is a terminal UI for long-lived coding-agent sessions"),
-				tr("(Claude Code, Codex, Cursor, and more) on top of tmux, Mosh, and Tailscale."),
-				"",
-				tr("This %d-step tour shows you the essentials. It runs once on"),
-				tr("first launch and re-opens any time with `T`."),
+			Body: []tourPara{
+				para(tr("ccmux is a terminal UI for long-lived coding-agent sessions (Claude Code, Codex, Cursor, and more) on top of tmux, Mosh, and Tailscale.")),
+				para(""),
+				para(tr("This %d-step tour shows you the essentials. It runs once on first launch and re-opens any time with `T`.")),
 			},
 			KeyHint: tr("→ / space / enter: next  ·  esc: skip"),
 		},
 		{
 			Title: tr("Sessions (") + screenKey(ScreenSessions) + ") — Sessions + Stats",
-			Body: []string{
-				tr("Sessions is your command centre. Left pane: live sessions. Right pane: usage stats."),
+			Body: []tourPara{
+				para(tr("Sessions is your command centre. Left pane: live sessions. Right pane: usage stats.")),
 			},
 			Bullets: []string{
 				tr("↑↓/jk — navigate the session list · Enter — attach to the highlighted session"),
@@ -56,8 +74,8 @@ func defaultTourSteps() []tourStep {
 		},
 		{
 			Title: fmt.Sprintf(tr("The other screens (%s-%s)"), screenKey(ScreenProjects), screenKey(ScreenNetwork)),
-			Body: []string{
-				tr("The remaining screens cover the full workflow loop:"),
+			Body: []tourPara{
+				para(tr("The remaining screens cover the full workflow loop:")),
 			},
 			Bullets: []string{
 				fmt.Sprintf(tr("%s — Projects: every folder under your projects root (~/Projects by default)"), screenKey(ScreenProjects)),
@@ -71,27 +89,26 @@ func defaultTourSteps() []tourStep {
 		},
 		{
 			Title: tr("Mobile, remote, the daemon"),
-			Body: []string{
-				tr("Two pieces you'll want eventually:"),
-				"",
-				tr("  ccmux moshi-setup   — iOS push notifications via Moshi"),
-				tr("  ccmux host add …    — supervise sessions on a remote ccmuxd"),
-				"",
-				tr("And one piece that's already running in the background:"),
-				"",
-				tr("  ccmuxd  — polls tmux, classifies state, triggers the bell on"),
-				tr("             needs_input, holds caffeinate while sessions are active"),
+			Body: []tourPara{
+				para(tr("Two pieces you'll want eventually:")),
+				para(""),
+				cmdRow("ccmux moshi-setup", tr("iOS push notifications via Moshi")),
+				cmdRow("ccmux host add …", tr("supervise sessions on a remote ccmuxd")),
+				para(""),
+				para(tr("And one piece that's already running in the background:")),
+				para(""),
+				cmdRow("ccmuxd", tr("polls tmux, classifies each session, rings the bell when an agent needs input, and keeps the machine awake while sessions are active")),
 			},
 			KeyHint: tr("Press enter to finish the tour, esc to skip — you can re-open with T"),
 		},
 	}
-	// Stamp the derived step count into any body line carrying a %d
-	// placeholder (today just the welcome slide). Done by scan rather
-	// than a hard-coded line index so reflowing the copy can't silently
-	// point the Sprintf at the wrong line.
-	for i, line := range steps[0].Body {
-		if strings.Contains(line, "%d") {
-			steps[0].Body[i] = fmt.Sprintf(line, len(steps))
+	// Stamp the derived step count into any body paragraph carrying a
+	// %d placeholder (today just the welcome slide). Done by scan rather
+	// than a hard-coded index so reflowing the copy can't silently point
+	// the Sprintf at the wrong paragraph.
+	for i, p := range steps[0].Body {
+		if strings.Contains(p.Text, "%d") {
+			steps[0].Body[i].Text = fmt.Sprintf(p.Text, len(steps))
 		}
 	}
 	return steps
@@ -217,8 +234,40 @@ func (m tourModel) layout(w, h int) tourLayout {
 
 	titleStyle := m.st.Title.Foreground(m.st.P.Mauve).Bold(true)
 	l.body = append(wrap(titleStyle.Render(step.Title)), "")
-	for _, line := range step.Body {
-		l.body = append(l.body, wrap(line)...)
+	// Command rows share one column for their commands (the widest on
+	// the slide), with each description wrapping under its own start.
+	// On a card too narrow for that, the description goes under the
+	// command instead.
+	cmdW := 0
+	for _, p := range step.Body {
+		if p.Cmd != "" {
+			cmdW = maxInt(cmdW, lipgloss.Width(p.Cmd))
+		}
+	}
+	const cmdIndent = 2
+	descX := cmdIndent + cmdW + 2
+	stacked := textW-descX < 20
+	for _, p := range step.Body {
+		if p.Cmd == "" {
+			l.body = append(l.body, wrap(p.Text)...)
+			continue
+		}
+		cmd := strings.Repeat(" ", cmdIndent) + m.st.Key.Render(p.Cmd)
+		if stacked {
+			l.body = append(l.body, cmd)
+			for _, line := range strings.Split(lipgloss.NewStyle().Width(maxInt(4, textW-2*cmdIndent)).Render(p.Text), "\n") {
+				l.body = append(l.body, strings.Repeat(" ", 2*cmdIndent)+line)
+			}
+			continue
+		}
+		desc := strings.Split(lipgloss.NewStyle().Width(textW-descX).Render(p.Text), "\n")
+		for i, line := range desc {
+			if i == 0 {
+				l.body = append(l.body, cmd+strings.Repeat(" ", descX-cmdIndent-lipgloss.Width(p.Cmd))+line)
+			} else {
+				l.body = append(l.body, strings.Repeat(" ", descX)+line)
+			}
+		}
 	}
 	if len(step.Bullets) > 0 && len(step.Body) > 0 {
 		l.body = append(l.body, "")

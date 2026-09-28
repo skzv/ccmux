@@ -83,7 +83,7 @@ func TestTour_FitsSmallTerminals(t *testing.T) {
 				case len(last.Bullets) > 0:
 					tail = last.Bullets[len(last.Bullets)-1]
 				default:
-					tail = last.Body[len(last.Body)-1]
+					tail = last.Body[len(last.Body)-1].Text
 				}
 				words := strings.Fields(tail)
 				want := words[len(words)-1]

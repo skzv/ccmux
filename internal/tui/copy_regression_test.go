@@ -37,7 +37,7 @@ func TestVersionLabel(t *testing.T) {
 func TestTourCopy_OpenEndedAndComplete(t *testing.T) {
 	var all strings.Builder
 	for _, s := range defaultTourSteps() {
-		all.WriteString(s.Title + "\n" + strings.Join(s.Body, "\n") + "\n" + strings.Join(s.Bullets, "\n") + "\n")
+		all.WriteString(s.Title + "\n" + tourBodyText(s) + "\n" + strings.Join(s.Bullets, "\n") + "\n")
 	}
 	text := all.String()
 	for _, stale := range []string{"Claude Code sessions", "managing long-lived Claude Code", "CLAUDE.md or .git", "(Claude/Codex/Antigravity)"} {

@@ -5,6 +5,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
+
+	"github.com/skzv/ccmux/internal/i18n"
 	"github.com/skzv/ccmux/internal/tui/styles"
 )
 
@@ -92,10 +95,7 @@ func TestDefaultTourSteps_ContainsRequiredAnchors(t *testing.T) {
 	}
 	all := ""
 	for _, s := range steps {
-		all += s.Title + "\n"
-		for _, b := range s.Body {
-			all += b + "\n"
-		}
+		all += s.Title + "\n" + tourBodyText(s) + "\n"
 		for _, b := range s.Bullets {
 			all += b + "\n"
 		}
@@ -117,7 +117,7 @@ func TestTour_WelcomeCopyMatchesStepCount(t *testing.T) {
 	if len(steps) == 0 {
 		t.Fatal("tour has no steps")
 	}
-	welcome := strings.Join(steps[0].Body, "\n")
+	welcome := tourBodyText(steps[0])
 	want := fmt.Sprintf("This %d-step tour", len(steps))
 	if !strings.Contains(welcome, want) {
 		t.Errorf("welcome copy does not advertise the real step count: want substring %q in:\n%s", want, welcome)
@@ -125,6 +125,70 @@ func TestTour_WelcomeCopyMatchesStepCount(t *testing.T) {
 	if strings.Contains(welcome, "%d") {
 		t.Errorf("count placeholder was not stamped in:\n%s", welcome)
 	}
+}
+
+// TestTour_WelcomeParagraphsWrapAsAWhole — the welcome slide's copy was
+// hard-broken into lines and each line wrapped on its own, so at 80 and
+// 120 columns it came out ragged ("…Mosh, and" / "Tailscale." with room
+// to spare on the line above). Paragraphs now wrap as a whole: no line
+// ends early when the next line's first word would have fit on it.
+func TestTour_WelcomeParagraphsWrapAsAWhole(t *testing.T) {
+	withLang(t, "en")
+	for _, code := range []string{"en", "de", "es", "fr", "ru"} {
+		for _, w := range []int{40, 60, 80, 120} {
+			t.Run(fmt.Sprintf("%s/%d", code, w), func(t *testing.T) {
+				i18n.SetLanguage(code)
+				defer i18n.SetLanguage("en")
+				m := newTour(styles.Default())
+				m.Open()
+				l := m.layout(w, 60)
+				textW := l.cardW - 2*l.padX
+				// Skip the title and the blank line under it.
+				body := l.body[2:]
+				for i := 1; i < len(body); i++ {
+					prev, next := ansi.Strip(body[i-1]), ansi.Strip(body[i])
+					if strings.TrimSpace(prev) == "" || strings.TrimSpace(next) == "" {
+						continue // paragraph break
+					}
+					first := strings.Fields(next)[0]
+					if ansi.StringWidth(strings.TrimRight(prev, " "))+1+ansi.StringWidth(first) <= textW {
+						t.Errorf("ragged wrap: %q ends early — %q fits after it (text width %d)", prev, first, textW)
+					}
+				}
+			})
+		}
+	}
+}
+
+// TestTour_CommandsStayVerbatim — the remote-setup slide's commands
+// were part of the translated text, so German read "ccmux-Host
+// hinzufügen" for `ccmux host add`. The commands are printed as-is in
+// every language.
+func TestTour_CommandsStayVerbatim(t *testing.T) {
+	withLang(t, "en")
+	for _, code := range i18n.Codes() {
+		i18n.SetLanguage(code)
+		m := newTour(styles.Default())
+		m.Open()
+		m.step = len(m.steps) - 1
+		out := ansi.Strip(m.View(120, 60))
+		for _, cmd := range []string{"ccmux moshi-setup", "ccmux host add", "ccmuxd"} {
+			if !strings.Contains(out, cmd) {
+				t.Errorf("%s: slide lacks the command %q:\n%s", code, cmd, out)
+			}
+		}
+	}
+	i18n.SetLanguage("en")
+}
+
+// tourBodyText is a slide's body as plain text, one block per line
+// (a command row as "cmd description").
+func tourBodyText(s tourStep) string {
+	lines := make([]string, len(s.Body))
+	for i, p := range s.Body {
+		lines[i] = strings.TrimSpace(p.Cmd + " " + p.Text)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func min(a, b int) int {
