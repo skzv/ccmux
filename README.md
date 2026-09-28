@@ -281,7 +281,7 @@ low_battery_cutoff = 20              # dangerous mode auto-downgrades below this
 bell = true                          # ring local terminal BEL on needs_input
 ```
 
-> **Notifications:** the bell rings whenever an agent finishes a turn and waits for input (`needs_input`) and `bell = true`, regardless of whether moshi-hook is paired. Typing into a prompt, resizing a pane or restarting the daemon doesn't ring it. The audible chime at your desk and the push on your phone are complementary, not duplicates. Set `bell = false` if you'd rather rely on phone pushes alone. An agent you start by hand in any tmux session (`claude` in a plain shell) is watched too, for as long as it runs. The exact rules are in the [HTTP API reference](docs/02_Architecture/05_HTTP_API.md) under "What counts as a turn".
+> **Notifications:** the bell rings whenever an agent finishes a turn and waits for input (`needs_input`) and `bell = true`, regardless of whether moshi-hook is paired. Typing into a prompt, resizing a pane or restarting the daemon doesn't ring it, and a restart (or `ccmux update`) doesn't forget which sessions you've already looked at or how many prompts each has had. The audible chime at your desk and the push on your phone are complementary, not duplicates. Set `bell = false` if you'd rather rely on phone pushes alone. An agent you start by hand in any tmux session (`claude` in a plain shell) is watched too, for as long as it runs. The exact rules are in the [HTTP API reference](docs/02_Architecture/05_HTTP_API.md) under "What counts as a turn".
 
 > **Sleep-mode notes:**
 >
