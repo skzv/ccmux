@@ -537,3 +537,5 @@
 "iOS push notifications via Moshi" = "notificaciones push de iOS a través de Moshi"
 "supervise sessions on a remote ccmuxd" = "supervisar sesiones en un ccmuxd remoto"
 "polls tmux, classifies each session, rings the bell when an agent needs input, and keeps the machine awake while sessions are active" = "consulta tmux, clasifica cada sesión, hace sonar la campana cuando un agente necesita una respuesta y mantiene el equipo despierto mientras haya sesiones activas"
+"↑↓ %d/%d · esc: close" = "↑↓ %d/%d · esc: cerrar"
+"? / esc: close" = "? / esc: cerrar"

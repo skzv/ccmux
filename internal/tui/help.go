@@ -123,12 +123,9 @@ func helpForScreen(s Screen, km Keymap) []HelpItem {
 func (a App) renderHelpOverlay(width, height int) string {
 	st := a.styles
 	lines, modalW := a.helpLines(width)
-	visible, footer := helpWindow(lines, a.helpScroll, height)
-	if footer == "" {
-		footer = tr("press ? or esc to close")
-	}
+	visible, offset, maxOff := helpWindow(lines, a.helpScroll, height)
 	// One row, always: helpWindow budgeted exactly one for it.
-	footer = truncate(footer, maxInt(1, modalW-2*st.Spacing.SM))
+	footer := helpFooter(offset, maxOff, maxInt(1, modalW-2*st.Spacing.SM))
 	body := strings.Join(append(visible, "", st.Muted.Render(footer)), "\n")
 	modal := st.PaneFocused.Width(modalW).Render(body)
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, modal)
@@ -211,23 +208,48 @@ func (a App) helpLines(width int) ([]string, int) {
 const helpChromeRows = 4
 
 // helpWindow picks the slice of the help text that fits a height-row
-// terminal, starting at offset (clamped). When everything fits it
-// returns all lines and an empty footer; otherwise the footer is a
-// scroll hint with the position. The overlay used to be as tall as its
-// text: on an 80x24 terminal the top of it (the screen's own bindings)
-// was cut off with no way to scroll to it.
-func helpWindow(lines []string, offset, height int) (visible []string, footer string) {
+// terminal, starting at offset (clamped), and returns it with the
+// clamped offset and the largest offset (0 when everything fits). The
+// overlay used to be as tall as its text: on an 80x24 terminal the top
+// of it (the screen's own bindings) was cut off with no way to scroll
+// to it.
+func helpWindow(lines []string, offset, height int) (visible []string, off, maxOff int) {
 	room := height - helpChromeRows
 	if room < 1 {
 		room = 1
 	}
 	if len(lines) <= room {
-		return lines, ""
+		return lines, 0, 0
 	}
-	maxOff := len(lines) - room
+	maxOff = len(lines) - room
 	offset = maxInt(0, minInt(offset, maxOff))
-	return lines[offset : offset+room],
-		fmt.Sprintf(tr("↑↓ scroll %d/%d · ? or esc to close"), offset+1, maxOff+1)
+	return lines[offset : offset+room], offset, maxOff
+}
+
+// helpFooter is the help modal's one-row footer for a textW-wide
+// column: how to close it, plus the scroll position when the help
+// scrolls. The longest form that fits wins; the close hint used to be
+// cut off at 40 columns once the counter reached two digits ("↑↓ scroll
+// 21/21 · ? or esc to clo…").
+func helpFooter(offset, maxOff, textW int) string {
+	var forms []string
+	if maxOff == 0 {
+		forms = []string{tr("press ? or esc to close"), tr("? / esc: close"), "esc"}
+	} else {
+		pos := []any{offset + 1, maxOff + 1}
+		forms = []string{
+			fmt.Sprintf(tr("↑↓ scroll %d/%d · ? or esc to close"), pos...),
+			fmt.Sprintf(tr("↑↓ %d/%d · esc: close"), pos...),
+			fmt.Sprintf("↑↓ %d/%d · esc", pos...),
+			fmt.Sprintf("%d/%d esc", pos...),
+		}
+	}
+	for _, f := range forms {
+		if lipgloss.Width(f) <= textW {
+			return f
+		}
+	}
+	return truncate(forms[len(forms)-1], textW)
 }
 
 // helpScrollMax is the largest useful helpScroll for the current screen
