@@ -33,8 +33,8 @@ func defaultTourSteps() []tourStep {
 		{
 			Title: tr("Welcome to ccmux"),
 			Body: []string{
-				tr("ccmux is a terminal UI for managing long-lived Claude Code"),
-				tr("sessions on top of tmux, Mosh, and Tailscale."),
+				tr("ccmux is a terminal UI for long-lived coding-agent sessions"),
+				tr("(Claude Code, Codex, Cursor, and more) on top of tmux, Mosh, and Tailscale."),
 				"",
 				tr("This %d-step tour shows you the essentials. It runs once on"),
 				tr("first launch and re-opens any time with `T`."),
@@ -55,16 +55,17 @@ func defaultTourSteps() []tourStep {
 			KeyHint: fmt.Sprintf(tr("Press %s / F1 anywhere to come back here"), screenKey(ScreenSessions)),
 		},
 		{
-			Title: tr("Projects, Conversations, Notes, Agents (") + screenKey(ScreenProjects) + "-" + screenKey(ScreenSettings) + ")",
+			Title: fmt.Sprintf(tr("The other screens (%s-%s)"), screenKey(ScreenProjects), screenKey(ScreenNetwork)),
 			Body: []string{
 				tr("The remaining screens cover the full workflow loop:"),
 			},
 			Bullets: []string{
-				fmt.Sprintf(tr("%s — Projects: every dir under ~/Projects with a CLAUDE.md or .git"), screenKey(ScreenProjects)),
-				fmt.Sprintf(tr("%s — Conversations: every past agent dialogue (Claude/Codex/Antigravity) — resume any"), screenKey(ScreenConversations)),
-				fmt.Sprintf(tr("%s — Notes: per-project docs/ vault — Specs, ADRs, Agent Logs"), screenKey(ScreenNotes)),
-				fmt.Sprintf(tr("%s — Agents: edit ~/.claude / ~/.codex / ~/.gemini/antigravity-cli config"), screenKey(ScreenAgents)),
+				fmt.Sprintf(tr("%s — Projects: every folder under your projects root (~/Projects by default)"), screenKey(ScreenProjects)),
+				fmt.Sprintf(tr("%s — Conversations: every past agent conversation — resume any"), screenKey(ScreenConversations)),
+				fmt.Sprintf(tr("%s — Notes: every markdown file in the project, rendered"), screenKey(ScreenNotes)),
+				fmt.Sprintf(tr("%s — Agents: each agent's own config — model, hooks, commands, skills"), screenKey(ScreenAgents)),
 				fmt.Sprintf(tr("%s — Settings: ccmux's own config (paths, daemon, theme)"), screenKey(ScreenSettings)),
+				fmt.Sprintf(tr("%s — Network: your devices on the tailnet — ssh in, set up keys"), screenKey(ScreenNetwork)),
 			},
 			KeyHint: tr("Number keys jump between screens · `?` opens contextual help · q quits"),
 		},

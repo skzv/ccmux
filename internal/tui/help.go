@@ -47,6 +47,7 @@ func helpForScreen(s Screen, km Keymap) []HelpItem {
 			{"↑↓ / j k", tr("navigate session list")},
 			{"enter", tr("attach (Ctrl-b then d to detach back to ccmux)")},
 			{"n", tr("new session")},
+			{"p", tr("toggle a live preview of the selected session")},
 			{"x", tr("kill selected session")},
 			{"R", tr("rename selected session")},
 			{"u", tr("open the full usage overlay")},

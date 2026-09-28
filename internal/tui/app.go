@@ -2159,7 +2159,7 @@ func (a App) renderStatusBar() string {
 		if !a.lastRefresh.IsZero() {
 			refreshed = a.lastRefresh.Format("15:04:05")
 		}
-		versionChip := a.styles.Muted.Render("v" + a.version)
+		versionChip := a.styles.Muted.Render(versionLabel(a.version))
 		if strings.Contains(a.version, "dirty") {
 			versionChip = a.styles.StatusWarning.Render(a.version)
 		}
@@ -2195,6 +2195,19 @@ func (a App) renderStatusBar() string {
 	}
 	line := a.styles.StatusBar.Render(body)
 	return forceSingleLine(line, a.width)
+}
+
+// versionLabel is the status bar's version chip: a "v" prefix for bare
+// release numbers, none for `git describe` output that already has one
+// (make builds showed "vv0.6.1-12-g…").
+func versionLabel(v string) string {
+	if v == "" || strings.HasPrefix(v, "v") || strings.HasPrefix(v, "V") {
+		return v
+	}
+	if v[0] < '0' || v[0] > '9' {
+		return v // "dev", a bare sha: not a version number
+	}
+	return "v" + v
 }
 
 // renderHelpLine renders the screen's bottom help row. The line is

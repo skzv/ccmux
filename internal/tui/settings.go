@@ -335,7 +335,7 @@ func editableFields() []editableField {
 		},
 		{
 			label: "theme",
-			hint:  tr("Theme picker UI coming in v0.2. Edit config.toml directly to switch."),
+			hint:  tr("Set `theme` in config.toml (press e) to switch."),
 			get:   func(c *config.Config) string { return c.Theme },
 			set: func(c *config.Config, raw string) error {
 				return fmt.Errorf("not yet editable from the TUI — coming v0.2")

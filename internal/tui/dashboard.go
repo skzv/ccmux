@@ -433,6 +433,15 @@ func agentSectionHeading(st styles.Styles, id agent.ID, text string) string {
 	return st.AgentAccent(id).Render(text)
 }
 
+// pluralLabel is the label for a count of n: one for exactly 1 ("1
+// prompt"), many otherwise ("0 prompts", "2 prompts").
+func pluralLabel(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
+}
+
 // renderClaudeWindowSection produces the indented body rows of the
 // "Claude · 5h window" section: headline + bar + reset.
 func (m dashboardModel) renderClaudeWindowSection() []string {
@@ -440,10 +449,10 @@ func (m dashboardModel) renderClaudeWindowSection() []string {
 	a := m.usage
 
 	headlineCount := a.UserPrompts
-	headlineLabel := tr("prompts")
+	headlineLabel, headlineOne := tr("prompts"), tr("prompt")
 	if headlineCount == 0 {
 		headlineCount = a.Messages
-		headlineLabel = tr("msgs")
+		headlineLabel, headlineOne = tr("msgs"), tr("msg")
 	}
 	limit := planMessageLimit(m.cfg.Subscription.TierFor("claude"))
 
@@ -466,7 +475,7 @@ func (m dashboardModel) renderClaudeWindowSection() []string {
 		}
 		headline += st.Muted.Render("  ·  ") + pctStyle.Render(fmt.Sprintf(tr("%d%% used"), pct))
 	} else {
-		headline += " " + st.Muted.Render(headlineLabel)
+		headline += " " + st.Muted.Render(pluralLabel(headlineCount, headlineOne, headlineLabel))
 	}
 
 	lines := []string{headline}
@@ -668,7 +677,7 @@ func (m dashboardModel) renderUsageOverlay(st styles.Styles, width, height int) 
 			lines = append(lines, heading+"  "+st.Muted.Render(tr("— no conversations yet")))
 			continue
 		}
-		parts := []string{fmt.Sprintf("%d %s", ag.s.Prompts, tr("prompts"))}
+		parts := []string{fmt.Sprintf("%d %s", ag.s.Prompts, pluralLabel(ag.s.Prompts, tr("prompt"), tr("prompts")))}
 		if ag.s.InputTokens > 0 || ag.s.OutputTokens > 0 {
 			parts = append(parts, fmt.Sprintf("%s %s · %s %s",
 				claudeusage.HumanCount(ag.s.InputTokens), tr("in"),
@@ -714,7 +723,7 @@ func (m dashboardModel) renderOtherAgentSection(s usage.AgentSummary) []string {
 	}
 	prompts := lipgloss.NewStyle().Foreground(st.P.Lavender).Bold(true).
 		Render(fmt.Sprintf("%d", s.Prompts))
-	line := "   " + prompts + " " + st.Muted.Render(tr("prompts"))
+	line := "   " + prompts + " " + st.Muted.Render(pluralLabel(s.Prompts, tr("prompt"), tr("prompts")))
 	if s.InputTokens > 0 || s.OutputTokens > 0 {
 		in := lipgloss.NewStyle().Foreground(st.P.Lavender).Bold(true).
 			Render(claudeusage.HumanCount(s.InputTokens))
@@ -776,9 +785,9 @@ func (m dashboardModel) usageSummaryLine() string {
 	st := m.st
 	parts := []string{st.Emphasis.Render(tr("Usage"))}
 	if a := m.usage; a != nil {
-		count, label := a.UserPrompts, tr("prompts")
+		count, label := a.UserPrompts, pluralLabel(a.UserPrompts, tr("prompt"), tr("prompts"))
 		if count == 0 {
-			count, label = a.Messages, tr("msgs")
+			count, label = a.Messages, pluralLabel(a.Messages, tr("msg"), tr("msgs"))
 		}
 		parts = append(parts, fmt.Sprintf("%d %s", count, label))
 	} else {

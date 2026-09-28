@@ -644,9 +644,22 @@ func (m claudeModel) viewPicker(width, height int) string {
 	}
 	lines = append(lines, "")
 	pickerW := minInt(96, width-4) - 2
-	for i, o := range rows {
-		row := fmt.Sprintf("%-40s %s", o.Label, st.Muted.Render(o.Desc))
-		lines = append(lines, components.RenderListRow(st, row, i == m.pickerCursor, pickerW))
+	// One row per option, always: the label column is only as wide as
+	// the longest label, and whatever doesn't fit is cut with "…" —
+	// rows used to wrap mid-line into the next option at 80 columns.
+	labelW := 0
+	for _, o := range rows {
+		labelW = maxInt(labelW, lipgloss.Width(o.Label))
+	}
+	labelW = minInt(labelW, maxInt(8, pickerW/2))
+	rowW := pickerW - 2 // RenderListRow's selection bar
+	// A list taller than the terminal scrolls with the cursor.
+	budget := maxInt(3, height-len(lines)-4)
+	start, end := windowAroundCursor(m.pickerCursor, len(rows), budget)
+	for i := start; i < end; i++ {
+		o := rows[i]
+		row := padLabel(truncate(o.Label, labelW), labelW) + " " + st.Muted.Render(o.Desc)
+		lines = append(lines, components.RenderListRow(st, truncate(row, rowW), i == m.pickerCursor, pickerW))
 	}
 	lines = append(lines, "",
 		st.Muted.Render(tr("↑↓ navigate  enter: choose  esc: cancel")),
