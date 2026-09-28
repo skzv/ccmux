@@ -88,14 +88,19 @@ func ReadTurn(pane string) Turn {
 		end--
 	}
 	lines = lines[:end]
-	start, closing, ok := inputArea(lines)
-	if !ok {
+	start, closing, below, ok := inputArea(lines)
+	if !ok || !footerOnly(lines[below:]) {
+		// Nothing, or a frozen frame: Claude was killed and the shell
+		// it fell back to prints under its last screen. That input box
+		// is no one's; reading the output "above" it as Claude's would
+		// take Claude relaunched in that shell (redrawing the screen)
+		// for a turn.
 		return Turn{}
 	}
 	out := tailNonEmpty(lines[:start], outputTailLines)
 	t := Turn{Output: strings.Join(out, "\n"), HasInput: true}
-	if closing < 0 || !footerOnly(lines[closing+1:]) {
-		return t // no input box, or not the live bottom of the pane
+	if closing < 0 {
+		return t // a dialog or the v1 frame: no status line over it
 	}
 	for _, l := range lastN(out, statusSearchLines) {
 		if statusLineRE.MatchString(l) {
@@ -123,9 +128,13 @@ func ReadTurn(pane string) Turn {
 //     or the v1 rounded frame: start is that rule or the frame's top
 //     border, and closing is -1.
 //
+// below is where what follows the input area starts — the lines that
+// must be Claude's footer (or the dialog's own indented lines) for it
+// to be the live bottom of the pane (see footerOnly).
+//
 // ok is false when neither is on screen: a shell after Claude exited,
 // or a full-screen view such as the transcript.
-func inputArea(lines []string) (start, closing int, ok bool) {
+func inputArea(lines []string) (start, closing, below int, ok bool) {
 	lo := max(0, len(lines)-inputAreaLines)
 	last := -1
 	for i := len(lines) - 1; i >= lo; i-- {
@@ -136,29 +145,39 @@ func inputArea(lines []string) (start, closing int, ok bool) {
 	}
 	switch {
 	case last < 0:
-		return 0, -1, false
+		return 0, -1, 0, false
 	case !isRuleLine(lines[last]):
-		return last, -1, true // v1 frame
+		// v1 frame: what follows its bottom border.
+		for i := last + 1; i < len(lines); i++ {
+			if v1FrameBottomRE.MatchString(lines[i]) {
+				return last, -1, i + 1, true
+			}
+		}
+		return last, -1, len(lines), true // drawn no further yet
 	case last+1 < len(lines) && isInputLine(lines[last+1]):
-		return last, -1, true // a box whose closing rule isn't drawn yet
+		return last, -1, len(lines), true // a box whose closing rule isn't drawn yet
 	}
 	for i := last - 1; i >= lo; i-- {
 		if isRuleLine(lines[i]) {
 			if isInputLine(lines[i+1]) {
-				return i, last, true
+				return i, last, last + 1, true
 			}
 			break
 		}
 	}
-	return last, -1, true // a dialog
+	return last, -1, last + 1, true // a dialog
 }
 
+// v1FrameBottomRE is the bottom border of the v1 frame (`╰──────╯`).
+var v1FrameBottomRE = regexp.MustCompile(`^[ \t]*╰(?:─{3,}|─*╯)`)
+
 // footerOnly reports whether lines — what follows the input box's
-// closing rule — are Claude's footer: every line indented, as Claude
-// draws its mode line, hints and statusline. A line at column 0 is
-// something else printed after Claude's last frame — the shell prompt
-// and error of a Claude that was killed mid-turn — so the frame above
-// it, status line included, is frozen, not live.
+// closing rule, or a dialog's opening one — are Claude's own: every
+// line indented, as Claude draws its mode line, hints, statusline and
+// dialog text. A line at column 0 is something else printed after
+// Claude's last frame — the shell prompt and error of a Claude that was
+// killed — so the frame above it, status line included, is frozen, not
+// live.
 func footerOnly(lines []string) bool {
 	for _, l := range lines {
 		if strings.TrimSpace(l) == "" {

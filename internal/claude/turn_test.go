@@ -45,7 +45,9 @@ func TestReadTurn(t *testing.T) {
 		{"empty", "", false, false, ""},
 		// Killed mid-turn: the last frame stays on screen with the shell
 		// printing under it. The status line in it is frozen.
-		{"frozen frame above a shell prompt", working + "\nzsh: killed     claude\nuser@host ~ % ", true, false, "✻ Cogitating… (12s · ↓ 1.2k tokens · esc to interrupt)"},
+		{"frozen frame above a shell prompt", working + "\nzsh: killed     claude\nuser@host ~ % ", false, false, ""},
+		{"frozen dialog above a shell prompt", paneFixture(t, "claude_v2_permission.txt") + "\nuser@host ~ % ", false, false, ""},
+		{"v1 frame with output after it", "done.\n╭──────────╮\n│ > hi     │\n╰──────────╯\nuser@host ~ % ", false, false, ""},
 		{"interrupt hint in the footer", typed(idle, "") + "\n  esc to interrupt", true, true, "  Get to finished work sooner with Opus 5.5. Switch anytime with /model."},
 		{"answer mentioning the key is not a status line", strings.Replace(idle, "  Get to finished", "⏺ Press esc to interrupt me (any time).\n  Get to finished", 1), true, false, "  Get to finished work sooner with Opus 5.5. Switch anytime with /model."},
 	} {

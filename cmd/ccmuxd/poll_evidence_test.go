@@ -221,3 +221,43 @@ func TestPollOnce_RelaunchAfterACrashDoesNotNotify(t *testing.T) {
 		t.Errorf("relaunching after a crash notified: pushes=%d bells=%d promptCount=%d, want 0", got, *bells, tr.promptCount)
 	}
 }
+
+// TestPollOnce_RelaunchOverAFrozenFrameDoesNotNotify — a Claude killed
+// mid-turn leaves its last screen, input box and all, with the shell it
+// fell back to printing under it. That box is no one's: read as live,
+// Claude relaunched in the shell (redrawing the screen) looked like new
+// output above an input box — a turn — and notified.
+func TestPollOnce_RelaunchOverAFrozenFrameDoesNotNotify(t *testing.T) {
+	shortSpinnerStaleness(t)
+	s := newPollTestServer(t)
+	pushes := countPushes(t, s)
+	bells := countBells(s)
+	idle, working := readFixture(t, "claude_v2_idle.txt"), readFixture(t, "claude_v2_working.txt")
+	p := &fakePane{Pane: tmux.Pane{ID: "%1", Width: 120, Height: 40, Title: "✳ Claude Code"}, body: idle}
+	f := newFakeTmux()
+	f.addSession(tmux.Session{Name: "c-frozen", Path: "/tmp", Created: time.Now().Add(-time.Hour)}, p)
+	f.wire(s)
+	pollNTimes(s, 1)
+
+	f.update(func() { p.body, p.Title = working, "⠋ Refactor poll loop" })
+	pollNTimes(s, 1)
+	frozen := working + "\nError: something broke\n    at turn (cli.js:1)\nuser@host ~ % "
+	f.update(func() { p.body = frozen })
+	pollNTimes(s, 5) // the spinner goes stale; the crashed turn ends
+	tr := s.seen["c-frozen"]
+	if tr.state == agent.StateActive {
+		t.Fatalf("setup: crash: state=%s, want settled", tr.state)
+	}
+	b, n, pc := *bells, pushes(), tr.promptCount
+
+	f.update(func() { p.body = frozen + "claude" })
+	pollNTimes(s, 1) // typing `claude` under the frozen frame
+	f.update(func() { p.body, p.Title = idle, "✳ Claude Code" })
+	pollNTimes(s, 4) // Claude is back, its screen redrawn
+	if tr.state != agent.StateNeedsInput {
+		t.Fatalf("state = %s after the relaunch, want needs_input", tr.state)
+	}
+	if got := pushes(); got != n || *bells != b || tr.promptCount != pc {
+		t.Errorf("relaunching over a frozen frame notified: pushes %d→%d bells %d→%d promptCount %d→%d", n, got, b, *bells, pc, tr.promptCount)
+	}
+}
