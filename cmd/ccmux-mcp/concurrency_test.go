@@ -614,11 +614,14 @@ func TestWriteFailureDropsQueuedCalls(t *testing.T) {
 				return
 			}
 		}
-		_, _ = inW.Write([]byte(`{"jsonrpc":"2.0","id":"p","method":"ping"}` + "\n"))
 	}()
 	for i := 0; i < maxInFlight; i++ {
 		waitEntered(t, h, "sessions")
 	}
+	// Only now the ping, whose answer is the write that fails: sent any
+	// earlier, it could stop Run before every slot's call had reached
+	// the daemon.
+	go func() { _, _ = inW.Write([]byte(`{"jsonrpc":"2.0","id":"p","method":"ping"}` + "\n")) }()
 	select {
 	case err := <-done:
 		if err == nil || !strings.Contains(err.Error(), "write stdout") {
