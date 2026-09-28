@@ -513,19 +513,22 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 	}
 	if s.markSpinner != nil {
 		for _, m := range spinnerMarks {
-			if err := s.markSpinner(ctx, m.name, string(m.agent)); err != nil {
+			// A session no target reaches by name alone ("$1", a dotted
+			// name) can't carry the mark (tmux.ErrUntargetable): it just
+			// goes unrecorded.
+			if err := s.markSpinner(ctx, m.name, string(m.agent)); err != nil && !errors.Is(err, tmux.ErrUntargetable) {
 				log.Printf("ccmuxd: record %s's spinner on session %s: %v", m.agent, m.name, err)
 			}
 		}
 	}
 	if s.markReview != nil {
 		for _, m := range reviews {
-			// A session named "$…" can't be targeted by name (see
-			// tmux.SetSessionReview): it just goes unrecorded. Nor is a
-			// session that ended, or was renamed, since this tick's list
-			// worth a log line.
+			// A session no target reaches by name alone ("$…", a dotted
+			// name — tmux.ErrUntargetable) can't carry the record: it
+			// just goes unrecorded. Nor is a session that ended, or was
+			// renamed, since this tick's list worth a log line.
 			err := s.markReview(ctx, m.name, m.review)
-			if err != nil && !errors.Is(err, tmux.ErrSessionIDTarget) && !sessionNotFound(err) {
+			if err != nil && !errors.Is(err, tmux.ErrUntargetable) && !sessionNotFound(err) {
 				log.Printf("ccmuxd: record session %s's review: %v", m.name, err)
 			}
 		}

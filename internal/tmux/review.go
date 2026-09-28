@@ -32,12 +32,13 @@ const (
 
 // SetSessionReview writes r on the session called name: its three
 // options in one tmux invocation (`set-option … ; set-option …`), so a
-// record is never half written. A name starting with "$" is refused
-// with ErrSessionIDTarget: tmux reads "=$1:" as the session whose ID is
-// $1, so the record would land on some other session.
+// record is never half written. A name no target can carry is refused
+// (ErrUntargetable; ErrSessionIDTarget for "$…"): tmux reads "=$1:" as
+// the session whose ID is $1, so the record would land on some other
+// session.
 func SetSessionReview(ctx context.Context, name string, r Review) error {
-	if strings.HasPrefix(name, "$") {
-		return fmt.Errorf("record session review on %q: %w", name, ErrSessionIDTarget)
+	if err := checkOptionTarget(name); err != nil {
+		return fmt.Errorf("record session review: %w", err)
 	}
 	seen := "0"
 	if r.Seen {

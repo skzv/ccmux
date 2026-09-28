@@ -116,7 +116,8 @@ func exactPane(name string) string { return exactSession(name) }
 // `=name:` target, reaches the session called name and nothing else.
 // It is the one rule shared by everything that targets a session a
 // user or a peer named: the daemon's HTTP API (badSessionName in
-// cmd/ccmuxd) and the CLI's kill, rename, attach and shell --name.
+// cmd/ccmuxd), the CLI's kill, rename, attach and shell --name, and
+// every session option write (checkOptionTarget).
 //
 // What tmux does with these targets (checked on tmux 3.7c):
 //
@@ -291,8 +292,15 @@ func New(ctx context.Context, name, dir, cmdline string) error {
 // untagged. Tagging with a second call left a window in which the
 // daemon's poll tick classified the new session by its project's agent
 // (Claude for a bare shell, whose prompt then read as a crashed Claude).
-// An empty agentTag is plain New.
+// An empty agentTag is plain New. With a tag, a name no target can
+// carry is refused before anything is created (checkOptionTarget): the
+// tag would be written on whichever session "=$1:" resolves to.
 func NewWithAgent(ctx context.Context, name, dir, cmdline, agentTag string) error {
+	if agentTag != "" {
+		if err := checkOptionTarget(name); err != nil {
+			return fmt.Errorf("tmux new-session: %w", err)
+		}
+	}
 	args := []string{"new-session", "-d", "-s", name}
 	if dir != "" {
 		args = append(args, "-c", escapeFormat(dir))
@@ -674,9 +682,29 @@ func SetSessionSpinner(ctx context.Context, name, id string) error {
 	return nil
 }
 
+// ErrUntargetable marks an option write refused because the session's
+// name fails CheckTarget: no `-t` target reaches that session and only
+// it. With a name like "$1" tmux reads "=$1:" as the session whose ID
+// is $1, so the option landed on some other session. errors.Is also
+// matches the CheckTarget error itself (ErrSessionIDTarget for "$…").
+var ErrUntargetable = errors.New("no tmux target reaches only this session")
+
+// checkOptionTarget is the check every session set-option path makes
+// (setSessionOption, SetSessionReview, NewWithAgent's tag) before
+// writing on the session called name.
+func checkOptionTarget(name string) error {
+	if err := CheckTarget(name); err != nil {
+		return fmt.Errorf("%w: %q: %w", ErrUntargetable, name, err)
+	}
+	return nil
+}
+
 // setSessionOption sets the user option (an "@…" name) on the session
-// called name.
+// called name. A name no target can carry is refused (checkOptionTarget).
 func setSessionOption(ctx context.Context, name, option, value string) error {
+	if err := checkOptionTarget(name); err != nil {
+		return err
+	}
 	if out, err := command(ctx, "tmux", "set-option", "-t", exactPane(name), option, value).CombinedOutput(); err != nil {
 		return fmt.Errorf("%w (%s)", err, strings.TrimSpace(string(out)))
 	}

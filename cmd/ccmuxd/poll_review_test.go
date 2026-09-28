@@ -1,10 +1,15 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -206,6 +211,43 @@ func TestPollOnce_ReviewWrittenOnlyOnChange(t *testing.T) {
 	}
 	if last := got[len(got)-1]; last != (tmux.Review{Recorded: true, Seen: false, Prompts: 1, State: string(agent.StateNeedsInput)}) {
 		t.Errorf("the record after the turn: %+v", last)
+	}
+}
+
+// TestPollOnce_UntargetableNameGoesUnrecordedQuietly — the session
+// option writers now refuse every name no tmux target reaches by name
+// alone (tmux.ErrUntargetable: "$1", and a dotted name such as one made
+// outside ccmux). The poll loop can't do anything about that, so it
+// neither writes on some other session nor logs a line per change.
+func TestPollOnce_UntargetableNameGoesUnrecordedQuietly(t *testing.T) {
+	s := newPollTestServer(t)
+	idle := readFixture(t, "claude_v2_idle.txt")
+	p := &fakePane{Pane: tmux.Pane{ID: "%1", Width: 120, Height: 40, Title: "✳ Claude Code"}, body: idle}
+	f := newFakeTmux()
+	f.addSession(tmux.Session{Name: "c-api.v2", Path: "/tmp", Created: time.Now().Add(-time.Hour)}, p)
+	f.wire(s)
+	var refused []string
+	s.markReview = func(ctx context.Context, name string, r tmux.Review) error {
+		err := tmux.SetSessionReview(ctx, name, r) // refuses before running tmux
+		refused = append(refused, "review:"+name)
+		return err
+	}
+	s.markSpinner = func(ctx context.Context, name, id string) error {
+		err := tmux.SetSessionSpinner(ctx, name, id)
+		refused = append(refused, "spinner:"+name)
+		return err
+	}
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+
+	pollNTimes(s, 1)
+	claudeTurn(t, s, f, p)
+	if len(refused) < 2 {
+		t.Fatalf("setup: the ticks asked for %v, want a review record and a spinner mark", refused)
+	}
+	if strings.Contains(buf.String(), "record") {
+		t.Errorf("refused writes were logged:\n%s", buf.String())
 	}
 }
 
