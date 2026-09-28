@@ -30,7 +30,9 @@ func TestSearchRipgrep_ReapsProcess(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(root, "rg"), []byte(script), 0o700); err != nil {
 				t.Fatal(err)
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			// A hang guard, not a performance budget: under a loaded
+			// machine a freshly written script can take seconds to start.
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			type result struct {
 				hits []SearchHit

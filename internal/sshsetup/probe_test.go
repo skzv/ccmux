@@ -178,6 +178,12 @@ func TestProbe_RefusesOptionLikeTarget(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("sh-script ssh fake is unix-only")
 	}
+	// The well-formed probe at the end must reach the fake ssh inside
+	// Probe's budget; under load a freshly written script can take
+	// longer than the production 4s to start.
+	orig := probeTimeout
+	probeTimeout = 30 * time.Second
+	t.Cleanup(func() { probeTimeout = orig })
 	bin := t.TempDir()
 	ran := filepath.Join(bin, "ssh-ran")
 	if err := os.WriteFile(filepath.Join(bin, "ssh"), []byte("#!/bin/sh\n: > '"+ran+"'\nexit 255\n"), 0o755); err != nil {

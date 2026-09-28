@@ -96,7 +96,7 @@ func (r ProbeResult) IsSetupNeeded() bool {
 // enough that a wedged peer can't stall a UI flow, long enough for
 // a slow VPN handshake. Tuned for the "attach probe before exec'ing
 // mosh" path where every millisecond counts.
-const probeTimeout = 4 * time.Second
+var probeTimeout = 4 * time.Second // var so tests on a loaded machine can raise it
 
 // Prober is the dependency we mock in tests so we don't shell out to
 // a real ssh binary or wait on real network timeouts. The default

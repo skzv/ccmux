@@ -48,7 +48,9 @@ func TestClaudeCLIFetcher_CancelKillsChildrenAndReturns(t *testing.T) {
 		_, err := ClaudeCLIFetcher{Binary: bin}.Fetch(ctx)
 		done <- err
 	}()
-	deadline := time.Now().Add(5 * time.Second)
+	// Hang guard: a freshly written fake can take seconds to start on a
+	// loaded machine.
+	deadline := time.Now().Add(30 * time.Second)
 	for childPID() == 0 {
 		if time.Now().After(deadline) {
 			t.Fatal("fake claude never started its child")
