@@ -527,7 +527,7 @@ func (m notesModel) renderPreviewContent(wrap int) string {
 	if err != nil {
 		return m.previewSrc
 	}
-	out, rerr := r.Render(m.previewSrc)
+	out, rerr := r.Render(markdownForPreview(m.previewSrc))
 	if rerr != nil {
 		return m.previewSrc
 	}

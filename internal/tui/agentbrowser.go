@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/skzv/ccmux/internal/termsafe"
 	"github.com/skzv/ccmux/internal/tui/components"
 	"github.com/skzv/ccmux/internal/tui/styles"
 )
@@ -286,7 +287,12 @@ func (b *agentBrowser) updatePreview() {
 	content := row.item.Preview
 	if content == "" {
 		content = b.st.Muted.Render(tr("(no preview)"))
-	} else if row.item.Markdown {
+	} else if !row.item.Markdown {
+		// Structured text built from config files (hooks, MCP servers):
+		// never let it carry terminal control sequences.
+		content = termsafe.String(content)
+	} else {
+		content = markdownForPreview(content)
 		width := b.preview.Width - 4
 		if width < 20 {
 			width = 20
