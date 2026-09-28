@@ -59,16 +59,20 @@ func (projectInfoOverlay) View(st styles.Styles, p project.Project, sessions []d
 	}
 
 	lines = append(lines, st.Subtitle.Render(tr("Identity")))
-	lines = append(lines, fmt.Sprintf("  %s%s", padLabel(tr("session"), 10), st.Emphasis.Render(p.SessionName())))
-	lines = append(lines, fmt.Sprintf("  %s%s", padLabel(tr("agent"), 10), st.Emphasis.Render(agentDisplay)))
+	// One label column from the translated widths (at least the 10
+	// cells the English labels had), so the values line up in every
+	// language.
+	labelW := labelColumn(10, 0, tr("session"), tr("agent"), tr("detected"), tr("modified"))
+	lines = append(lines, fmt.Sprintf("  %s%s", padLabel(tr("session"), labelW), st.Emphasis.Render(p.SessionName())))
+	lines = append(lines, fmt.Sprintf("  %s%s", padLabel(tr("agent"), labelW), st.Emphasis.Render(agentDisplay)))
 	detected := renderScaffoldChips(st, p, false)
 	if detected == "" {
-		lines = append(lines, "  "+padLabel(tr("detected"), 10)+st.Muted.Render(tr("(none)")))
+		lines = append(lines, "  "+padLabel(tr("detected"), labelW)+st.Muted.Render(tr("(none)")))
 	} else {
-		lines = append(lines, "  "+padLabel(tr("detected"), 10)+strings.TrimLeft(detected, " "))
+		lines = append(lines, "  "+padLabel(tr("detected"), labelW)+strings.TrimLeft(detected, " "))
 	}
 	if !p.Modified.IsZero() {
-		lines = append(lines, fmt.Sprintf("  %s%s", padLabel(tr("modified"), 10), st.Muted.Render(humanModified(p.Modified))))
+		lines = append(lines, fmt.Sprintf("  %s%s", padLabel(tr("modified"), labelW), st.Muted.Render(humanModified(p.Modified))))
 	}
 	lines = append(lines, "")
 

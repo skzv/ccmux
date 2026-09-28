@@ -959,7 +959,9 @@ func (m conversationsModel) renderDetail(c conversations.Conversation, width, he
 		"",
 	}
 
-	const labelW = 12
+	// One label column from the translated widths (at least the 12
+	// cells the English labels had).
+	labelW := labelColumn(12, 0, tr("last active"), tr("messages"), tr("mode"))
 	lines = append(lines, indent+st.Muted.Render(padLabel(tr("last active"), labelW))+"  "+relativeTimeLong(c.LastActivity))
 	if count, ok := m.statsCache[c.ID]; ok && count >= 0 {
 		lines = append(lines, indent+st.Muted.Render(padLabel(tr("messages"), labelW))+"  "+fmt.Sprintf("%d", count))

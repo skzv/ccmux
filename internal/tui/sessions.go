@@ -660,9 +660,15 @@ func (m sessionsModel) renderDetail(width int, narrow bool) string {
 	if narrow {
 		return m.renderDetailNarrow(*sel, width)
 	}
-	attachedLine := fmt.Sprintf("%s %s", tr("attached"), m.st.Muted.Render(tr("no")))
+	// Labels share one column sized from their translated widths: the
+	// spacing after each used to be hard-coded for the English words,
+	// so the values zig-zagged in every other language.
+	labels := []string{tr("state"), tr("path"), tr("attached"), tr("created")}
+	labelW := labelColumn(0, 0, labels...)
+	row := func(i int, value string) string { return padLabel(labels[i], labelW) + value }
+	attached := m.st.Muted.Render(tr("no"))
 	if sel.Attached {
-		attachedLine = tr("attached") + " " + lipgloss.NewStyle().Foreground(m.st.P.Mauve).Bold(true).Render("⊙ "+tr("yes"))
+		attached = lipgloss.NewStyle().Foreground(m.st.P.Mauve).Bold(true).Render("⊙ " + tr("yes"))
 	}
 	subtitle := fmt.Sprintf("%s %s", tr("on"), sel.Host)
 	if sel.Project != "" {
@@ -672,13 +678,14 @@ func (m sessionsModel) renderDetail(width int, narrow bool) string {
 		m.st.Emphasis.Render(sel.Name),
 		m.st.Muted.Render(subtitle),
 		"",
-		fmt.Sprintf("%s    %s %s", tr("state"), stateGlyph(m.st, sel.State), sel.State),
-		fmt.Sprintf("%s     %s", tr("path"), truncate(summarizePath(sel.Path), width-12)),
-		attachedLine,
+		row(0, stateGlyph(m.st, sel.State)+" "+sel.State),
+		// Pane border + padding take 4 columns.
+		row(1, truncate(summarizePath(sel.Path), width-4-labelW)),
+		row(2, attached),
 		// "changed" duplicates the age the sessions list already shows
 		// on the row itself, so the detail pane carries "created"
 		// instead — the one timestamp the list doesn't surface.
-		fmt.Sprintf("%s  %s", tr("created"), relTime(sel.Created)),
+		row(3, relTime(sel.Created)),
 	}
 	return m.st.Pane.Width(width - 2).MaxWidth(width).Render(strings.Join(lines, "\n"))
 }
@@ -693,13 +700,18 @@ func (m sessionsModel) renderDetailNarrow(sel daemon.SessionState, width int) st
 	if sel.Attached {
 		attached = lipgloss.NewStyle().Foreground(m.st.P.Mauve).Bold(true).Render("⊙ " + tr("yes"))
 	}
+	// One label column from the translated widths (see renderDetail),
+	// with a two-cell gap.
+	labels := []string{tr("state"), tr("project"), tr("attached")}
+	labelW := labelColumn(0, 0, labels...) + 1
+	row := func(i int, value string) string { return padLabel(labels[i], labelW) + value }
 	lines := []string{
 		m.st.Emphasis.Render(sel.Name),
 		m.st.Muted.Render(tr("on") + " " + sel.Host),
 		"",
-		fmt.Sprintf("%s     %s %s", tr("state"), stateGlyph(m.st, sel.State), sel.State),
-		fmt.Sprintf("%s   %s", tr("project"), sel.Project),
-		fmt.Sprintf("%s  %s", tr("attached"), attached),
+		row(0, stateGlyph(m.st, sel.State)+" "+sel.State),
+		row(1, sel.Project),
+		row(2, attached),
 		m.st.Muted.Render(tr("detach: press ") + detectedPrefix() + tr(" then d")),
 	}
 	return m.st.Pane.Width(width - 2).MaxWidth(width).Render(strings.Join(lines, "\n"))
