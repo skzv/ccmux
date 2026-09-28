@@ -79,7 +79,9 @@ func runProjectCmd(name string) error {
 	}
 	tw.Flush()
 	if found == 0 {
-		fmt.Printf("  (none — `ccmux attach %s` starts one)\n", safeField(name))
+		// Quote the name: a project called "with space" printed a
+		// hint that attached to project "with".
+		fmt.Printf("  (none — `ccmux attach %s` starts one)\n", shellWord(name))
 	}
 
 	// Past conversations recorded against the project folder.

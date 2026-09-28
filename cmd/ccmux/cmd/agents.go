@@ -28,12 +28,14 @@ func newAgentsCmd() *cobra.Command {
 		Short: "Configure agents and pick a default model",
 		Long: `Manage agent-level settings ccmux applies when launching sessions.
 
-The ccmuxd daemon discovers the Claude model catalog from Anthropic's
-Models API every 24h (when ANTHROPIC_API_KEY is set on the daemon's
-environment) and falls back to a curated in-binary list otherwise.
-Use the subcommands below to inspect the catalog and pin a default
-model that ccmux passes as ANTHROPIC_MODEL on every Claude session
-it launches.`,
+The ccmuxd daemon keeps a catalog of Claude models. It asks your claude
+CLI first (works for subscription and API users alike), then Anthropic's
+Models API when ANTHROPIC_API_KEY is set in the daemon's environment, and
+always merges in a curated list that ships with ccmux. The catalog is
+refreshed weekly; ` + "`ccmux agents models --refresh`" + ` refreshes it now (at
+most once every 10 minutes). Use the subcommands below to inspect the
+catalog and pin a default model that ccmux passes as ANTHROPIC_MODEL on
+every Claude session it launches.`,
 	}
 	c.AddCommand(newAgentsModelsCmd())
 	c.AddCommand(newAgentsSetDefaultModelCmd())
@@ -42,11 +44,11 @@ it launches.`,
 
 // newAgentsModelsCmd: `ccmux agents models [--refresh] [--json]`
 //
-// Lists the catalog the daemon discovered. Tagged rows: `[default]`
-// next to the current ccmux pin, `[api]` vs `[fallback]` source.
-// --refresh forces a synchronous re-fetch on the daemon side; useful
-// the day Anthropic ships a new model and you don't want to wait for
-// the next 24h tick.
+// Lists the catalog the daemon discovered. Tagged rows: `*` next to
+// the current ccmux pin, and each model's source (claude-cli / api /
+// fallback). --refresh forces a synchronous re-fetch on the daemon
+// side; useful the day Anthropic ships a new model and you don't want
+// to wait for the weekly refresh.
 func newAgentsModelsCmd() *cobra.Command {
 	var (
 		refresh bool
@@ -57,15 +59,18 @@ func newAgentsModelsCmd() *cobra.Command {
 		Short: "List the Claude models the daemon discovered (or fallback list)",
 		Long: `Print every model the daemon currently knows about.
 
-When ANTHROPIC_API_KEY is set on the daemon's environment, the catalog
-comes from a live call to GET /v1/models on api.anthropic.com,
-refreshed every 24h and merged with a curated fallback list. Without
-a key, the catalog is the curated list alone — still useful, and
-auto-grows with every ccmux release.
+The catalog comes from the first source that answers: your claude CLI
+(a small ` + "`claude -p`" + ` query — works for subscription and API users), then
+Anthropic's Models API (GET /v1/models, when ANTHROPIC_API_KEY is set in
+the daemon's environment). It is cached on disk, refreshed weekly, and
+always merged with a curated list that ships with every ccmux release,
+so it's never empty — even offline.
 
-Pass --refresh to force a re-fetch right now instead of waiting for
-the next 24h tick. Pass --json for machine-parsable output (the same
-shape /v1/models returns).`,
+Pass --refresh to re-run discovery now instead of waiting for the weekly
+refresh; the daemon runs it at most once every 10 minutes and answers
+repeats from that run. Without a running ccmuxd the cached catalog is
+shown and --refresh has no effect. Pass --json for machine-parsable
+output (the same shape /v1/models returns).`,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
@@ -138,7 +143,7 @@ shape /v1/models returns).`,
 		},
 	}
 	c.Flags().BoolVar(&refresh, "refresh", false,
-		"force the daemon to re-fetch the catalog from the Anthropic API")
+		"make the daemon re-run model discovery now (claude CLI, then the Models API); at most once per 10 minutes")
 	c.Flags().BoolVar(&asJSON, "json", false,
 		"output the raw catalog as JSON (same shape as /v1/models)")
 	return c

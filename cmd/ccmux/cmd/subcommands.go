@@ -208,8 +208,25 @@ func newNewCmd() *cobra.Command {
 				return err
 			}
 			opts.Agent = id
-			session, err := scaffold.StartSession(context.Background(), opts)
+			// A project whose session is already running used to fail
+			// with tmux's raw "duplicate session: c-alpha". Say what's
+			// going on and how to get to it — `new` doesn't attach to an
+			// existing session on its own, since it may be running a
+			// different agent than --agent asks for.
+			ctx := context.Background()
+			running := tmux.SessionNameForPath(opts.Dir)
+			alreadyRunning := func() error {
+				return fmt.Errorf("project %s already has a running session (%s); attach with: ccmux attach %s",
+					shellWord(args[0]), safeField(running), shellWord(args[0]))
+			}
+			if live, _ := tmux.Has(ctx, running); live {
+				return alreadyRunning()
+			}
+			session, err := scaffold.StartSession(ctx, opts)
 			if err != nil {
+				if live, _ := tmux.Has(ctx, running); live {
+					return alreadyRunning() // lost a race with another start
+				}
 				return err
 			}
 			return attachAfterStart(c.OutOrStdout(), session, args[0], false, true)
@@ -258,7 +275,12 @@ func newListCmd() *cobra.Command {
 	var asJSON bool
 	c := &cobra.Command{
 		Use:   "list",
-		Short: "List Claude sessions",
+		Short: "List running sessions (every agent, plus bare shells)",
+		Long: `List the tmux sessions ccmux knows about on this device — every agent's
+sessions and bare shells — with the state ccmuxd classified them in.
+
+When ccmuxd isn't running (or doesn't answer), the list comes straight
+from tmux instead, and STATE is "unknown": only the daemon classifies.`,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
@@ -285,6 +307,10 @@ func newListCmd() *cobra.Command {
 					sessions = append(sessions, daemon.SessionState{
 						Name: t.Name, Host: "local", Path: t.Path, Windows: t.Windows, Attached: t.Attached,
 						Created: t.Created, LastChange: t.LastAttach,
+						// Only the daemon classifies; say so rather than
+						// emitting state "" (not a value the protocol
+						// defines).
+						State: string(agent.StateUnknown),
 					})
 				}
 			}
