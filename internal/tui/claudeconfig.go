@@ -986,18 +986,29 @@ func (m claudeModel) unifiedModelChoices() []modelChoice {
 }
 
 // applyModelChoiceCmd writes both targets of a pick: settings.json
-// `model` AND ccmux's pin. Doing both in one command (rather than two
-// chained messages) keeps the success/failure reporting atomic — the
-// user sees one toast, and a failure on either write surfaces.
+// `model` AND ccmux's pin — all or nothing. The pin goes first because
+// it's the write that gets refused (config.toml that doesn't parse);
+// settings.json changes only once the pin is saved, and the pin is put
+// back if settings.json can't be written. The other order half-applied a
+// pick on a broken config.toml: settings.json changed, the pin didn't,
+// and the Agents tab kept showing the old model.
 func applyModelChoiceCmd(c modelChoice) tea.Cmd {
 	return func() tea.Msg {
+		prev, err := config.Load()
+		if err != nil {
+			return claudeModelChangedMsg{New: c.Settings, Err: fmt.Errorf("model not changed: %w", err)}
+		}
+		saved, err := setCcmuxClaudeDefault(c.Pin)
+		if err != nil {
+			return claudeModelChangedMsg{New: c.Settings, Err: fmt.Errorf("model not changed: %w", err)}
+		}
 		backup, err := claudeconfig.SetModel(c.Settings)
 		if err != nil {
+			err = fmt.Errorf("model not changed: %w", err)
+			if _, rerr := setCcmuxClaudeDefault(prev.Claude.DefaultModel); rerr != nil {
+				err = fmt.Errorf("%w (and restoring the ccmux pin failed: %v)", err, rerr)
+			}
 			return claudeModelChangedMsg{New: c.Settings, Err: err}
-		}
-		saved, perr := setCcmuxClaudeDefault(c.Pin)
-		if perr != nil {
-			return claudeModelChangedMsg{New: c.Settings, Backup: backup, Err: perr}
 		}
 		return claudeModelChangedMsg{New: c.toastValue(), Backup: backup, Cfg: &saved}
 	}
