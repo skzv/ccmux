@@ -52,6 +52,7 @@ type Cache[P Parser] struct {
 	newParser func(path string) P
 	retention time.Duration
 	maxLen    int
+	fsys      fs.FS // nil: the OS
 
 	mu    sync.Mutex
 	files map[string]*cacheEntry[P]
@@ -95,6 +96,14 @@ func NewCache[P Parser](retention time.Duration, maxLen int, newParser func(path
 	}
 }
 
+// WithFS makes the cache read files from fsys instead of the OS, so
+// tests can drive it over an in-memory tree; see Cursor.FollowFS. Call
+// it before the cache is used.
+func (c *Cache[P]) WithFS(fsys fs.FS) *Cache[P] {
+	c.fsys = fsys
+	return c
+}
+
 // Span is the time range one walk reads: records at or after Cutoff,
 // as of Now. Make one with Cache.Span.
 type Span struct {
@@ -136,7 +145,9 @@ func (c *Cache[P]) Span(now time.Time, lookback time.Duration) Span {
 func (c *Cache[P]) Parse(path string, info fs.FileInfo, sp Span, use func(P)) {
 	if sp.uncached {
 		p := c.newParser(path)
-		_ = ParseFile(path, c.maxLen, sp.floor, p)
+		var cur Cursor
+		_ = cur.FollowFS(c.fsys, path, c.maxLen, p.Restart,
+			func(line []byte) { p.Line(line, sp.floor) }, p.Partial)
 		use(p)
 		return
 	}
@@ -156,7 +167,7 @@ func (c *Cache[P]) Parse(path string, info fs.FileInfo, sp Span, use func(P)) {
 		from := e.from
 		// A read error leaves the state consistent with the lines
 		// that were delivered, and the cursor retries from there.
-		_ = e.cur.Follow(path, c.maxLen, e.parser.Restart,
+		_ = e.cur.FollowFS(c.fsys, path, c.maxLen, e.parser.Restart,
 			func(line []byte) { e.parser.Line(line, from) }, e.parser.Partial)
 	}
 	use(e.parser)

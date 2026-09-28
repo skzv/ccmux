@@ -3,11 +3,14 @@ package claudeusage
 // The pre-cache scanner, kept verbatim (renamed) from before transcripts
 // were cached, as the oracle the incremental parser is checked against:
 // for any file contents and span, replaying the cached records must
-// give exactly the events legacyScanFile produces from the bytes.
+// give exactly the events legacyScanFile produces from the bytes. The
+// one change: it opens the file through fsys (nil: the OS), so the
+// fuzz target can keep its transcripts in memory.
 
 import (
 	"encoding/json"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,9 +19,16 @@ import (
 	"github.com/skzv/ccmux/internal/jsonl"
 )
 
-func legacyScanFile(path string, cutoff, now time.Time) (r scanResult) {
+func legacyOpen(fsys fs.FS, path string) (io.ReadCloser, error) {
+	if fsys == nil {
+		return os.Open(path)
+	}
+	return fsys.Open(path)
+}
+
+func legacyScanFile(fsys fs.FS, path string, cutoff, now time.Time) (r scanResult) {
 	defer func() { r.tally(r.events, time.Time{}) }()
-	f, err := os.Open(path)
+	f, err := legacyOpen(fsys, path)
 	if err != nil {
 		return r
 	}

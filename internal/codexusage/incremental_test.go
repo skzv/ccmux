@@ -2,13 +2,13 @@ package codexusage
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/skzv/ccmux/internal/jsonl"
@@ -84,50 +84,44 @@ func sameResult(a, b scanResult) bool {
 func FuzzIncrementalMatchesOneShot(f *testing.F) {
 	f.Add([]byte{0, 200, 2, 150, 7, 140, 3, 139, 3, 138, 4, 137, 2, 30, 5, 29, 8, 28, 3, 1, 11, 1, 3, 2}, []byte{40, 7, 90, 255, 3, 120})
 	f.Add([]byte{1, 100, 2, 90, 7, 80, 3, 70, 13, 3, 9, 2, 10, 1, 6, 1, 12, 0}, []byte{1, 1, 254, 60, 60})
-	dir := f.TempDir()
-	var execs atomic.Int64
 	lookbacks := []time.Duration{time.Hour, 5 * time.Hour, 24 * time.Hour, 48 * time.Hour}
 	f.Fuzz(func(t *testing.T, program, splits []byte) {
-		if len(program) > 160 || len(splits) > 24 {
+		if len(program) > 256 || len(splits) > 32 {
 			return // keeps an exec cheap: every step re-scans the file
 		}
 		content := genRollout(program)
-		path := filepath.Join(dir, fmt.Sprintf("rollout-%d.jsonl", execs.Add(1)))
-		if err := os.WriteFile(path, nil, 0o644); err != nil {
-			t.Fatal(err)
-		}
-		defer os.Remove(path)
-		c := jsonl.NewCache(cacheRetention, maxLineBytes, newFileRecords)
+		// The rollout lives in memory: file IO on every exec made the
+		// target slow, and a machine-wide IO stall could trip the fuzz
+		// harness's 10-second per-exec watchdog. Cursor's on-disk
+		// behavior is covered by jsonl's tests and the walk tests below.
+		const path = "rollout-x.jsonl"
+		file := &fstest.MapFile{ModTime: fuzzBase}
+		fsys := fstest.MapFS{path: file}
+		c := jsonl.NewCache(cacheRetention, maxLineBytes, newFileRecords).WithFS(fsys)
 		written := 0
 		for step, b := range append(splits, 0) {
 			switch {
 			case step == len(splits):
-				appendBytes(t, path, content[written:])
+				file.Data = append(file.Data, content[written:]...)
 				written = len(content)
 			case b == 255 && written > 0:
 				written /= 2
-				if err := os.Truncate(path, int64(written)); err != nil {
-					t.Fatal(err)
-				}
+				file.Data = file.Data[:written]
 			case b == 254:
-				tmp := path + ".tmp"
-				if err := os.WriteFile(tmp, []byte(content[:written]), 0o644); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.Rename(tmp, path); err != nil {
-					t.Fatal(err)
-				}
+				file = &fstest.MapFile{Data: []byte(content[:written])}
+				fsys[path] = file
 			default:
 				n := min(1+int(b)*3, len(content)-written)
-				appendBytes(t, path, content[written:written+n])
+				file.Data = append(file.Data, content[written:written+n]...)
 				written += n
 			}
+			file.ModTime = fuzzBase.Add(time.Duration(step+1) * time.Millisecond)
 			now := fuzzBase.Add(time.Duration(b%7) * 25 * time.Minute)
 			sp := c.Span(now, lookbacks[int(b)%len(lookbacks)])
-			fi, _ := os.Stat(path)
+			fi, _ := fs.Stat(fsys, path)
 			var got scanResult
 			c.Parse(path, fi, sp, func(f *fileRecords) { got = f.result(sp.Cutoff, now) })
-			if want := legacyScanFile(path, sp.Cutoff, now); !sameResult(got, want) {
+			if want := legacyScanFile(fsys, path, sp.Cutoff, now); !sameResult(got, want) {
 				t.Fatalf("step %d, window %v..%v: incremental %+v, fresh scan %+v", step, sp.Cutoff, now, got, want)
 			}
 		}

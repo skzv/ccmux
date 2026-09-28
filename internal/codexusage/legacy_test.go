@@ -2,19 +2,30 @@ package codexusage
 
 // The pre-cache scanner, kept verbatim (renamed) from before rollouts
 // were cached, as the oracle the incremental parser is checked against.
+// The one change: it opens the file through fsys (nil: the OS), so the
+// fuzz target can keep its rollouts in memory.
 
 import (
 	"bytes"
 	"encoding/json"
+	"io"
+	"io/fs"
 	"os"
 	"time"
 
 	"github.com/skzv/ccmux/internal/jsonl"
 )
 
-func legacyScanFile(path string, cutoff, now time.Time) scanResult {
+func legacyOpen(fsys fs.FS, path string) (io.ReadCloser, error) {
+	if fsys == nil {
+		return os.Open(path)
+	}
+	return fsys.Open(path)
+}
+
+func legacyScanFile(fsys fs.FS, path string, cutoff, now time.Time) scanResult {
 	r := scanResult{byModel: map[string]*Tokens{}}
-	f, err := os.Open(path)
+	f, err := legacyOpen(fsys, path)
 	if err != nil {
 		return r
 	}

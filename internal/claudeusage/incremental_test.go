@@ -2,13 +2,14 @@ package claudeusage
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/skzv/ccmux/internal/jsonl"
@@ -98,23 +99,20 @@ func sameEvents(a, b []usageEvent) bool {
 }
 
 // checkIncremental asserts the cache's events for path match a
-// one-shot legacy scan of the file as it is now: over one span picked
-// by sel, or over all of them when all is set.
-func checkIncremental(t *testing.T, c *jsonl.Cache[*fileRecords], path string, step int, sel byte, all bool) {
+// one-shot legacy scan of the file as it is now, over two spans picked
+// by sel.
+func checkIncremental(t *testing.T, c *jsonl.Cache[*fileRecords], fsys fs.FS, path string, step int, sel byte) {
 	t.Helper()
 	lookbacks := []time.Duration{time.Hour, 5 * time.Hour, 10 * time.Hour, 48 * time.Hour}
 	spans := []jsonl.Span{
 		c.Span(fuzzBase, lookbacks[int(sel)%len(lookbacks)]),
 		c.Span(fuzzBase.Add(time.Duration(sel%7)*25*time.Minute), 10*time.Hour),
 	}
-	if !all {
-		spans = spans[sel%2 : sel%2+1]
-	}
 	for _, sp := range spans {
-		fi, _ := os.Stat(path)
+		fi, _ := fs.Stat(fsys, path)
 		var got []usageEvent
 		c.Parse(path, fi, sp, func(f *fileRecords) { got = f.events(sp.Cutoff, sp.Now) })
-		want := legacyScanFile(path, sp.Cutoff, sp.Now).events
+		want := legacyScanFile(fsys, path, sp.Cutoff, sp.Now).events
 		if !sameEvents(got, want) {
 			t.Fatalf("step %d, span %v..%v: incremental events differ from a fresh scan\n got  %d events: %+v\n want %d events: %+v",
 				step, sp.Cutoff.Format(time.RFC3339), sp.Now.Format(time.RFC3339), len(got), got, len(want), want)
@@ -131,54 +129,42 @@ func FuzzIncrementalMatchesOneShot(f *testing.F) {
 	f.Add([]byte{0, 10, 3, 11, 3, 11, 2, 12, 3, 13, 6, 20, 18, 21, 3, 22, 7, 23, 4, 24}, []byte{40, 7, 90, 255, 3, 120})
 	f.Add([]byte{3, 200, 3, 1, 0, 150, 5, 2, 12, 3, 13, 0, 14, 9, 19, 5, 1, 1, 3, 1}, []byte{1, 1, 1, 254, 60, 60})
 	f.Add([]byte{16, 1, 10, 2, 11, 3, 15, 4, 17, 5, 8, 6, 9, 7}, []byte{200, 200})
-	// One directory per fuzz worker, one file per exec: creating and
-	// removing a temp dir on every exec dominated the run time.
-	dir := f.TempDir()
-	subDir := filepath.Join(dir, "sess", "subagents")
-	if err := os.MkdirAll(subDir, 0o755); err != nil {
-		f.Fatal(err)
-	}
-	var execs atomic.Int64
 	f.Fuzz(func(t *testing.T, program, splits []byte) {
-		if len(program) > 160 || len(splits) > 24 {
+		if len(program) > 256 || len(splits) > 32 {
 			return // keeps an exec cheap: every step re-scans the file
 		}
 		content := genTranscript(program)
-		name := fmt.Sprintf("s%d.jsonl", execs.Add(1))
-		path := filepath.Join(dir, name)
+		// The transcript lives in memory: file IO on every exec made the
+		// target slow, and a machine-wide IO stall could trip the fuzz
+		// harness's 10-second per-exec watchdog. Cursor's on-disk
+		// behavior is covered by jsonl's tests and the walk tests below.
+		path := "s.jsonl"
 		if len(splits) > 0 && splits[0]%2 == 1 {
-			path = filepath.Join(subDir, name) // subagent transcript: no prompts
+			path = "sess/subagents/agent-a.jsonl" // subagent transcript: no prompts
 		}
-		if err := os.WriteFile(path, nil, 0o644); err != nil {
-			t.Fatal(err)
-		}
-		defer os.Remove(path)
-		c := jsonl.NewCache(cacheRetention, maxScanLineBytes, newFileRecords)
+		file := &fstest.MapFile{ModTime: fuzzBase}
+		fsys := fstest.MapFS{path: file}
+		c := jsonl.NewCache(cacheRetention, maxScanLineBytes, newFileRecords).WithFS(fsys)
 		written := 0
 		for step, b := range append(splits, 0) {
 			switch {
 			case step == len(splits): // the rest, in one go
-				appendBytes(t, path, content[written:])
+				file.Data = append(file.Data, content[written:]...)
 				written = len(content)
 			case b == 255 && written > 0: // truncate to half
 				written /= 2
-				if err := os.Truncate(path, int64(written)); err != nil {
-					t.Fatal(err)
-				}
+				file.Data = file.Data[:written]
 			case b == 254: // atomically replace with the same bytes
-				tmp := path + ".tmp"
-				if err := os.WriteFile(tmp, []byte(content[:written]), 0o644); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.Rename(tmp, path); err != nil {
-					t.Fatal(err)
-				}
+				file = &fstest.MapFile{Data: []byte(content[:written])}
+				fsys[path] = file
 			default:
 				n := min(1+int(b)*3, len(content)-written)
-				appendBytes(t, path, content[written:written+n])
+				file.Data = append(file.Data, content[written:written+n]...)
 				written += n
 			}
-			checkIncremental(t, c, path, step, b, step == len(splits))
+			// Every write moves the modification time, as a real one does.
+			file.ModTime = fuzzBase.Add(time.Duration(step+1) * time.Millisecond)
+			checkIncremental(t, c, fsys, path, step, b)
 		}
 	})
 }

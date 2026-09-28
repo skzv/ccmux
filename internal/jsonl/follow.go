@@ -2,6 +2,7 @@ package jsonl
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -68,8 +69,23 @@ func (c *Cursor) Unchanged(fi fs.FileInfo) bool {
 // Follow never reads a file the caller didn't ask about and never
 // holds any lock; callers serialize access to one Cursor themselves.
 func (c *Cursor) Follow(path string, maxLen int, restart func(), line, partial func([]byte)) error {
+	return c.FollowFS(nil, path, maxLen, restart, line, partial)
+}
+
+// randomAccessFile is what Follow needs from an open file; *os.File and
+// the files of an fstest.MapFS qualify.
+type randomAccessFile interface {
+	fs.File
+	io.ReaderAt
+	io.Seeker
+}
+
+// FollowFS is Follow reading path from fsys instead of the OS (nil
+// means the OS). fsys's files must implement io.ReaderAt and io.Seeker.
+// It exists so tests can drive a Cursor over an in-memory tree.
+func (c *Cursor) FollowFS(fsys fs.FS, path string, maxLen int, restart func(), line, partial func([]byte)) error {
 	c.valid = false
-	f, err := os.Open(path)
+	f, err := openRandomAccess(fsys, path)
 	if err != nil {
 		c.rewind(restart)
 		partial(nil)
@@ -126,7 +142,7 @@ func (c *Cursor) rewind(restart func()) {
 
 // readSig returns the (up to) sigLen bytes ending at the offset, or
 // nil when they can't be read.
-func (c *Cursor) readSig(f *os.File) []byte {
+func (c *Cursor) readSig(f io.ReaderAt) []byte {
 	n := min(c.off, sigLen)
 	if n == 0 {
 		return nil
@@ -140,10 +156,32 @@ func (c *Cursor) readSig(f *os.File) []byte {
 
 // sigMatches reports whether the bytes just before the offset are
 // still the ones read last time.
-func (c *Cursor) sigMatches(f *os.File) bool {
+func (c *Cursor) sigMatches(f io.ReaderAt) bool {
 	if len(c.sig) != int(min(c.off, sigLen)) {
 		return false
 	}
 	got := c.readSig(f)
 	return got != nil && bytes.Equal(got, c.sig)
+}
+
+// openRandomAccess opens path from fsys, or from the OS when fsys is
+// nil.
+func openRandomAccess(fsys fs.FS, path string) (randomAccessFile, error) {
+	if fsys == nil {
+		f, err := os.Open(path)
+		if err != nil {
+			return nil, err
+		}
+		return f, nil
+	}
+	f, err := fsys.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	rf, ok := f.(randomAccessFile)
+	if !ok {
+		f.Close()
+		return nil, fmt.Errorf("jsonl: %s: file does not support ReadAt and Seek", path)
+	}
+	return rf, nil
 }

@@ -1,10 +1,12 @@
 package jsonl
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 )
 
@@ -187,6 +189,43 @@ func TestCursor_MissingFileRestarts(t *testing.T) {
 	if f.restarts != 1 || len(f.lines) != 0 || f.cur.Offset() != 0 {
 		t.Fatalf("restarts %d lines %q off %d", f.restarts, f.got(), f.cur.Offset())
 	}
+}
+
+// TestCursor_FollowFS — the same contract over an in-memory tree, which
+// the usage packages' fuzz targets rely on.
+func TestCursor_FollowFS(t *testing.T) {
+	fsys := fstest.MapFS{"a/t.jsonl": {Data: []byte("a\nb")}}
+	var c Cursor
+	var lines []string
+	var partial string
+	follow := func() error {
+		return c.FollowFS(fsys, "a/t.jsonl", 100,
+			func() { lines = nil },
+			func(l []byte) { lines = append(lines, string(l)) },
+			func(l []byte) { partial = string(l) })
+	}
+	if err := follow(); err != nil || strings.Join(lines, "|") != "a" || partial != "b" {
+		t.Fatalf("first: err %v lines %q partial %q", err, lines, partial)
+	}
+	fsys["a/t.jsonl"].Data = []byte("a\nbc\nd\n")
+	if err := follow(); err != nil || strings.Join(lines, "|") != "a|bc|d" || partial != "" {
+		t.Fatalf("after append: err %v lines %q partial %q", err, lines, partial)
+	}
+	fsys["a/t.jsonl"].Data = []byte("z\n")
+	if err := follow(); err != nil || strings.Join(lines, "|") != "z" {
+		t.Fatalf("after truncation: err %v lines %q", err, lines)
+	}
+	if err := c.FollowFS(noSeekFS{fsys}, "a/t.jsonl", 100, func() {}, func([]byte) {}, func([]byte) {}); err == nil {
+		t.Fatal("a file without ReadAt/Seek must be refused")
+	}
+}
+
+// noSeekFS hides everything but fs.File's own methods.
+type noSeekFS struct{ fs.FS }
+
+func (n noSeekFS) Open(name string) (fs.File, error) {
+	f, err := n.FS.Open(name)
+	return struct{ fs.File }{f}, err
 }
 
 // TestCursor_Unchanged — the no-IO fast path holds only while size,
