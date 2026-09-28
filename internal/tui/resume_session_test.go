@@ -102,3 +102,29 @@ func TestResumeConversation_UUIDv7NeighboursGetOwnSessions(t *testing.T) {
 		t.Errorf("sessions created = %d, want 2", len(f.sessions))
 	}
 }
+
+// TestResumeConversation_MissingFolderRefused — resuming a conversation
+// whose project folder was deleted used to start the session in $HOME,
+// where the agent can't find the conversation. The TUI must refuse with
+// the folder named, create nothing — and still attach to a session an
+// earlier resume left running.
+func TestResumeConversation_MissingFolderRefused(t *testing.T) {
+	f := installFakeResumeTmux(t)
+	a := newAppForTest(t)
+	gone := t.TempDir() + "/deleted"
+	c := conversations.Conversation{ID: "5f3c1d2e-aaaa-4bbb-8ccc-0123456789ab", Agent: agent.IDCodex, Project: gone}
+
+	msg, ok := a.resumeConversationCmd(c)().(conversationResumedMsg)
+	if !ok || msg.Err == nil {
+		t.Fatalf("resume in a missing folder = %+v, want an error", msg)
+	}
+	if len(f.sessions) != 0 {
+		t.Errorf("a session was created for a missing folder: %v", f.sessions)
+	}
+
+	f.sessions[conversations.ResumeSessionName(c.ID)] = true
+	msg, _ = a.resumeConversationCmd(c)().(conversationResumedMsg)
+	if msg.Err != nil || !msg.Existing {
+		t.Errorf("a running resume session wasn't reattached: %+v", msg)
+	}
+}

@@ -2803,6 +2803,15 @@ func (a App) resumeConversationCmd(c conversations.Conversation) tea.Cmd {
 		cmdline := joinShellArgs(argv) + " || zsh"
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
+		// A new session needs the conversation's folder: tmux would
+		// quietly start one whose folder is gone in $HOME, where the
+		// agent can't find the conversation. (A session an earlier
+		// resume left running is still attached to below.)
+		if has, _ := resumeTmuxHas(ctx, sessionName); !has {
+			if err := c.ValidateResumeFolder(); err != nil {
+				return conversationResumedMsg{Err: err}
+			}
+		}
 		if err := resumeTmuxNew(ctx, sessionName, c.Project, cmdline); err != nil {
 			// Resumed before and still running: attach to that
 			// session (as `ccmux resume` does) rather than failing

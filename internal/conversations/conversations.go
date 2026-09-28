@@ -178,6 +178,31 @@ func (c Conversation) ValidateResume() error {
 	return nil
 }
 
+// ValidateResumeFolder refuses to start a resume whose project folder no
+// longer exists. Every agent resumes in the folder the conversation ran
+// in, and tmux quietly starts a session whose folder is gone in $HOME —
+// where Claude, Codex and friends can't find the conversation (or, worse,
+// carry on in the wrong tree). Call it before creating the session, not
+// before attaching to one a previous resume left running. A conversation
+// with no recorded folder is left to the caller.
+func (c Conversation) ValidateResumeFolder() error {
+	if !filepath.IsAbs(c.Project) {
+		return nil
+	}
+	if info, err := os.Stat(c.Project); err != nil || !info.IsDir() {
+		return fmt.Errorf("project folder %q no longer exists; %s resumes a conversation in the folder it ran in, so it can't be resumed", c.Project, agentName(c.Agent))
+	}
+	return nil
+}
+
+// agentName is the agent's display name, or its raw ID when unknown.
+func agentName(id agent.ID) string {
+	if parsed, ok := agent.ParseID(string(id)); ok {
+		return agent.ByID(parsed).DisplayName()
+	}
+	return string(id)
+}
+
 func (c Conversation) ResumeArgs() []string {
 	return c.ResumeArgsWithCommands(agent.Commands{})
 }
