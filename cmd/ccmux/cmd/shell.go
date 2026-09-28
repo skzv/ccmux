@@ -16,8 +16,10 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/daemon"
+	"github.com/skzv/ccmux/internal/tmux"
 	"github.com/skzv/ccmux/internal/tmuxchrome"
 )
 
@@ -36,16 +38,21 @@ func newShellCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "shell",
 		Short: "Spawn a tmux session (agent or shell only) on local or any tailnet peer",
-		Long: `Start a tmux session running an AI agent (claude / codex / antigravity / cursor / pi / grok / muse)
-or a bare shell. Equivalent to pressing 'n' in the Sessions tab.
+		Long: `Start a tmux session running an AI agent or a bare shell. Equivalent to
+pressing 'n' in the Sessions tab.
+
+Agents: ` + agentIDList() + `, or "shell" for no agent.
 
 Defaults:
   --name      auto-generated (c-shell-<runid>)
   --path      sessions.default_dir from config; falls back to $HOME
               on the daemon's host (NOT the client's)
   --host      local (use a tailnet peer name to spawn on that host)
-  --agent     sessions.default_agent from config (claude unless overridden);
-              pass "shell" for a no-agent $SHELL session`,
+  --agent     agents.default from config (claude unless overridden);
+              pass "shell" for a no-agent $SHELL session
+
+Without a terminal (a script, a pipe) the session is still created;
+ccmux prints its name and the command to attach instead of attaching.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runShellCmd(cmd.Context(), name, path, host, agentFlag)
 		},
@@ -53,11 +60,28 @@ Defaults:
 	c.Flags().StringVar(&name, "name", "", "tmux session name; empty for auto")
 	c.Flags().StringVar(&path, "path", "", "working directory; empty uses config default")
 	c.Flags().StringVar(&host, "host", "", "remote tailnet peer; empty for local")
-	c.Flags().StringVar(&agentFlag, "agent", "", `agent to launch: "claude" / "codex" / "antigravity" / "cursor" / "pi" / "grok" / "shell"; empty uses config default`)
+	c.Flags().StringVar(&agentFlag, "agent", "", `agent to launch: `+agentIDList()+`, or "shell"; empty uses config default`)
 	return c
 }
 
+// validateShellAgent checks `ccmux shell --agent`. An unknown value
+// used to be sent to the daemon, which silently launched the default
+// agent instead.
+func validateShellAgent(s string) error {
+	s = strings.TrimSpace(s)
+	if s == "" || strings.EqualFold(s, tmux.ShellAgentTag) {
+		return nil
+	}
+	if _, ok := agent.ParseID(s); ok {
+		return nil
+	}
+	return fmt.Errorf("unknown agent %q (want %s, or %q for a plain shell)", s, agentIDList(), tmux.ShellAgentTag)
+}
+
 func runShellCmd(ctx context.Context, name, path, host, agentFlag string) error {
+	if err := validateShellAgent(agentFlag); err != nil {
+		return err
+	}
 	host = strings.TrimSpace(host)
 	if host == "" || host == "local" {
 		return runShellLocal(ctx, name, path, agentFlag)
@@ -82,6 +106,12 @@ func runShellLocal(ctx context.Context, name, path, agentFlag string) error {
 	})
 	if err != nil {
 		return fmt.Errorf("new bare session: %w", err)
+	}
+	if !canAttachHere() {
+		// No terminal to attach: say what was created instead of
+		// failing after the fact (see attachAfterStart).
+		printAttachHint(os.Stdout, res.Session, true)
+		return nil
 	}
 	// Exec into tmux attach — the foreground replaces us. After detach
 	// the user lands back in their shell, not back in `ccmux shell`.
@@ -124,6 +154,17 @@ func runShellRemote(ctx context.Context, name, path, host, agentFlag string) err
 	// rather than reaching into internal/tui — that package is
 	// gigantic and the CLI shouldn't drag it in.
 	tmuxAttach := remoteShellTmuxAttach(res.Session)
+	if !stdinIsTTY() {
+		// ssh -t can't give tmux a terminal it doesn't have. The
+		// session is up on the peer; say how to reach it.
+		dial := hostCfg.Address
+		if hostCfg.User != "" {
+			dial = hostCfg.User + "@" + dial
+		}
+		fmt.Printf("created %s on %s; attach from a terminal with: ssh -t %s tmux attach-session -t %s\n",
+			safeField(res.Session), safeField(host), shellWord(dial), shellWord(res.Session))
+		return nil
+	}
 	// nocontext: foreground interactive ssh; it ends when the user detaches.
 	c := exec.Command("ssh", shellSSHArgs(hostCfg, tmuxAttach)...)
 	c.Stdin = os.Stdin

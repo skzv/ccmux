@@ -186,7 +186,7 @@ func newNewCmd() *cobra.Command {
 		Use:   "new <name>",
 		Short: "Create a project directory and start its agent session",
 		Args:  cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
+		RunE: func(c *cobra.Command, args []string) error {
 			cfg, _ := config.Load()
 			if err := project.ValidateName(args[0]); err != nil {
 				return err
@@ -212,7 +212,7 @@ func newNewCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return attachWithChrome(session, args[0], false)
+			return attachAfterStart(c.OutOrStdout(), session, args[0], false, true)
 		},
 	}
 	c.Flags().StringVar(&agentFlag, "agent", "",

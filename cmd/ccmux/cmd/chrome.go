@@ -2,9 +2,13 @@ package cmd
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"time"
+
+	"golang.org/x/term"
 
 	"github.com/skzv/ccmux/internal/moshi"
 	"github.com/skzv/ccmux/internal/tmux"
@@ -42,6 +46,16 @@ import (
 // Standalone, on success this does not return: tmux.Attach replaces the
 // process.
 func attachWithChrome(session, projectLabel string, detachOthers bool) error {
+	applyCLIChrome(session, projectLabel)
+	if tmuxchrome.InTmux() {
+		return runForeground(tmuxAttachCmd(session, detachOthers, true))
+	}
+	return tmux.Attach(session, detachOthers)
+}
+
+// applyCLIChrome styles session's status bar the way the TUI and the
+// daemon do. Failure is swallowed: it's cosmetic.
+func applyCLIChrome(session, projectLabel string) {
 	// The moshi probe drives only the cosmetic "reachable via Moshi"
 	// badge, and on macOS it shells out to slow tooling. Give it its
 	// own bounded context so a slow probe can't starve the chrome step
@@ -57,15 +71,48 @@ func attachWithChrome(session, projectLabel string, detachOthers bool) error {
 	// what made CLI chrome flaky on macOS CI — the shared deadline
 	// expired mid-probe and every set-option got cancelled, leaving the
 	// session with vanilla tmux styling.
-	nested := tmuxchrome.InTmux()
 	cctx, ccancel := context.WithTimeout(context.Background(), 5*time.Second)
-	_ = tmuxchrome.Apply(cctx, session, projectLabel, reachable, nested)
+	_ = tmuxchrome.Apply(cctx, session, projectLabel, reachable, tmuxchrome.InTmux())
 	ccancel()
+}
 
-	if nested {
-		return runForeground(tmuxAttachCmd(session, detachOthers, true))
+// stdinIsTTY reports whether stdin is a terminal — what `tmux
+// attach-session` needs (it opens the client on stdin). A var so tests
+// can choose.
+var stdinIsTTY = func() bool { return term.IsTerminal(int(os.Stdin.Fd())) }
+
+// canAttachHere reports whether this process can put its terminal in a
+// session: inside tmux a switch-client needs no terminal of its own;
+// otherwise stdin must be one.
+func canAttachHere() bool { return tmuxchrome.InTmux() || stdinIsTTY() }
+
+// attachAfterStart hands the terminal to a session `new`, `resume` or
+// `shell` just started (created=true) or found already running. With no
+// terminal — a script, a pipe, cron, an agent's tool call — tmux used
+// to fail with "open terminal failed: not a terminal" AFTER the session
+// was up, and the command exited 1 ("ccmux: exit status 1") although
+// it had done its job. Now it reports the session and how to attach to
+// it, and succeeds.
+//
+// The session gets its chrome either way, so it looks right whenever
+// (and however) it's attached later.
+func attachAfterStart(w io.Writer, session, projectLabel string, detachOthers, created bool) error {
+	if !canAttachHere() {
+		applyCLIChrome(session, projectLabel)
+		printAttachHint(w, session, created)
+		return nil
 	}
-	return tmux.Attach(session, detachOthers)
+	return attachWithChrome(session, projectLabel, detachOthers)
+}
+
+// printAttachHint is the no-terminal report: which session is running
+// and the command that attaches to it.
+func printAttachHint(w io.Writer, session string, created bool) {
+	if created {
+		fmt.Fprintf(w, "created %s; attach with: ccmux attach %s\n", safeField(session), shellWord(session))
+		return
+	}
+	fmt.Fprintf(w, "%s is already running; attach with: ccmux attach %s\n", safeField(session), shellWord(session))
 }
 
 // tmuxAttachCmd picks the tmux command that puts this terminal in

@@ -35,6 +35,17 @@ func safeField(s string) string {
 	}, s)
 }
 
+// shellWord renders s as one shell word for a command the user may
+// copy-paste: sanitized, and single-quoted unless it's made only of
+// characters no shell treats specially.
+func shellWord(s string) string {
+	s = safeField(s)
+	if s != "" && strings.Trim(s, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-/@%+=:,") == "" {
+		return s
+	}
+	return shellQuote(s)
+}
+
 // ErrorMessage renders err for the terminal (main prints it after
 // "ccmux:"). Errors quote daemon responses, file names and tmux output,
 // so they are sanitized like any other external text.

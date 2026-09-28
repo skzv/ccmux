@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -210,7 +211,7 @@ func resumeNow(target conversations.Conversation) error {
 	if target.Project != "" {
 		label = filepath.Base(target.Project)
 	}
-	return attachWithChrome(sessionName, label, detachOthers)
+	return attachAfterStart(os.Stdout, sessionName, label, detachOthers, !existed)
 }
 
 // ensureResumeSession creates the tmux session that resumes target —

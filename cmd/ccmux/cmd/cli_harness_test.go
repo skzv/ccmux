@@ -16,6 +16,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/creack/pty"
 )
 
 // The CLI harness runs the real cobra tree in a child process (the test
@@ -136,7 +138,26 @@ func (e *cliEnv) mkdir(rel string) string {
 }
 
 // run executes `ccmux <args>` in the child with cwd = dir ("" → $HOME).
+// The child's stdin is /dev/null — not a terminal.
 func (e *cliEnv) run(dir string, args ...string) cliResult {
+	e.t.Helper()
+	return e.runStdin(dir, nil, args...)
+}
+
+// runTTY is run with a pseudo-terminal as the child's stdin, for the
+// paths that behave differently when there is a terminal to attach.
+func (e *cliEnv) runTTY(dir string, args ...string) cliResult {
+	e.t.Helper()
+	ptmx, tty, err := pty.Open()
+	if err != nil {
+		e.t.Skipf("no pty available: %v", err)
+	}
+	defer ptmx.Close()
+	defer tty.Close()
+	return e.runStdin(dir, tty, args...)
+}
+
+func (e *cliEnv) runStdin(dir string, stdin *os.File, args ...string) cliResult {
 	e.t.Helper()
 	if dir == "" {
 		dir = e.home
@@ -152,6 +173,9 @@ func (e *cliEnv) run(dir string, args ...string) cliResult {
 	}
 	var stdout, stderr bytes.Buffer
 	c.Stdout, c.Stderr = &stdout, &stderr
+	if stdin != nil {
+		c.Stdin = stdin
+	}
 	err := c.Run()
 	res := cliResult{stdout: stdout.String(), stderr: stderr.String()}
 	var ee *exec.ExitError
