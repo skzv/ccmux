@@ -52,13 +52,11 @@ func TestPollOnce_AttachAndDetachArePublished(t *testing.T) {
 // windows:0 and a zero last_change for the session it had just started,
 // which GET /v1/sessions never reports for a live session.
 func TestCreateSession_ResponseHasTmuxFields(t *testing.T) {
-	s, root, _ := newCreateTestServer(t)
+	s, root, logPath := newCreateTestServer(t)
 	mkdir(t, filepath.Join(root, "proj"))
 	created := time.Now().Add(-time.Second).Truncate(time.Second)
-	started := false
 	s.list = func(context.Context) ([]tmux.Session, error) {
-		if !started { // existingSession's look before creating
-			started = true
+		if len(tmuxCallsWith(t, logPath, "new-session")) == 0 { // the looks before creating
 			return nil, nil
 		}
 		return []tmux.Session{{Name: "c-proj", Path: filepath.Join(root, "proj"), Windows: 1, Created: created}}, nil

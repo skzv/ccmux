@@ -37,6 +37,9 @@ type projectsModel struct {
 	// the picker shows what the user was looking at.
 	hosts []hostStatus
 
+	// sessions is the live session list, fed in with hosts (SetSessions).
+	sessions []daemon.SessionState
+
 	// defaultAgent — resolved cfg.Agents.Default, pushed by App on
 	// config load/reload. Selects the new-project form's agent picker
 	// at open time. Empty falls back to the first installed agent.
@@ -220,6 +223,14 @@ func (m *projectsModel) commitFilter() {
 // picker with reachable peers at form-open time.
 func (m *projectsModel) SetHosts(h []hostStatus) {
 	m.hosts = h
+}
+
+// SetSessions receives the live session list (every host's) on each
+// refresh, so the detail pane can name the session a project opens —
+// its path-tagged one when a same-named project elsewhere holds
+// c-<project> (projectSessionName).
+func (m *projectsModel) SetSessions(s []daemon.SessionState) {
+	m.sessions = s
 }
 
 // Init kicks the spinner so the very first frame animates while the
@@ -620,7 +631,7 @@ func (m projectsModel) renderDetail(width, height int) string {
 		m.st.Emphasis.Render(p.Name) + "   " + m.st.HostColor(host).Render("● "+host),
 		m.st.Muted.Render(summarizePath(p.Path)),
 		"",
-		padLabel(tr("session"), 10) + m.st.Emphasis.Render(p.SessionName()),
+		padLabel(tr("session"), 10) + m.st.Emphasis.Render(projectSessionName(p, m.sessions)),
 		padLabel(tr("agent"), 10) + m.st.AgentAccent(p.Agent).Render("• ") + m.st.Emphasis.Render(agentDisplay),
 		padLabel(tr("detected"), 10) + detected,
 		"",

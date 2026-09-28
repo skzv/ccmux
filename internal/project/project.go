@@ -53,11 +53,12 @@ type Project struct {
 	Agent agent.ID
 }
 
-// SessionName returns the ccmux tmux session name for this project.
-// Shares tmux.SessionNameForPath's implementation so the two paths
-// (project-list "session name" column + scaffold's tmux.New call) can
-// never disagree about a project's session name — a copy of the
-// sanitizer here would silently drift from the tmux one.
+// SessionName returns the plain ccmux tmux session name for this
+// project, c-<name>. Shares tmux.SessionNameForPath's implementation —
+// a copy of the sanitizer here would silently drift from the tmux one.
+// The session a project actually opens is tmux.ProjectSessionName's:
+// this name, or a path-tagged one when a same-named project in another
+// directory already holds it.
 func (p Project) SessionName() string {
 	return tmux.SessionNameForBase(p.Name)
 }

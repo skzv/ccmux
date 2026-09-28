@@ -854,6 +854,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.dashboard.SetHosts(a.hosts)
 		a.network.SetHosts(a.hosts)
 		a.projectsM.SetHosts(a.hosts)
+		a.projectsM.SetSessions(a.sessions)
 		a.sessionsM.SetHosts(a.hosts)
 		a.notes.SetHosts(a.hosts)
 		a.sessionsM.SetDefaultDir(a.cfg.Sessions.DefaultDir)
@@ -944,14 +945,19 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, tea.Batch(tick, func() tea.Msg {
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer cancel()
-				// Name it c-<project>, uniquified when that is already
-				// running — the menu's "new" is explicitly a second
-				// session alongside any existing one.
-				name := tmux.SessionNameForPath(projectPath)
-				if has, _ := tmux.Has(ctx, name); has {
-					name = uniqueSessionName(ctx, name)
+				// Name it as the project's own session (c-<project>, or
+				// its path-tagged name when a same-named project
+				// elsewhere holds c-<project>: tmux.ProjectSessionName),
+				// uniquified when that is already taken — the menu's
+				// "new" is explicitly a second session alongside any
+				// existing one.
+				sessions, err := projectTmuxList(ctx)
+				if err != nil {
+					return toastMsg{Text: tr("start session: ") + err.Error(), Kind: toastError, Until: time.Now().Add(5 * time.Second)}
 				}
-				if err := tmux.New(ctx, name, projectPath, launch); err != nil {
+				name, _ := tmux.ProjectSessionName(sessions, projectPath)
+				name = uniqueSessionName(sessions, name)
+				if err := projectTmuxNew(ctx, name, projectPath, launch); err != nil {
 					return toastMsg{Text: tr("start session: ") + err.Error(), Kind: toastError, Until: time.Now().Add(5 * time.Second)}
 				}
 				return projectSessionReadyMsg{Session: name, Project: projectLabel}
@@ -2673,9 +2679,10 @@ func (a App) attachOrCreateLocal(p project.Project) tea.Cmd {
 		defer cancel()
 
 		var sessions []tmux.Session
-		if all, err := tmux.List(ctx); err == nil {
+		all, err := projectTmuxList(ctx)
+		if err == nil {
 			for _, s := range all {
-				if s.Path == path {
+				if tmux.SamePath(s.Path, path) {
 					sessions = append(sessions, s)
 				}
 			}
@@ -2694,8 +2701,15 @@ func (a App) attachOrCreateLocal(p project.Project) tea.Cmd {
 			// particular, since they always reach this branch.
 			nctx, ncancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer ncancel()
-			session := p.SessionName()
-			if err := tmux.New(nctx, session, path, launch); err != nil {
+			if err != nil {
+				return toastMsg{Text: tr("start session: ") + err.Error(), Kind: toastError, Until: time.Now().Add(5 * time.Second)}
+			}
+			// The project's own session name: c-<project>, or its
+			// path-tagged name when c-<project> belongs to a same-named
+			// project in another directory — taking that name used to
+			// fail with "duplicate session" (tmux.ProjectSessionName).
+			session, _ := tmux.ProjectSessionName(all, path)
+			if err := projectTmuxNew(nctx, session, path, launch); err != nil {
 				return toastMsg{Text: tr("start session: ") + err.Error(), Kind: toastError, Until: time.Now().Add(5 * time.Second)}
 			}
 			return projectSessionReadyMsg{Session: session, Project: label}
@@ -2915,19 +2929,34 @@ func (a App) localNewSessionAttachCmd(session, projectLabel string) tea.Cmd {
 	return prepLocalAttachCmd(session, projectLabel, false)
 }
 
-// uniqueSessionName finds the next unused tmux session name by appending a
-// numeric suffix to `base` (e.g. "c-myproject-2", "c-myproject-3", …).
-// Falls back to a millisecond timestamp suffix if the first 99 candidates
-// are all taken. The caller is responsible for the context lifetime.
-func uniqueSessionName(ctx context.Context, base string) string {
+// uniqueSessionName is base when no session in sessions has that name,
+// else the next unused numeric suffix ("c-myproject-2", "c-myproject-3",
+// …). Falls back to a millisecond timestamp suffix if the first 99
+// candidates are all taken.
+func uniqueSessionName(sessions []tmux.Session, base string) string {
+	taken := make(map[string]bool, len(sessions))
+	for _, s := range sessions {
+		taken[s.Name] = true
+	}
+	if !taken[base] {
+		return base
+	}
 	for i := 2; i < 100; i++ {
 		candidate := fmt.Sprintf("%s-%d", base, i)
-		if has, _ := tmux.Has(ctx, candidate); !has {
+		if !taken[candidate] {
 			return candidate
 		}
 	}
 	return fmt.Sprintf("%s-%d", base, time.Now().UnixMilli())
 }
+
+// The tmux calls opening a local project makes (attachOrCreateLocal,
+// the project menu's "new session") — seams so tests can drive the
+// session naming without a tmux server.
+var (
+	projectTmuxList = tmux.List
+	projectTmuxNew  = tmux.New
+)
 
 // renameSessionCmd runs `tmux rename-session` on the LOCAL tmux server
 // and returns the result. Remote rows go through renameSessionTargetCmd

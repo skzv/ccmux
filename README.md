@@ -313,6 +313,7 @@ bell = true                          # ring local terminal BEL on needs_input
 
 - Live dashboard of every agent session across every project, with state (active / idle / **needs_input**) and per-row agent tags
 - One-key attach, kill, rename — applies a styled tmux status bar so you always know where you are
+- Two projects with the same folder name (`~/Projects/api` and `~/work/api`) get separate sessions. Whichever started first keeps `c-api`, the other gets `c-api-<tag>`, and ccmux matches each one to its project by directory
 - Per-session "keep awake" pin — the daemon holds a sleep-prevention lock while any pinned or active session is alive
 - **Three sleep-prevention modes** — `safe`, `dangerous`, `very_dangerous` (sudo-gated; system-wide override that survives lid-close)
 

@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -15,6 +14,7 @@ import (
 	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/moshi"
 	"github.com/skzv/ccmux/internal/project"
+	"github.com/skzv/ccmux/internal/tmux"
 	"github.com/skzv/ccmux/internal/tui/styles"
 )
 
@@ -608,58 +608,39 @@ func TestSessionsCursorEmptyList(t *testing.T) {
 	}
 }
 
-// TestUniqueSessionName_Format verifies that uniqueSessionName returns a name
-// with the expected suffix pattern. When tmux is not running (CI or any
-// machine without a server), tmux.Has reports no session and the function
-// returns the first candidate: "<base>-2".
-func TestUniqueSessionName_Format(t *testing.T) {
-	ctx := context.Background()
-	got := uniqueSessionName(ctx, "c-myproject")
-	// Must start with the base and a hyphen-digit suffix.
-	if !strings.HasPrefix(got, "c-myproject-") {
-		t.Errorf("uniqueSessionName = %q, want c-myproject-<n>", got)
-	}
-	suffix := got[len("c-myproject-"):]
-	if suffix == "" {
-		t.Errorf("uniqueSessionName = %q, missing suffix", got)
-	}
-	// The suffix must be numeric or a ms timestamp — both parse as digits.
-	for _, ch := range suffix {
-		if ch < '0' || ch > '9' {
-			t.Errorf("uniqueSessionName suffix %q contains non-digit %q", suffix, string(ch))
+// TestUniqueSessionName — the base name when it's free, else the next
+// free numeric suffix, judged against the listed sessions.
+func TestUniqueSessionName(t *testing.T) {
+	sessions := func(names ...string) []tmux.Session {
+		out := make([]tmux.Session, len(names))
+		for i, n := range names {
+			out[i] = tmux.Session{Name: n}
 		}
+		return out
 	}
-}
-
-// TestUniqueSessionName_SkipsTaken tests the core deduplication logic using
-// a pure function extracted from uniqueSessionName. We can't inject a fake
-// tmux.Has, so we verify the naming algorithm directly.
-func TestUniqueSessionName_NamingAlgorithm(t *testing.T) {
-	// Simulate the deduplication loop from uniqueSessionName.
-	nextFree := func(base string, taken map[string]bool) string {
-		for i := 2; i < 100; i++ {
-			candidate := fmt.Sprintf("%s-%d", base, i)
-			if !taken[candidate] {
-				return candidate
-			}
-		}
-		return fmt.Sprintf("%s-overflow", base)
-	}
-
 	cases := []struct {
 		base  string
-		taken map[string]bool
+		taken []tmux.Session
 		want  string
 	}{
-		{"c-foo", map[string]bool{}, "c-foo-2"},
-		{"c-foo", map[string]bool{"c-foo-2": true}, "c-foo-3"},
-		{"c-foo", map[string]bool{"c-foo-2": true, "c-foo-3": true}, "c-foo-4"},
-		{"c-bar", map[string]bool{"c-bar-2": true, "c-bar-3": true, "c-bar-4": true}, "c-bar-5"},
+		{"c-foo", nil, "c-foo"},
+		{"c-foo", sessions("c-bar"), "c-foo"},
+		{"c-foo", sessions("c-foo"), "c-foo-2"},
+		{"c-foo", sessions("c-foo", "c-foo-2"), "c-foo-3"},
+		{"c-foo", sessions("c-foo", "c-foo-2", "c-foo-3"), "c-foo-4"},
+		{"c-bar", sessions("c-bar", "c-bar-3"), "c-bar-2"},
 	}
 	for _, tc := range cases {
-		if got := nextFree(tc.base, tc.taken); got != tc.want {
-			t.Errorf("nextFree(%q, taken=%v) = %q, want %q", tc.base, tc.taken, got, tc.want)
+		if got := uniqueSessionName(tc.taken, tc.base); got != tc.want {
+			t.Errorf("uniqueSessionName(%v, %q) = %q, want %q", tc.taken, tc.base, got, tc.want)
 		}
+	}
+	all := []tmux.Session{{Name: "c-x"}}
+	for i := 2; i < 100; i++ {
+		all = append(all, tmux.Session{Name: fmt.Sprintf("c-x-%d", i)})
+	}
+	if got := uniqueSessionName(all, "c-x"); !strings.HasPrefix(got, "c-x-") || len(got) < len("c-x-1700000000000") {
+		t.Errorf("all 99 suffixes taken: got %q, want a timestamp suffix", got)
 	}
 }
 

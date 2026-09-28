@@ -34,20 +34,36 @@ import (
 // syscall.Exec (which would replace the test binary) and `doctor` ends
 // in os.Exit.
 
-// fakeTmux logs its argv and emulates just enough of tmux:
-// has-session succeeds only for names in $FAKE_TMUX_SESSIONS (as an
-// exact target, "=name" or "=name:"), and list-sessions exits 1 ("no
-// server running"). Everything else succeeds silently.
+// fakeTmux logs its argv and emulates just enough of tmux over the
+// sessions in $FAKE_TMUX_SESSIONS — space-separated "name" or
+// "name=/its/dir" entries: has-session succeeds only for their names
+// (as an exact target, "=name" or "=name:"), and list-sessions lists
+// them with their directory (/nonexistent/fake-tmux for a bare name:
+// running somewhere that is no project's directory), or exits 1 ("no
+// server running") when there are none. Everything else succeeds
+// silently.
 const fakeTmux = `printf '%s|' "$@" >> "$FAKE_TMUX_LOG"
 printf '\n' >> "$FAKE_TMUX_LOG"
 case "$1" in
 has-session)
   for s in $FAKE_TMUX_SESSIONS; do
-    [ "$3" = "=$s" ] && exit 0
-    [ "$3" = "=$s:" ] && exit 0
+    n=${s%%=*}
+    [ "$3" = "=$n" ] && exit 0
+    [ "$3" = "=$n:" ] && exit 0
   done
   exit 1 ;;
-list-sessions) echo "no server running on /tmp/tmux-fake/default" >&2; exit 1 ;;
+list-sessions)
+  if [ -z "$FAKE_TMUX_SESSIONS" ]; then
+    echo "no server running on /tmp/tmux-fake/default" >&2; exit 1
+  fi
+  for s in $FAKE_TMUX_SESSIONS; do
+    n=${s%%=*}; p=/nonexistent/fake-tmux
+    case "$s" in *=*) p=${s#*=} ;; esac
+    case "$3" in
+    *session_path*) printf '%s\t1700000000\t1700000000\t0\t1\t%s\n' "$n" "$p" ;;
+    *) printf '%s\t\t\n' "$n" ;;
+    esac
+  done ;;
 esac
 exit 0
 `

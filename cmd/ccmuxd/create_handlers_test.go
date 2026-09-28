@@ -235,26 +235,80 @@ func TestCreateBareSession_ExistingSession(t *testing.T) {
 
 // TestCreateProject_ExistingSession — creating a project whose session
 // is already running answered 500 "duplicate session"; it is now
-// idempotent like POST /v1/sessions (and 409 when the session name is
-// taken by a session in another directory).
+// idempotent like POST /v1/sessions.
 func TestCreateProject_ExistingSession(t *testing.T) {
 	s, root, logPath := newCreateTestServer(t)
 	dir := mkdir(t, filepath.Join(root, "proj"))
-	sessionPath := dir
 	s.list = func(context.Context) ([]tmux.Session, error) {
-		return []tmux.Session{{Name: "c-proj", Path: sessionPath}}, nil
+		return []tmux.Session{{Name: "c-proj", Path: dir}}, nil
 	}
 	rec := post(t, s.createProject, "/v1/projects", daemon.NewProjectRequest{Name: "proj"})
 	var got daemon.NewProjectResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); rec.Code != http.StatusOK || err != nil || got.Session != "c-proj" || got.Path != dir {
 		t.Errorf("status %d, response %+v (%s), want 200 with c-proj in %s", rec.Code, got, rec.Body, dir)
 	}
-	sessionPath = t.TempDir()
-	if rec := post(t, s.createProject, "/v1/projects", daemon.NewProjectRequest{Name: "proj"}); rec.Code != http.StatusConflict {
-		t.Errorf("session elsewhere: status %d (%s), want 409", rec.Code, rec.Body)
-	}
 	if calls := tmuxCallsWith(t, logPath, "new-session"); len(calls) != 0 {
 		t.Errorf("tmux new-session ran for an existing session: %q", calls)
+	}
+}
+
+// TestCreateEndpoints_SameFolderNameElsewhere — a c-proj session
+// running in another directory (a same-named project under another
+// root) made POST /v1/projects answer 409 and POST /v1/sessions hand
+// back 409 too, so the project could never be opened. Each now starts
+// the project's own, path-tagged session and — once it runs — returns
+// that; the other directory's c-proj is left alone. 409 remains for a
+// tagged name that is taken as well.
+func TestCreateEndpoints_SameFolderNameElsewhere(t *testing.T) {
+	for _, endpoint := range []string{"/v1/projects", "/v1/sessions"} {
+		t.Run(endpoint, func(t *testing.T) {
+			s, root, logPath := newCreateTestServer(t)
+			dir := mkdir(t, filepath.Join(root, "proj"))
+			elsewhere := mkdir(t, filepath.Join(t.TempDir(), "proj"))
+			tagged := tmux.PathTaggedSessionName(dir)
+			sessions := []tmux.Session{{Name: "c-proj", Path: elsewhere}}
+			s.list = func(context.Context) ([]tmux.Session, error) { return sessions, nil }
+			create := func() (int, string, string) {
+				var rec *httptest.ResponseRecorder
+				if endpoint == "/v1/projects" {
+					rec = post(t, s.createProject, endpoint, daemon.NewProjectRequest{Name: "proj"})
+					var got daemon.NewProjectResponse
+					_ = json.Unmarshal(rec.Body.Bytes(), &got)
+					return rec.Code, got.Session, got.Path
+				}
+				rec = post(t, s.createSession, endpoint, daemon.NewSessionRequest{Project: "proj"})
+				var got daemon.SessionState
+				_ = json.Unmarshal(rec.Body.Bytes(), &got)
+				return rec.Code, got.Name, got.Path
+			}
+
+			code, name, path := create()
+			if code != http.StatusOK || name != tagged || path != dir {
+				t.Fatalf("first open: status %d session %q path %q, want 200 %s in %s", code, name, path, tagged, dir)
+			}
+			creates := tmuxCallsWith(t, logPath, "new-session")
+			if len(creates) != 1 || !strings.Contains(creates[0], "|-s|"+tagged+"|-c|"+dir+"|") {
+				t.Fatalf("new-session = %q, want %s started in %s", creates, tagged, dir)
+			}
+			for _, call := range tmuxCallsWith(t, logPath, "=c-proj:") {
+				t.Errorf("the other directory's c-proj was touched: %q", call)
+			}
+
+			// Opened again, the tagged session is the answer; nothing new starts.
+			sessions = append(sessions, tmux.Session{Name: tagged, Path: dir, Windows: 1})
+			if code, name, _ := create(); code != http.StatusOK || name != tagged {
+				t.Errorf("second open: status %d session %q, want 200 %s", code, name, tagged)
+			}
+			if n := len(tmuxCallsWith(t, logPath, "new-session")); n != 1 {
+				t.Errorf("second open started a session (%d new-session calls)", n)
+			}
+
+			// The tagged name held by yet another directory: 409, not a stranger's session.
+			sessions = []tmux.Session{{Name: "c-proj", Path: elsewhere}, {Name: tagged, Path: elsewhere}}
+			if code, _, _ := create(); code != http.StatusConflict {
+				t.Errorf("tagged name taken elsewhere: status %d, want 409", code)
+			}
+		})
 	}
 }
 

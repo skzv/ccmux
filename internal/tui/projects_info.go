@@ -13,6 +13,7 @@ import (
 	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/project"
+	"github.com/skzv/ccmux/internal/tmux"
 	"github.com/skzv/ccmux/internal/tui/styles"
 )
 
@@ -63,7 +64,7 @@ func (projectInfoOverlay) View(st styles.Styles, p project.Project, sessions []d
 	// cells the English labels had), so the values line up in every
 	// language.
 	labelW := labelColumn(10, 0, tr("session"), tr("agent"), tr("detected"), tr("modified"))
-	lines = append(lines, fmt.Sprintf("  %s%s", padLabel(tr("session"), labelW), st.Emphasis.Render(p.SessionName())))
+	lines = append(lines, fmt.Sprintf("  %s%s", padLabel(tr("session"), labelW), st.Emphasis.Render(projectSessionName(p, sessions))))
 	lines = append(lines, fmt.Sprintf("  %s%s", padLabel(tr("agent"), labelW), st.Emphasis.Render(agentDisplay)))
 	detected := renderScaffoldChips(st, p, false)
 	if detected == "" {
@@ -77,8 +78,8 @@ func (projectInfoOverlay) View(st styles.Styles, p project.Project, sessions []d
 	lines = append(lines, "")
 
 	// Recent-sessions count: how many tmux sessions on the same host
-	// claim this project's session name as a prefix. Cheap O(n) scan of
-	// the already-loaded live session list.
+	// are this project's (sessionOfProject). Cheap O(n) scan of the
+	// already-loaded live session list.
 	count := countSessionsForProject(p, sessions)
 	lines = append(lines, st.Subtitle.Render(tr("Sessions")))
 	if count == 0 {
@@ -128,28 +129,72 @@ func (projectInfoOverlay) View(st styles.Styles, p project.Project, sessions []d
 }
 
 // countSessionsForProject counts live sessions that belong to the
-// project: its canonical session name, plus the numbered siblings
-// uniqueSessionName mints for additional sessions (`c-ccmux-2`,
-// `c-ccmux-3`, …). Only a purely numeric suffix counts — a bare prefix
-// match credited project `api` with `c-api-server`, another project's
-// session.
+// project (sessionOfProject): its canonical session name, plus the
+// numbered siblings uniqueSessionName mints for additional sessions
+// (`c-ccmux-2`, `c-ccmux-3`, …). Only a purely numeric suffix counts — a
+// bare prefix match credited project `api` with `c-api-server`, another
+// project's session.
 func countSessionsForProject(p project.Project, sessions []daemon.SessionState) int {
-	name := p.SessionName()
 	host := projectHost(p)
 	n := 0
 	for _, s := range sessions {
-		sHost := s.Host
-		if sHost == "" {
-			sHost = "local"
-		}
-		if sHost != host {
-			continue
-		}
-		if s.Name == name || isNumberedSibling(s.Name, name) {
+		if sessionHostLabel(s) == host && sessionOfProject(s, p) {
 			n++
 		}
 	}
 	return n
+}
+
+// sessionHostLabel is a session row's host as projectHost names a
+// project's: "local" for this machine.
+func sessionHostLabel(s daemon.SessionState) string {
+	if s.Host == "" {
+		return "local"
+	}
+	return s.Host
+}
+
+// sessionOfProject reports whether session s (on p's host) is one of
+// project p's: named c-<project> or with the path-tagged name a project
+// gets when a same-named project elsewhere holds c-<project>
+// (tmux.ProjectSessionName) — either with uniqueSessionName's numbered
+// suffix or without — and running in p's directory. A c-<project>
+// session in another directory is the same-named other project's. When
+// either path is unknown the name alone decides for c-<project>, as it
+// always did; a tagged name needs the directory to match.
+func sessionOfProject(s daemon.SessionState, p project.Project) bool {
+	plain := p.SessionName()
+	name := s.Name
+	if i := strings.LastIndexByte(name, '-'); i > 0 && isNumberedSibling(name, name[:i]) {
+		name = name[:i]
+	}
+	unknownPath := s.Path == "" || p.Path == ""
+	switch {
+	case s.Name == plain || name == plain:
+		return unknownPath || tmux.SamePath(s.Path, p.Path)
+	case tmux.IsPathTagged(name, plain):
+		return !unknownPath && tmux.SamePath(s.Path, p.Path)
+	}
+	return false
+}
+
+// projectSessionName is the session project p opens (or would start):
+// tmux.ProjectSessionName over the sessions listed on p's host —
+// c-<project>, or its path-tagged name when a same-named project in
+// another directory holds c-<project>.
+func projectSessionName(p project.Project, sessions []daemon.SessionState) string {
+	if p.Path == "" {
+		return p.SessionName()
+	}
+	host := projectHost(p)
+	var onHost []tmux.Session
+	for _, s := range sessions {
+		if sessionHostLabel(s) == host {
+			onHost = append(onHost, tmux.Session{Name: s.Name, Path: s.Path})
+		}
+	}
+	name, _ := tmux.ProjectSessionName(onHost, p.Path)
+	return name
 }
 
 // isNumberedSibling reports whether session is base + "-" + digits,

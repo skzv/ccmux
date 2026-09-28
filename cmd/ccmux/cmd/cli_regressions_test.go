@@ -143,9 +143,9 @@ func TestAttach_LiveSessionNameAttachesAsIs(t *testing.T) {
 // current client instead, as the TUI does.
 func TestAttach_InsideTmuxSwitchesClient(t *testing.T) {
 	e := newCLIEnv(t)
-	e.mkdir("Projects/web")
+	web := e.mkdir("Projects/web")
 	e.env["TMUX"] = filepath.Join(e.home, "tmp", "tmux-fake", "default") + ",4242,0"
-	e.env["FAKE_TMUX_SESSIONS"] = "c-web"
+	e.env["FAKE_TMUX_SESSIONS"] = "c-web=" + web
 
 	res := e.run("", "attach", "web")
 	if res.code != 0 {
@@ -162,8 +162,8 @@ func TestAttach_InsideTmuxSwitchesClient(t *testing.T) {
 // TestAttach_OutsideTmuxAttaches — the standalone path is unchanged.
 func TestAttach_OutsideTmuxAttaches(t *testing.T) {
 	e := newCLIEnv(t)
-	e.mkdir("Projects/web")
-	e.env["FAKE_TMUX_SESSIONS"] = "c-web"
+	web := e.mkdir("Projects/web")
+	e.env["FAKE_TMUX_SESSIONS"] = "c-web=" + web
 
 	res := e.run("", "attach", "web")
 	if res.code != 0 {

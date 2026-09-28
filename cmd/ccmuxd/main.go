@@ -869,9 +869,16 @@ func (s *server) createSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
 	// Caller-supplied name wins; same rule createBareSession uses to
-	// keep names safe for `tmux new-session -s`.
+	// keep names safe for `tmux new-session -s`. Without one, the
+	// project's own session: c-<folder>, or a path-tagged name when a
+	// session called c-<folder> runs in another directory (two projects
+	// with the same folder name) — see tmux.ProjectSessionName.
 	var session string
+	sessionDir := path
 	if name := strings.TrimSpace(req.Name); name != "" {
 		if badNewSessionName(name) {
 			http.Error(w, badNewSessionNameMsg, http.StatusBadRequest)
@@ -879,13 +886,18 @@ func (s *server) createSession(w http.ResponseWriter, r *http.Request) {
 		}
 		session = name
 	} else {
-		session = tmux.SessionNameForPath(path)
+		name, running, err := s.projectSession(ctx, path)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		session = name
+		if running {
+			sessionDir = "" // already known to run in path
+		}
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-	defer cancel()
-
-	if st, done := s.existingSession(ctx, w, session, path); done {
+	if st, done := s.existingSession(ctx, w, session, sessionDir); done {
 		if st != nil {
 			writeJSON(w, st)
 		}
@@ -985,7 +997,7 @@ func (s *server) existingSession(ctx context.Context, w http.ResponseWriter, nam
 	if !exists {
 		return nil, false
 	}
-	if dir != "" && !samePath(ts.Path, dir) {
+	if dir != "" && !tmux.SamePath(ts.Path, dir) {
 		http.Error(w, fmt.Sprintf("session %q already exists in %s", name, ts.Path), http.StatusConflict)
 		return nil, true
 	}
@@ -1031,15 +1043,20 @@ func (s *server) liveSessionState(ts tmux.Session) daemon.SessionState {
 	return st
 }
 
-// samePath reports whether two directory paths name the same directory
-// (tmux records a session's start directory as it was given).
-func samePath(a, b string) bool {
-	if filepath.Clean(a) == filepath.Clean(b) {
-		return true
+// projectSession resolves the tmux session of the project in dir
+// against this daemon's session list (tmux.ProjectSessionName):
+// running reports that it already runs there.
+func (s *server) projectSession(ctx context.Context, dir string) (name string, running bool, err error) {
+	list := s.list
+	if list == nil {
+		list = tmux.List
 	}
-	ra, errA := filepath.EvalSymlinks(a)
-	rb, errB := filepath.EvalSymlinks(b)
-	return errA == nil && errB == nil && ra == rb
+	sessions, err := list(ctx)
+	if err != nil {
+		return "", false, err
+	}
+	name, running = tmux.ProjectSessionName(sessions, dir)
+	return name, running, nil
 }
 
 // defaultStartGrace is how long a create handler watches a session it
@@ -1946,7 +1963,7 @@ func (s *server) listProjects(w http.ResponseWriter, _ *http.Request) {
 
 // createProject creates a new project — its directory plus an agent
 // session — on this host. The directory is placed under the daemon's
-// Projects.Root and the session is named via tmux.SessionNameForPath
+// Projects.Root and the session is named via tmux.ProjectSessionName
 // so the client can ssh-attach directly. It creates only the
 // directory; no CLAUDE.md, no docs/ tree, no git init.
 func (s *server) createProject(w http.ResponseWriter, r *http.Request) {
@@ -1984,9 +2001,21 @@ func (s *server) createProject(w http.ResponseWriter, r *http.Request) {
 	host, _ := os.Hostname()
 	// A project whose session is already running is answered like
 	// POST /v1/sessions answers one: 200 with that session (creating it
-	// again used to fail with 500 "duplicate session"), or 409 when a
-	// session of that name runs in another directory.
-	if st, done := s.existingSession(ctx, w, tmux.SessionNameForPath(dir), dir); done {
+	// again used to fail with 500 "duplicate session"). The session is
+	// the project's own (tmux.ProjectSessionName): a c-<name> session
+	// running in another directory — a same-named project elsewhere —
+	// no longer blocks it; it gets a path-tagged session instead. 409
+	// only when that name is taken too.
+	session, running, err := s.projectSession(ctx, dir)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	sessionDir := dir
+	if running {
+		sessionDir = "" // already known to run in dir
+	}
+	if st, done := s.existingSession(ctx, w, session, sessionDir); done {
 		if st != nil {
 			writeJSON(w, daemon.NewProjectResponse{Session: st.Name, Path: st.Path, Host: host})
 		}
@@ -1997,11 +2026,12 @@ func (s *server) createProject(w http.ResponseWriter, r *http.Request) {
 		Dir:      dir,
 		Agent:    chosenAgent,
 		Commands: s.freshCommands(),
+		Session:  session,
 	}
 	// What StartSession runs: the requested agent, else the existing
 	// project's recorded one.
 	launched := scaffold.SessionAgent(opts, dir)
-	session, err := scaffold.StartSession(ctx, opts)
+	session, err = scaffold.StartSession(ctx, opts)
 	if err != nil {
 		http.Error(w, "start: "+err.Error(), http.StatusInternalServerError)
 		return

@@ -2,13 +2,9 @@ package cmd
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"os"
 	"path/filepath"
-	"reflect"
-	"slices"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -55,17 +51,20 @@ func TestParseSince(t *testing.T) {
 	}
 }
 
-func TestResolveKillTarget(t *testing.T) {
-	sessionsHas := func(live ...string) func(context.Context, string) (bool, error) {
-		return func(_ context.Context, name string) (bool, error) {
-			for _, s := range live {
-				if s == name {
-					return true, nil
-				}
-			}
-			return false, nil
-		}
+// named is a session list of bare names, each with no known path.
+func named(names ...string) []tmux.Session {
+	out := make([]tmux.Session, len(names))
+	for i, n := range names {
+		out[i] = tmux.Session{Name: n}
 	}
+	return out
+}
+
+// noProjectDir is a projectDir for resolveKillTarget under which no
+// project directory exists: the argument maps to a missing path.
+func noProjectDir(arg string) (string, bool) { return filepath.Join("/nonexistent", arg), false }
+
+func TestResolveKillTarget(t *testing.T) {
 	cases := []struct {
 		arg  string
 		live []string
@@ -76,43 +75,66 @@ func TestResolveKillTarget(t *testing.T) {
 		{"work", []string{"work"}, "work"},                                                         // bare (unprefixed) session
 		{"web", []string{"c-web"}, "c-web"},                                                        // project name
 		{"my.app", []string{tmux.SessionNameForPath("my.app")}, tmux.SessionNameForPath("my.app")}, // sanitized like attach
+		{"/x/Projects/web", []string{"c-web"}, "c-web"},                                            // a path, gone: its folder's name
 	}
 	for _, tc := range cases {
-		got, err := resolveKillTarget(context.Background(), tc.arg, sessionsHas(tc.live...))
+		got, err := resolveKillTarget(tc.arg, named(tc.live...), noProjectDir)
 		if err != nil || got != tc.want {
 			t.Errorf("resolveKillTarget(%q, live=%v) = %q, %v; want %q", tc.arg, tc.live, got, err, tc.want)
 		}
 	}
-	if _, err := resolveKillTarget(context.Background(), "c-foo", sessionsHas()); err == nil {
+	if _, err := resolveKillTarget("c-foo", nil, noProjectDir); err == nil {
 		t.Error("nothing live: want an error, not a guessed target")
-	}
-	boom := errors.New("tmux missing")
-	if _, err := resolveKillTarget(context.Background(), "x", func(context.Context, string) (bool, error) { return false, boom }); !errors.Is(err, boom) {
-		t.Errorf("has() error must propagate, got %v", err)
 	}
 }
 
-// tmuxLikeHas is a `has` for resolveKillTarget that behaves like real
-// tmux's `has-session -t =name:`: a name starting with "$" followed by
-// a live session ID resolves as that ID, whatever the session is
-// called. calls records every name it was asked about.
-func tmuxLikeHas(names []string, ids int, calls *[]string) func(context.Context, string) (bool, error) {
-	return func(_ context.Context, name string) (bool, error) {
-		*calls = append(*calls, name)
-		if n, err := strconv.Atoi(strings.TrimPrefix(name, "$")); err == nil && strings.HasPrefix(name, "$") {
-			return n >= 0 && n < ids, nil
+// TestResolveKillTarget_ByDirectory — `ccmux kill api` killed whichever
+// session was called c-api, even one running a same-named project in
+// another directory. A project that exists is killed by its directory:
+// its own session (plain or path-tagged), never the other project's.
+func TestResolveKillTarget_ByDirectory(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	mine, other := filepath.Join(base, "Projects", "api"), filepath.Join(base, "work", "api")
+	for _, d := range []string{mine, other} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
 		}
-		return slices.Contains(names, name), nil
+	}
+	tagged := tmux.PathTaggedSessionName(mine)
+	dirOf := func(string) (string, bool) { return mine, true }
+
+	got, err := resolveKillTarget("api", []tmux.Session{{Name: "c-api", Path: other}, {Name: tagged, Path: mine}}, dirOf)
+	if err != nil || got != tagged {
+		t.Errorf("kill api with its tagged session running = %q, %v; want %s", got, err, tagged)
+	}
+	got, err = resolveKillTarget("api", []tmux.Session{{Name: "c-api", Path: mine}, {Name: "c-api-2", Path: mine}}, dirOf)
+	if err != nil || got != "c-api" {
+		t.Errorf("kill api with its plain session running = %q, %v; want c-api", got, err)
+	}
+	_, err = resolveKillTarget("api", []tmux.Session{{Name: "c-api", Path: other}}, dirOf)
+	if err == nil {
+		t.Fatal("only the other project's c-api runs: want an error, not a kill of it")
+	}
+	for _, want := range []string{mine, "c-api runs in " + other, "ccmux kill c-api"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q should mention %q", err, want)
+		}
 	}
 }
 
 // TestResolveKillTarget_RefusesSessionIDs — `ccmux kill '$1'` exited 0
 // after killing whichever session had tmux ID $1. A "$" name is refused
-// before tmux is asked anything, and isn't mapped as a project either.
+// before anything is looked up, and isn't mapped as a project either.
 func TestResolveKillTarget_RefusesSessionIDs(t *testing.T) {
 	for _, arg := range []string{"$0", "$1", "$x"} {
-		var calls []string
-		got, err := resolveKillTarget(context.Background(), arg, tmuxLikeHas([]string{"a", "b"}, 2, &calls))
+		mapped := false
+		got, err := resolveKillTarget(arg, named(arg, tmux.SessionNameForPath(arg)), func(a string) (string, bool) {
+			mapped = true
+			return noProjectDir(a)
+		})
 		if err == nil {
 			t.Errorf("resolveKillTarget(%q) = %q, want an error", arg, got)
 			continue
@@ -120,25 +142,27 @@ func TestResolveKillTarget_RefusesSessionIDs(t *testing.T) {
 		if !strings.Contains(err.Error(), "session ID") {
 			t.Errorf("resolveKillTarget(%q) error %q should say tmux reads it as a session ID", arg, err)
 		}
-		if len(calls) != 0 {
-			t.Errorf("resolveKillTarget(%q) asked tmux about %v; a session-ID name must not reach tmux", arg, calls)
+		if mapped {
+			t.Errorf("resolveKillTarget(%q) mapped it as a project", arg)
 		}
+		if err := refuseSessionID("kill", arg); err == nil || !strings.Contains(err.Error(), "session ID") {
+			t.Errorf("refuseSessionID(kill, %q) = %v, want a session-ID refusal", arg, err)
+		}
+	}
+	if err := refuseSessionID("kill", "c-ok"); err != nil {
+		t.Errorf("refuseSessionID(kill, c-ok) = %v", err)
 	}
 }
 
 // TestResolveKillTarget_InvalidTargetsOnlyMapAsProjects — an argument a
 // tmux target can't carry (a dotted project name, a path) is never
-// looked up as a session itself, only mapped through SessionNameForPath.
+// taken as a session name itself, only mapped as a project.
 func TestResolveKillTarget_InvalidTargetsOnlyMapAsProjects(t *testing.T) {
 	for _, arg := range []string{"my.app", "/x/Projects/web", "$x/web", "a:b"} {
 		mapped := tmux.SessionNameForPath(arg)
-		var calls []string
-		got, err := resolveKillTarget(context.Background(), arg, tmuxLikeHas([]string{mapped}, 0, &calls))
+		got, err := resolveKillTarget(arg, named(arg, mapped), noProjectDir)
 		if err != nil || got != mapped {
 			t.Errorf("resolveKillTarget(%q) = %q, %v; want %q", arg, got, err, mapped)
-		}
-		if !reflect.DeepEqual(calls, []string{mapped}) {
-			t.Errorf("resolveKillTarget(%q) looked up %v; want only the project's session %q", arg, calls, mapped)
 		}
 	}
 }

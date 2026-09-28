@@ -80,7 +80,9 @@ type NewSessionRequest struct {
 	Path     string `json:"path"`     // working directory; defaults to ~/Projects/<project>
 	Continue bool   `json:"continue"` // start Claude with --continue
 	// Name overrides the tmux session name. Empty falls back to the
-	// derived c-<project> from tmux.SessionNameForPath.
+	// project's own session (tmux.ProjectSessionName): c-<project>, or a
+	// path-tagged c-<project>-<tag> when a c-<project> session runs in
+	// another directory.
 	Name string `json:"name,omitempty"`
 	// Agent picks which AI agent to launch. When set, the daemon writes
 	// it to the project's .ccmux/agent sidecar before launching so

@@ -181,6 +181,11 @@ a requested agent to `<project>/.ccmux/agent`.
   of that name runs in a different directory; `500` tmux failure; `502` the
   agent exited right after starting (e.g. not installed).
 - `path` defaults to `<projects_root>/<project>` **on the daemon host**.
+- Without `name`, the session is the project's own, found by directory:
+  `c-<project>`, or `c-<project>-<tag>` (a five-letter tag of the full path)
+  when a `c-<project>` session runs in another directory — a same-named
+  project elsewhere. So a `409` is only possible with an explicit `name`, or
+  when the tagged name is taken as well.
 
 #### `POST /v1/sessions/bare`
 Create a **shell-only** tmux session not tied to any project (no scaffold).
@@ -264,9 +269,12 @@ under the projects root, and start an agent session inside it.
   and nothing is started.
 - **Errors:** `400` if `name` isn't a single non-hidden path segment (no
   `/`, `\`, no leading `.`, no control characters) — a directory-escape
-  guard for tailnet peers — or `agent` isn't a known agent id; `409` the
-  project's session name is taken by a session in another directory; `502`
-  the agent exited right after starting.
+  guard for tailnet peers — or `agent` isn't a known agent id; `409` both the
+  project's session name and its path-tagged one are taken by sessions in
+  other directories; `502` the agent exited right after starting.
+- The session is named as for `POST /v1/sessions` without `name`: a
+  `c-<name>` session running in another directory gets this project a
+  path-tagged `c-<name>-<tag>` session instead of a conflict.
 
 ---
 

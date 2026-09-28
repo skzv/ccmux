@@ -9,6 +9,7 @@ import (
 
 	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/project"
+	"github.com/skzv/ccmux/internal/tmux"
 )
 
 // hermeticHome redirects $HOME so nothing reads or writes real settings.
@@ -124,23 +125,79 @@ func TestPrepareDir_KeepsExistingProjectsAgent(t *testing.T) {
 // started is one session StartSession created through fakeTmux.
 type started struct {
 	session, launch, tag string
+	dir                  string
 }
 
-// fakeTmux swaps StartSession's tmux call for the duration of a test,
+// fakeTmux swaps StartSession's tmux calls for the duration of a test,
 // recording every session it creates with its launch command and agent
-// tag.
+// tag. The session list StartSession names against holds the sessions
+// created so far, in their directories.
 func fakeTmux(t *testing.T, newErr error) *[]started {
 	t.Helper()
 	var created []started
-	origNew := newSession
-	t.Cleanup(func() { newSession = origNew })
-	newSession = func(_ context.Context, session, _, launch, tag string) error {
+	origNew, origList := newSession, listSessions
+	t.Cleanup(func() { newSession, listSessions = origNew, origList })
+	newSession = func(_ context.Context, session, dir, launch, tag string) error {
 		if newErr == nil {
-			created = append(created, started{session, launch, tag})
+			created = append(created, started{session: session, launch: launch, tag: tag, dir: dir})
 		}
 		return newErr
 	}
+	listSessions = func(context.Context) ([]tmux.Session, error) {
+		out := make([]tmux.Session, 0, len(created))
+		for _, c := range created {
+			out = append(out, tmux.Session{Name: c.session, Path: c.dir})
+		}
+		return out, nil
+	}
 	return &created
+}
+
+// TestStartSession_SameFolderNameGetsItsOwnSession — two projects whose
+// folders share a name both got c-api, so starting the second failed
+// with "duplicate session" (or, through attach, landed in the first
+// project's session). The first keeps c-api; the second gets a
+// path-tagged session; starting either again reports it already runs,
+// without touching its agent.
+func TestStartSession_SameFolderNameGetsItsOwnSession(t *testing.T) {
+	hermeticHome(t)
+	created := fakeTmux(t, nil)
+	base := t.TempDir()
+	first, second := filepath.Join(base, "Projects", "api"), filepath.Join(base, "work", "api")
+
+	s1, err := StartSession(context.Background(), Options{Name: "api", Dir: first})
+	if err != nil || s1 != "c-api" {
+		t.Fatalf("first project: %q, %v; want c-api", s1, err)
+	}
+	s2, err := StartSession(context.Background(), Options{Name: "api", Dir: second, Agent: agent.IDCodex})
+	if err != nil || s2 != tmux.PathTaggedSessionName(second) {
+		t.Fatalf("second project: %q, %v; want %s", s2, err, tmux.PathTaggedSessionName(second))
+	}
+	if len(*created) != 2 || (*created)[1].dir != second {
+		t.Fatalf("sessions = %+v", *created)
+	}
+
+	for _, dir := range []string{first, second} {
+		_, err := StartSession(context.Background(), Options{Name: "api", Dir: dir, Agent: agent.IDKimi})
+		if !errors.Is(err, ErrAlreadyRunning) {
+			t.Errorf("%s again: err = %v, want ErrAlreadyRunning", dir, err)
+		}
+	}
+	if len(*created) != 2 {
+		t.Errorf("a running project was started again: %+v", *created)
+	}
+	if got := project.ReadAgent(first); got != agent.IDClaude {
+		t.Errorf("first project's agent = %q after a refused start, want claude (no sidecar)", got)
+	}
+	if got := project.ReadAgent(second); got != agent.IDCodex {
+		t.Errorf("second project's agent = %q after a refused start, want codex", got)
+	}
+
+	// A caller that resolved the name itself (the daemon) gets it as is.
+	s3, err := StartSession(context.Background(), Options{Name: "x", Dir: filepath.Join(base, "x"), Session: "given"})
+	if err != nil || s3 != "given" {
+		t.Errorf("explicit session: %q, %v; want given", s3, err)
+	}
 }
 
 // TestStartSession_FailedStartLeavesAgentUnchanged — a sidecar recorded

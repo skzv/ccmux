@@ -31,7 +31,16 @@ type Options struct {
 	Dir      string         // target directory (absolute). Empty → ./<Name> resolved to absolute.
 	Agent    agent.ID       // which agent to launch; empty → the project's recorded agent (SessionAgent)
 	Commands agent.Commands // optional configured agent executable paths
+	// Session is the tmux session name to create, for a caller that has
+	// already resolved it (the daemon, from its own session list). Empty
+	// → tmux.ProjectSessionName against the live tmux server, so two
+	// projects with the same folder name don't share a session.
+	Session string
 }
+
+// ErrAlreadyRunning is StartSession's error when the project's session
+// is already running in its directory: there is nothing to start.
+var ErrAlreadyRunning = errors.New("the project's session is already running")
 
 // SessionAgent is the agent StartSession runs for opts in the project
 // directory dir: opts.Agent when it names one, else the agent the
@@ -103,20 +112,49 @@ func prepareDir(opts Options) (dir string, wroteSidecar bool, err error) {
 	return dir, wroteSidecar, nil
 }
 
-// newSession is the tmux call StartSession makes, swappable so its
-// sidecar bookkeeping is testable without a tmux server.
-var newSession = tmux.NewWithAgent
+// newSession and listSessions are the tmux calls StartSession makes,
+// swappable so its sidecar bookkeeping and naming are testable without
+// a tmux server.
+var (
+	newSession   = tmux.NewWithAgent
+	listSessions = tmux.List
+)
 
 // StartSession creates the project directory (PrepareDir) and opens a
 // detached tmux session running the chosen agent. It writes no project
 // files. Returns the tmux session name; the caller attaches (via
 // tmux.Attach which exec's, or tea.ExecProcess from the TUI).
+//
+// The session is named by tmux.ProjectSessionName (unless opts.Session
+// names it): c-<folder>, or a path-tagged name when a session of that
+// name already runs in another directory. When the project's own
+// session is already running, nothing is started and the error wraps
+// ErrAlreadyRunning.
 func StartSession(ctx context.Context, opts Options) (string, error) {
 	dir, wroteSidecar, err := prepareDir(opts)
 	if err != nil {
 		return "", err
 	}
-	session := tmux.SessionNameForPath(dir)
+	undoSidecar := func() {
+		if wroteSidecar {
+			// Don't leave the project recorded as an agent it never ran.
+			_ = os.Remove(project.AgentSidecarPath(dir))
+			_ = os.Remove(filepath.Dir(project.AgentSidecarPath(dir))) // only if now empty
+		}
+	}
+	session := opts.Session
+	if session == "" {
+		sessions, err := listSessions(ctx)
+		if err != nil {
+			undoSidecar()
+			return "", fmt.Errorf("start tmux session: %w", err)
+		}
+		var running bool
+		if session, running = tmux.ProjectSessionName(sessions, dir); running {
+			undoSidecar()
+			return "", fmt.Errorf("start tmux session %s: %w", session, ErrAlreadyRunning)
+		}
+	}
 	// Run the agent named, else the project's own (SessionAgent), and
 	// pin it on the session — in the same tmux call that creates it —
 	// so the daemon classifies the agent that's actually running: an
@@ -127,11 +165,7 @@ func StartSession(ctx context.Context, opts Options) (string, error) {
 	launch := opts
 	launch.Agent = launched
 	if err := newSession(ctx, session, dir, LaunchCmd(launch), string(launched)); err != nil {
-		if wroteSidecar {
-			// Don't leave the project recorded as an agent it never ran.
-			_ = os.Remove(project.AgentSidecarPath(dir))
-			_ = os.Remove(filepath.Dir(project.AgentSidecarPath(dir))) // only if now empty
-		}
+		undoSidecar()
 		return "", fmt.Errorf("start tmux session: %w", err)
 	}
 	return session, nil

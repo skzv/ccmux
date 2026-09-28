@@ -22,8 +22,8 @@ import (
 // starting anything.
 func TestNew_ExistingSessionSaysSo(t *testing.T) {
 	e := newCLIEnv(t)
-	e.mkdir("Projects/alpha")
-	e.env["FAKE_TMUX_SESSIONS"] = "c-alpha"
+	alpha := e.mkdir("Projects/alpha")
+	e.env["FAKE_TMUX_SESSIONS"] = "c-alpha=" + alpha
 	res := e.run("", "new", "alpha")
 	if res.code == 0 {
 		t.Fatalf("new over a running session should fail; stdout: %s", res.stdout)

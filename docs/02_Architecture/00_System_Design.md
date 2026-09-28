@@ -259,6 +259,8 @@ Compatibility with the existing `cc()` zsh function: session name is `c-<basenam
 
 A basename outside `[a-zA-Z0-9_-]` has every other byte rewritten to `_` (dots, spaces, `:`, non-ASCII), and because that rewrite is lossy the name also gets a five-letter tag of the original basename: `my.app` → `c-my_app-ipltv`, so it can't share a session with a project literally named `my_app` (→ `c-my_app`). Names already in the safe alphabet are unchanged. `tmux.SessionNameForPath` is the single implementation; `project.Project.SessionName` delegates to it.
 
+Two projects in different directories can share a basename — `~/Projects/api` and `~/work/api`, or a `--projects` root next to the default one — and so a plain name. Which session a project opens is decided by `tmux.ProjectSessionName` from the live session list and each session's `#{session_path}` (symlinks resolved): the plain `c-api` when it runs in the project's directory (or nobody has it); otherwise a path-tagged `c-api-<five letters>`, the tag being a digest of the project's full path, so it is the same from every process. Nobody's existing session is renamed — whichever directory had `c-api` keeps it — and a project that got a tagged session keeps finding it by directory even after `c-api` ends. Every place that turns a project into a session name resolves through it: the CLI's `attach` / `new` / `kill`, the TUI's project open and "new session", the daemon's `POST /v1/sessions` and `POST /v1/projects`, and `scaffold.StartSession`.
+
 Future: drop the prefix and use full path as session name (`/Users/skz/Projects/foo` → `c..Users.skz.Projects.foo`)? Decision deferred to v0.2 after user feedback.
 
 ## Concurrency
