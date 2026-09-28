@@ -119,3 +119,50 @@ func TestSessionsRename_KeepsCursorOnRenamedRow(t *testing.T) {
 		t.Errorf("after rename the cursor is on %q, want the renamed session zz-renamed", got)
 	}
 }
+
+// TestSessionsRename_StaleRefreshCannotMoveCursor — with a slow host, a
+// refresh started before the rename can land after it, carrying the
+// pre-rename list. Applying it re-attached the cursor to the old name,
+// and the next (post-rename) list no longer had that name, so the
+// cursor jumped to another row. Refreshes older than the rename are now
+// dropped.
+func TestSessionsRename_StaleRefreshCannotMoveCursor(t *testing.T) {
+	a := buildPreviewApp(t, "", nil)
+	// Fresh slices per delivery: the model keeps (and renames in) the
+	// slice it is handed.
+	before := func() []daemon.SessionState {
+		return []daemon.SessionState{
+			{Name: "a-one", Host: "local", State: "idle"},
+			{Name: "b-two", Host: "local", State: "idle"},
+			{Name: "c-three", Host: "local", State: "idle"},
+		}
+	}
+	after := []daemon.SessionState{
+		{Name: "a-one", Host: "local", State: "idle"},
+		{Name: "c-three", Host: "local", State: "idle"},
+		{Name: "zz-renamed", Host: "local", State: "idle"},
+	}
+	a, _ = updateApp(t, a, sessionsLoadedMsg{Sessions: before()})
+	a, _ = updateApp(t, a, keyMsg("down"))
+	if got := selectedSession(t, a); got != "b-two" {
+		t.Fatalf("setup: selected %q, want b-two", got)
+	}
+	// A tick refresh starts (a slow host holds it up) …
+	a.refreshSessionsCmd()
+	stale := a.sessionsLoadGen
+	// … the rename lands and starts its own refresh …
+	a, _ = updateApp(t, a, sessionRenamedMsg{OldName: "b-two", NewName: "zz-renamed"})
+	fresh := a.sessionsLoadGen
+	if fresh <= stale {
+		t.Fatalf("rename started no new refresh (gen %d after %d)", fresh, stale)
+	}
+	// … then the stale refresh finishes with the pre-rename list.
+	a, _ = updateApp(t, a, sessionsLoadedMsg{Sessions: before(), Gen: stale})
+	if got := selectedSession(t, a); got != "zz-renamed" {
+		t.Errorf("stale refresh moved the cursor to %q, want zz-renamed", got)
+	}
+	a, _ = updateApp(t, a, sessionsLoadedMsg{Sessions: after, Gen: fresh})
+	if got := selectedSession(t, a); got != "zz-renamed" {
+		t.Errorf("after the post-rename refresh the cursor is on %q, want zz-renamed", got)
+	}
+}
