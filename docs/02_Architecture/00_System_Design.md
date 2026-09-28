@@ -269,6 +269,29 @@ Future: drop the prefix and use full path as session name (`/Users/skz/Projects/
 - The daemon's poll loop runs in one goroutine. Each session check is a sub-goroutine with a 1s timeout so a hung tmux call can't stall the loop.
 - SQLite writes use a single writer goroutine with a buffered channel. Reads from the TUI go through a read-only WAL connection.
 
+## Usage walks
+
+The dashboard's usage panel (every 15 s) and `GET /v1/usage` aggregate
+token usage from the agents' append-only JSONL transcripts
+(`internal/claudeusage`, `internal/codexusage`). Each process keeps an
+in-memory cache of every transcript's parsed records (`jsonl.Cache`),
+checked against the file's device/inode, size and modification time, so
+a repeat walk reads only the bytes appended since the last one and an
+unchanged file costs nothing beyond the directory walk's `stat`. A
+truncated, replaced or rewritten file is re-parsed from its first byte;
+a line still being written is re-read until its newline lands. Results
+are identical to parsing every file from scratch. Concurrent walks are
+safe: one lock guards the file map, and each file has its own lock,
+held while that file is read.
+
+Memory is bounded by time. Records are kept for the largest window any
+walk asked for in the last hour (the TUI's is 10 h: the 5-hour session
+block and the one before it); a file no walk touched for an hour is
+dropped; and a walk reaching back more than 31 days (`/v1/usage`'s
+maximum window) bypasses the cache and parses its files in full. On a
+heavy user's machine that is about 1 MB for the dashboard and about
+22 MB after a 31-day `/v1/usage` request. Nothing is written to disk.
+
 ## Failure Modes
 
 | Failure | Behavior |

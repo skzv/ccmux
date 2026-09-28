@@ -183,7 +183,9 @@ FUZZ_TARGETS := \
 	./internal/jsonl:FuzzScanner \
 	./internal/termsafe:FuzzString \
 	./internal/tomlpatch:FuzzPatch \
-	./internal/tomlpatch:FuzzPatchArbitrary
+	./internal/tomlpatch:FuzzPatchArbitrary \
+	./internal/claudeusage:FuzzIncrementalMatchesOneShot \
+	./internal/codexusage:FuzzIncrementalMatchesOneShot
 
 fuzz: check-go
 	@for pair in $(FUZZ_TARGETS); do \
