@@ -14,6 +14,7 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/configfile"
+	"github.com/skzv/ccmux/internal/tomlpatch"
 )
 
 // SchemaVersion is the config.toml format this build writes. Bump it,
@@ -609,7 +610,14 @@ func migrate(cfg *Config) {
 //
 // Keys this version of ccmux doesn't know about (written by a newer
 // release, or hand-added) are carried over from the file being
-// replaced rather than silently dropped. Comments are not preserved.
+// replaced rather than silently dropped.
+//
+// The file is patched, not rewritten: the full encoding above is only
+// the target data, and tomlpatch changes just the values that differ
+// in the existing text — so the user's comments, key order, blank
+// lines and quoting survive a Settings change. If the existing file
+// can't be patched safely (see tomlpatch.Patch), the full encoding is
+// written instead, as before.
 func Save(cfg Config) error {
 	p, err := Path()
 	if err != nil {
@@ -625,8 +633,14 @@ func Save(cfg Config) error {
 		return err
 	}
 	if prev, err := os.ReadFile(p); err == nil {
+		structOrder := data
 		if merged, ok := carryUnknownKeys(data, prev); ok {
 			data = merged
+		}
+		// Keys the patch has to add go in Config's field order, not the
+		// alphabetical order the carried-over merge re-encodes in.
+		if patched, err := patchTOML(prev, data, structOrder); err == nil {
+			data = patched
 		}
 	}
 	if err := configfile.WriteAtomic(p, data, 0o600); err != nil {
@@ -634,6 +648,10 @@ func Save(cfg Config) error {
 	}
 	return nil
 }
+
+// patchTOML is tomlpatch.PatchOrdered; tests swap it to force the
+// full-rewrite fallback.
+var patchTOML = tomlpatch.PatchOrdered
 
 func encode(v any) ([]byte, error) {
 	var buf bytes.Buffer
