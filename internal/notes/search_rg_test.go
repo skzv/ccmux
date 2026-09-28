@@ -288,7 +288,10 @@ func TestSearchRipgrep_TimeoutKeepsPartialHits(t *testing.T) {
 	// exec, so the deadline's kill reaches the sleeping process (and
 	// closes its stdout) rather than an sh that leaves sleep behind.
 	fakeRipgrepScript(t, "printf '%s\\n' \"$CCMUX_TEST_RG_OUT\"\nexec sleep 10\n")
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	// The deadline has to outlast the fake rg's startup: under a loaded
+	// full-suite run, 500ms sometimes expired before the script printed
+	// anything, and the test saw zero hits.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	hits, err := v.Search(ctx, "match", 100)
 	if !errors.Is(err, context.DeadlineExceeded) {
