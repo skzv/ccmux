@@ -19,7 +19,6 @@ package codexusage
 import (
 	"bytes"
 	"encoding/json"
-	"github.com/skzv/ccmux/internal/jsonl"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -119,7 +118,9 @@ func priceFor(model string) price {
 // Walk scans every rollout-*.jsonl under ~/.codex/sessions/ and
 // returns one aggregate of events whose timestamp falls inside the
 // requested window. Safe to call concurrently with itself; built for
-// dashboard polling every 5-10s, not per-keystroke.
+// dashboard polling every 5-10s, not per-keystroke. Rollouts parsed by
+// an earlier walk are cached in memory (see rollouts), so a repeat walk
+// reads only the bytes appended since.
 func Walk(window time.Duration) (*Aggregate, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -136,6 +137,7 @@ func Walk(window time.Duration) (*Aggregate, error) {
 func walkRoot(root string, window time.Duration, now time.Time) (*Aggregate, error) {
 	if _, err := os.Stat(root); err != nil {
 		if os.IsNotExist(err) {
+			rollouts.Sweep(root, nil, now)
 			return emptyAggregate(window, now), nil
 		}
 		return nil, err
@@ -148,7 +150,13 @@ func walkRoot(root string, window time.Duration, now time.Time) (*Aggregate, err
 		ByModel:     map[string]*Tokens{},
 	}
 
-	var files []string
+	span := rollouts.Span(now, window)
+	type fileTask struct {
+		path string
+		info fs.FileInfo
+	}
+	present := map[string]bool{} // every rollout listed, for the cache sweep
+	var files []fileTask
 	if err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil // skip unreadable
@@ -156,28 +164,33 @@ func walkRoot(root string, window time.Duration, now time.Time) (*Aggregate, err
 		if d.IsDir() || !strings.HasPrefix(d.Name(), "rollout-") || !strings.HasSuffix(d.Name(), ".jsonl") {
 			return nil
 		}
+		present[path] = true
 		// Skip files whose mtime is older than the window. Codex
 		// session files are append-only until the session closes, so
 		// mtime is a sound cutoff signal.
-		if info, _ := d.Info(); info != nil && info.ModTime().Before(cutoff) {
+		info, _ := d.Info()
+		if info != nil && info.ModTime().Before(cutoff) {
 			return nil
 		}
-		files = append(files, path)
+		files = append(files, fileTask{path, info})
 		return nil
 	}); err != nil {
 		return nil, err
 	}
 
+	// Bring each file's cached records up to date — only bytes appended
+	// since the last walk are read — and tally them over the window.
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, 8)
-	for _, p := range files {
+	for _, t := range files {
 		wg.Add(1)
 		sem <- struct{}{}
-		go func(path string) {
+		go func(task fileTask) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			r := scanFile(path, cutoff, now)
+			var r scanResult
+			rollouts.Parse(task.path, task.info, span, func(f *fileRecords) { r = f.result(cutoff, now) })
 			if r.events == 0 && r.userPrompts == 0 {
 				return
 			}
@@ -194,9 +207,10 @@ func walkRoot(root string, window time.Duration, now time.Time) (*Aggregate, err
 				}
 				mt.Add(*t)
 			}
-		}(p)
+		}(t)
 	}
 	wg.Wait()
+	rollouts.Sweep(root, present, now)
 	return agg, nil
 }
 
@@ -225,145 +239,6 @@ type scanResult struct {
 	byModel     map[string]*Tokens
 	events      int // token_count events with non-nil last_token_usage
 	userPrompts int // real user turns inside the window
-}
-
-// scanFile parses one rollout JSONL and returns the per-file scan
-// result over `cutoff..now`.
-//
-// Two distinct things get counted:
-//
-//   - token_count events with last_token_usage → token totals,
-//     attributed to the most recent model seen on a turn_context
-//     record (Codex emits one per turn, before its associated
-//     token_count event). Codex sometimes writes the same event twice
-//     in a row; an event whose cumulative total_token_usage hasn't
-//     moved since the previous one in the file reports no new API
-//     call and is skipped.
-//   - response_item records with role=user → user prompts, excluding
-//     synthetic injections whose first text block starts with
-//     "<environment_context>" (Codex prepends one per session) or
-//     other angle-bracketed system tags. This matches what a human
-//     would count as "I sent a message". A subagent rollout (its
-//     session_meta source is {"subagent": …}) has no human prompts at
-//     all: its "user" turns are what the parent agent sent. Its tokens
-//     are still real API usage and still count.
-//
-// Built to tolerate large lines: rollout entries can include the
-// full system-instructions blob, easily 100KB+.
-func scanFile(path string, cutoff, now time.Time) scanResult {
-	r := scanResult{byModel: map[string]*Tokens{}}
-	f, err := os.Open(path)
-	if err != nil {
-		return r
-	}
-	defer f.Close()
-	sc := jsonl.NewScanner(f, 1<<25)
-	currentModel := "" // last model seen from a turn_context record
-	subagent := false
-	var prevTotal *tokenUsage // total_token_usage on the previous token_count event
-	for sc.Scan() {
-		line := sc.Bytes()
-		// Cheap byte-level prefilter — only json-decode lines that
-		// could possibly carry usage, a turn_context model, a user
-		// response_item, or the session_meta source.
-		isTokenCount := bytes.Contains(line, []byte(`"token_count"`))
-		isTurnContext := bytes.Contains(line, []byte(`"turn_context"`))
-		isResponseItem := bytes.Contains(line, []byte(`"response_item"`))
-		isSessionMeta := bytes.Contains(line, []byte(`"session_meta"`))
-		if !isTokenCount && !isTurnContext && !isResponseItem && !isSessionMeta {
-			continue
-		}
-
-		var env struct {
-			Timestamp string          `json:"timestamp"`
-			Type      string          `json:"type"`
-			Payload   json.RawMessage `json:"payload"`
-		}
-		if err := json.Unmarshal(line, &env); err != nil {
-			continue
-		}
-		ts := parseTimestamp(env.Timestamp)
-		inWindow := !ts.IsZero() && !ts.Before(cutoff) && !ts.After(now)
-
-		switch env.Type {
-		case "session_meta":
-			var p struct {
-				Source json.RawMessage `json:"source"`
-			}
-			if err := json.Unmarshal(env.Payload, &p); err == nil && IsSubagentSource(p.Source) {
-				subagent = true
-			}
-		case "turn_context":
-			var p struct {
-				Model string `json:"model"`
-			}
-			if err := json.Unmarshal(env.Payload, &p); err == nil && p.Model != "" {
-				currentModel = p.Model
-			}
-		case "event_msg":
-			var p struct {
-				Type string `json:"type"`
-				Info struct {
-					Total *tokenUsage `json:"total_token_usage"`
-					Last  *tokenUsage `json:"last_token_usage"`
-				} `json:"info"`
-			}
-			if err := json.Unmarshal(env.Payload, &p); err != nil {
-				continue
-			}
-			if p.Type != "token_count" || p.Info.Last == nil {
-				continue
-			}
-			// Tracked across the whole file, not just the window, so a
-			// repeat of the last event before the cutoff is caught too.
-			repeat := p.Info.Total != nil && prevTotal != nil && *p.Info.Total == *prevTotal
-			if p.Info.Total != nil {
-				prevTotal = p.Info.Total
-			}
-			if repeat || !inWindow {
-				continue
-			}
-			tok := Tokens{Input: p.Info.Last.Input, Output: p.Info.Last.Output, Cached: p.Info.Last.Cached}
-			r.total.Add(tok)
-			r.events++
-			model := currentModel
-			if model == "" {
-				model = "unknown"
-			}
-			mt := r.byModel[model]
-			if mt == nil {
-				mt = &Tokens{}
-				r.byModel[model] = mt
-			}
-			mt.Add(tok)
-		case "response_item":
-			if !inWindow {
-				continue
-			}
-			var p struct {
-				Type    string `json:"type"`
-				Role    string `json:"role"`
-				Content []struct {
-					Type string `json:"type"`
-					Text string `json:"text"`
-				} `json:"content"`
-			}
-			if err := json.Unmarshal(env.Payload, &p); err != nil {
-				continue
-			}
-			if p.Type != "message" || p.Role != "user" {
-				continue
-			}
-			if isSyntheticUserContent(p.Content) {
-				continue
-			}
-			r.userPrompts++
-		}
-	}
-	if subagent {
-		r.userPrompts = 0
-	}
-	return r
 }
 
 // IsSubagentSource reports whether a rollout's session_meta
