@@ -3,6 +3,7 @@ package claude
 import (
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 // Turn is what one capture of a Claude Code pane shows about the
@@ -102,10 +103,17 @@ func ReadTurn(pane string) Turn {
 	if closing < 0 {
 		return t // a dialog or the v1 frame: no status line over it
 	}
-	for _, l := range lastN(out, statusSearchLines) {
-		if statusLineRE.MatchString(l) {
+	// The status line sits right above the box; only indented lines (the
+	// todo list under it) may come between them. Anything else in
+	// between is older output — a status line of an earlier screen, left
+	// in the scrollback when Claude was killed and relaunched.
+	for i := len(out) - 1; i >= 0 && i >= len(out)-statusSearchLines; i-- {
+		if statusLineRE.MatchString(out[i]) {
 			t.Busy = true
 			return t
+		}
+		if !indented(out[i]) {
+			break
 		}
 	}
 	for _, l := range lines[closing+1:] {
@@ -180,14 +188,18 @@ var v1FrameBottomRE = regexp.MustCompile(`^[ \t]*╰(?:─{3,}|─*╯)`)
 // live.
 func footerOnly(lines []string) bool {
 	for _, l := range lines {
-		if strings.TrimSpace(l) == "" {
-			continue
-		}
-		if r := []rune(l); r[0] != ' ' && r[0] != '\t' && r[0] != ' ' {
+		if strings.TrimSpace(l) != "" && !indented(l) {
 			return false
 		}
 	}
 	return true
+}
+
+// indented reports whether l starts with a space, tab or non-breaking
+// space.
+func indented(l string) bool {
+	r, _ := utf8.DecodeRuneInString(l)
+	return r == ' ' || r == '\t' || r == ' '
 }
 
 // tailNonEmpty returns up to n trailing non-blank lines of lines, in

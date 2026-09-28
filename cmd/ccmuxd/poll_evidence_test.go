@@ -252,8 +252,10 @@ func TestPollOnce_RelaunchOverAFrozenFrameDoesNotNotify(t *testing.T) {
 
 	f.update(func() { p.body = frozen + "claude" })
 	pollNTimes(s, 1) // typing `claude` under the frozen frame
-	f.update(func() { p.body, p.Title = idle, "✳ Claude Code" })
-	pollNTimes(s, 4) // Claude is back, its screen redrawn
+	// Claude is back. Its screen is redrawn, and tmux scrolled the old
+	// one — frozen status line included — into the scrollback above it.
+	f.update(func() { p.body, p.Title = frozen+"claude\n"+idle, "✳ Claude Code" })
+	pollNTimes(s, 4)
 	if tr.state != agent.StateNeedsInput {
 		t.Fatalf("state = %s after the relaunch, want needs_input", tr.state)
 	}

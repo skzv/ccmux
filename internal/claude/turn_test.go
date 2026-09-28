@@ -49,6 +49,10 @@ func TestReadTurn(t *testing.T) {
 		{"frozen dialog above a shell prompt", paneFixture(t, "claude_v2_permission.txt") + "\nuser@host ~ % ", false, false, ""},
 		{"v1 frame with output after it", "done.\n╭──────────╮\n│ > hi     │\n╰──────────╯\nuser@host ~ % ", false, false, ""},
 		{"interrupt hint in the footer", typed(idle, "") + "\n  esc to interrupt", true, true, "  Get to finished work sooner with Opus 5.5. Switch anytime with /model."},
+		{"todo list between status line and box", strings.Replace(working, "esc to interrupt)\n", "esc to interrupt)\n  ⎿  ☐ Fix the test\n     ☐ Run it\n", 1), true, true, "     ☐ Run it"},
+		// Relaunched over a killed Claude: the old screen, status line and
+		// all, is in the scrollback above the new banner and box.
+		{"old status line in the scrollback", working + "\nError: fake crash\nuser@host ~ % claude\n" + idle, true, false, "  Get to finished work sooner with Opus 5.5. Switch anytime with /model."},
 		{"answer mentioning the key is not a status line", strings.Replace(idle, "  Get to finished", "⏺ Press esc to interrupt me (any time).\n  Get to finished", 1), true, false, "  Get to finished work sooner with Opus 5.5. Switch anytime with /model."},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
