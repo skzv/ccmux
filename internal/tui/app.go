@@ -1006,15 +1006,15 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			port = 22
 		}
 		rt := &attachRemoteTarget{User: msg.User, Host: msg.DialHost, Port: port}
+		label := "ssh " + target
+		if msg.Mosh {
+			label = "mosh " + target
+		}
 		if !a.attach.active {
 			tick := a.startAttaching(attachKindRemote, msg.DialHost)
-			return a, tea.Batch(tick, tea.ExecProcess(c, func(err error) tea.Msg {
-				return attachExitedMsg{Err: err, RemoteSSHTarget: rt}
-			}))
+			return a, tea.Batch(tick, execAttach(c, label, rt, false))
 		}
-		return a, tea.ExecProcess(c, func(err error) tea.Msg {
-			return attachExitedMsg{Err: err, RemoteSSHTarget: rt}
-		})
+		return a, execAttach(c, label, rt, false)
 
 	case newBareSessionSubmitMsg:
 		// Close the form immediately — the form's own sessionsModel.Update
@@ -1110,14 +1110,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// tmux. The overlay stays drawn through the suspend; on the
 		// way back, the callback's attachExitedMsg clears it.
 		if msg.Nested {
-			return a, tea.ExecProcess(tmux.SwitchClientCmd(msg.Session), func(err error) tea.Msg {
-				return attachExitedMsg{Err: err}
-			})
+			return a, execAttach(tmux.SwitchClientCmd(msg.Session), "tmux switch-client -t "+msg.Session, nil, false)
 		}
-		return a, tea.ExecProcess(
-			tmux.AttachCmd(msg.Session, msg.DetachOthers),
-			func(err error) tea.Msg { return attachExitedMsg{Err: err} },
-		)
+		return a, execAttach(tmux.AttachCmd(msg.Session, msg.DetachOthers), "tmux attach -t "+msg.Session, nil, false)
 
 	case attachExitedMsg:
 		// Tmux exited (user detached, or the exec itself failed).
@@ -1146,8 +1141,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				})
 			}
 			until := time.Now().Add(5 * time.Second)
+			text := attachFailureText(msg)
 			cmds = append(cmds, func() tea.Msg {
-				return toastMsg{Text: tr("tmux: ") + msg.Err.Error(), Kind: toastError, Until: until}
+				return toastMsg{Text: text, Kind: toastError, Until: until}
 			})
 		}
 		return a, tea.Batch(cmds...)
@@ -2400,9 +2396,13 @@ func (a App) attachSelectedSession() (App, tea.Cmd) {
 			remoteArgs := tmux.AttachArgs(sel.Name, a.cfg.Sessions.DetachOthersOnAttach())
 			tick := a.startAttaching(attachKindRemote, sel.Host)
 			rt := &attachRemoteTarget{User: h.User, Host: h.Address, Port: h.EffectiveSSHPort()}
-			return a, tea.Batch(tick, tea.ExecProcess(
+			label := "ssh " + target
+			if h.Mosh {
+				label = "mosh " + target
+			}
+			return a, tea.Batch(tick, execAttach(
 				remoteattach.RunArgv(target, h.Mosh, h.EffectiveSSHPort(), append([]string{"tmux"}, remoteArgs...)),
-				func(err error) tea.Msg { return attachExitedMsg{Err: err, RemoteSSHTarget: rt} },
+				label, rt, false,
 			))
 		}
 	}
@@ -2461,9 +2461,7 @@ func (a App) attachSelectedSession() (App, tea.Cmd) {
 				rt.User = dial[:i]
 				rt.Host = dial[i+1:]
 			}
-			return a, tea.Batch(tick, tea.ExecProcess(cmd, func(err error) tea.Msg {
-				return attachExitedMsg{Err: err, RemoteSSHTarget: rt}
-			}))
+			return a, tea.Batch(tick, execAttach(cmd, "ssh "+dial, rt, false))
 		}
 	}
 

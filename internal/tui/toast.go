@@ -96,28 +96,45 @@ func (t *toastController) Render(st styles.Styles, maxWidth int) string {
 	// Border plus the box's horizontal padding.
 	chrome := 2 + box.GetHorizontalPadding()
 	if maxWidth > 0 && lipgloss.Width(text)+chrome > maxWidth {
-		text = wrapClamped(text, maxWidth-chrome, toastMaxLines)
+		wrapped, clipped := wrapClamped(text, maxWidth-chrome, toastMaxLines)
+		if clipped {
+			// Too long for the bubble: say where the rest is (the help
+			// overlay's Recent activity keeps every toast in full).
+			wrapped, _ = wrapClamped(text, maxWidth-chrome, toastMaxLines-1)
+			wrapped += "\n" + st.Muted.Render(truncate(tr("full text: press ?"), maxWidth-chrome))
+		}
+		text = wrapped
 	}
 	return box.Render(text)
 }
 
 // wrapClamped word-wraps s to width cells and keeps at most maxLines
-// lines, ending the last kept line with "…" when text was dropped.
-func wrapClamped(s string, width, maxLines int) string {
+// lines, ending the last kept line with "…" after a whole word when
+// text was dropped. clipped reports whether anything was.
+func wrapClamped(s string, width, maxLines int) (out string, clipped bool) {
 	if width < 1 {
 		width = 1
 	}
+	if maxLines < 1 {
+		maxLines = 1
+	}
 	lines := strings.Split(lipgloss.NewStyle().Width(width).Render(s), "\n")
 	if len(lines) <= maxLines {
-		return strings.Join(lines, "\n")
+		return strings.Join(lines, "\n"), false
 	}
 	lines = lines[:maxLines]
 	last := strings.TrimRight(lines[maxLines-1], " ")
 	if lipgloss.Width(last) >= width {
-		last = ansi.Truncate(last, width-1, "")
+		// No room for the ellipsis: drop the last word rather than cut
+		// one in half (a parse error ended in "…expecte").
+		if i := strings.LastIndex(last, " "); i > 0 && lipgloss.Width(last[:i]) < width {
+			last = strings.TrimRight(last[:i], " ")
+		} else {
+			last = ansi.Truncate(last, width-1, "")
+		}
 	}
 	lines[maxLines-1] = last + "…"
-	return strings.Join(lines, "\n")
+	return strings.Join(lines, "\n"), true
 }
 
 // Log returns the ring buffer (newest first). Read-only — callers

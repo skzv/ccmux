@@ -55,6 +55,11 @@ type attachExitedMsg struct {
 	// failure, the App swaps the error toast for an SSH setup
 	// wizard pointed at this target. Local attaches leave nil.
 	RemoteSSHTarget *attachRemoteTarget
+	// Command names what ran ("tmux attach -t c-app", "ssh mini") and
+	// Stderr is the tail of what it printed; both feed the failure
+	// toast (see attachFailureText).
+	Command string
+	Stderr  string
 }
 
 // attachRemoteTarget mirrors sshsetup.Target shape. Lives here so

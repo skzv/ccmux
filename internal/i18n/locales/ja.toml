@@ -525,3 +525,5 @@
 "↑↓ scroll %d/%d · ? or esc to close" = "↑↓ スクロール %d/%d · ? または esc で閉じる"
 "↑↓ scroll %d/%d" = "↑↓ スクロール %d/%d"
 "(make the terminal taller to browse this agent's hooks, MCP servers, commands and skills)" = "(このエージェントのフック・MCP サーバー・コマンド・スキルを見るには端末の高さを広げてください)"
+"the session no longer exists (killed outside ccmux?)" = "セッションはもう存在しません (ccmux の外で終了された?)"
+"full text: press ?" = "全文: ? を押す"

@@ -525,3 +525,5 @@
 "↑↓ scroll %d/%d · ? or esc to close" = "↑↓ desplazar %d/%d · ? o esc para cerrar"
 "↑↓ scroll %d/%d" = "↑↓ desplazar %d/%d"
 "(make the terminal taller to browse this agent's hooks, MCP servers, commands and skills)" = "(agranda la terminal en altura para explorar los hooks, servidores MCP, comandos y skills de este agente)"
+"the session no longer exists (killed outside ccmux?)" = "la sesión ya no existe (¿terminada fuera de ccmux?)"
+"full text: press ?" = "texto completo: pulsa ?"

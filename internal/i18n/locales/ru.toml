@@ -525,3 +525,5 @@
 "↑↓ scroll %d/%d · ? or esc to close" = "↑↓ прокрутка %d/%d · ? или esc — закрыть"
 "↑↓ scroll %d/%d" = "↑↓ прокрутка %d/%d"
 "(make the terminal taller to browse this agent's hooks, MCP servers, commands and skills)" = "(увеличьте высоту терминала, чтобы просмотреть хуки, MCP-серверы, команды и навыки этого агента)"
+"the session no longer exists (killed outside ccmux?)" = "сессия больше не существует (завершена вне ccmux?)"
+"full text: press ?" = "полный текст: нажмите ?"

@@ -195,12 +195,10 @@ func (m networkModel) SSHCmd() tea.Cmd {
 		dbg.Printf("network ssh: %s port=%d", target, sel.SSHPort)
 	}
 	rt := remoteTargetForSSH(*sel, target)
-	return tea.ExecProcess(cmd, func(err error) tea.Msg {
-		// err is nil on a clean detach (user typed `exit` on the
-		// remote shell). Pass it through unchanged — the
-		// attachExitedMsg handler treats nil-Err as success.
-		return attachExitedMsg{Err: err, RemoteSSHTarget: rt}
-	})
+	// An interactive shell: its exit status is the remote shell's (a
+	// failed last command, then `exit`), so only ssh's own 255 counts
+	// as a failure — it used to toast "tmux: exit status 1".
+	return execAttach(cmd, "ssh "+target, rt, true)
 }
 
 // sshInteractiveCmd builds the interactive-shell process for SSHCmd. A

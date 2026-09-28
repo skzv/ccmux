@@ -533,3 +533,5 @@
 "↑↓ scroll %d/%d · ? or esc to close" = "↑↓ 滚动 %d/%d · 按 ? 或 esc 关闭"
 "↑↓ scroll %d/%d" = "↑↓ 滚动 %d/%d"
 "(make the terminal taller to browse this agent's hooks, MCP servers, commands and skills)" = "（把终端调高一些，才能浏览这个智能体的 hooks、MCP 服务器、命令和技能）"
+"the session no longer exists (killed outside ccmux?)" = "会话已不存在（在 ccmux 之外被终止了？）"
+"full text: press ?" = "完整内容：按 ?"

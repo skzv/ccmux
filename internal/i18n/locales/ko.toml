@@ -525,3 +525,5 @@
 "↑↓ scroll %d/%d · ? or esc to close" = "↑↓ 스크롤 %d/%d · ? 또는 esc로 닫기"
 "↑↓ scroll %d/%d" = "↑↓ 스크롤 %d/%d"
 "(make the terminal taller to browse this agent's hooks, MCP servers, commands and skills)" = "(이 에이전트의 훅, MCP 서버, 명령, 스킬을 보려면 터미널 높이를 늘리세요)"
+"the session no longer exists (killed outside ccmux?)" = "세션이 더 이상 없습니다 (ccmux 밖에서 종료되었나요?)"
+"full text: press ?" = "전체 내용: ? 누르기"
