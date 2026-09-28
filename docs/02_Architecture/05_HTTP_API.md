@@ -149,7 +149,11 @@ List every tmux session this daemon manages, with daemon-derived state.
   project the session's directory belongs to — its top-level directory
   under the projects root, as `GET /v1/projects` names it, or the
   directory's name when it carries a `.ccmux/agent` sidecar outside the
-  root — and `""` for a session anywhere else.
+  root — and `""` for a session anywhere else. `agent` is the agent the
+  session is classified as: its `@ccmux_agent` tag, or for an untagged
+  `c-` session its project's recorded agent; any other session (tagged
+  `shell`, or made outside ccmux) is `shell` unless an agent is running
+  in its foreground right now, in which case it is that agent.
 
 #### `POST /v1/sessions`
 Create-or-attach a **project-bound** agent session (idempotent on the tmux
@@ -364,11 +368,13 @@ Stream of session lifecycle/state events; subscribe to live-update a view.
 - `state_change` is also sent when the state stays the same but the
   session's `attached` flag changes (a client attached or detached;
   attaching also sets `seen`), or its `agent` does (an agent started or
-  exited in the foreground of a session that follows it — see "What
-  counts as a turn" below).
+  exited in the foreground of a session that follows it — see
+  `GET /v1/sessions`).
 - A session the daemon first sees without having watched it being created
   (after a daemon restart, or renamed directly in tmux) gets one
-  `state_change` with its current state and never triggers a bell or push.
+  `state_change` with its current state, and triggers no bell or push
+  until it has settled once — the end of whatever it was in the middle
+  of isn't announced (see "What counts as a turn" under Pairing & push).
 - Heartbeats: `: connected` on open, `: ping` comment every 20s — comment
   lines (leading `:`) are ignorable.
 - If the per-subscriber buffer (256) overflows you get an
@@ -430,15 +436,52 @@ Send a verification push to the device registered for a given SSH public key.
 
 **Push behavior:** pushes fire on two transitions — a session entering
 `needs_input`, and `active → idle` ("agent finished") — and only when they
-end a real turn of the agent's: it showed a working-spinner title since it
-last entered `needs_input` (for agents that set one), or, for agents that
-don't, it was active for a reason other than a new session's startup. A
-pane resize or redraw, the user typing into the input box, or a new session
-settling after it starts still changes the state (and sends the SSE event)
-but pushes nothing, rings no bell and doesn't count toward `prompt_count`.
-The push's session id is `local/<sessionName>`. Both APNs and FCM are **off by default** and need
-server-side config (`[apns]` / `[fcm]` in `config.toml`). FCM routing exists
-but real Android delivery isn't wired yet.
+end a real turn of the agent's (below). The bell rings, and `prompt_count`
+goes up, when a turn ends in `needs_input`. A push goes out only while no
+client is attached; an attached session counts as reviewed. The push's
+session id is `local/<sessionName>`. Both APNs and FCM are **off by
+default** and need server-side config (`[apns]` / `[fcm]` in
+`config.toml`). FCM routing exists but real Android delivery isn't wired
+yet.
+
+**What counts as a turn.** Every state change is published as an SSE
+event; only the end of a turn notifies. A turn is the agent working, seen
+through evidence the user's own typing can't produce, and it ends when the
+session next settles into `needs_input`, `idle` or `error`. Each settle
+uses the evidence up, announced or not, so every notification needs a
+turn of its own. The evidence, per poll tick:
+
+- **A live working-spinner title** — a braille glyph opening the pane's
+  OSC title. It counts only while the daemon sees it alive: the title
+  changed between two of its reads (the spinner animating) within the
+  last `max(10s, 3 × idle threshold)`, or the pane body shows a turn
+  running (next point). A title found on the daemon's first look at a
+  session, or one that stopped changing, may be a crashed agent's
+  leftover (tmux keeps it) and is ignored.
+- **A body that shows a turn running**: Claude Code's `✻ Cogitating… (12s
+  · esc to interrupt)` status line over its input box, or any agent's
+  `working` body rule (a working footer).
+- **For Claude Code: new output above its input box** since the previous
+  tick — the echoed prompt, the answer, tool calls, the status line. Typing
+  only changes the box, and footers and statuslines sit below it, so a
+  session the user types into and leaves stays quiet, while a turn too
+  short to be caught working (it started and ended between two polls)
+  still left its answer above the box. A local command that prints into
+  the transcript (`/model`, `/clear`) counts too.
+- **For other agents: the session classifying as `active`** — until it
+  has shown a spinner title, after which only the spinner and body
+  evidence count. This generic fallback can't tell output from typing:
+  typing into such an agent before it has shown a spinner notifies, and
+  once it has, a turn that starts and ends between two polls is missed.
+
+Nothing else is a turn: a pane resize or redraw, the user typing, an
+agent starting up (a session created while the daemon runs, or an agent
+started by hand in a shell session — see `GET /v1/sessions`' `agent`),
+or relaunching a crashed agent. A session the daemon first sees already
+running — after a daemon restart, or renamed directly in tmux — is
+recorded as it stands and stays quiet until it first settles: the end of
+a turn it was caught in the middle of, or a crash, is published but not
+announced. Its next turn is.
 
 ---
 

@@ -50,20 +50,46 @@ writes nothing and leaves `ReadAgent` to fall back to Claude.
 ## How the daemon dispatches
 
 `cmd/ccmuxd/poll.go` `pollOnce` walks every tmux session each tick and
-resolves what runs in it (`sessionAgent`):
+resolves what runs in it (`fixedAgent`):
 
-1. The session's `@ccmux_agent` tag, when it has one — `shell` for a bare
-   shell, or the agent of a resumed conversation / bare agent session.
-   Read every tick, so a changed tag is followed.
-2. Otherwise, for a session ccmux created (named with the `c-` prefix) or
-   one in a project directory (under the projects root, or outside it with
-   a `.ccmux/agent` sidecar), the project's agent via
-   `project.ReadAgent(ts.Path)` — Claude when nothing is recorded.
-3. Anything else — a tmux session the user made themselves, somewhere
-   that isn't a project — is a plain shell and is never classified.
+1. The session's `@ccmux_agent` tag naming an agent — every session
+   ccmux starts is tagged with the agent it launched (a project session,
+   a resumed conversation, a bare agent session). Authoritative, and read
+   every tick, so a changed tag is followed.
+2. No tag, and named with the `c-` prefix: a session an older ccmux made
+   before it tagged them — the project's agent via
+   `project.ReadAgent(ts.Path)`, Claude when nothing is recorded.
+3. Anything else — tagged `shell` (`ccmux shell`, a bare shell session),
+   or a tmux session the user made themselves, wherever it runs — follows
+   its **foreground**: while an agent runs in the foreground of its pane
+   it is classified as that agent, otherwise it is a plain shell and is
+   never classified. So `claude` run by hand in a plain tmux session or a
+   ccmux shell is supervised and notifies like any other session, and a
+   log tail or a zsh prompt in a project directory is just a shell.
 
-An untagged session's agent is resolved when the daemon first sees it and
-cached on the `tracked` struct for the session's lifetime: switching a
+The foreground comes from tmux's `#{pane_current_command}` (read with the
+pane list each tick): the OS's name for the pane's foreground process,
+mapped by `agent.InForeground` — an agent's `Binary()` name, or a bare
+version number such as `2.1.281`, which is how macOS reports Claude Code's
+native installer (the `claude` symlink points at `versions/2.1.281`).
+Known limits, all because the name is the process's, not what was typed:
+
+- `node` runs Claude Code installed from npm, and Gemini CLI, Codex's npm
+  wrapper and other tools; it counts as Claude only when the pane shows
+  Claude (its `✳` title, its v2 input box, its banner). Other node-based
+  agents run by hand aren't recognised.
+- A script shows as its interpreter (`sh`, `bash`), so a wrapper script
+  named `claude` that doesn't `exec` the real binary hides it.
+- A session ccmux launches runs its agent under `$SHELL -c "agent ||
+  fallback"`, whose foreground is that shell — which is why tagged and
+  `c-` sessions keep their tag or sidecar instead.
+
+When the agent in a following session's foreground changes (started, or
+exited back to the shell), the session starts over as if new: its startup
+is not a turn, and a `state_change` event reports the new agent.
+
+An untagged `c-` session's agent is resolved when the daemon first sees it
+and cached on the `tracked` struct for the session's lifetime: switching a
 project's agent (Projects → `a`) applies to its next session, and doesn't
 reclassify the one already running.
 
@@ -74,11 +100,14 @@ newState := agent.ClassifyStateFrom(agent.ByID(t.agentID), prev, pane, title, la
 The pane classified is the agent's own — the session's oldest pane, kept
 while it exists — not whichever pane is active, so a shell window opened
 next to the agent doesn't hide it. A working-spinner OSC title counts only
-while the pane shows signs of life (tmux keeps the title of a program that
-exited), and a pane resize is a redraw, not activity. The bell, push and
-prompt count fire only at the end of a real turn — see `decideAttention`
-and `turn` in `poll.go`, and "Push behavior" in
-[05_HTTP_API.md](05_HTTP_API.md).
+while the daemon sees signs of life (tmux keeps the title of a program
+that exited), and a pane resize is a redraw, not activity. The bell, push
+and prompt count fire only at the end of a real turn — see `turn`,
+`decideAttention` and `agent.ReadTurn`, and "What counts as a turn" in
+[05_HTTP_API.md](05_HTTP_API.md). An agent can help the daemon tell its
+work from the user's typing by implementing `agent.TurnReader` (Claude
+does: its input box keeps typing apart from its output) or with body
+`working` rules in its rule file (a working footer).
 
 The `State` enum is shared (`agent.State` mirrors `internal/claude`'s
 values exactly) so the bell-trigger comparison, sleep-manager active
