@@ -27,7 +27,6 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
-	"unicode"
 
 	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/apns"
@@ -1178,23 +1177,22 @@ func parseUsageWindow(q string) time.Duration {
 	return 5 * time.Hour
 }
 
-// badSessionName reports whether a session name contains a character
-// that tmux would interpret as a target qualifier — `:` selects a
-// window/pane, `.` separates window from pane (tmux also rewrites it
-// to `_` in new session names, so the name we'd report back wouldn't
-// exist), `/` and `\` are path separators — or a control character,
-// which no tmux session name can hold (tmux 3.7 refuses it, older
-// versions store it escaped). Centralizes the rule every handler that
-// passes a name to a tmux `-t` argument shares.
+// badSessionName reports whether a session name can't be passed to a
+// tmux `-t` target: tmux.ValidTarget's rule — no leading `$` (tmux reads
+// it as a session ID even in the exact `=name:` form, so
+// POST /v1/sessions/$1/kill killed whichever session had ID $1), no
+// `:` (a window/pane qualifier), `.` (tmux also rewrites it to `_` in
+// new session names on older versions, so the name we'd report back
+// wouldn't exist), `/` or `\` (path separators in these routes), and no
+// control characters. `@` and `%` names are fine: tmux finds them by
+// name in an exact target. Centralizes the rule every handler that
+// passes a name to a tmux `-t` argument shares, and the one the CLI
+// applies before it targets a session.
 //
-// A leading `$` is refused too: tmux reads a target session starting
-// with `$` as a session ID even in the exact `=name:` form, so
-// POST /v1/sessions/$1/kill killed whichever session had ID $1, and a
-// session created as "$0" could never be found by that name (tmux keeps
-// `@` and `%` names verbatim and finds them by name, so those are fine).
+// The empty name is not "bad" here: each caller handles it (an auto
+// name for a new session, "session name required" for a route).
 func badSessionName(name string) bool {
-	return strings.HasPrefix(name, "$") ||
-		strings.ContainsAny(name, "/\\:.") || strings.ContainsFunc(name, unicode.IsControl)
+	return name != "" && !tmux.ValidTarget(name)
 }
 
 const badSessionNameMsg = "name must not start with $ or contain /, \\, :, . or control characters"

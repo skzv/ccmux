@@ -295,3 +295,76 @@ func TestIntegration_ListPanesFindsTheOriginalPane(t *testing.T) {
 		t.Error("ListPanes matched a session by prefix")
 	}
 }
+
+// TestIntegration_TargetIDPrefixes pins, on a real tmux, what
+// ValidTarget's doc says about ID-looking names in the exact `=name:`
+// target: a leading "$" is a session ID (so it must be refused), a
+// leading "%" or "@" is only a pane/window ID in a bare target (so it is
+// allowed, and finds the session so named).
+func TestIntegration_TargetIDPrefixes(t *testing.T) {
+	ctx := isolatedServer(t)
+	for _, name := range []string{"c-first", "c-victim"} {
+		if err := New(ctx, name, os.TempDir(), "sleep 300"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ids := func(session string) (sid, wid, pid string) {
+		t.Helper()
+		out, err := command(ctx, "tmux", "display-message", "-p", "-t", exactSession(session), "#{session_id} #{window_id} #{pane_id}").Output()
+		f := strings.Fields(string(out))
+		if err != nil || len(f) != 3 {
+			t.Fatalf("ids of %s: %q, %v", session, out, err)
+		}
+		return f[0], f[1], f[2]
+	}
+	sid, wid, pid := ids("c-victim") // e.g. $1 @1 %1
+	sessionAt := func(target string) string {
+		out, _ := command(ctx, "tmux", "display-message", "-p", "-t", target, "#{session_name}").Output()
+		return strings.TrimSpace(string(out))
+	}
+
+	// "$<n>": the exact target is still the session with that ID.
+	if got := sessionAt(exactSession(sid)); got != "c-victim" {
+		t.Skipf("this tmux resolves %s to %q, not c-victim by ID; nothing to pin", exactSession(sid), got)
+	}
+	if ValidTarget(sid) {
+		t.Errorf("tmux resolves %s to another session, but ValidTarget(%q) is true", exactSession(sid), sid)
+	}
+	if err := New(ctx, "$named", os.TempDir(), "sleep 300"); err == nil {
+		if ok, _ := Has(ctx, "$named"); ok {
+			t.Error(`tmux found "$named" by name; the session-ID rule may be stale`)
+		}
+	}
+
+	// "%<n>" / "@<n>": no ID lookup in the exact form...
+	for _, id := range []string{pid, wid} {
+		if ok, err := Has(ctx, id); err != nil || ok {
+			t.Errorf("Has(%q) = %v, %v: the exact target reached c-victim through its pane/window ID", id, ok, err)
+		}
+		if !ValidTarget(id) {
+			t.Errorf("ValidTarget(%q) = false, but tmux doesn't read it as an ID in an exact target", id)
+		}
+	}
+	// ...while a bare target is the pane's / window's session, which is
+	// why ccmux never sends one.
+	for _, id := range []string{pid, wid} {
+		if got := sessionAt(id); got != "c-victim" {
+			t.Errorf("bare target %s resolves to %q, want c-victim (the session holding it)", id, got)
+		}
+	}
+	// ...and a session named like an ID is found by that name, and only it.
+	for _, id := range []string{pid, wid} {
+		if err := New(ctx, id, os.TempDir(), "sleep 300"); err != nil {
+			t.Fatal(err)
+		}
+		if got := sessionAt(exactSession(id)); got != id {
+			t.Errorf("%s resolves to %q, want the session named %q", exactSession(id), got, id)
+		}
+		if err := Kill(ctx, id); err != nil {
+			t.Fatalf("Kill(%q): %v", id, err)
+		}
+		if ok, _ := Has(ctx, "c-victim"); !ok {
+			t.Fatalf("Kill(%q) killed c-victim", id)
+		}
+	}
+}

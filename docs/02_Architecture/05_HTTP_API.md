@@ -606,9 +606,12 @@ for a better UX:
 - **tmux session names** must not contain `/`, `\`, `:`, `.` or control
   characters (a tmux target-spec injection guard), and must not start with
   `$` (tmux reads a `$`-prefixed target as a session ID, so `$1` would act
-  on whichever session has ID `$1`). Names you create or rename to also
+  on whichever session has ID `$1`). A leading `%` or `@` is fine: tmux
+  only reads those as pane/window IDs in a bare target, and ccmux always
+  sends the exact `=name:` form. Names you create or rename to also
   must not contain `#`: tmux expands formats in them. Leading and trailing
-  whitespace is trimmed.
+  whitespace is trimmed. In Go, `tmux.ValidTarget` is this rule (the
+  daemon and the `ccmux` CLI both use it).
 - **project names** for `POST /v1/projects`, and for `POST /v1/sessions`
   without a `path`, must be a single non-hidden path segment — no `/`, `\`,
   no leading `.`, no control characters (C0, DEL, C1). A `path` may start

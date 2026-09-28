@@ -6,6 +6,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -86,6 +89,57 @@ func TestResolveKillTarget(t *testing.T) {
 	boom := errors.New("tmux missing")
 	if _, err := resolveKillTarget(context.Background(), "x", func(context.Context, string) (bool, error) { return false, boom }); !errors.Is(err, boom) {
 		t.Errorf("has() error must propagate, got %v", err)
+	}
+}
+
+// tmuxLikeHas is a `has` for resolveKillTarget that behaves like real
+// tmux's `has-session -t =name:`: a name starting with "$" followed by
+// a live session ID resolves as that ID, whatever the session is
+// called. calls records every name it was asked about.
+func tmuxLikeHas(names []string, ids int, calls *[]string) func(context.Context, string) (bool, error) {
+	return func(_ context.Context, name string) (bool, error) {
+		*calls = append(*calls, name)
+		if n, err := strconv.Atoi(strings.TrimPrefix(name, "$")); err == nil && strings.HasPrefix(name, "$") {
+			return n >= 0 && n < ids, nil
+		}
+		return slices.Contains(names, name), nil
+	}
+}
+
+// TestResolveKillTarget_RefusesSessionIDs — `ccmux kill '$1'` exited 0
+// after killing whichever session had tmux ID $1. A "$" name is refused
+// before tmux is asked anything, and isn't mapped as a project either.
+func TestResolveKillTarget_RefusesSessionIDs(t *testing.T) {
+	for _, arg := range []string{"$0", "$1", "$x"} {
+		var calls []string
+		got, err := resolveKillTarget(context.Background(), arg, tmuxLikeHas([]string{"a", "b"}, 2, &calls))
+		if err == nil {
+			t.Errorf("resolveKillTarget(%q) = %q, want an error", arg, got)
+			continue
+		}
+		if !strings.Contains(err.Error(), "session ID") {
+			t.Errorf("resolveKillTarget(%q) error %q should say tmux reads it as a session ID", arg, err)
+		}
+		if len(calls) != 0 {
+			t.Errorf("resolveKillTarget(%q) asked tmux about %v; a session-ID name must not reach tmux", arg, calls)
+		}
+	}
+}
+
+// TestResolveKillTarget_InvalidTargetsOnlyMapAsProjects — an argument a
+// tmux target can't carry (a dotted project name, a path) is never
+// looked up as a session itself, only mapped through SessionNameForPath.
+func TestResolveKillTarget_InvalidTargetsOnlyMapAsProjects(t *testing.T) {
+	for _, arg := range []string{"my.app", "/x/Projects/web", "$x/web", "a:b"} {
+		mapped := tmux.SessionNameForPath(arg)
+		var calls []string
+		got, err := resolveKillTarget(context.Background(), arg, tmuxLikeHas([]string{mapped}, 0, &calls))
+		if err != nil || got != mapped {
+			t.Errorf("resolveKillTarget(%q) = %q, %v; want %q", arg, got, err, mapped)
+		}
+		if !reflect.DeepEqual(calls, []string{mapped}) {
+			t.Errorf("resolveKillTarget(%q) looked up %v; want only the project's session %q", arg, calls, mapped)
+		}
 	}
 }
 

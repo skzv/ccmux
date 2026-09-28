@@ -21,6 +21,8 @@ import (
 //  4. Names already in the safe alphabet map to exactly `c-<name>`;
 //     a name that had to be rewritten never lands on that plain form
 //     (so `my.app` can't take over `my_app`'s session).
+//  5. The result is a ValidTarget, so the daemon and the CLI accept it
+//     (a project named "$1" must not map to a session-ID target).
 //
 // Why this matters: session names get used in `tmux -t <name>` args
 // across `internal/tmux` and chrome / send-keys / etc. A path with
@@ -50,6 +52,9 @@ func FuzzSessionNameForPath(f *testing.F) {
 
 		if !strings.HasPrefix(got, "c-") {
 			t.Fatalf("SessionNameForPath(%q) = %q — must start with `c-`", path, got)
+		}
+		if !ValidTarget(got) {
+			t.Fatalf("SessionNameForPath(%q) = %q is not a ValidTarget", path, got)
 		}
 		if got == "c-" {
 			// The basename was empty (e.g. "/" or ""). That's fine for

@@ -1,6 +1,7 @@
 package tmux
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -360,6 +361,59 @@ func TestValidSessionName(t *testing.T) {
 	for _, bad := range []string{"", "api.v2", "-x", "a:b", "a/b", "a b", "näme", "$0", "$x", "@x", "%x", "x#y"} {
 		if ValidSessionName(bad) {
 			t.Errorf("accepted %q", bad)
+		}
+	}
+}
+
+// TestValidTarget — the rule the daemon's API and the CLI share for a
+// name that goes into a `=name:` target. A leading "$" is the session-ID
+// trap (`kill '$1'` killed session ID $1); "%" and "@" are only IDs in a
+// bare target, so exact-form names starting with them stay reachable
+// (TestIntegration_TargetIDPrefixes pins both on a real tmux).
+func TestValidTarget(t *testing.T) {
+	for _, ok := range []string{"c-foo", "work", "work#2", "café", "a$1", "@0", "%0", "@work", "%work", "c-", "a b"} {
+		if !ValidTarget(ok) {
+			t.Errorf("ValidTarget(%q) = false, want true", ok)
+		}
+		if err := CheckTarget(ok); err != nil {
+			t.Errorf("CheckTarget(%q) = %v, want nil", ok, err)
+		}
+	}
+	for _, bad := range []string{"", "$0", "$1", "$x", "$", "a:b", "c-foo:1", "a.b", "win:0.1", "a/b", `a\b`,
+		"tab\tname", "nl\nname", "esc\x1b[31m", "del\x7f", "c1\u0085"} {
+		if ValidTarget(bad) {
+			t.Errorf("ValidTarget(%q) = true, want false", bad)
+		}
+		if CheckTarget(bad) == nil {
+			t.Errorf("CheckTarget(%q) = nil, want an error", bad)
+		}
+	}
+}
+
+// TestCheckTarget_SessionIDOnlyForPlainDollarNames — ErrSessionIDTarget
+// marks a name whose only problem is the leading "$": `ccmux kill` and
+// `ccmux attach` refuse those outright, but still map a path or dotted
+// project name ("$x/y", "$my.app") that merely starts with "$".
+func TestCheckTarget_SessionIDOnlyForPlainDollarNames(t *testing.T) {
+	for _, name := range []string{"$0", "$1", "$x", "$"} {
+		if err := CheckTarget(name); !errors.Is(err, ErrSessionIDTarget) {
+			t.Errorf("CheckTarget(%q) = %v, want ErrSessionIDTarget", name, err)
+		}
+	}
+	for _, name := range []string{"", "$x/y", "$my.app", "a:b", "tab\tname"} {
+		if err := CheckTarget(name); err == nil || errors.Is(err, ErrSessionIDTarget) {
+			t.Errorf("CheckTarget(%q) = %v, want a non-session-ID error", name, err)
+		}
+	}
+}
+
+// TestValidSessionName_IsAValidTarget — every name the rename form and
+// `ccmux rename` accept, and every name ccmux derives from a project,
+// can be targeted.
+func TestValidSessionName_IsAValidTarget(t *testing.T) {
+	for _, name := range []string{"c-foo", "my_app", "A1", "_x", SessionNameForPath("/x/my.app"), SessionNameForPath("/x/$1"), AutoSessionName("c-shell")} {
+		if !ValidTarget(name) {
+			t.Errorf("ValidTarget(%q) = false for a name ccmux accepts or generates", name)
 		}
 	}
 }

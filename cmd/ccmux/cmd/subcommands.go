@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -58,14 +59,21 @@ that doesn't exist is an error — the session is never started elsewhere.`,
 			// A live session's own name — what `ccmux list` prints,
 			// e.g. c-shell-abc — attaches as-is, the way `ccmux kill`
 			// resolves it. Mapped as a project it became c-c-shell-abc
-			// and failed with "no project …".
+			// and failed with "no project …". Only a valid tmux target
+			// is looked up (see resolveKillTarget): `attach '$0'`
+			// attached to whichever session had ID $0.
 			if arg != "" {
-				live, err := tmux.Has(ctx, arg)
-				if err != nil {
-					return err
-				}
-				if live {
-					return attachWithChrome(arg, "", attachDetachOthers())
+				switch err := tmux.CheckTarget(arg); {
+				case errors.Is(err, tmux.ErrSessionIDTarget):
+					return fmt.Errorf("refusing to attach to %q: %w", arg, err)
+				case err == nil:
+					live, err := tmux.Has(ctx, arg)
+					if err != nil {
+						return err
+					}
+					if live {
+						return attachWithChrome(arg, "", attachDetachOthers())
+					}
 				}
 			}
 
@@ -362,17 +370,29 @@ func newKillCmd() *cobra.Command {
 // named `c-foo` (session c-c-foo), `kill c-foo` killed project foo's
 // session instead, and a session without the prefix (`ccmux shell
 // --name work`) was rewritten to c-work and could never be killed.
+//
+// Only a name tmux.ValidTarget accepts is looked up as a session. A
+// leading "$" is refused outright: tmux read `kill '$1'` as "the
+// session with ID $1" and killed it, whatever it was called. Any other
+// name a target can't carry (a path, a dotted project name) is only
+// mapped as a project, which always yields a valid target.
 func resolveKillTarget(ctx context.Context, arg string, has func(context.Context, string) (bool, error)) (string, error) {
-	exists, err := has(ctx, arg)
-	if err != nil {
-		return "", err
-	}
-	if exists {
-		return arg, nil
+	switch err := tmux.CheckTarget(arg); {
+	case errors.Is(err, tmux.ErrSessionIDTarget):
+		return "", fmt.Errorf("refusing to kill %q: %w", arg, err)
+	case err == nil:
+		exists, err := has(ctx, arg)
+		if err != nil {
+			return "", err
+		}
+		if exists {
+			return arg, nil
+		}
 	}
 	mapped := tmux.SessionNameForPath(arg)
 	if mapped != arg {
-		if exists, err = has(ctx, mapped); err != nil {
+		exists, err := has(ctx, mapped)
+		if err != nil {
 			return "", err
 		}
 		if exists {

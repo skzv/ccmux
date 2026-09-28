@@ -5,6 +5,7 @@ package cmd
 import (
 	"encoding/json"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -347,6 +348,107 @@ func TestKill_NothingToKillNamesBothCandidates(t *testing.T) {
 	}
 	if kills := e.tmuxCallsWith("kill-session"); len(kills) != 0 {
 		t.Errorf("no kill-session may be sent for a guessed name: %v", kills)
+	}
+}
+
+// --- session-ID targets --------------------------------------------------------
+
+// fakeTmuxResolvingIDs is fakeTmux plus real tmux's session-ID quirk:
+// a target "=$<n>:" is the session with ID $<n> even in the exact form,
+// so has-session succeeds for $0..$4 whatever the sessions are called
+// (TestIntegration_TargetIDPrefixes pins that on a real tmux).
+const fakeTmuxResolvingIDs = `printf '%s|' "$@" >> "$FAKE_TMUX_LOG"
+printf '\n' >> "$FAKE_TMUX_LOG"
+case "$1" in
+has-session)
+  case "$3" in '=$'[0-4]*) exit 0 ;; esac
+  exit 1 ;;
+list-sessions) echo "no server running on /tmp/tmux-fake/default" >&2; exit 1 ;;
+esac
+exit 0
+`
+
+// TestCLI_SessionIDTargetsAreRefused — `ccmux kill '$1'` exited 0 after
+// killing whichever session had tmux ID $1, `rename '$4' x` renamed
+// one, and `attach '$0'` attached to one: tmux reads a leading "$" as a
+// session ID even in the exact `=name:` target. Each must now fail
+// with a clear error before asking tmux anything (kill doesn't fall
+// through to a project named "$1" either).
+func TestCLI_SessionIDTargetsAreRefused(t *testing.T) {
+	for _, args := range [][]string{
+		{"kill", "$1"},
+		{"rename", "$4", "x"},
+		{"attach", "$0"},
+	} {
+		t.Run(args[0], func(t *testing.T) {
+			e := newCLIEnv(t)
+			e.writeExe("tmux", fakeTmuxResolvingIDs)
+			e.mkdir("Projects/$1") // a project so named must not be what kill finds
+			res := e.run("", args...)
+			if res.code == 0 {
+				t.Fatalf("ccmux %v exited 0; tmux calls:\n%s", args, strings.Join(e.tmuxCalls(), "\n"))
+			}
+			if !strings.Contains(res.stderr, "session ID") || !strings.Contains(res.stderr, `"`+args[1]+`"`) {
+				t.Errorf("error should name %q and say tmux reads it as a session ID: %s", args[1], res.stderr)
+			}
+			if calls := e.tmuxCalls(); len(calls) != 0 {
+				t.Errorf("no tmux call may be made for %q, got:\n%s", args[1], strings.Join(calls, "\n"))
+			}
+		})
+	}
+}
+
+// TestRename_NewNameMustBeASessionName — the new name is held to the
+// rename form's stricter rule, so it can't be "$4" (or "%1") either.
+func TestRename_NewNameMustBeASessionName(t *testing.T) {
+	for _, newName := range []string{"$4", "%1", "@1", "a.b"} {
+		e := newCLIEnv(t)
+		e.env["FAKE_TMUX_SESSIONS"] = "work"
+		res := e.run("", "rename", "work", newName)
+		if res.code == 0 || !strings.Contains(res.stderr, "invalid session name") {
+			t.Errorf("rename work %q: exit %d, stderr %q; want an invalid-name error", newName, res.code, res.stderr)
+		}
+		if got := e.tmuxCallsWith("rename-session"); len(got) != 0 {
+			t.Errorf("rename work %q sent %v", newName, got)
+		}
+	}
+}
+
+// TestRename_OldNameMustBeATarget — an old name a tmux target can't
+// carry is refused rather than sent to tmux ("a:b" reaches session a).
+func TestRename_OldNameMustBeATarget(t *testing.T) {
+	e := newCLIEnv(t)
+	e.env["FAKE_TMUX_SESSIONS"] = "a"
+	res := e.run("", "rename", "a:b", "x")
+	if res.code == 0 || !strings.Contains(res.stderr, `refusing to rename "a:b"`) {
+		t.Errorf("rename a:b x: exit %d, stderr %q; want a refusal", res.code, res.stderr)
+	}
+	if got := e.tmuxCallsWith("rename-session"); len(got) != 0 {
+		t.Errorf("rename a:b sent %v", got)
+	}
+}
+
+// TestShell_NameMustBeATarget — `ccmux shell --name '$1'` is refused
+// before any daemon is asked: a peer running an older ccmuxd would
+// create "$1", and the attach that follows would land in session ID $1.
+func TestShell_NameMustBeATarget(t *testing.T) {
+	e := newCLIEnv(t)
+	var mu sync.Mutex
+	var paths []string
+	e.fakeDaemon(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		paths = append(paths, r.URL.Path)
+		mu.Unlock()
+		http.Error(w, "unexpected request", http.StatusTeapot)
+	}))
+	res := e.run("", "shell", "--name", "$1", "--agent", "shell")
+	if res.code == 0 || !strings.Contains(res.stderr, "session ID") {
+		t.Errorf("shell --name '$1': exit %d, stderr %q; want a session-ID refusal", res.code, res.stderr)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(paths) != 0 {
+		t.Errorf("the daemon was asked %v; the name must be refused first", paths)
 	}
 }
 

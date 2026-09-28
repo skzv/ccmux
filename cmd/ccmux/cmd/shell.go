@@ -82,6 +82,14 @@ func runShellCmd(ctx context.Context, name, path, host, agentFlag string) error 
 	if err := validateShellAgent(agentFlag); err != nil {
 		return err
 	}
+	// The daemon refuses these names too, but a peer running an older
+	// ccmuxd may not, and the attach below targets the name it hands
+	// back: a session created as "$1" would attach to session ID $1.
+	if name != "" {
+		if err := tmux.CheckTarget(name); err != nil {
+			return fmt.Errorf("invalid --name %q: %w", name, err)
+		}
+	}
 	host = strings.TrimSpace(host)
 	if host == "" || host == "local" {
 		return runShellLocal(ctx, name, path, agentFlag)

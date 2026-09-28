@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+	"unicode"
 )
 
 // withStderr enriches an error from exec.Cmd.Output() with the captured
@@ -110,6 +111,59 @@ func ExactSession(name string) string { return exactSession(name) }
 // target-pane). Same string as exactSession; kept as a separate name
 // so call sites say which kind of target they pass.
 func exactPane(name string) string { return exactSession(name) }
+
+// ValidTarget reports whether name, as the session in exactSession's
+// `=name:` target, reaches the session called name and nothing else.
+// It is the one rule shared by everything that targets a session a
+// user or a peer named: the daemon's HTTP API (badSessionName in
+// cmd/ccmuxd) and the CLI's kill, rename, attach and shell --name.
+//
+// What tmux does with these targets (checked on tmux 3.7c):
+//
+//   - A leading "$" is read as a session ID even in the exact form.
+//     `kill-session -t '=$1:'` kills whichever session has ID $1, and a
+//     session created as "$x" can never be found by that name — "=$5:"
+//     is the session whose ID is $5, not the one named "$5".
+//   - A leading "%" or "@" is not: pane (%N) and window (@N) IDs are
+//     only recognised in a bare target. "=%1:" finds the session named
+//     "%1", or nothing — never the session holding pane %1 — so those
+//     names are allowed.
+//   - ":" ends the session part ("=b:1:" reaches session b), "." splits
+//     a bare target into window and pane (and older tmux, e.g. 3.4,
+//     rewrites it to "_" in new names), "/" and "\" are path separators
+//     on the daemon's /v1/sessions/<name>/… routes, and no session can
+//     hold a control character (tmux 3.7 refuses it, older versions
+//     store it escaped).
+//
+// The empty name is not a target either.
+func ValidTarget(name string) bool { return CheckTarget(name) == nil }
+
+// ErrSessionIDTarget is CheckTarget's error for a name that is
+// otherwise a plain session name but starts with "$".
+var ErrSessionIDTarget = errors.New(`tmux reads a session name starting with "$" as a session ID, so it would act on a different session`)
+
+var (
+	errEmptyTarget    = errors.New("session name is empty")
+	errTargetSpecials = errors.New(`ccmux can't target a session whose name contains /, \, :, . or a control character`)
+)
+
+// CheckTarget is ValidTarget with the reason it fails: nil for a valid
+// target, ErrSessionIDTarget for a name whose only problem is a leading
+// "$", and a plain error otherwise. Callers whose argument may also be
+// a project name or a path (`ccmux kill`, `ccmux attach`) refuse
+// ErrSessionIDTarget outright but let any other invalid name fall
+// through to their project mapping.
+func CheckTarget(name string) error {
+	switch {
+	case name == "":
+		return errEmptyTarget
+	case strings.ContainsAny(name, `/\:.`) || strings.ContainsFunc(name, unicode.IsControl):
+		return errTargetSpecials
+	case strings.HasPrefix(name, "$"):
+		return ErrSessionIDTarget
+	}
+	return nil
+}
 
 // Session is the static metadata about a tmux session.
 type Session struct {

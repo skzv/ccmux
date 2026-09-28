@@ -18,7 +18,14 @@ func newRenameCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(2),
 		RunE: func(_ *cobra.Command, args []string) error {
 			oldName, newName := args[0], args[1]
-			// Same rule as the TUI rename form (tmux.ValidSessionName).
+			// The old name goes into a tmux target: the daemon's rule
+			// (tmux.ValidTarget). `rename '$4' x` renamed whichever
+			// session had ID $4.
+			if err := tmux.CheckTarget(oldName); err != nil {
+				return fmt.Errorf("refusing to rename %q: %w", oldName, err)
+			}
+			// Same rule as the TUI rename form (tmux.ValidSessionName),
+			// which is stricter than ValidTarget.
 			if !tmux.ValidSessionName(newName) {
 				return fmt.Errorf("invalid session name %q: use only letters, digits, hyphens and underscores, not starting with a hyphen", newName)
 			}
