@@ -146,6 +146,39 @@ func TestPollOnce_TurnInFlightAtRestartIsNotAnnounced(t *testing.T) {
 	}
 }
 
+// TestPollOnce_RestartSpinnerInStepWithPollsIsNotAnnounced — hands-on,
+// a Codex whose spinner cycles once a second read the same frame at every
+// 2-second poll until its timing drifted: the daemon saw the joined
+// session at its caret, unchanged for a whole idle window, took it for
+// settled, and announced the rest of the turn ("finished") once the
+// spinner was finally seen to move. A spinner title the first look found
+// keeps a joined session joined until it has stood still for the stale
+// window, or gone.
+func TestPollOnce_RestartSpinnerInStepWithPollsIsNotAnnounced(t *testing.T) {
+	s := newPollTestServer(t)
+	s.startedAt = time.Now()
+	pushes := countPushes(t, s)
+	working := codexPane("> fix it\n\n• Working")
+	p := &fakePane{Pane: tmux.Pane{ID: "%1", Width: 120, Height: 40, Title: "⠋ codex"}, body: working}
+	f := newFakeTmux()
+	f.addSession(tmux.Session{Name: "c-codex", Path: "/tmp", Agent: "codex", Created: time.Now().Add(-time.Hour)}, p)
+	f.wire(s)
+	pollNTimes(s, 5) // the same frame on every read: well past the idle window
+	for _, frame := range []string{"⠙", "⠹"} {
+		f.update(func() { p.Title = frame + " codex" })
+		pollNTimes(s, 1)
+	}
+	f.update(func() { p.body, p.Title = codexPane("> fix it\n\n• Fixed."), "codex" })
+	pollNTimes(s, 4)
+	if got := pushes(); got != 0 {
+		t.Errorf("the turn in flight at the restart notified: pushes=%d, want 0", got)
+	}
+	codexTurn(s, f, p, "and the test")
+	if got := pushes(); got != 1 {
+		t.Errorf("the next turn: pushes=%d, want 1", got)
+	}
+}
+
 // TestTurn_JoinedEndsOnlyOnAStillSettle — a joined session stays joined
 // through settled ticks until the daemon has seen its pane still
 // (evidence.still): the turn it was caught in ends unannounced, and the

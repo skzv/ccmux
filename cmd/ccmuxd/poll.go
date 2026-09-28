@@ -422,7 +422,7 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 		if t.joinedAt.After(quietSince) {
 			quietSince = t.joinedAt
 		}
-		ev.still = time.Since(quietSince) >= idleNeeds
+		ev.still = time.Since(quietSince) >= idleNeeds && !spinnerPending(r.mem, t.joinedAt, staleAfter)
 		prevSeen := t.seen
 		decision := t.attend(t.state, r.newState, ev, t.seen, ts.Attached)
 		if t.spinnerMarkDue(ts) {
@@ -673,6 +673,25 @@ func liveTitle(title string, lastLife, now time.Time, staleAfter time.Duration) 
 	return strings.TrimLeftFunc(title, func(r rune) bool { return unicode.IsSpace(r) || isBraille(r) })
 }
 
+// spinnerPending reports whether the pane's title (m.title) opens with a
+// spinner that may still be live although the daemon hasn't believed it:
+// one found on the first look at a session joined at joinedAt, not yet
+// watched for staleAfter without moving. liveTitle doesn't take such a
+// spinner for work — it may be a dead agent's leftover — but it can't be
+// ruled out either: a spinner whose frames cycle in step with the poll
+// interval reads the same on every tick until its timing drifts. A
+// joined session isn't seen to settle while one is pending (see turn).
+func spinnerPending(m paneMemory, joinedAt time.Time, staleAfter time.Duration) bool {
+	if !isSpinnerTitle(strings.TrimSpace(m.title)) {
+		return false
+	}
+	life := m.titleChange
+	if joinedAt.After(life) {
+		life = joinedAt
+	}
+	return time.Since(life) < staleAfter
+}
+
 // isSpinnerTitle reports whether title opens with a braille spinner
 // glyph: what the title_spinner_working rule in every agent's rule file
 // matches (`^[\x{2800}-\x{28FF}]`).
@@ -825,7 +844,8 @@ type evidence struct {
 	separated, output bool
 	// still: the pane body hasn't changed for a whole idle window of the
 	// daemon's own watching — since its last change and, for a session it
-	// joined, since its first look (see turn.joined).
+	// joined, since its first look — and its title shows no spinner that
+	// may still be live (spinnerPending). See turn.joined.
 	still bool
 }
 
@@ -862,9 +882,11 @@ type evidence struct {
 // a restart or a rename done straight through tmux — is recorded as it
 // stands (the baseline) and stays joined until the daemon has seen it
 // settle: settled, with its pane still (evidence.still) for a whole idle
-// window since the first look (joinedAt). Nothing is news until then:
-// not the end of a turn it was caught in the middle of, and not a crash.
-// Its next turn is.
+// window since the first look (joinedAt), and no spinner title on it
+// that may still be live — one the first look found and the daemon
+// hasn't yet watched stand still for the stale window. Nothing is news
+// until then: not the end of a turn it was caught in the middle of, and
+// not a crash. Its next turn is.
 //
 // Settled on the first look is not enough. That look backdates the
 // pane's last change so a session found waiting shows needs_input at

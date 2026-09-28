@@ -486,8 +486,11 @@ recorded as it stands (a session waiting for input shows `needs_input`
 from that first look; one whose body shows a turn running, `active`) and
 stays quiet until the daemon has seen it settle: in `needs_input`,
 `idle` or `error`, with its pane unchanged for a whole idle threshold
-since that first look. The end of a turn it was caught in the middle
-of, or a crash, is published but not announced. That holds even when
+since that first look, and any spinner title that look found gone or
+unchanged for the spinner's stale window (a spinner whose frames cycle
+in step with the poll interval reads the same on every tick). The end
+of a turn it was caught in the middle of, or a crash, is published but
+not announced. That holds even when
 the first look reads as settled: one capture can't tell a turn in
 flight whose only signs are a spinner title (not believed on a first
 look) or output still to come from a session waiting, so a turn started
