@@ -9,9 +9,45 @@
 package remoteattach
 
 import (
+	"errors"
 	"os/exec"
 	"strings"
 )
+
+// guard refuses to run cmd when target could be read as an option.
+// ssh and mosh both take the destination as a bare argument, so a
+// stored address like `-oProxyCommand=…` (or a user part starting with
+// `-`, which makes the whole `user@host` start with one) would become
+// an ssh option that runs a local command. `--` can't fix this for
+// every builder — mosh re-joins its arguments and would pass the `--`
+// on as the remote command — so the command gets an Err instead: its
+// Start/Run returns the error without executing anything. Well-formed
+// targets are untouched, argv included.
+func guard(cmd *exec.Cmd, target string) *exec.Cmd {
+	switch {
+	case strings.TrimSpace(target) == "":
+		cmd.Err = errors.New("remote attach: empty host address")
+	case strings.HasPrefix(target, "-"):
+		cmd.Err = errors.New("remote attach: refusing host address " + quoteForError(target) + ": it starts with '-' and would be read as an ssh option")
+	}
+	return cmd
+}
+
+// quoteForError renders a target for an error message without letting
+// control characters through.
+func quoteForError(s string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f {
+			b.WriteByte('?')
+			continue
+		}
+		b.WriteRune(r)
+	}
+	b.WriteByte('"')
+	return b.String()
+}
 
 // defaultPort reports whether a configured SSH port means "just use
 // the default" — 0 (unset) or 22. Callers that pass one of those get
@@ -53,7 +89,7 @@ func moshSSHFlags(port int) []string {
 func SSH(target, remoteCmd string, port int) *exec.Cmd {
 	args := append([]string{"-t"}, sshPortFlags(port)...)
 	// nocontext: interactive foreground attach (see package doc).
-	return exec.Command("ssh", append(args, target, remoteCmd)...)
+	return guard(exec.Command("ssh", append(args, target, remoteCmd)...), target)
 }
 
 // SSHInteractive builds `ssh -t [-p port] target` with no command —
@@ -63,7 +99,7 @@ func SSH(target, remoteCmd string, port int) *exec.Cmd {
 func SSHInteractive(target string, port int) *exec.Cmd {
 	args := append([]string{"-t"}, sshPortFlags(port)...)
 	// nocontext: interactive foreground attach (see package doc).
-	return exec.Command("ssh", append(args, target)...)
+	return guard(exec.Command("ssh", append(args, target)...), target)
 }
 
 // itoa is a tiny strconv.Itoa to avoid pulling strconv into this
@@ -100,7 +136,7 @@ func itoa(n int) string {
 func Mosh(target, remoteCmd string, port int) *exec.Cmd {
 	args := append(moshSSHFlags(port), target, "--", "bash", "-c", remoteCmd)
 	// nocontext: interactive foreground attach (see package doc).
-	return exec.Command("mosh", args...)
+	return guard(exec.Command("mosh", args...), target)
 }
 
 // RunArgv builds `ssh|mosh [port flags] target -- ARGV...`, used when
@@ -118,7 +154,7 @@ func Mosh(target, remoteCmd string, port int) *exec.Cmd {
 func RunArgv(target string, useMosh bool, port int, argv []string) *exec.Cmd {
 	if useMosh {
 		// nocontext: interactive foreground attach (see package doc).
-		return exec.Command("mosh", append(append(moshSSHFlags(port), target, "--"), argv...)...)
+		return guard(exec.Command("mosh", append(append(moshSSHFlags(port), target, "--"), argv...)...), target)
 	}
 	quoted := make([]string, len(argv))
 	for i, a := range argv {
@@ -126,7 +162,7 @@ func RunArgv(target string, useMosh bool, port int, argv []string) *exec.Cmd {
 	}
 	args := append(append([]string{"-t"}, sshPortFlags(port)...), target, "--", strings.Join(quoted, " "))
 	// nocontext: interactive foreground attach (see package doc).
-	return exec.Command("ssh", args...)
+	return guard(exec.Command("ssh", args...), target)
 }
 
 // shellQuote single-quotes s for a POSIX shell.

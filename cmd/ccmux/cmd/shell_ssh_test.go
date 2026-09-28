@@ -21,22 +21,30 @@ func TestShellSSHArgs(t *testing.T) {
 		{
 			"user + default port",
 			config.Host{User: "skz", Address: "100.64.0.5"},
-			[]string{"-t", "skz@100.64.0.5", cmd},
+			[]string{"-t", "--", "skz@100.64.0.5", cmd},
 		},
 		{
 			"no user falls back to bare address",
 			config.Host{Address: "100.64.0.5"},
-			[]string{"-t", "100.64.0.5", cmd},
+			[]string{"-t", "--", "100.64.0.5", cmd},
 		},
 		{
 			"custom sshd port adds -p",
 			config.Host{User: "skz", Address: "mini", SSHPort: 2222},
-			[]string{"-t", "-p", "2222", "skz@mini", cmd},
+			[]string{"-t", "-p", "2222", "--", "skz@mini", cmd},
 		},
 		{
 			"explicit port 22 stays bare",
 			config.Host{User: "skz", Address: "mini", SSHPort: 22},
-			[]string{"-t", "skz@mini", cmd},
+			[]string{"-t", "--", "skz@mini", cmd},
+		},
+		{
+			// An option-like address stays the destination: ssh stops
+			// parsing options at "--" instead of running a
+			// ProxyCommand.
+			"option-like address can't become an ssh option",
+			config.Host{Address: "-oProxyCommand=touch /tmp/pwned"},
+			[]string{"-t", "--", "-oProxyCommand=touch /tmp/pwned", cmd},
 		},
 	}
 	for _, tc := range cases {

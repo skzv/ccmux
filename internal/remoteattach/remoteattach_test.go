@@ -1,8 +1,11 @@
 package remoteattach
 
 import (
+	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -155,6 +158,55 @@ func TestRunArgv_PortPerBinary(t *testing.T) {
 		}
 		if !sawSep {
 			t.Errorf("missing -- separator: %v", cmd.Args)
+		}
+	}
+}
+
+// TestBuilders_RefuseOptionLikeTarget — a stored host address such as
+// `-oProxyCommand=…` (or a user part starting with `-`) was handed to
+// ssh/mosh as a bare argument, where it's parsed as an option: ssh runs
+// the proxy command locally. Every builder must refuse to execute such
+// a target, and must not touch well-formed ones.
+func TestBuilders_RefuseOptionLikeTarget(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses /bin/sh stubs")
+	}
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "ran")
+	for _, name := range []string{"ssh", "mosh"} {
+		stub := "#!/bin/sh\necho \"$@\" >> '" + marker + "'\n"
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(stub), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", dir)
+
+	builders := map[string]func(target string) *exec.Cmd{
+		"SSH":            func(tg string) *exec.Cmd { return SSH(tg, "tmux attach", 0) },
+		"SSHInteractive": func(tg string) *exec.Cmd { return SSHInteractive(tg, 2222) },
+		"Mosh":           func(tg string) *exec.Cmd { return Mosh(tg, "tmux attach", 0) },
+		"RunArgv/ssh":    func(tg string) *exec.Cmd { return RunArgv(tg, false, 0, []string{"tmux", "attach"}) },
+		"RunArgv/mosh":   func(tg string) *exec.Cmd { return RunArgv(tg, true, 0, []string{"tmux", "attach"}) },
+	}
+	for name, build := range builders {
+		for _, bad := range []string{"-oProxyCommand=touch /tmp/pwned", "-oProxyCommand=x@mini", "", "  "} {
+			cmd := build(bad)
+			if err := cmd.Run(); err == nil {
+				t.Errorf("%s(%q) ran; want it refused", name, bad)
+			}
+		}
+		if _, err := os.Stat(marker); err == nil {
+			t.Fatalf("%s executed ssh/mosh for an option-like target", name)
+		}
+		good := build("alice@mini")
+		if good.Err != nil {
+			t.Errorf("%s(alice@mini) refused: %v", name, good.Err)
+		}
+		if err := good.Run(); err != nil {
+			t.Errorf("%s(alice@mini) failed to run the stub: %v", name, err)
+		}
+		if err := os.Remove(marker); err != nil {
+			t.Errorf("%s(alice@mini) didn't reach the stub: %v", name, err)
 		}
 	}
 }

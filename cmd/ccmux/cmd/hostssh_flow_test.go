@@ -78,6 +78,31 @@ func TestRunHostSetupSSH_SlowPasswordDoesNotExpireInstall(t *testing.T) {
 	}
 }
 
+// TestRunHostSetupSSH_SkipsUnusableEnumeratedAccounts — account names
+// come from the remote. One starting with '-' was offered and stored as
+// a host whose `user@host` ssh target begins with '-', i.e. an ssh
+// option; such names are skipped without consuming an answer.
+func TestRunHostSetupSSH_SkipsUnusableEnumeratedAccounts(t *testing.T) {
+	isolateHome(t)
+	stubSSHSetup(t)
+	sshEnumerateUsers = func(context.Context, sshsetup.Target, sshsetup.LocalKey) ([]string, error) {
+		return []string{"-oProxyCommand=touch /tmp/pwned", "evil;id", "bob"}, nil
+	}
+	sshInstallKey = func(context.Context, sshsetup.Target, string, sshsetup.LocalKey, sshsetup.Progress) error { return nil }
+	pipeStdin(t, "y\ny\ny\n")
+
+	if err := runHostSetupSSH("alice@sputnik.example", false); err != nil {
+		t.Fatalf("setup-ssh: %v", err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Hosts) != 1 || cfg.Hosts[0].User != "bob" {
+		t.Errorf("hosts added = %+v, want only bob", cfg.Hosts)
+	}
+}
+
 // TestRunHostSetupSSH_PipedAnswersAllReachTheirPrompts — the password
 // read and every "Add …?" confirm built a fresh bufio.Reader over
 // stdin; the first one read ahead and swallowed the rest, so with piped

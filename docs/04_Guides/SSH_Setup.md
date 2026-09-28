@@ -79,7 +79,7 @@ A non-zero exit count from `ccmux doctor` is the number of problems found, inclu
 
 When a remote has multiple Unix accounts (a shared dev box, a build-and-test machine), ccmux models each `user@host` as a distinct device:
 
-- `ccmux host add alice@sputnik sputnik --user alice` and `bob@sputnik` show up as separate rows in the Network screen.
+- `ccmux host add alice@sputnik sputnik --user alice` and `ccmux host add bob@sputnik sputnik --user bob` show up as separate rows in the Network screen. (`--ssh-port` sets a non-22 sshd port, `--port` a non-7474 ccmuxd port, and `--mosh=false` attaches over plain ssh.)
 - Each has its own session list, its own connection state, its own `~/.config` on the remote.
 - The wizard's enumerate step is the quick way to bulk-add multiple users for a single remote.
 

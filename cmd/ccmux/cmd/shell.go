@@ -185,7 +185,10 @@ func shellSSHArgs(h config.Host, remoteCmd string) []string {
 		// supports); 0/22 stay on the bare form.
 		args = append(args, "-p", strconv.Itoa(p))
 	}
-	return append(args, dial, remoteCmd)
+	// "--" ends ssh's option parsing, so a stored address (or user)
+	// starting with "-" can never be read as an option such as
+	// -oProxyCommand=…, which would run a local command.
+	return append(args, "--", dial, remoteCmd)
 }
 
 // shellQuote wraps `s` in single quotes, escaping any embedded

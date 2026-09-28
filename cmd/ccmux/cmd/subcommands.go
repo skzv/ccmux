@@ -1009,33 +1009,7 @@ func newHostCmd() *cobra.Command {
 	c := &cobra.Command{Use: "host", Short: "Manage remote ccmuxd hosts"}
 
 	c.AddCommand(
-		&cobra.Command{
-			Use:   "add <name> <address>",
-			Short: "Add a remote ccmuxd host",
-			Args:  cobra.ExactArgs(2),
-			RunE: func(_ *cobra.Command, args []string) error {
-				// Abort on a Load error instead of proceeding: Load
-				// returns Defaults() alongside the error on a corrupt or
-				// unreadable config.toml, and Save truncates the file —
-				// so swallowing the error would wipe every other host and
-				// all other settings on the next write.
-				cfg, err := config.Load()
-				if err != nil {
-					return fmt.Errorf("load config (not modifying it): %w", err)
-				}
-				// Reject duplicate names instead of silently appending:
-				// `host remove <name>` deletes every entry with that
-				// name, so a duplicate add would make the eventual
-				// remove wipe both — including the original.
-				for _, h := range cfg.Hosts {
-					if h.Name == args[0] {
-						return fmt.Errorf("host %q already exists (address %s); run `ccmux host remove %s` first, or pick a different name", args[0], h.Address, args[0])
-					}
-				}
-				cfg.Hosts = append(cfg.Hosts, config.Host{Name: args[0], Address: args[1], Mosh: true, Port: 7474})
-				return config.Save(cfg)
-			},
-		},
+		newHostAddCmd(),
 		&cobra.Command{
 			Use:   "remove <name>",
 			Short: "Remove a remote ccmuxd host",

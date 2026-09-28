@@ -251,9 +251,9 @@ The Devices panel on the Dashboard shows every device on your tailnet:
 - ⚪ **peers NOT running ccmuxd** (Macs/Linux boxes you haven't installed on yet) — with a one-line "ccmux not installed" hint
 - 📱 **phones / iPads** — with a "connect via Moshi app" hint (the iOS Moshi app is their picker; they don't run ccmux directly)
 
-Attaching to an auto-discovered peer execs `ssh -t <host> -- tmux attach -t <name>` (cross-platform PATH prepend so Homebrew/Snap/Linuxbrew tmux is found). If you've pinned a host with `ccmux host add --mosh <name> …`, ccmux uses `mosh` instead — tolerates roaming and stalls.
+Attaching to an auto-discovered peer execs `ssh -t <host> -- tmux attach -t <name>` (cross-platform PATH prepend so Homebrew/Snap/Linuxbrew tmux is found). A host you've pinned with `ccmux host add <name> <address>` attaches with `mosh` instead — tolerates roaming and stalls (`--mosh=false` keeps it on plain ssh).
 
-> Manually pinning a host with `ccmux host add` still works — useful for non-Tailscale hosts, or to force a specific port. Discovered hosts and pinned hosts coexist on the dashboard without duplicates.
+> Manually pinning a host with `ccmux host add` still works — useful for non-Tailscale hosts, or to force a specific port: `--port` is the remote ccmuxd port (default 7474), `--ssh-port` its sshd port (default 22), `--user` the SSH user (or write the address as `user@host`). Ports go in the flags, not the address. Discovered hosts and pinned hosts coexist on the dashboard without duplicates.
 
 ---
 

@@ -190,6 +190,14 @@ func runHostSetupSSH(arg string, skipEnumerate bool) error {
 	// they reach the terminal (see safeprint.go).
 	fmt.Printf("\nOther users on %s: %s\n", safeField(target.Host), safeField(strings.Join(others, ", ")))
 	for _, u := range others {
+		// The names come from the remote; one starting with '-' (or
+		// holding shell metacharacters) would become an ssh option or
+		// a broken host once stored. Offer only names `host add`
+		// would accept.
+		if err := validateSSHUser(u); err != nil {
+			fmt.Printf("  · skipping %q: not a usable account name\n", safeField(u))
+			continue
+		}
 		if !confirm(fmt.Sprintf("Add %s@%s as a separate host?", safeField(u), safeField(target.Host))) {
 			continue
 		}
