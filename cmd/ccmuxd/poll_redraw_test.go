@@ -16,17 +16,20 @@ func reflow(body string, from, to int) string {
 	return strings.ReplaceAll(body, strings.Repeat("─", from), strings.Repeat("─", to))
 }
 
-// waitingSession sets up a Claude session in a fake tmux that worked
-// (spinner title) and then went back to its input box — one turn,
-// announced with one bell.
+// waitingSession sets up a Claude session in a fake tmux that the
+// daemon found waiting at its input box, that then worked (spinner
+// title) and went back to its input box — one turn, announced with one
+// bell.
 func waitingSession(t *testing.T, s *server, attached bool) (*fakeTmux, *fakePane, *int) {
 	t.Helper()
 	bells := countBells(s)
 	working, idle := readFixture(t, "claude_v2_working.txt"), readFixture(t, "claude_v2_idle.txt")
-	p := &fakePane{Pane: tmux.Pane{ID: "%1", Width: 120, Height: 40, Title: "⠋ Fix flaky poll test"}, body: working}
+	p := &fakePane{Pane: tmux.Pane{ID: "%1", Width: 120, Height: 40, Title: "✳ Claude Code"}, body: idle}
 	f := newFakeTmux()
 	f.addSession(tmux.Session{Name: "c-wait", Path: "/tmp", Attached: attached, Created: time.Now().Add(-time.Hour)}, p)
 	f.wire(s)
+	pollNTimes(s, 1)
+	f.update(func() { p.body, p.Title = working, "⠋ Fix flaky poll test" })
 	pollNTimes(s, 2)
 	f.update(func() { p.body, p.Title = idle, "✳ Fix flaky poll test" })
 	pollNTimes(s, 3)

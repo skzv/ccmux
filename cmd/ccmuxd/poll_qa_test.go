@@ -27,12 +27,14 @@ func TestPollOnce_ReadsAgentPaneNotActivePane(t *testing.T) {
 	s := newPollTestServer(t)
 	bells := countBells(s)
 	working, idle := readFixture(t, "claude_v2_working.txt"), readFixture(t, "claude_v2_idle.txt")
-	agentP := &fakePane{Pane: tmux.Pane{ID: "%3", Width: 120, Height: 40, Title: "⠋ Fix flaky poll test"}, body: working}
+	agentP := &fakePane{Pane: tmux.Pane{ID: "%3", Width: 120, Height: 40, Title: "✳ Claude Code"}, body: idle}
 	shellP := &fakePane{Pane: tmux.Pane{ID: "%4", Window: 1, Width: 120, Height: 40, Active: true, Title: "host.local"}, body: "user@host ~ % "}
 	f := newFakeTmux()
 	f.addSession(tmux.Session{Name: "c-multi", Path: "/tmp", Created: time.Now().Add(-time.Hour)}, agentP, shellP)
 	f.wire(s)
 
+	pollNTimes(s, 1)
+	f.update(func() { agentP.body, agentP.Title = working, "⠋ Fix flaky poll test" })
 	pollNTimes(s, 2)
 	if st := s.seen["c-multi"].state; st != agent.StateActive {
 		t.Fatalf("agent working in window 0 while a shell window is active: state = %s, want active", st)
@@ -102,22 +104,108 @@ const crashedPane = "⏺ Refactoring the poll loop…\nzsh: abort      claude\nu
 // #{pane_title} after the process exits). The spinner rule outranks the
 // shell-prompt rule, so the session read as active forever and the
 // sleep lock (held while any session is active) was never released. A
-// spinner nothing is animating any more must stop counting as work.
+// spinner nothing is animating any more must stop counting as work —
+// and one the daemon has never seen move, from its very first look.
 func TestPollOnce_StaleSpinnerTitleDoesNotPinActive(t *testing.T) {
 	shortSpinnerStaleness(t)
 	s := newPollTestServer(t)
+	p := &fakePane{Pane: tmux.Pane{ID: "%1", Width: 80, Height: 24, Title: "✳ Refactor poll loop"}, body: readFixture(t, "claude_v2_idle.txt")}
 	f := newFakeTmux()
-	f.addSession(tmux.Session{Name: "c-crash", Path: "/tmp", Created: time.Now()},
-		&fakePane{Pane: tmux.Pane{ID: "%1", Width: 80, Height: 24, Title: "⠋ Refactor poll loop"}, body: crashedPane})
+	f.addSession(tmux.Session{Name: "c-crash", Path: "/tmp", Created: time.Now()}, p)
 	f.wire(s)
+	pollNTimes(s, 1)
 
+	// The agent starts a turn (the spinner is set: a change the daemon
+	// sees) and crashes to a shell.
+	f.update(func() { p.body, p.Title = crashedPane, "⠋ Refactor poll loop" })
 	pollNTimes(s, 1)
 	if st := s.seen["c-crash"].state; st != agent.StateActive {
-		t.Fatalf("first look with a fresh spinner: state = %s, want active", st)
+		t.Fatalf("a spinner just set: state = %s, want active", st)
 	}
 	pollNTimes(s, 5) // 300ms with nothing changing: well past 150ms
 	if st := s.seen["c-crash"].state; st != agent.StateError {
 		t.Errorf("stale spinner over a shell prompt: state = %s, want error (not active, which holds the sleep lock)", st)
+	}
+}
+
+// TestPollOnce_RestartWithLeftoverSpinnerStaysQuiet — a session whose
+// agent crashed mid-turn keeps the dead agent's spinner title. After a
+// daemon restart the first look set the title's "last change" to that
+// moment, so the spinner was believed: the session showed active for
+// the stale window (sleep lock held), then settled into error or
+// needs_input with a NEW bell, push and prompt count — on every
+// restart. A spinner the daemon hasn't seen move is not believed, and
+// a session it joined doesn't notify before it has settled once.
+func TestPollOnce_RestartWithLeftoverSpinnerStaysQuiet(t *testing.T) {
+	shortSpinnerStaleness(t)
+	for _, tc := range []struct {
+		tag  string
+		want agent.State
+	}{
+		{"claude", agent.StateError},
+		{"codex", agent.StateNeedsInput}, // codex has no shell-prompt rule: quiet reads as waiting
+	} {
+		t.Run(tc.tag, func(t *testing.T) {
+			s := newPollTestServer(t)
+			s.startedAt = time.Now()
+			pushes := countPushes(t, s)
+			bells := countBells(s)
+			f := newFakeTmux()
+			f.addSession(tmux.Session{Name: "c-crash", Path: "/tmp", Agent: tc.tag, Created: time.Now().Add(-time.Hour)},
+				&fakePane{Pane: tmux.Pane{ID: "%1", Width: 80, Height: 24, Title: "⠙ Refactor poll loop"}, body: crashedPane})
+			f.wire(s)
+
+			for i := 0; i < 6; i++ { // well past the 150ms stale window
+				pollNTimes(s, 1)
+				if st := s.seen["c-crash"].state; st != tc.want {
+					t.Fatalf("tick %d: state = %s, want %s from the first look (active holds the sleep lock)", i, st, tc.want)
+				}
+			}
+			tr := s.seen["c-crash"]
+			if got := pushes(); got != 0 || *bells != 0 || tr.promptCount != 0 {
+				t.Errorf("restart re-notified: pushes=%d bells=%d promptCount=%d, want 0", got, *bells, tr.promptCount)
+			}
+		})
+	}
+}
+
+// TestPollOnce_JoinedMidTurnFirstSettleIsQuiet — a live Claude caught
+// mid-turn by a daemon restart shows active (its status line says so),
+// and the end of that turn is not announced: the daemon didn't watch it
+// start. Its next turn is.
+func TestPollOnce_JoinedMidTurnFirstSettleIsQuiet(t *testing.T) {
+	s := newPollTestServer(t)
+	s.startedAt = time.Now()
+	pushes := countPushes(t, s)
+	bells := countBells(s)
+	working, idle := readFixture(t, "claude_v2_working.txt"), readFixture(t, "claude_v2_idle.txt")
+	p := &fakePane{Pane: tmux.Pane{ID: "%1", Width: 120, Height: 40, Title: "⠋ Fix flaky poll test"}, body: working}
+	f := newFakeTmux()
+	f.addSession(tmux.Session{Name: "c-busy", Path: "/tmp", Created: time.Now().Add(-time.Hour)}, p)
+	f.wire(s)
+
+	pollNTimes(s, 1)
+	if st := s.seen["c-busy"].state; st != agent.StateActive {
+		t.Fatalf("first look at a working Claude: state = %s, want active", st)
+	}
+	f.update(func() { p.Title = "⠙ Fix flaky poll test" })
+	pollNTimes(s, 1)
+	f.update(func() { p.body, p.Title = idle, "✳ Fix flaky poll test" })
+	pollNTimes(s, 3)
+	tr := s.seen["c-busy"]
+	if tr.state != agent.StateNeedsInput {
+		t.Fatalf("state = %s, want needs_input", tr.state)
+	}
+	if got := pushes(); got != 0 || *bells != 0 || tr.promptCount != 0 {
+		t.Errorf("the turn in flight at restart notified: pushes=%d bells=%d promptCount=%d, want 0", got, *bells, tr.promptCount)
+	}
+
+	f.update(func() { p.body, p.Title = working, "⠋ Next task" })
+	pollNTimes(s, 2)
+	f.update(func() { p.body, p.Title = idle, "✳ Next task" })
+	pollNTimes(s, 3)
+	if got := pushes(); got != 1 || *bells != 1 || tr.promptCount != 1 {
+		t.Errorf("the next turn: pushes=%d bells=%d promptCount=%d, want 1/1/1", got, *bells, tr.promptCount)
 	}
 }
 

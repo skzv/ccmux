@@ -29,6 +29,7 @@ func TestDecideAttention(t *testing.T) {
 		prev, next         agent.State
 		prevSeen, attached bool
 		work, worked       bool
+		joined             bool
 		want               want
 	}{
 		// === HAPPY PATHS: not attached, the agent's turn ended. ===
@@ -149,6 +150,21 @@ func TestDecideAttention(t *testing.T) {
 			prevSeen: true, worked: true,
 			want: want{newSeen: true},
 		},
+		// === JOINED: a session the daemon first saw already running, not
+		//     yet settled. Whatever it settles into is published, not
+		//     announced — the end of a turn it was caught in, or a crash. ===
+		{
+			name: "joined: needs_input after work → event only",
+			prev: agent.StateActive, next: agent.StateNeedsInput,
+			prevSeen: true, worked: true, joined: true,
+			want: want{newSeen: true, emit: true, eventKind: "needs_input"},
+		},
+		{
+			name: "joined: error → event only",
+			prev: agent.StateActive, next: agent.StateError,
+			prevSeen: true, joined: true,
+			want: want{newSeen: true, emit: true, eventKind: "state_change"},
+		},
 		// === DETACHING from a needs_input: state didn't change, no event, but
 		//     seen stays false because we never auto-flip it true off-attach. ===
 		{
@@ -161,7 +177,7 @@ func TestDecideAttention(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			got := decideAttention(attentionInput{
 				Prev: tc.prev, Next: tc.next, PrevSeen: tc.prevSeen, Attached: tc.attached,
-				Work: tc.work, Worked: tc.worked,
+				Work: tc.work, Worked: tc.worked, Joined: tc.joined,
 			})
 			if got.NewSeen != tc.want.newSeen {
 				t.Errorf("NewSeen = %v, want %v", got.NewSeen, tc.want.newSeen)

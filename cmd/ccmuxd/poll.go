@@ -267,15 +267,22 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 		if pane != sn.prevLast && !sn.baseline && !redraw {
 			lastCh = now
 		}
-		if obs.title != mem.title {
-			mem.title, mem.titleChange = obs.title, now
+		// A title counts as changed only between two of our own reads:
+		// the one found on a first look may be a dead agent's leftover.
+		if !first && obs.title != mem.title {
+			mem.titleChange = now
 		}
+		mem.title = obs.title
 		newSt := agent.StateIdle // a plain shell has no agent state to detect
 		var ev evidence
 		if sn.agentID != shellAgentID {
 			a := agent.ByID(sn.agentID)
 			view := agent.ReadTurn(a, pane)
-			title := liveTitle(obs.title, later(lastCh, mem.titleChange), now, staleAfter)
+			life := mem.titleChange
+			if view.Busy {
+				life = now
+			}
+			title := liveTitle(obs.title, life, now, staleAfter)
 			// ClassifyStateFrom routes through ClassifyWithTitle when the
 			// agent implements TitleAwareAgent, otherwise falls back to
 			// the legacy body-only Classify. It also takes the previous
@@ -322,10 +329,10 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 			t.last = r.pane
 			t.state = r.newState
 			t.seen = ts.Attached || r.newState != agent.StateNeedsInput
-			if r.ev.spinning || r.ev.busy {
-				// Caught mid-turn: its end is news.
-				t.spinnerSeen, t.worked = r.ev.spinning, true
-			}
+			// Whatever it is in the middle of — a turn, a startup — is not
+			// news: until it first settles, nothing it does notifies.
+			t.spinnerSeen = r.ev.spinning
+			t.joined = !settled(r.newState)
 			stateEvents = append(stateEvents, daemon.SessionEvent{
 				At:      time.Now(),
 				Kind:    "state_change",
@@ -495,9 +502,9 @@ var spinnerStaleFloor = 10 * time.Second
 
 // spinnerStaleAfter is how long a working-spinner title is believed
 // after the last sign of life in its pane — a few idle thresholds, and
-// never less than spinnerStaleFloor. A working agent repaints far more
-// often than that: Claude's elapsed-time counter ticks every second and
-// its title spinner animates.
+// never less than spinnerStaleFloor. A working agent shows one far more
+// often than that: its title spinner animates, and Claude's status line
+// is on screen for the whole turn.
 func spinnerStaleAfter(idle time.Duration) time.Duration {
 	return max(spinnerStaleFloor, 3*idle)
 }
@@ -510,10 +517,21 @@ func spinnerStaleAfter(idle time.Duration) time.Duration {
 // shell prompt its launch chain fell back to, and the sleep lock was
 // never released.
 //
-// So a spinner only counts while there is evidence of life — the pane
-// body or the title itself changed within staleAfter of now (lastLife).
-// Past that, the pane is classified as if the title carried no spinner,
-// and the body decides (a shell prompt: the agent crashed).
+// So a spinner only counts while there is evidence of life (lastLife)
+// within staleAfter of now: the title changed between two of the
+// daemon's reads (the spinner animating, or just set), or the body
+// shows a turn running (agent.TurnView.Busy). Past that, the pane is
+// classified as if the title carried no spinner, and the body decides
+// (a shell prompt: the agent crashed).
+//
+// Neither a first look nor a body change is life. The title found on a
+// first look — a new session, or every session after a daemon restart
+// — may be a dead agent's leftover: believing it showed a crashed
+// session active for the whole stale window, holding the sleep lock,
+// and then announced its "turn" ending with a bell and push, on every
+// restart. And a body change is as likely the user typing into the
+// shell the dead agent fell back to (`claude`, to bring it back) as
+// the agent working.
 func liveTitle(title string, lastLife, now time.Time, staleAfter time.Duration) string {
 	if now.Sub(lastLife) < staleAfter {
 		return title
@@ -595,6 +613,9 @@ type attentionInput struct {
 	// whether it has worked since the session last entered needs_input
 	// (this tick included) — see turn.
 	Work, Worked bool
+	// Joined: the daemon first saw this session already running and it
+	// hasn't settled since (see turn). Nothing it does is news yet.
+	Joined bool
 }
 
 // decideAttention computes the per-session decision for one poll
@@ -629,7 +650,7 @@ func decideAttention(in attentionInput) attentionDecision {
 	if in.Next == agent.StateNeedsInput {
 		d.StateEventKind = "needs_input"
 	}
-	if !isNews(in) {
+	if in.Joined || !isNews(in) {
 		return d
 	}
 	if in.Next == agent.StateNeedsInput {
@@ -708,10 +729,22 @@ type evidence struct {
 // A session created while the daemon watched is in startup until it
 // first settles (needs_input, idle or error): only the strongest
 // evidence counts then, since its startup output is not a turn.
+//
+// A session the daemon joined — one it first saw already running, after
+// a restart or a rename done straight through tmux — is recorded as it
+// stands (the baseline) and stays joined until it first settles.
+// Nothing is news until then: not the end of a turn it was caught in
+// the middle of, and not a crash. Its next turn is.
 type turn struct {
 	spinnerSeen bool
 	worked      bool
 	startup     bool
+	joined      bool
+}
+
+// settled reports whether st is a state a turn ends in.
+func settled(st agent.State) bool {
+	return st == agent.StateNeedsInput || st == agent.StateIdle || st == agent.StateError
 }
 
 // attend folds one classified tick into the bookkeeping and decides the
@@ -721,13 +754,13 @@ func (tn *turn) attend(prev, next agent.State, ev evidence, prevSeen, attached b
 	tn.worked = tn.worked || work
 	d := decideAttention(attentionInput{
 		Prev: prev, Next: next, PrevSeen: prevSeen, Attached: attached,
-		Work: work, Worked: tn.worked,
+		Work: work, Worked: tn.worked, Joined: tn.joined,
 	})
 	if next == agent.StateNeedsInput && prev != agent.StateNeedsInput {
 		tn.worked = false // the turn ended: the next prompt needs new work
 	}
-	if next == agent.StateNeedsInput || next == agent.StateIdle || next == agent.StateError {
-		tn.startup = false
+	if settled(next) {
+		tn.startup, tn.joined = false, false
 	}
 	return d
 }
@@ -739,6 +772,8 @@ func (tn *turn) isWork(next agent.State, ev evidence) bool {
 		tn.spinnerSeen = true
 	}
 	switch {
+	case tn.joined:
+		return false
 	case ev.spinning || ev.busy:
 		return true
 	case tn.startup:
