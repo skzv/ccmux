@@ -89,7 +89,7 @@ func buildTools(s *Server) map[string]Tool {
 			Handler:     wrap(s.handleListConversations),
 		},
 		"get_usage": {
-			Description: "Get aggregated per-agent token + estimated cost over a rolling window. Returns per-agent prompt counts, input/output tokens, and a USD estimate from published API rates.",
+			Description: "Get aggregated per-agent token + estimated cost over the daemon's rolling 5-hour window (fixed: takes no arguments). Returns per-agent prompt counts, input/output tokens, and a USD estimate from published API rates.",
 			InputSchema: emptySchema(),
 			Handler:     wrap(s.handleGetUsage),
 		},

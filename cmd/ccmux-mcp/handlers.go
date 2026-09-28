@@ -71,7 +71,22 @@ func (s *Server) handleListConversations(ctx context.Context, _ json.RawMessage)
 	return out, nil
 }
 
-func (s *Server) handleGetUsage(ctx context.Context, _ json.RawMessage) (any, error) {
+// handleGetUsage reports the daemon's default rolling window (5 hours;
+// window_seconds in each summary). It takes no window argument, but a
+// "rolling window" invites one and unknown arguments are tolerated, so
+// "window":"-5h", "0s" and "24h" alike used to return five hours of
+// data as if asked for. A window is refused instead of silently
+// ignored.
+func (s *Server) handleGetUsage(ctx context.Context, raw json.RawMessage) (any, error) {
+	var a struct {
+		Window json.RawMessage `json:"window"`
+	}
+	if err := json.Unmarshal(raw, &a); err != nil {
+		return nil, &invalidArgs{msg: "get_usage: " + err.Error()}
+	}
+	if len(a.Window) > 0 && string(a.Window) != "null" {
+		return nil, &invalidArgs{msg: `get_usage: "window" is not supported — usage always covers the daemon's rolling 5-hour window (window_seconds in the result); call it with no arguments`}
+	}
 	out, err := s.client.Usage(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("get usage: %w", err)

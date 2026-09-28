@@ -26,6 +26,7 @@ type fakeClient struct {
 	conversErr    error
 	usage         daemon.AgentUsage
 	usageErr      error
+	usageCalls    int
 	peers         []daemon.PeerInfo
 	peersErr      error
 	notes         []daemon.NoteEntry
@@ -90,6 +91,7 @@ func (f *fakeClient) Conversations(_ context.Context) ([]daemon.Conversation, er
 }
 
 func (f *fakeClient) Usage(_ context.Context) (daemon.AgentUsage, error) {
+	f.usageCalls++
 	return f.usage, f.usageErr
 }
 
@@ -369,6 +371,38 @@ func TestHandleGetUsage_PassThrough(t *testing.T) {
 	body, _ := json.Marshal(out)
 	if !strings.Contains(string(body), `"prompts":42`) {
 		t.Errorf("usage missing daemon-supplied value; got %s", body)
+	}
+}
+
+// TestGetUsageRejectsWindow — get_usage has no window parameter (it
+// always reports the daemon's default rolling window), but it silently
+// accepted any: "-5h", "0s" and "24h" alike returned five hours of
+// data. A window argument is now a -32602 that says so, and never
+// reaches the daemon.
+func TestGetUsageRejectsWindow(t *testing.T) {
+	for _, window := range []string{`"-5h"`, `"0s"`, `"banana"`, `""`, `"24h"`, `3600`} {
+		fake := &fakeClient{}
+		srv := newTestServer(false, fake)
+		r := decodeOne(t, runRaw(t, srv, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_usage","arguments":{"window":`+window+`}}}`+"\n"))
+		if r.Error == nil || r.Error.Code != errInvalidParams {
+			t.Errorf("window %s: got error %+v (result %v), want -32602", window, r.Error, r.Result)
+			continue
+		}
+		if !strings.Contains(r.Error.Message, "window") || !strings.Contains(r.Error.Message, "5-hour") {
+			t.Errorf("window %s: message %q should say the window is fixed at 5 hours", window, r.Error.Message)
+		}
+		if fake.usageCalls != 0 {
+			t.Errorf("window %s: the daemon was asked for usage anyway", window)
+		}
+	}
+	// No window (or an explicit null, or a padding argument) still works.
+	for _, args := range []string{`{}`, `{"window":null}`, `{"random_string":"x"}`} {
+		fake := &fakeClient{}
+		srv := newTestServer(false, fake)
+		r := decodeOne(t, runRaw(t, srv, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_usage","arguments":`+args+`}}`+"\n"))
+		if r.Error != nil || fake.usageCalls != 1 {
+			t.Errorf("arguments %s: got error %+v after %d daemon calls, want success after 1", args, r.Error, fake.usageCalls)
+		}
 	}
 }
 
