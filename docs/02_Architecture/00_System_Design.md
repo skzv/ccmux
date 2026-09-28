@@ -237,7 +237,7 @@ Each tracked session is in exactly one of:
 
 | Path | Purpose |
 |---|---|
-| `~/.config/ccmux/config.toml` | User config: projects dir, theme, keybindings, idle thresholds. |
+| `~/.config/ccmux/config.toml` | User config: projects dir, theme, keybindings, idle thresholds. Saves patch the existing text in place (`internal/tomlpatch`), so hand-written comments and layout survive; a file that can't be patched safely is rewritten whole. |
 | `~/.local/share/ccmux/ccmux.db` | SQLite: session history, prompt counts, snapshots index. |
 | `~/.local/share/ccmux/snapshots/<id>/` | Snapshot archives: tmux scrollback + Claude transcript copy. |
 | `~/.local/state/ccmux/ccmuxd.sock` | Daemon Unix socket. |
