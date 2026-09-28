@@ -448,6 +448,26 @@ func (m *conversationsModel) moveFocusedSection(delta int, sections []conversati
 	m.clampSelection(sections)
 }
 
+// FocusAgent moves focus to the agent's section (its row position
+// kept), e.g. when `c` on a Codex project opens this screen. An agent
+// without a section here leaves focus where it is.
+func (m *conversationsModel) FocusAgent(id agent.ID) {
+	if id == "" {
+		id = agent.IDClaude // no sidecar: the project runs Claude
+	}
+	idx, ok := conversationAgentSectionIndex(id)
+	if !ok {
+		return
+	}
+	sections := m.sections()
+	m.clampSelection(sections)
+	m.sectionCursors[m.activeSection] = m.cursor
+	m.activeSection = idx
+	m.cursor = m.sectionCursors[idx]
+	m.pendingDelete = ""
+	m.clampSelection(sections)
+}
+
 func (m conversationsModel) focusedSectionDef() conversationAgentSectionDef {
 	if m.activeSection < 0 || m.activeSection >= len(conversationAgentSections) {
 		return conversationAgentSections[0]

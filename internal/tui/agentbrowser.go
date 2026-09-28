@@ -69,6 +69,12 @@ type agentBrowser struct {
 	focus    agentBrowserFocus
 	preview  viewport.Model
 	rendered string
+
+	// dormant is set (on a render copy) while the host's own rows hold
+	// the keyboard: the browser then shows no selection bar and no
+	// focused pane, so only one row on screen looks selected — the one
+	// Enter acts on.
+	dormant bool
 }
 
 type agentBrowserRow struct {
@@ -420,9 +426,11 @@ func (b agentBrowser) View(width, height int) string {
 	previewContent := b.preview.View()
 
 	listStyle, previewStyle := st.Pane, st.Pane
-	if b.focus == agentBrowserFocusList {
+	switch {
+	case b.dormant:
+	case b.focus == agentBrowserFocusList:
 		listStyle = st.PaneFocused
-	} else {
+	default:
 		previewStyle = st.PaneFocused
 	}
 	listPane := listStyle.Width(g.listFrameW).Height(g.paneFrameH).Render(listContent)
@@ -511,8 +519,9 @@ func (b agentBrowser) renderList(width, height int) string {
 		}
 		row := strings.Repeat(" ", itemIndentW) + dot + content
 		selected := i == b.cursor
-		if selected && b.focus == agentBrowserFocusPreview {
-			lines = append(lines, lipgloss.NewStyle().Foreground(st.P.FGMuted).Render(row))
+		if selected && (b.focus == agentBrowserFocusPreview || b.dormant) {
+			// Same columns as the other rows: the selection bar's two cells stay.
+			lines = append(lines, strings.Repeat(" ", selBarW)+lipgloss.NewStyle().Foreground(st.P.FGMuted).Render(row))
 		} else {
 			lines = append(lines, components.RenderListRow(st, row, selected, width))
 		}

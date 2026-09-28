@@ -258,6 +258,15 @@ func (m projectsModel) Update(msg tea.Msg) (projectsModel, tea.Cmd) {
 			m.form = nil
 			return m, nil
 		case newProjectSubmitMsg:
+			// A local name that's already taken: say so and keep the
+			// form, rather than quietly starting a session in the
+			// existing project as if it had just been created.
+			if msg.Host == "" || msg.Host == "local" {
+				if dir := localProjectDir(m.root, msg.Name); pathExists(dir) {
+					m.form.err = fmt.Sprintf(tr("%s already exists — esc, then open it from the list"), summarizePath(dir))
+					return m, nil
+				}
+			}
 			// Drop the form, kick off create+session start as a tea.Cmd.
 			m.form = nil
 			msg.Root = m.root
@@ -316,7 +325,7 @@ func (m projectsModel) Update(msg tea.Msg) (projectsModel, tea.Cmd) {
 			// has no business poking at App state directly.
 			if sel := m.Selected(); sel != nil {
 				return m, func() tea.Msg {
-					return openConversationsForProjectMsg{Project: sel.Path}
+					return openConversationsForProjectMsg{Project: sel.Path, Agent: sel.Agent}
 				}
 			}
 		case keyMatches(km, m.km.NewItem):

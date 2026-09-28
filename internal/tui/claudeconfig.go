@@ -455,9 +455,14 @@ func (m claudeModel) ViewBody(width, height int) string {
 }
 
 // browserView renders the embedded browser in the rows left under the
-// settings header.
+// settings header. While a settings row has the focus the browser is
+// drawn without a selection of its own: both used to show a "▌" bar,
+// and Enter acted on the settings row while the browser row looked
+// just as selected.
 func (m claudeModel) browserView(width, height int) string {
-	return m.browser.ViewFit(width, height)
+	b := m.browser
+	b.dormant = m.focusTop
+	return b.ViewFit(width, height)
 }
 
 // viewBodyHeader builds the settings-rows header stacked above the

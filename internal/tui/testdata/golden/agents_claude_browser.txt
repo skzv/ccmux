@@ -15,7 +15,7 @@
 │                                                                                                                      │
 │ ╭────────────────────────────────────────────╮╭────────────────────────────────────────────────────────────────────╮ │
 │ │ • Hooks                                    ││ SessionStart                                                       │ │
-│ │ ▌   • SessionStart               1 hook(s) ││                                                                    │ │
+│ │     • SessionStart               1 hook(s) ││                                                                    │ │
 │ │     • Stop                       1 hook(s) ││   command: '/opt/homebrew/bin/moshi-hook' claude-hook              │ │
 │ │ • MCP servers                              ││                                                                    │ │
 │ │     • github                         stdio ││                                                                    │ │

@@ -539,3 +539,4 @@
 "Set `theme` in config.toml (press e) to switch." = "Pour en changer, définis `theme` dans config.toml (appuie sur e)."
 "prompt" = "invite"
 "msg" = "message"
+"%s already exists — esc, then open it from the list" = "%s existe déjà — échap, puis ouvre-le depuis la liste"

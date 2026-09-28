@@ -539,3 +539,4 @@
 "Set `theme` in config.toml (press e) to switch." = "切り替えるには config.toml の `theme` を設定します (e で開く)。"
 "prompt" = "プロンプト"
 "msg" = "メッセージ"
+"%s already exists — esc, then open it from the list" = "%s は既に存在します — esc を押して一覧から開いてください"

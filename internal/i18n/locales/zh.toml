@@ -547,3 +547,4 @@
 "Set `theme` in config.toml (press e) to switch." = "要切换，请在 config.toml 中设置 `theme`（按 e）。"
 "prompt" = "提示"
 "msg" = "消息"
+"%s already exists — esc, then open it from the list" = "%s 已存在——按 esc，然后在列表中打开它"

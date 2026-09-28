@@ -656,6 +656,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case openConversationsForProjectMsg:
 		a.screen = ScreenConversations
 		a.conversationsM.SetProjectFilter(msg.Project)
+		a.conversationsM.FocusAgent(msg.Agent)
 		a.conversationsM.SetLoading(true)
 		return a, tea.Batch(a.refreshConversationsCmd(), a.conversationsM.SpinnerTickCmd())
 
@@ -1979,8 +1980,17 @@ func (a *App) overlayDetectedTier(cfg *config.Config) bool {
 func (a *App) SetRuntimeOverrides(fn func(*config.Config)) { a.runtimeOverrides = fn }
 
 // SetStartupConfigError records a config.toml load failure to show once
-// the UI is running.
-func (a *App) SetStartupConfigError(err error) { a.startupConfigErr = err }
+// the UI is running. A config that didn't load can't say the first-run
+// tour was already shown (and couldn't record it now), so the tour New
+// opened from the defaults is closed: a broken config.toml used to
+// re-show the tour on every launch. Someone with a config file to break
+// isn't on their first run.
+func (a *App) SetStartupConfigError(err error) {
+	a.startupConfigErr = err
+	if err != nil {
+		a.tour.Close()
+	}
+}
 
 // padToHeight extends `s` with trailing blank lines so its line
 // count is at least `n`. Screens whose body doesn't wrap in a

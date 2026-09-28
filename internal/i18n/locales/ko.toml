@@ -539,3 +539,4 @@
 "Set `theme` in config.toml (press e) to switch." = "바꾸려면 config.toml에서 `theme`을 설정하세요 (e 누르기)."
 "prompt" = "프롬프트"
 "msg" = "메시지"
+"%s already exists — esc, then open it from the list" = "%s이(가) 이미 있습니다 — esc를 누르고 목록에서 여세요"

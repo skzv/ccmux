@@ -262,3 +262,9 @@ func fitPaneLines(lines []string, width, rows, focus int) []string {
 	}
 	return out[start : start+rows]
 }
+
+// pathExists reports whether anything exists at path.
+func pathExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}

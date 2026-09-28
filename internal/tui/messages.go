@@ -496,6 +496,9 @@ type conversationPreviewLoadedMsg struct {
 // user lands on a view scoped to "this project's history."
 type openConversationsForProjectMsg struct {
 	Project string
+	// Agent is the project's agent: the screen opens on its section
+	// (a Codex project's conversations are under Codex, not Claude).
+	Agent agent.ID
 }
 
 // updateCheckMsg carries the result of the launch-time auto-update
