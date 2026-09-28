@@ -121,7 +121,7 @@ func Probe(ctx context.Context, t Target) ProbeResult {
 }
 
 func (defaultProber) Probe(ctx context.Context, t Target) ProbeResult {
-	if t.Host == "" {
+	if t.Host == "" || optionLike(t) {
 		return ProbeUnknown
 	}
 
@@ -189,8 +189,20 @@ func probeSSHArgs(t Target) []string {
 		"-o", "ConnectTimeout=3",
 		"-o", "StrictHostKeyChecking=accept-new",
 		"-p", fmt.Sprintf("%d", port),
-		target, "exit",
+		// "--" ends ssh's option parsing: the destination can never be
+		// read as an option (see optionLike).
+		"--", target, "exit",
 	}
+}
+
+// optionLike reports whether t's destination would start with "-" —
+// a host (or user) hand-edited into config.toml as, say,
+// `-oProxyCommand=…`, which ssh would take for an option and run as a
+// local command during a `ccmux doctor` or setup probe. Probe refuses
+// such a target outright rather than rely on "--" alone, like
+// internal/remoteattach does for the attach itself.
+func optionLike(t Target) bool {
+	return strings.HasPrefix(t.Host, "-") || strings.HasPrefix(t.User, "-")
 }
 
 // classifyProbeStderr is the pure-function half of the probe. Lifted

@@ -3,6 +3,9 @@ package sshsetup
 import (
 	"context"
 	"net"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -148,8 +151,70 @@ func TestProbeSSHArgs_AllowsAgentIdentities(t *testing.T) {
 			t.Errorf("probe args missing %q: %q", want, joined)
 		}
 	}
-	if got := strings.Join(probeSSHArgs(Target{Host: "mini"}), " "); !strings.Contains(got, "-p 22 mini exit") {
+	if got := strings.Join(probeSSHArgs(Target{Host: "mini"}), " "); !strings.Contains(got, "-p 22 -- mini exit") {
 		t.Errorf("default port/user args = %q, want -p 22 and a bare host", got)
+	}
+}
+
+// TestProbeSSHArgs_DestinationIsNeverAnOption — the probe passed the
+// destination to ssh without "--", so a host or user starting with "-"
+// (hand-edited into config.toml as `-oProxyCommand=…`) was parsed as
+// an ssh option. Every option must come before a "--" that directly
+// precedes the destination.
+func TestProbeSSHArgs_DestinationIsNeverAnOption(t *testing.T) {
+	for _, tgt := range []Target{{Host: "mini"}, {User: "alice", Host: "mini", Port: 2222}, {User: "-oProxyCommand=x", Host: "mini"}} {
+		args := probeSSHArgs(tgt)
+		if n := len(args); n < 3 || args[n-3] != "--" || args[n-1] != "exit" {
+			t.Errorf("probeSSHArgs(%+v) = %q, want ... -- <destination> exit", tgt, args)
+		}
+	}
+}
+
+// TestProbe_RefusesOptionLikeTarget — with a reachable port, the probe
+// ran `ssh` on a destination starting with "-", which ssh took for an
+// option: a user of `-oProxyCommand=<cmd>` ran <cmd> on this machine
+// during `ccmux doctor`. Such a target is refused before ssh runs.
+func TestProbe_RefusesOptionLikeTarget(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh-script ssh fake is unix-only")
+	}
+	bin := t.TempDir()
+	ran := filepath.Join(bin, "ssh-ran")
+	if err := os.WriteFile(filepath.Join(bin, "ssh"), []byte("#!/bin/sh\n: > '"+ran+"'\nexit 255\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			_ = c.Close()
+		}
+	}()
+	port := ln.Addr().(*net.TCPAddr).Port
+
+	for _, tgt := range []Target{
+		{User: "-oProxyCommand=touch pwned", Host: "127.0.0.1", Port: port},
+		{Host: "-oProxyCommand=touch pwned", Port: port},
+	} {
+		if got := Probe(context.Background(), tgt); got != ProbeUnknown {
+			t.Errorf("Probe(%+v) = %v, want unknown", tgt, got)
+		}
+		if _, err := os.Stat(ran); err == nil {
+			t.Fatalf("Probe(%+v) ran ssh on an option-like destination", tgt)
+		}
+	}
+	// A well-formed target on the same port still reaches ssh.
+	Probe(context.Background(), Target{User: "alice", Host: "127.0.0.1", Port: port})
+	if _, err := os.Stat(ran); err != nil {
+		t.Errorf("a well-formed target never reached ssh (%v)", err)
 	}
 }
 
