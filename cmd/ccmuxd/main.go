@@ -1405,6 +1405,7 @@ func (s *server) sendKeysToAgent(ctx context.Context, name, keys string) error {
 func sessionNotFound(err error) bool {
 	msg := err.Error()
 	return strings.Contains(msg, "can't find session") ||
+		strings.Contains(msg, "no such session") || // set-option's wording
 		strings.Contains(msg, "no current session") ||
 		strings.Contains(msg, "no server running") ||
 		(strings.Contains(msg, "error connecting to") && strings.Contains(msg, "No such file or directory"))

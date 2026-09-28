@@ -12,6 +12,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/skzv/ccmux/internal/tmux"
 )
 
 // scriptedPanes fakes only the pane bodies of real tmux sessions: each
@@ -170,6 +172,12 @@ func TestPollOnce_ReviewSurvivesRestartOnRealTmux(t *testing.T) {
 	pollNTimes(srv2, 2)
 	if got := review(srv2, "c-renamed"); got != "prompts=1 seen=true" {
 		t.Errorf("after a rename in tmux: %s, want prompts=1 seen=true", got)
+	}
+	// A write that races the rename (queued for the old name) fails as a
+	// missing session, which the poll loop doesn't log.
+	err := tmux.SetSessionReview(context.Background(), "c-turn", tmux.Review{Recorded: true})
+	if err == nil || !sessionNotFound(err) {
+		t.Errorf("a record for the renamed-away name: err = %v, want a session-not-found error", err)
 	}
 	if got := pushes(); got != 0 || *bells != 0 {
 		t.Errorf("the restart or the rename notified: pushes=%d bells=%d", got, *bells)

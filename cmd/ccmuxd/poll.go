@@ -521,8 +521,11 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 	if s.markReview != nil {
 		for _, m := range reviews {
 			// A session named "$…" can't be targeted by name (see
-			// tmux.SetSessionReview): it just goes unrecorded.
-			if err := s.markReview(ctx, m.name, m.review); err != nil && !errors.Is(err, tmux.ErrSessionIDTarget) {
+			// tmux.SetSessionReview): it just goes unrecorded. Nor is a
+			// session that ended, or was renamed, since this tick's list
+			// worth a log line.
+			err := s.markReview(ctx, m.name, m.review)
+			if err != nil && !errors.Is(err, tmux.ErrSessionIDTarget) && !sessionNotFound(err) {
 				log.Printf("ccmuxd: record session %s's review: %v", m.name, err)
 			}
 		}

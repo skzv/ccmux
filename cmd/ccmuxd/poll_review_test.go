@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -223,6 +224,22 @@ func TestPollOnce_PlainShellIsNotRecorded(t *testing.T) {
 	}
 	if got := f.reviewWrites("scratch"); len(got) != 0 {
 		t.Errorf("a plain shell got a review record: %+v", got)
+	}
+}
+
+// TestSessionNotFound_SetOptionWording — tmux's set-option reports a
+// missing target as "no such session", not "can't find session". A
+// review record queued for a session that ended or was renamed since the
+// tick's list is not an error worth logging.
+func TestSessionNotFound_SetOptionWording(t *testing.T) {
+	for msg, want := range map[string]bool{
+		"record session review: exit status 1 (no such session: =c-gone:)":  true,
+		"tmux kill-session: exit status 1 (can't find session: =c-gone:)":   true,
+		"record session review: exit status 1 (server exited unexpectedly)": false,
+	} {
+		if got := sessionNotFound(errors.New(msg)); got != want {
+			t.Errorf("sessionNotFound(%q) = %v, want %v", msg, got, want)
+		}
 	}
 }
 
