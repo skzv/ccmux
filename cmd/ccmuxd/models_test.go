@@ -254,6 +254,69 @@ func countingUpstream(t *testing.T, status int, delay time.Duration) (*httptest.
 	return srv, &hits
 }
 
+// TestHandleModels_PlainGETDoesNotWaitForBootRefresh — with an empty
+// model cache, GET /v1/models blocked until the boot refresh already in
+// flight (a `claude -p` call of up to 90s) finished. A plain GET must
+// answer with the curated list at once; ?refresh=true may keep waiting
+// for that run's result.
+func TestHandleModels_PlainGETDoesNotWaitForBootRefresh(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		once.Do(func() { close(started) })
+		<-release
+		_, _ = w.Write([]byte(`{"data":[{"id":"claude-opus-9-9","display_name":"Test Opus"}],"has_more":false}`))
+	}))
+	defer upstream.Close()
+	releaseOnce := sync.OnceFunc(func() { close(release) })
+	defer releaseOnce() // before upstream.Close, which waits for the handler
+
+	svc := claudemodels.New(filepath.Join(t.TempDir(), "models.json"), "k")
+	disableTestCLIFetcher(svc)
+	swapFetcherBaseURL(t, svc, upstream.URL)
+	srv := &server{models: svc}
+	boot := make(chan struct{})
+	go func() {
+		defer close(boot)
+		_, _ = svc.Catalog(context.Background()) // modelRefreshLoop's boot kick
+	}()
+	<-started
+
+	get := func(path string) <-chan claudemodels.Catalog {
+		out := make(chan claudemodels.Catalog, 1)
+		go func() {
+			w := httptest.NewRecorder()
+			srv.handleModels(w, httptest.NewRequest(http.MethodGet, path, nil))
+			var cat claudemodels.Catalog
+			if err := json.Unmarshal(w.Body.Bytes(), &cat); w.Code != http.StatusOK || err != nil {
+				t.Errorf("GET %s: status %d: %s", path, w.Code, w.Body)
+			}
+			out <- cat
+		}()
+		return out
+	}
+	forced := get("/v1/models?refresh=true")
+	select {
+	case cat := <-get("/v1/models"):
+		if cat.Source != claudemodels.SourceFallback || len(cat.Models) == 0 {
+			t.Errorf("plain GET during the boot refresh = %s with %d models, want the curated list", cat.Source, len(cat.Models))
+		}
+	case <-time.After(2 * time.Second):
+		t.Error("plain GET /v1/models blocked on the boot refresh")
+	}
+	select {
+	case cat := <-forced:
+		t.Errorf("?refresh=true answered (%s) before the run it joined finished", cat.Source)
+	default:
+	}
+
+	releaseOnce()
+	<-boot
+	if cat := <-forced; cat.Source != claudemodels.SourceAPI {
+		t.Errorf("?refresh=true = %s, want the refreshed api catalog", cat.Source)
+	}
+}
+
 // TestHandleModels_ForcedRefreshBurstFetchesOnce — any tailnet peer can
 // send ?refresh=true, and each one ran the whole discovery chain (for
 // most users a paid `claude -p` call). A burst of them now shares one

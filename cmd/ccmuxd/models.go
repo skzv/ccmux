@@ -60,8 +60,11 @@ func (s *server) modelRefreshLoop(ctx context.Context) {
 
 // handleModels serves GET /v1/models — the discovered + curated
 // model catalog. ?refresh=true forces a synchronous re-fetch before
-// responding; without it the response comes from the cached catalog
-// (which Service.Catalog refreshes opportunistically when stale).
+// responding (joining one already running; bounded by the discovery
+// chain's own timeouts); without it the response comes from the cached
+// catalog, which Service.Catalog refreshes opportunistically when stale
+// — but never waiting on a refresh already in flight, such as the boot
+// refresh: a plain GET then gets the cache or the curated list at once.
 //
 // Returns claudemodels.Catalog verbatim — that's the public shape
 // integrators key off, documented in docs/02_Architecture/05_HTTP_API.md.

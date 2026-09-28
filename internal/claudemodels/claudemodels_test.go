@@ -481,6 +481,57 @@ func TestService_RefreshIsSingleFlightedAndRateLimited(t *testing.T) {
 	}
 }
 
+// TestService_CatalogDoesNotWaitForARunningRefresh — with an empty
+// cache, Catalog joined the refresh already in flight (the daemon's
+// boot refresh, a `claude -p` call of up to 90s) and blocked until it
+// finished. It must answer from the curated list at once, and serve the
+// run's result once it lands.
+func TestService_CatalogDoesNotWaitForARunningRefresh(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		once.Do(func() { close(started) })
+		<-release
+		stubResponse(t, w, []modelRow{{ID: "claude-opus-9-9"}}, false, "")
+	}))
+	defer srv.Close()
+	releaseOnce := sync.OnceFunc(func() { close(release) })
+	defer releaseOnce() // before srv.Close, which waits for the handler
+
+	s := New(filepath.Join(t.TempDir(), "models.json"), "k")
+	s.Fetcher.BaseURL = srv.URL
+	disableCLIFetcher(s)
+
+	refreshed := make(chan Catalog, 1)
+	go func() {
+		cat, _ := s.Refresh(context.Background())
+		refreshed <- cat
+	}()
+	<-started
+
+	got := make(chan Catalog, 1)
+	go func() {
+		cat, _ := s.Catalog(context.Background())
+		got <- cat
+	}()
+	select {
+	case cat := <-got:
+		if cat.Source != SourceFallback || !cat.FetchedAt.IsZero() || len(cat.Models) != len(Fallback()) {
+			t.Errorf("Catalog during a refresh = %s, fetched %v, %d models; want the curated list", cat.Source, cat.FetchedAt, len(cat.Models))
+		}
+	case <-time.After(2 * time.Second):
+		t.Error("Catalog blocked on the refresh already in flight")
+	}
+
+	releaseOnce()
+	if cat := <-refreshed; cat.Source != SourceAPI {
+		t.Fatalf("refresh source = %q, want api", cat.Source)
+	}
+	if cat, err := s.Catalog(context.Background()); err != nil || !contains(ids(cat.Models), "claude-opus-9-9") {
+		t.Errorf("Catalog after the refresh = %v, %v; want the fetched model", ids(cat.Models), err)
+	}
+}
+
 // TestService_RefreshAgainAfterInterval — the rate limit is a window,
 // not a latch.
 func TestService_RefreshAgainAfterInterval(t *testing.T) {
