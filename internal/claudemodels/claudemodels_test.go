@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -385,22 +386,121 @@ func TestCachePath_RespectsXDG(t *testing.T) {
 // installed AND logged in — left enabled, the chain would happily
 // hit the real LLM (billable!) during `go test`.
 //
-// We disable by replacing Run with a thunk that returns a sentinel.
-// LookPath still sees a real binary on the developer's PATH; the
-// Run swap intercepts before the actual exec.
+// We disable by pointing Binary at a path that doesn't exist, with no
+// Run override: LookPath fails before anything is exec'd, so Fetch
+// returns ErrClaudeCLIUnavailable — exactly "claude isn't installed".
+// (A CLI that runs and fails is a different case: the chain keeps the
+// cached catalog and reports the error; see failingCLIFetcher.)
 func disableCLIFetcher(s *Service) {
-	s.CLIFetcher.Run = func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		// `false` is POSIX and always exits non-zero — gives the Fetch
-		// a clean "ran but failed" path. cmd.Run returns an
-		// *exec.ExitError; ClaudeCLIFetcher's wrap treats that as a
-		// generic error (not ErrClaudeCLIUnavailable), so the chain
-		// continues to the API tier as if claude isn't installed.
-		return exec.CommandContext(ctx, "false")
+	s.CLIFetcher = ClaudeCLIFetcher{Binary: "/nonexistent/claude-disabled-in-test"}
+}
+
+// failingCLIFetcher makes the CLI tier run and fail — `false` exits
+// non-zero, like a `claude -p` that hit a network error or timed out.
+func failingCLIFetcher(s *Service) {
+	s.CLIFetcher = ClaudeCLIFetcher{
+		Binary: "/nonexistent/claude-failing-in-test",
+		Run: func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+			return exec.CommandContext(ctx, "false")
+		},
 	}
-	// Also clear Binary so LookPath at the top of Fetch doesn't
-	// confuse a developer with claude installed for what tests are
-	// really exercising — the Run hook is the seam.
-	s.CLIFetcher.Binary = "/nonexistent/claude-disabled-in-test"
+}
+
+// TestService_CLIFailureKeepsGoodCache — with no API key the CLI is
+// the only live source. One failed `claude -p` used to stamp a
+// fallback-only catalog over a good cached list, so the picker lost
+// every discovered model for the next 7 days (MaxAge).
+func TestService_CLIFailureKeepsGoodCache(t *testing.T) {
+	dir := t.TempDir()
+	cache := Cache{Path: filepath.Join(dir, "models.json")}
+	good := Catalog{
+		Models:    []Model{{ID: "claude-opus-9-9", Family: "opus", Source: SourceClaudeCLI}},
+		FetchedAt: time.Now().Add(-8 * 24 * time.Hour).UTC(), // stale → Catalog refreshes
+		Source:    SourceClaudeCLI,
+	}
+	if err := cache.Write(good); err != nil {
+		t.Fatal(err)
+	}
+	s := New(cache.Path, "")
+	failingCLIFetcher(s)
+
+	if _, err := s.Refresh(context.Background()); err == nil {
+		t.Error("Refresh swallowed the CLI failure")
+	}
+	got, err := cache.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Source != SourceClaudeCLI || !contains(ids(got.Models), "claude-opus-9-9") {
+		t.Errorf("cache after a failed CLI refresh = %+v, want the good CLI catalog kept", got)
+	}
+	if cat := s.Cached(); !contains(ids(cat.Models), "claude-opus-9-9") {
+		t.Errorf("Cached() lost the discovered model: %v", ids(cat.Models))
+	}
+}
+
+// TestService_RefreshIsSingleFlightedAndRateLimited — every forced
+// refresh ran the whole chain (a paid `claude -p` for most users), and
+// /v1/models?refresh=true is open to any tailnet peer. Concurrent
+// callers now share one run, and calls inside MinRefreshInterval reuse
+// its result.
+func TestService_RefreshIsSingleFlightedAndRateLimited(t *testing.T) {
+	var mu sync.Mutex
+	hits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		hits++
+		mu.Unlock()
+		time.Sleep(100 * time.Millisecond) // keep the run in flight while the others arrive
+		stubResponse(t, w, []modelRow{{ID: "claude-opus-4-8"}}, false, "")
+	}))
+	defer srv.Close()
+
+	s := New(filepath.Join(t.TempDir(), "models.json"), "k")
+	s.Fetcher.BaseURL = srv.URL
+	disableCLIFetcher(s)
+
+	var wg sync.WaitGroup
+	for range 10 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if cat, err := s.Refresh(context.Background()); err != nil || cat.Source != SourceAPI {
+				t.Errorf("Refresh = %v source %q, want the shared API result", err, cat.Source)
+			}
+		}()
+	}
+	wg.Wait()
+	if _, err := s.Refresh(context.Background()); err != nil { // straight after: rate-limited
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if hits != 1 {
+		t.Errorf("upstream fetched %d times for 11 refreshes, want 1", hits)
+	}
+}
+
+// TestService_RefreshAgainAfterInterval — the rate limit is a window,
+// not a latch.
+func TestService_RefreshAgainAfterInterval(t *testing.T) {
+	hits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		stubResponse(t, w, []modelRow{{ID: "claude-opus-4-8"}}, false, "")
+	}))
+	defer srv.Close()
+	s := New(filepath.Join(t.TempDir(), "models.json"), "k")
+	s.Fetcher.BaseURL = srv.URL
+	s.MinRefreshInterval = 20 * time.Millisecond
+	disableCLIFetcher(s)
+
+	_, _ = s.Refresh(context.Background())
+	time.Sleep(40 * time.Millisecond)
+	_, _ = s.Refresh(context.Background())
+	if hits != 2 {
+		t.Errorf("upstream fetched %d times, want 2 once the interval passed", hits)
+	}
 }
 
 // helpers

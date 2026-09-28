@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -26,6 +27,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+	"unicode"
 
 	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/apns"
@@ -74,9 +76,28 @@ func decodeJSONBody(w http.ResponseWriter, r *http.Request, v any) error {
 // SetReadDeadline is best-effort: httptest recorders and other
 // non-network ResponseWriters don't support it, and those paths have
 // no slow socket to protect against anyway.
+//
+// On success the body is read to its end and the deadline lifted.
+// Decode stops at the end of the JSON value, and a deadline left armed
+// over an unread tail (a client's trailing whitespace) made the
+// server's post-handler drain fail once a slow handler finished,
+// dropping the keep-alive connection. The tail is read here, still
+// under the deadline, so a client that stalls after the value can't pin
+// the handler either. On failure the deadline stays armed: the server
+// drains the unread body before replying, and a stalled client would
+// otherwise hold that drain open forever.
 func decodeJSONBodyWithin(w http.ResponseWriter, r *http.Request, v any, d time.Duration) error {
-	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(d))
-	return json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)).Decode(v)
+	rc := http.NewResponseController(w)
+	_ = rc.SetReadDeadline(time.Now().Add(d))
+	body := http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)
+	if err := json.NewDecoder(body).Decode(v); err != nil {
+		return err
+	}
+	if _, err := io.Copy(io.Discard, body); err != nil {
+		return err
+	}
+	_ = rc.SetReadDeadline(time.Time{})
+	return nil
 }
 
 // errPeerAlreadyServing is the sentinel returned by run() when another
@@ -104,14 +125,21 @@ func main() {
 	}
 }
 
+// applyDaemonDefaults fills in poll settings that are unset or make no
+// sense. A negative poll_interval_seconds used to reach time.NewTicker,
+// which panics on a non-positive interval, crash-looping the daemon.
+func applyDaemonDefaults(d *config.DaemonConfig) {
+	if d.PollIntervalSeconds <= 0 {
+		d.PollIntervalSeconds = 2
+	}
+	if d.IdleSecondsForNeedsInput <= 0 {
+		d.IdleSecondsForNeedsInput = 3
+	}
+}
+
 func run() error {
 	cfg, _ := config.Load()
-	if cfg.Daemon.PollIntervalSeconds == 0 {
-		cfg.Daemon.PollIntervalSeconds = 2
-	}
-	if cfg.Daemon.IdleSecondsForNeedsInput == 0 {
-		cfg.Daemon.IdleSecondsForNeedsInput = 3
-	}
+	applyDaemonDefaults(&cfg.Daemon)
 
 	srv := newServer(cfg)
 	// Unix socket listener.
@@ -190,6 +218,8 @@ func run() error {
 	// reverted on every clean exit path. SIGKILL won't run defers; for
 	// that case the launchd/systemd job re-runs the daemon, and
 	// startSleepManager reverts the override the dead daemon left on.
+	// stopBackground stops the loops before it releases the lock, so a
+	// poll tick in flight can't re-engage it.
 	defer stopBackground()
 
 	// Unix-socket mux: full surface (tailnet-safe routes + local-only).
@@ -235,10 +265,10 @@ func run() error {
 
 // startBackground starts everything with a side effect outside this
 // process — the sleep manager (which may revert a stale system sleep
-// override), the tmux clipboard setup, the poll loop (bells, pushes)
-// and the model refresh — and returns the matching teardown. run()
-// calls it only after binding the socket; a seam so tests can prove a
-// daemon that loses the bind race never gets here.
+// override), the tmux clipboard setup, the poll loop (bells, pushes),
+// the model refresh and the Moshi detection — and returns the matching
+// teardown. run() calls it only after binding the socket; a seam so
+// tests can prove a daemon that loses the bind race never gets here.
 var startBackground = func(srv *server, ctx context.Context) (stop func()) {
 	srv.startSleepManager()
 
@@ -250,11 +280,58 @@ var startBackground = func(srv *server, ctx context.Context) (stop func()) {
 	srv.clipboardApplied = srv.enableClipboard(cctx) == nil
 	ccancel()
 
-	go srv.pollLoop(ctx)
-	// Background model-catalog refresh. Separate goroutine so it
-	// can't stall the high-frequency poll loop on a slow API call.
-	go srv.modelRefreshLoop(ctx)
-	return srv.sleeper.Stop
+	ctx, cancel := context.WithCancel(ctx)
+	var wg sync.WaitGroup
+	for _, loop := range []func(context.Context){
+		srv.pollLoop,
+		// Background model-catalog refresh. Separate goroutine so it
+		// can't stall the high-frequency poll loop on a slow API call.
+		srv.modelRefreshLoop,
+		// Moshi detection shells out for seconds at a time; on its own
+		// ticker it can't use up a poll tick's budget.
+		srv.moshiLoop,
+	} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			loop(ctx)
+		}()
+	}
+	return func() {
+		// Stop the loops and wait for them before releasing the sleep
+		// lock: a poll tick still in flight ends in SetActive, which
+		// after Stop would re-engage the lock (and re-apply the
+		// very_dangerous system override) with nothing left to undo it.
+		cancel()
+		if !waitGroupWithin(&wg, backgroundStopTimeout) {
+			log.Printf("ccmuxd: background loops still running after %s; releasing the sleep lock anyway", backgroundStopTimeout)
+		}
+		srv.sleeper.Stop()
+	}
+}
+
+// backgroundStopTimeout bounds how long shutdown waits for the
+// background loops. They all watch the context and their shell-outs are
+// cancelled with it, so this only matters when a child process ignores
+// the kill. A stopped sleep manager ignores late SetActive calls anyway.
+const backgroundStopTimeout = 5 * time.Second
+
+// waitGroupWithin waits for wg, giving up after d. It reports whether
+// the group finished.
+func waitGroupWithin(wg *sync.WaitGroup, d time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-done:
+		return true
+	case <-t.C:
+		return false
+	}
 }
 
 // tailnetRetryInterval is how often serveTailnet retries when Tailscale
@@ -320,7 +397,6 @@ type tracked struct {
 	lastChange  time.Time // when content last changed
 	state       agent.State
 	promptCount int
-	created     time.Time
 	// agentID is the AI agent this session is running, sourced from
 	// <project>/.ccmux/agent and refreshed by the poll loop. The
 	// classifier for state detection is `agent.ByID(agentID).Classify(…)`
@@ -358,11 +434,16 @@ type server struct {
 	startedAt time.Time
 	mu        sync.Mutex
 	seen      map[string]*tracked
-	sleeper   *sleeplock.Manager
+	// gone tombstones names this daemon killed or renamed away (name →
+	// when), guarded by mu. A poll tick whose tmux.List ran before the
+	// kill or rename still lists the old name; Phase 1 skips it rather
+	// than re-track a ghost and announce it as created. Short-lived:
+	// see tombstoneTTL.
+	gone    map[string]time.Time
+	sleeper *sleeplock.Manager
 
-	tokens  *daemon.TokenStore
-	events  *daemon.EventBus
-	sshUser string
+	tokens *daemon.TokenStore
+	events *daemon.EventBus
 
 	// tailnetLive is true while the tailnet HTTP listener is serving.
 	tailnetLive atomic.Bool
@@ -392,13 +473,14 @@ type server struct {
 	// fcmSlots mirrors apnsSlots for the FCM v1 path.
 	fcmSlots chan struct{}
 
-	// moshiState is refreshed periodically (not every poll) so we don't
+	// moshiState is refreshed by moshiLoop (not every poll) so we don't
 	// shell out to moshi-hook every 2 seconds. Used only to drive the
 	// "moshi reachable" badge in the tmux status bar — the bell rings
-	// independently per the always-ring policy.
-	moshiState   moshi.Status
-	moshiCheckAt time.Time
-	moshiMu      sync.Mutex
+	// independently per the always-ring policy. detectMoshi is the
+	// detection seam (moshi.Detect); nil disables the loop.
+	moshiState  moshi.Status
+	moshiMu     sync.Mutex
+	detectMoshi func(ctx context.Context) moshi.Status
 
 	// models is the Claude model catalog service. Reads from disk
 	// cache; refreshes from the Anthropic Models API in the background
@@ -421,6 +503,13 @@ type server struct {
 	bell      func(ctx context.Context, name string) error
 	readAgent func(projectPath string) agent.ID
 
+	// Session-handler seams, defaulted to tmux.Has / tmux.Kill /
+	// tmux.Rename so the create/kill/rename handlers' bookkeeping is
+	// unit-testable without a tmux server.
+	has    func(ctx context.Context, name string) (bool, error)
+	kill   func(ctx context.Context, name string) error
+	rename func(ctx context.Context, oldName, newName string) error
+
 	// pollBudget bounds one whole pollOnce tick (tmux.List + every
 	// capture-pane/display-message + the bell path). Without it a
 	// single wedged subprocess — a SIGSTOP'd tmux, most plausibly —
@@ -438,10 +527,6 @@ type server struct {
 // integration tests construct through here so the seam defaults stay
 // in one place.
 func newServer(cfg config.Config) *server {
-	sshUser := cfg.Daemon.SSHUser
-	if sshUser == "" {
-		sshUser, _ = os.LookupEnv("USER")
-	}
 	// Device-token + APNs setup is best-effort: failures (no store
 	// dir, bad APNs key) log and disable push but never block the
 	// daemon from coming up.
@@ -502,11 +587,14 @@ func newServer(cfg config.Config) *server {
 		capture:         tmux.CapturePane,
 		pollBudget:      10 * time.Second,
 		paneTitle:       tmux.PaneTitle,
+		detectMoshi:     moshi.Detect,
 		bell:            notificationBell(cfg.Notifications),
 		readAgent:       project.ReadAgent,
+		has:             tmux.Has,
+		kill:            tmux.Kill,
+		rename:          tmux.Rename,
 		tokens:          daemon.NewTokenStore(),
 		events:          daemon.NewEventBus(),
-		sshUser:         sshUser,
 		devices:         devices,
 		apnsSender:      sender,
 		fcmSender:       fcmSender,
@@ -615,7 +703,7 @@ func (s *server) listSessions(w http.ResponseWriter, r *http.Request) {
 			// seen=true (nothing for the user to review yet) rather
 			// than implicitly unseen, otherwise restarting ccmuxd
 			// would resurface every old session as "needs attention".
-			t = &tracked{created: ts.Created, state: agent.StateUnknown, seen: true}
+			t = &tracked{state: agent.StateUnknown, seen: true}
 		}
 		// For sessions we've seen via the poll loop this is already
 		// populated. For pre-existing sessions (e.g. the daemon just
@@ -651,8 +739,16 @@ func (s *server) createSession(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "project required", http.StatusBadRequest)
 		return
 	}
-	path := req.Path
+	// An explicit path gets the same "~/" expansion bare sessions do
+	// (MCP spawn_session passes paths like "~/Projects/foo"). Without
+	// one the project name becomes a path under the projects root, so it
+	// gets createProject's validation: "../.." used to escape the root.
+	path := expandTilde(strings.TrimSpace(req.Path))
 	if path == "" {
+		if err := project.ValidateName(req.Project); err != nil {
+			http.Error(w, "project must be a single non-hidden path segment: "+err.Error(), http.StatusBadRequest)
+			return
+		}
 		path = filepath.Join(project.ResolveRoot(s.cfg.Projects.Root), req.Project)
 	}
 	if _, err := os.Stat(path); err != nil {
@@ -664,8 +760,8 @@ func (s *server) createSession(w http.ResponseWriter, r *http.Request) {
 	// keep names safe for `tmux new-session -s`.
 	var session string
 	if name := strings.TrimSpace(req.Name); name != "" {
-		if badSessionName(name) {
-			http.Error(w, badSessionNameMsg, http.StatusBadRequest)
+		if badNewSessionName(name) {
+			http.Error(w, badNewSessionNameMsg, http.StatusBadRequest)
 			return
 		}
 		session = name
@@ -676,12 +772,12 @@ func (s *server) createSession(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	has, herr := tmux.Has(ctx, session)
+	exists, herr := s.has(ctx, session)
 	if herr != nil {
 		http.Error(w, "tmux has-session: "+herr.Error(), http.StatusInternalServerError)
 		return
 	}
-	if !has {
+	if !exists {
 		// Caller-supplied agent persists to .ccmux/agent so the launch
 		// command (read via project.ReadAgent) and future attaches all
 		// pick the same one. Invalid agent strings are ignored — the
@@ -756,33 +852,33 @@ func (s *server) createBareSession(w http.ResponseWriter, r *http.Request) {
 	}
 	// Reject obviously-bad names — the same rule createProject uses,
 	// for the same reason (we'll pass it to tmux as -s).
-	if badSessionName(name) {
-		http.Error(w, badSessionNameMsg, http.StatusBadRequest)
+	if badNewSessionName(name) {
+		http.Error(w, badNewSessionNameMsg, http.StatusBadRequest)
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	has, herr := tmux.Has(ctx, name)
+	exists, herr := s.has(ctx, name)
 	if herr != nil {
 		http.Error(w, "tmux has-session: "+herr.Error(), http.StatusInternalServerError)
 		return
 	}
-	if !has {
+	if !exists {
 		// Order: explicit request agent → daemon's
 		// sessions.default_agent → $SHELL. Bare sessions don't carry
 		// --continue because they're not tied to a project transcript.
 		launch := bareSessionLaunchCmd(req.Agent, s.cfg.Agents.Default, s.freshCommands())
-		if err := tmux.New(ctx, name, path, launch); err != nil {
+		// Tag what actually runs there, in the same tmux call that
+		// creates the session. A bare session has no project sidecar,
+		// so untagged the poll loop assumed Claude — a plain shell
+		// prompt then read as "Claude crashed" (error) — and a tick
+		// landing between two separate calls did exactly that.
+		tag := bareSessionAgentTag(req.Agent, s.cfg.Agents.Default)
+		if err := tmux.NewWithAgent(ctx, name, path, launch, tag); err != nil {
 			http.Error(w, "tmux new-session: "+err.Error(), http.StatusInternalServerError)
 			return
-		}
-		// Tag what actually runs there. A bare session has no project
-		// sidecar, so without the tag the poll loop assumed Claude —
-		// a plain shell prompt then read as "Claude crashed" (error).
-		if err := tmux.SetSessionAgent(ctx, name, bareSessionAgentTag(req.Agent, s.cfg.Agents.Default)); err != nil {
-			log.Printf("ccmuxd: tag bare session %s: %v", name, err)
 		}
 	}
 	// Chrome the new session so when the client ssh-attaches it
@@ -839,14 +935,27 @@ func parseUsageWindow(q string) time.Duration {
 // that tmux would interpret as a target qualifier — `:` selects a
 // window/pane, `.` separates window from pane (tmux also rewrites it
 // to `_` in new session names, so the name we'd report back wouldn't
-// exist), `/` and `\` are path separators. Centralizes the rule the
-// create/rename/bare handlers share so every name that reaches a tmux
-// `-t` argument is validated the same way.
+// exist), `/` and `\` are path separators — or a control character,
+// which no tmux session name can hold (tmux 3.7 refuses it, older
+// versions store it escaped). Centralizes the rule every handler that
+// passes a name to a tmux `-t` argument shares.
 func badSessionName(name string) bool {
-	return strings.ContainsAny(name, "/\\:.")
+	return strings.ContainsAny(name, "/\\:.") || strings.ContainsFunc(name, unicode.IsControl)
 }
 
-const badSessionNameMsg = "name must not contain /, \\, :, or ."
+const badSessionNameMsg = "name must not contain /, \\, :, . or control characters"
+
+// badNewSessionName is badSessionName for a name ccmux gives a session
+// (create, rename), which additionally must not contain `#`: tmux
+// expands formats in the name passed to new-session -s and
+// rename-session, so "x#{session_id}" is created as "x$1" and the name
+// we'd report back doesn't exist (and "#(…)" would run a command). `#`
+// stays allowed when targeting an existing session.
+func badNewSessionName(name string) bool {
+	return badSessionName(name) || strings.Contains(name, "#")
+}
+
+const badNewSessionNameMsg = "name must not contain /, \\, :, ., # or control characters"
 
 func (s *server) handleSessionsItem(w http.ResponseWriter, r *http.Request) {
 	// /v1/sessions/<name>[/<subaction>]
@@ -894,13 +1003,11 @@ func (s *server) handleKill(w http.ResponseWriter, r *http.Request, name string)
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	if err := tmux.Kill(ctx, name); err != nil {
+	if err := s.kill(ctx, name); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.mu.Lock()
-	delete(s.seen, name)
-	s.mu.Unlock()
+	s.forgetKilled(name)
 	s.events.Publish(daemon.SessionEvent{At: time.Now(), Kind: "killed", Session: daemon.SessionState{Name: name, Host: "local"}})
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -911,30 +1018,42 @@ func (s *server) handleRename(w http.ResponseWriter, r *http.Request, name strin
 		return
 	}
 	var req daemon.RenameRequest
-	if err := decodeJSONBody(w, r, &req); err != nil || req.Name == "" {
+	err := decodeJSONBody(w, r, &req)
+	// Trimmed like the create handlers' names: " new " would otherwise
+	// become a session whose name nobody types back correctly.
+	req.Name = strings.TrimSpace(req.Name)
+	if err != nil || req.Name == "" {
 		http.Error(w, "name required", http.StatusBadRequest)
 		return
 	}
 	// Same rule createSession/createBareSession enforce: tmux interprets
 	// `name:window.pane` as a target spec, so a rename to "victim:0"
-	// would let later send-keys land in an unrelated tmux session.
-	if badSessionName(req.Name) {
-		http.Error(w, badSessionNameMsg, http.StatusBadRequest)
+	// would let later send-keys land in an unrelated tmux session, and
+	// rename-session expands formats (`#{…}`) in the new name.
+	if badNewSessionName(req.Name) {
+		http.Error(w, badNewSessionNameMsg, http.StatusBadRequest)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	if err := tmux.Rename(ctx, name, req.Name); err != nil {
+	if err := s.rename(ctx, name, req.Name); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.renameTracked(name, req.Name)
+	renamed := s.renameTracked(name, req.Name)
+	if req.Name == name {
+		// tmux accepts a rename to the same name and changes nothing, so
+		// there is nothing to announce: a killed+created pair would make
+		// clients drop the row and re-add it.
+		writeJSON(w, renamed)
+		return
+	}
 	// There is no "renamed" event kind (the mobile apps decode a fixed
 	// set), so report a rename as the old name going away and the new
-	// one appearing.
+	// one appearing — with the state it had, not a blank "unseen" row.
 	s.events.Publish(daemon.SessionEvent{At: time.Now(), Kind: "killed", Session: daemon.SessionState{Name: name, Host: "local"}})
-	s.events.Publish(daemon.SessionEvent{At: time.Now(), Kind: "created", Session: daemon.SessionState{Name: req.Name, Host: "local"}})
-	writeJSON(w, daemon.SessionState{Name: req.Name, Host: "local"})
+	s.events.Publish(daemon.SessionEvent{At: time.Now(), Kind: "created", Session: renamed})
+	writeJSON(w, renamed)
 }
 
 func (s *server) handleSendKeys(w http.ResponseWriter, r *http.Request, name string) {
@@ -1145,8 +1264,12 @@ func (s *server) handlePeers(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, []daemon.PeerInfo{})
 		return
 	}
+	writeJSON(w, peerInfos(scan, s.cfg.Daemon.TailnetPort))
+}
+
+// peerInfos maps a tailnet scan to the /v1/peers wire shape.
+func peerInfos(scan tailnet.Scan, port int) []daemon.PeerInfo {
 	out := make([]daemon.PeerInfo, 0, len(scan.Reachable)+len(scan.NeedsInstall)+len(scan.Mobile))
-	port := s.cfg.Daemon.TailnetPort
 	if port == 0 {
 		port = 7474
 	}
@@ -1155,7 +1278,7 @@ func (s *server) handlePeers(w http.ResponseWriter, r *http.Request) {
 		ip, _, _ := strings.Cut(d.Address, ":")
 		p := port
 		out = append(out, daemon.PeerInfo{
-			Hostname: d.Name, Addr: ip, OS: "macOS",
+			Hostname: d.Name, Addr: ip, OS: d.OS,
 			Online: true, RunsCCMuxd: true, Port: &p,
 		})
 	}
@@ -1171,7 +1294,7 @@ func (s *server) handlePeers(w http.ResponseWriter, r *http.Request) {
 			Online: peer.Online, RunsCCMuxd: false,
 		})
 	}
-	writeJSON(w, out)
+	return out
 }
 
 // handleUsage returns per-agent token + cost activity over a rolling
@@ -1330,12 +1453,21 @@ func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 			}
 			// If the subscriber missed events while we weren't reading
 			// fast enough, surface it as a synthetic frame so clients
-			// can refresh state instead of silently desyncing.
-			if d := s.events.Dropped(ch); d > lastDropsReported {
-				if _, err := fmt.Fprintf(w, "event: drops\ndata: %d\n\n", d-lastDropsReported); err != nil {
+			// can refresh state instead of silently desyncing. Publish
+			// drops the *newest* events on overflow, so everything still
+			// buffered (this event included) predates the snapshot the
+			// client fetches when it sees the frame; streaming it after
+			// the frame replayed up to a buffer's worth of stale events
+			// on top of that snapshot. Discard it and count it as missed.
+			if s.events.Dropped(ch) > lastDropsReported {
+				discarded := 1 + drainEvents(ch)
+				d := s.events.Dropped(ch)
+				if _, err := fmt.Fprintf(w, "event: drops\ndata: %d\n\n", d-lastDropsReported+uint64(discarded)); err != nil {
 					return
 				}
 				lastDropsReported = d
+				flusher.Flush()
+				continue
 			}
 			if _, err := fmt.Fprintf(w, "data: "); err != nil {
 				return
@@ -1347,6 +1479,23 @@ func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			flusher.Flush()
+		}
+	}
+}
+
+// drainEvents empties a subscriber channel without blocking and returns
+// how many events it discarded.
+func drainEvents(ch chan daemon.SessionEvent) int {
+	n := 0
+	for {
+		select {
+		case _, open := <-ch:
+			if !open {
+				return n
+			}
+			n++
+		default:
+			return n
 		}
 	}
 }

@@ -84,6 +84,12 @@ func withLocale(env []string) []string {
 // target-pane arguments.
 func exactSession(name string) string { return "=" + name + ":" }
 
+// ExactSession is exactSession for packages that build their own tmux
+// command lines (internal/tmuxchrome): the `-t` target that matches the
+// session called name and nothing else. Append a window index for a
+// window target ("=name:1").
+func ExactSession(name string) string { return exactSession(name) }
+
 // exactPane targets a session's active pane with an exact session
 // match (capture-pane / send-keys / display-message take a
 // target-pane). Same string as exactSession; kept as a separate name
@@ -130,12 +136,9 @@ func List(ctx context.Context) ([]Session, error) {
 	cmd := command(ctx, "tmux", "list-sessions", "-F", listFormat)
 	out, err := cmd.Output()
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			// tmux prints "no server running on /tmp/tmux-…" to stderr and exits 1.
-			// Treat that as "no sessions" rather than an error.
-			if exitErr.ExitCode() == 1 {
-				return nil, nil
-			}
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 && noServerRunning(string(exitErr.Stderr)) {
+			return nil, nil
 		}
 		return nil, fmt.Errorf("tmux list-sessions: %w", withStderr(err))
 	}
@@ -146,6 +149,20 @@ func List(ctx context.Context) ([]Session, error) {
 	}
 	applySessionAgents(sessions, tags)
 	return sessions, nil
+}
+
+// noServerRunning reports whether a failed tmux command's stderr means
+// there is simply no tmux server: "no server running on <socket>" (a
+// socket file with nothing listening) or "error connecting to <socket>
+// (No such file or directory)" (no socket at all). tmux exits 1 for
+// every failure, so the exit code alone can't tell these apart from a
+// socket it may not open ("Permission denied") or a server that failed
+// mid-command — and callers that read "no sessions" as "every session
+// ended" (the daemon's cleanup pass) must not see those as empty.
+func noServerRunning(stderr string) bool {
+	s := strings.ToLower(stderr)
+	return strings.Contains(s, "no server running") ||
+		(strings.Contains(s, "error connecting to") && strings.Contains(s, "no such file or directory"))
 }
 
 // parseList turns raw `tmux list-sessions -F listFormat` output into
@@ -181,12 +198,27 @@ func parseList(out []byte) []Session {
 // New creates a new detached session named `name`, starting `cmdline` in directory `dir`.
 // If cmdline is empty, tmux's default shell is used.
 func New(ctx context.Context, name, dir, cmdline string) error {
+	return NewWithAgent(ctx, name, dir, cmdline, "")
+}
+
+// NewWithAgent is New plus the session's @ccmux_agent tag (see
+// SetSessionAgent), set by the same tmux invocation —
+// `new-session … ; set-option …` — so the session never exists
+// untagged. Tagging with a second call left a window in which the
+// daemon's poll tick classified the new session by its project's agent
+// (Claude for a bare shell, whose prompt then read as a crashed Claude).
+// An empty agentTag is plain New.
+func NewWithAgent(ctx context.Context, name, dir, cmdline, agentTag string) error {
 	args := []string{"new-session", "-d", "-s", name}
 	if dir != "" {
 		args = append(args, "-c", dir)
 	}
 	if cmdline != "" {
 		args = append(args, cmdline)
+	}
+	if agentTag != "" {
+		// A lone ";" argument separates tmux commands.
+		args = append(args, ";", "set-option", "-t", exactSession(name), agentOption, agentTag)
 	}
 	cmd := command(ctx, "tmux", args...)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -505,10 +537,15 @@ func atoi(s string) int {
 // with an agent's rules.
 const ShellAgentTag = "shell"
 
+// agentOption is the tmux user option that tags a session with what it
+// runs (read back by List as Session.Agent).
+const agentOption = "@ccmux_agent"
+
 // SetSessionAgent pins a resumed conversation's agent without changing the
 // workspace's default agent or other sessions running in that workspace.
+// A session ccmux creates itself should get its tag from NewWithAgent.
 func SetSessionAgent(ctx context.Context, name, id string) error {
-	if out, err := command(ctx, "tmux", "set-option", "-t", exactPane(name), "@ccmux_agent", id).CombinedOutput(); err != nil {
+	if out, err := command(ctx, "tmux", "set-option", "-t", exactPane(name), agentOption, id).CombinedOutput(); err != nil {
 		return fmt.Errorf("set session agent: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
 	return nil

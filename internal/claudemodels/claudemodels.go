@@ -32,6 +32,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -479,6 +480,22 @@ type Service struct {
 	// per user — the model catalog only changes a handful of times
 	// a year, so weekly is plenty.
 	MaxAge time.Duration
+	// MinRefreshInterval is the shortest gap between two runs of the
+	// discovery chain. A Refresh inside it gets the previous run's
+	// result instead of a new fetch: the CLI tier is a paid `claude -p`
+	// call, and /v1/models?refresh=true is open to every tailnet peer.
+	// Zero disables the limit.
+	MinRefreshInterval time.Duration
+
+	// flight single-flights Refresh: concurrent callers share one run of
+	// the chain, and its outcome is kept for MinRefreshInterval.
+	flight struct {
+		mu      sync.Mutex
+		running chan struct{} // non-nil while a run is in progress; closed when it ends
+		at      time.Time     // when the last run finished
+		cat     Catalog
+		err     error
+	}
 }
 
 // New wires a Service to the daemon's cache path and an API key
@@ -487,11 +504,24 @@ type Service struct {
 // curated list.
 func New(cachePath, apiKey string) *Service {
 	return &Service{
-		cache:      Cache{Path: cachePath},
-		Fetcher:    Fetcher{APIKey: apiKey},
-		CLIFetcher: ClaudeCLIFetcher{}, // resolves `claude` on PATH at exec time
-		MaxAge:     7 * 24 * time.Hour,
+		cache:              Cache{Path: cachePath},
+		Fetcher:            Fetcher{APIKey: apiKey},
+		CLIFetcher:         ClaudeCLIFetcher{}, // resolves `claude` on PATH at exec time
+		MaxAge:             7 * 24 * time.Hour,
+		MinRefreshInterval: 10 * time.Minute,
 	}
+}
+
+// Cached returns the on-disk catalog merged with the curated list,
+// without ever refreshing — the curated list alone when nothing usable
+// is cached. For callers that just saw a refresh fail and must not
+// start another one.
+func (s *Service) Cached() Catalog {
+	cached, err := s.cache.Read()
+	if err != nil || cached.FetchedAt.IsZero() {
+		return s.withFallback(Catalog{Source: SourceFallback})
+	}
+	return s.withFallback(cached)
 }
 
 // Catalog returns the current snapshot. Reads the cache first; if
@@ -554,19 +584,56 @@ func (s *Service) Catalog(ctx context.Context) (Catalog, error) {
 // falls through silently for the common cases. Non-sentinel errors
 // (network blip, parse failure) also fall through, but get returned
 // up the stack so the caller can log them.
+//
+// Runs are single-flighted and rate-limited: callers that arrive while
+// a run is in progress wait for its result, and a call within
+// MinRefreshInterval of the last run returns that run's result without
+// fetching again.
 func (s *Service) Refresh(ctx context.Context) (Catalog, error) {
+	f := &s.flight
+	f.mu.Lock()
+	if running := f.running; running != nil {
+		f.mu.Unlock()
+		select {
+		case <-running:
+		case <-ctx.Done():
+			return Catalog{}, ctx.Err()
+		}
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		return f.cat, f.err
+	}
+	if !f.at.IsZero() && time.Since(f.at) < s.MinRefreshInterval {
+		defer f.mu.Unlock()
+		return f.cat, f.err
+	}
+	running := make(chan struct{})
+	f.running = running
+	f.mu.Unlock()
+
+	cat, err := s.refresh(ctx)
+
+	f.mu.Lock()
+	f.at, f.cat, f.err = time.Now(), cat, err
+	f.running = nil
+	f.mu.Unlock()
+	close(running)
+	return cat, err
+}
+
+// refresh is one run of the discovery chain (see Refresh).
+func (s *Service) refresh(ctx context.Context) (Catalog, error) {
 	// 1. CLI — best for subscription users.
-	if models, err := s.CLIFetcher.Fetch(ctx); err == nil && len(models) > 0 {
+	models, cliErr := s.CLIFetcher.Fetch(ctx)
+	if cliErr == nil && len(models) > 0 {
 		return s.writeAndReturn(Catalog{
 			Models:    models,
 			FetchedAt: time.Now().UTC(),
 			Source:    SourceClaudeCLI,
 		})
-	} else if err != nil && !errors.Is(err, ErrClaudeCLIUnavailable) {
-		// Not the silent-fallthrough sentinel — keep walking but
-		// hold onto the error so the eventual caller can surface it.
-		// (Today we just continue; future work could collect a list.)
-		_ = err
+	}
+	if errors.Is(cliErr, ErrClaudeCLIUnavailable) {
+		cliErr = nil // the silent-fallthrough sentinel: not a failure
 	}
 
 	// 2. Anthropic Models API — for API-key users.
@@ -579,6 +646,13 @@ func (s *Service) Refresh(ctx context.Context) (Catalog, error) {
 		})
 	}
 	if errors.Is(apiErr, ErrNoAPIKey) {
+		if cliErr != nil {
+			// The CLI is this user's only live source and it failed
+			// (network, timeout, a bad answer). Keep whatever the cache
+			// has: stamping a fallback-only catalog here replaced a good
+			// cached list with the curated one for the next 7 days.
+			return Catalog{}, cliErr
+		}
 		// Both live sources unavailable — write a fallback-only
 		// stamp so the cache file exists and the caller can see how
 		// stale "live" is from the FetchedAt. The Models slice is

@@ -94,6 +94,9 @@ func (s *server) handleModels(w http.ResponseWriter, r *http.Request) {
 		err error
 	)
 	if r.URL.Query().Get("refresh") == "true" {
+		// Refresh is single-flighted and rate-limited inside the
+		// service: a burst of these (any tailnet peer can send them)
+		// costs at most one paid `claude -p` call per interval.
 		cat, err = s.models.Refresh(ctx)
 		if err != nil && !errors.Is(err, claudemodels.ErrNoAPIKey) {
 			// Surface the refresh error but still return 200 with the
@@ -101,7 +104,11 @@ func (s *server) handleModels(w http.ResponseWriter, r *http.Request) {
 			// caller than a 500. The client can spot the degraded
 			// source via cat.Source if it cares.
 			log.Printf("ccmuxd: /v1/models forced refresh: %v", err)
-			cat, _ = s.models.Catalog(ctx)
+			if cat.FetchedAt.IsZero() {
+				// Cached, not Catalog: on a stale cache Catalog would
+				// run the whole discovery chain a second time.
+				cat = s.models.Cached()
+			}
 		}
 	} else {
 		cat, _ = s.models.Catalog(ctx)

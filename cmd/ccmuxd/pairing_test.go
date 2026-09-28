@@ -303,6 +303,85 @@ func TestHandleRegisterDevice_RequiresPairedKey(t *testing.T) {
 	}
 }
 
+// TestHandleRegisterDevice_SaveFailureIs500 — a disk error saving the
+// registration came back as 400 (as if the phone had sent a bad
+// request) while the registration stayed live in memory.
+func TestHandleRegisterDevice_SaveFailureIs500(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	storeDir := filepath.Join(home, "state")
+	store, err := daemon.OpenDeviceStore(filepath.Join(storeDir, "devices.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(storeDir); err != nil { // every save now fails
+		t.Fatal(err)
+	}
+	s := pairTestServer()
+	s.devices = store
+	paired := testEd25519AuthorizedKey(t)
+	if err := appendAuthorizedKey(paired); err != nil {
+		t.Fatal(err)
+	}
+
+	body, _ := json.Marshal(daemon.RegisterDeviceRequest{PublicKey: paired, Token: "tok", Provider: daemon.ProviderFCM})
+	rec := httptest.NewRecorder()
+	s.handleRegisterDevice(rec, httptest.NewRequest(http.MethodPost, "/v1/devices", bytes.NewReader(body)))
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500 for a failed save; body=%s", rec.Code, rec.Body)
+	}
+	if regs := store.All(); len(regs) != 0 {
+		t.Errorf("failed registration kept in memory: %+v", regs)
+	}
+
+	// A bad request is still the client's error.
+	bad, _ := json.Marshal(daemon.RegisterDeviceRequest{PublicKey: paired, Token: "tok", Provider: "carrier-pigeon"})
+	rec = httptest.NewRecorder()
+	s.handleRegisterDevice(rec, httptest.NewRequest(http.MethodPost, "/v1/devices", bytes.NewReader(bad)))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("unknown provider: status = %d, want 400", rec.Code)
+	}
+}
+
+// TestHandlePair_WriteFailureKeepsToken — the pair token was consumed
+// before authorized_keys was written, so a disk error cost the user
+// their one-time token and they had to mint a new one. Now the token
+// survives a failed write and pairs once the disk is fixed.
+func TestHandlePair_WriteFailureKeepsToken(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	// ~/.ssh as a plain file: every authorized_keys write fails.
+	sshPath := filepath.Join(home, ".ssh")
+	if err := os.WriteFile(sshPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := pairTestServer()
+	tok, err := s.tokens.Create(time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pubKey := testEd25519AuthorizedKey(t)
+	pair := func() int {
+		body, _ := json.Marshal(daemon.PairRequest{Token: tok, PublicKey: pubKey})
+		rec := httptest.NewRecorder()
+		s.handlePair(rec, httptest.NewRequest(http.MethodPost, "/v1/pair", bytes.NewReader(body)))
+		return rec.Code
+	}
+
+	if code := pair(); code != http.StatusInternalServerError {
+		t.Fatalf("pair with a broken ~/.ssh: status = %d, want 500", code)
+	}
+	if err := os.Remove(sshPath); err != nil {
+		t.Fatal(err)
+	}
+	if code := pair(); code != http.StatusOK {
+		t.Fatalf("retry with the same token after fixing ~/.ssh: status = %d, want 200", code)
+	}
+	if code := pair(); code != http.StatusUnauthorized {
+		t.Errorf("replay after a successful pair: status = %d, want 401", code)
+	}
+}
+
 // TestAppendAuthorizedKey_Dedupes — re-pairing the same phone must not
 // grow authorized_keys by a line each time.
 func TestAppendAuthorizedKey_Dedupes(t *testing.T) {

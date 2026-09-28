@@ -91,14 +91,20 @@ func (s *server) handlePair(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid public key: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	if !s.tokens.Consume(req.Token) {
+	// Claim, not Consume: the token is spent only once the key is on
+	// disk, so a disk error doesn't cost the user their one-time token.
+	// The claim still refuses a concurrent replay of the same token.
+	done, ok := s.tokens.Claim(req.Token)
+	if !ok {
 		http.Error(w, "invalid or expired token", http.StatusUnauthorized)
 		return
 	}
 	if err := appendAuthorizedKey(authLine); err != nil {
+		done(false)
 		http.Error(w, "write authorized_keys: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	done(true)
 	// Optional APNs registration carried with the pair — lets push
 	// work from first pair without a second round trip. Failures
 	// (no device store, bad env) log and continue; pairing itself
@@ -142,7 +148,13 @@ func (s *server) handleRegisterDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.devices.RegisterWithProvider(req.PublicKey, req.Token, req.Provider, req.Env); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		// A bad request is the client's to fix; a failed save is ours
+		// (and the store has already undone it in memory).
+		status := http.StatusInternalServerError
+		if errors.Is(err, daemon.ErrInvalidRegistration) {
+			status = http.StatusBadRequest
+		}
+		http.Error(w, err.Error(), status)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

@@ -4,7 +4,9 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,6 +18,7 @@ import (
 	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/project"
+	"github.com/skzv/ccmux/internal/tmux"
 )
 
 // TestCreateSession_NameOverride covers the mobile UX where the user
@@ -150,6 +153,48 @@ func TestCreateSession_InvalidNameRejected(t *testing.T) {
 		if resp.StatusCode != http.StatusBadRequest {
 			t.Errorf("name %q: status %d, want 400", name, resp.StatusCode)
 		}
+	}
+}
+
+// TestTmuxMangledSessionNamesAreRejected — pins, on a real tmux, why
+// badNewSessionName rejects `#` and control characters: tmux expands
+// formats in the name given to new-session -s and rename-session, and
+// refuses (3.7) or escapes (older) control characters, so the session
+// never exists under the name the daemon would report back. Every name
+// tmux doesn't store verbatim must be rejected up front.
+func TestTmuxMangledSessionNamesAreRejected(t *testing.T) {
+	dir := pollSandbox(t)
+	mustTmux(t, "new-session", "-d", "-s", "c-anchor", "-c", dir, "sleep 300")
+	ctx := context.Background()
+	exists := func(name string) bool {
+		ok, err := tmux.Has(ctx, name)
+		return err == nil && ok
+	}
+	mangled := 0
+	for i, name := range []string{
+		"x#{session_id}", "y#(echo hi)", "tab\tname", "nl\nname", "esc\x1b[31m",
+	} {
+		// Via new-session -s.
+		_ = tmux.New(ctx, name, dir, "sleep 300")
+		if !exists(name) {
+			mangled++
+			if !badNewSessionName(name) {
+				t.Errorf("tmux new-session doesn't keep %q verbatim, but badNewSessionName allows it", name)
+			}
+		}
+		// Via rename-session.
+		from := fmt.Sprintf("c-ren-%d", i)
+		mustTmux(t, "new-session", "-d", "-s", from, "-c", dir, "sleep 300")
+		_ = tmux.Rename(ctx, from, name)
+		if !exists(name) {
+			mangled++
+			if !badNewSessionName(name) {
+				t.Errorf("tmux rename-session doesn't keep %q verbatim, but badNewSessionName allows it", name)
+			}
+		}
+	}
+	if mangled == 0 {
+		t.Skip("this tmux keeps every candidate name verbatim; nothing to pin")
 	}
 }
 

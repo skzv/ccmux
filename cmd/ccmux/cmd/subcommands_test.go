@@ -139,7 +139,15 @@ func TestListCmd_JSONFlag(t *testing.T) {
 	// socket dir, so this never reads the developer's real daemon or
 	// tmux server.
 	withTempCcmuxConfig(t)
-	t.Setenv("TMUX_TMPDIR", t.TempDir())
+	// Short: on macOS t.TempDir() is long enough that the socket path
+	// overflows sockaddr_un, and tmux then fails with "File name too
+	// long" instead of reporting that no server is running.
+	tmuxDir, err := os.MkdirTemp("/tmp", "ccl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(tmuxDir) })
+	t.Setenv("TMUX_TMPDIR", tmuxDir)
 	t.Setenv("TMUX", "")
 	os.Unsetenv("TMUX")
 	// Capture stdout.

@@ -17,7 +17,9 @@
 //     (macOS) / `sudo -n systemctl mask sleep.target suspend.target …`
 //     (Linux). Survives lid-close. Requires passwordless sudo for the
 //     specific command. Reverted on Manager.Stop() and on
-//     SIGINT/SIGTERM via the daemon's defer chain.
+//     SIGINT/SIGTERM via the daemon's defer chain; an override a killed
+//     daemon left behind is reverted by the next one at startup
+//     (RevertStaleOverride), whatever mode that one runs in.
 //
 // The package is engineered so the sudo path and the battery readers
 // are swappable for tests via fields on Manager.
@@ -99,6 +101,15 @@ type Manager struct {
 	overrideOn  bool          // we've issued the very_dangerous system override
 	stopMonitor chan struct{}
 	monitorWG   sync.WaitGroup
+	// stopped is set by Stop. A stopped Manager ignores SetActive, so a
+	// poll tick still finishing during shutdown can't re-engage the lock
+	// (or re-apply the system override) after Stop released it. It also
+	// keeps monitorWG.Add from racing Stop's Wait.
+	stopped bool
+	// overrideMarker is a file that exists while this Manager has the
+	// very_dangerous system override applied (see SetOverrideMarker).
+	// Empty disables the bookkeeping.
+	overrideMarker string
 
 	// Injectable seams for tests. nil means "use real OS path".
 	readBattery   func(ctx context.Context) (BatteryStatus, error)
@@ -138,12 +149,27 @@ func (m *Manager) Effective() Mode {
 	return m.effective
 }
 
+// SetOverrideMarker names a file the Manager keeps in place for exactly
+// as long as it has the very_dangerous system override applied, so a
+// later daemon can tell that a predecessor died holding it — even after
+// the user switched to another mode. Call before RevertStaleOverride
+// and the first SetActive.
+func (m *Manager) SetOverrideMarker(path string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.overrideMarker = path
+}
+
 // SetActive flips the lock on/off based on whether any session needs to
 // keep the system awake. Idempotent — repeated true calls don't spawn
-// new holders, repeated false calls don't error.
+// new holders, repeated false calls don't error. A no-op once Stop has
+// run.
 func (m *Manager) SetActive(active bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.stopped {
+		return
+	}
 	if active {
 		m.engageLocked()
 	} else {
@@ -173,8 +199,9 @@ func (m *Manager) engageLocked() {
 	// passwordless we silently degrade to dangerous so the user at
 	// least gets idle-sleep protection.
 	if mode == ModeVeryDangerous && !m.overrideOn {
-		if err := m.runOverride(context.Background(), true); err == nil {
+		if err := m.override(true); err == nil {
 			m.overrideOn = true
+			m.writeOverrideMarker()
 		} else {
 			mode = ModeDangerous
 		}
@@ -239,14 +266,67 @@ func (m *Manager) startHolderLocked(cmd *exec.Cmd) error {
 // left behind by a previous daemon that died without running Stop
 // (SIGKILL, crash, power loss) — overrideOn only lives in memory, so a
 // fresh Manager can't know one is in force. Call once at startup,
-// before the first SetActive. No-op unless very_dangerous is requested.
+// before the first SetActive.
+//
+// It reverts when very_dangerous is requested (the previous daemon may
+// predate the marker file) or when the override marker shows a previous
+// daemon applied one — whatever mode is configured now, so a user who
+// switched to safe after the crash still gets system sleep back. It
+// doesn't run sudo otherwise: most users never configured it, and a
+// `sudo -n` on every start would log an auth failure (or, for a user
+// outside sudoers, an "incident" report) each time.
 func (m *Manager) RevertStaleOverride() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.requested != ModeVeryDangerous || m.overrideOn {
+	if m.overrideOn {
 		return
 	}
-	_ = m.runOverride(context.Background(), false)
+	if m.requested != ModeVeryDangerous && !m.overrideMarked() {
+		return
+	}
+	if err := m.override(false); err == nil {
+		m.removeOverrideMarker()
+	}
+}
+
+// overrideTimeout bounds one sudo override call. runOverride runs under
+// m.mu, so a hung `sudo`/`pmset` would otherwise block every SetActive
+// (the poll loop), Effective (the health endpoint) and Stop.
+const overrideTimeout = 15 * time.Second
+
+// override applies (on=true) or reverts the system override, bounded by
+// overrideTimeout. Caller holds m.mu.
+func (m *Manager) override(on bool) error {
+	ctx, cancel := context.WithTimeout(context.Background(), overrideTimeout)
+	defer cancel()
+	return m.runOverride(ctx, on)
+}
+
+// overrideMarked reports whether the override marker file exists.
+func (m *Manager) overrideMarked() bool {
+	if m.overrideMarker == "" {
+		return false
+	}
+	_, err := os.Stat(m.overrideMarker)
+	return err == nil
+}
+
+// writeOverrideMarker records that the system override is applied. Best
+// effort: without it a crash is still recovered while the mode stays
+// very_dangerous.
+func (m *Manager) writeOverrideMarker() {
+	if m.overrideMarker == "" {
+		return
+	}
+	_ = os.WriteFile(m.overrideMarker, []byte("ccmuxd applied the very_dangerous sleep override\n"), 0o600)
+}
+
+// removeOverrideMarker clears the marker once the override is reverted.
+func (m *Manager) removeOverrideMarker() {
+	if m.overrideMarker == "" {
+		return
+	}
+	_ = os.Remove(m.overrideMarker)
 }
 
 // releaseLocked is the off-transition path. Caller holds m.mu.
@@ -268,15 +348,21 @@ func (m *Manager) revertOverrideLocked() {
 	if !m.overrideOn {
 		return
 	}
-	_ = m.runOverride(context.Background(), false)
+	// The marker stays when the revert fails, so the next daemon
+	// retries it at startup.
+	if err := m.override(false); err == nil {
+		m.removeOverrideMarker()
+	}
 	m.overrideOn = false
 }
 
 // Stop tears down everything: kills the lock process, reverts the
-// system override if any, stops the battery monitor. Idempotent; safe
-// to defer from main and to call repeatedly.
+// system override if any, stops the battery monitor. After Stop the
+// Manager ignores SetActive. Idempotent; safe to defer from main and to
+// call repeatedly.
 func (m *Manager) Stop() {
 	m.mu.Lock()
+	m.stopped = true
 	m.releaseLocked()
 	m.mu.Unlock()
 	m.monitorWG.Wait()
@@ -297,10 +383,7 @@ func (m *Manager) downgradeFromDangerous(reason string) {
 	// override survive a downgrade defeats the whole "fail safe"
 	// promise.
 	m.killHolderLocked()
-	if m.overrideOn {
-		_ = m.runOverride(context.Background(), false)
-		m.overrideOn = false
-	}
+	m.revertOverrideLocked()
 	cmd := m.startLockProc(ModeSafe)
 	if cmd == nil {
 		m.effective = ModeOff

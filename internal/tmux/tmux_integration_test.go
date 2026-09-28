@@ -4,8 +4,10 @@ package tmux
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -133,5 +135,71 @@ func TestIntegration_SendTextStartingWithDash(t *testing.T) {
 		if !strings.Contains(pane, want) {
 			t.Errorf("pane missing %q:\n%s", want, pane)
 		}
+	}
+}
+
+// TestIntegration_NewWithAgentTagsSession — the chained
+// `new-session … ; set-option …` form must really tag the session it
+// creates (and only it) on a real tmux.
+func TestIntegration_NewWithAgentTagsSession(t *testing.T) {
+	ctx := isolatedServer(t)
+	if err := New(ctx, "c-tag-sibling", os.TempDir(), "sleep 300"); err != nil {
+		t.Fatal(err)
+	}
+	if err := NewWithAgent(ctx, "c-tag", os.TempDir(), "sleep 300", ShellAgentTag); err != nil {
+		t.Fatalf("NewWithAgent: %v", err)
+	}
+	sessions, err := List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, s := range sessions {
+		got[s.Name] = s.Agent
+	}
+	if got["c-tag"] != ShellAgentTag {
+		t.Errorf("c-tag agent = %q, want %q (sessions %+v)", got["c-tag"], ShellAgentTag, sessions)
+	}
+	if got["c-tag-sibling"] != "" {
+		t.Errorf("tag leaked onto another session: %q", got["c-tag-sibling"])
+	}
+}
+
+// TestIntegration_ListNoServerVersusUnreachable — tmux exits 1 both
+// when there is no server and when it can't reach one. Only the first
+// is "no sessions": reading an unreachable server as empty made the
+// daemon forget every session and announce each one as killed.
+func TestIntegration_ListNoServerVersusUnreachable(t *testing.T) {
+	ctx := isolatedServer(t)
+
+	// No socket yet: "error connecting to … (No such file or directory)".
+	if tss, err := List(ctx); err != nil || len(tss) != 0 {
+		t.Fatalf("no server: List = %v, %v; want empty, no error", tss, err)
+	}
+
+	if err := New(ctx, "c-list", os.TempDir(), "sleep 300"); err != nil {
+		t.Fatal(err)
+	}
+	if os.Geteuid() != 0 { // root ignores the socket's permissions
+		sock := filepath.Join(os.Getenv("TMUX_TMPDIR"), fmt.Sprintf("tmux-%d", os.Getuid()), "default")
+		if err := os.Chmod(sock, 0); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(sock, 0o700) }) // before isolatedServer's kill-server
+		tss, err := List(ctx)
+		if err == nil {
+			t.Errorf("unreachable server (socket permission denied): List = %v with no error, want an error", tss)
+		}
+		if err := os.Chmod(sock, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// A server that exited leaves its socket file: "no server running".
+	if err := exec.CommandContext(ctx, "tmux", "kill-server").Run(); err != nil {
+		t.Fatal(err)
+	}
+	if tss, err := List(ctx); err != nil || len(tss) != 0 {
+		t.Errorf("after kill-server: List = %v, %v; want empty, no error", tss, err)
 	}
 }

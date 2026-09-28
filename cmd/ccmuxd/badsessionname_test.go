@@ -10,16 +10,35 @@ import (
 // are path separators. Anything else (including the c- prefix names ccmux
 // generates) is allowed.
 func TestBadSessionName(t *testing.T) {
-	bad := []string{"a:b", "a/b", `a\b`, "c-foo:1", "win:0.1", "a.b"}
+	bad := []string{"a:b", "a/b", `a\b`, "c-foo:1", "win:0.1", "a.b", "tab\tname", "nl\nname", "esc\x1b[31m", "del\x7f"}
 	for _, n := range bad {
 		if !badSessionName(n) {
 			t.Errorf("badSessionName(%q) = false, want true", n)
 		}
 	}
-	good := []string{"c-foo", "myproj", "c-shell-12ab", "foo-bar_baz", ""}
+	// `#` is fine in a target: a session someone created outside ccmux
+	// with a `#` in its name must stay reachable.
+	good := []string{"c-foo", "myproj", "c-shell-12ab", "foo-bar_baz", "", "work#2", "café"}
 	for _, n := range good {
 		if badSessionName(n) {
 			t.Errorf("badSessionName(%q) = true, want false", n)
+		}
+	}
+}
+
+// TestBadNewSessionName — names ccmux gives a session must also avoid
+// `#`, which tmux expands as a format in new-session -s and
+// rename-session (TestTmuxMangledSessionNamesAreRejected pins that on a
+// real tmux).
+func TestBadNewSessionName(t *testing.T) {
+	for _, n := range []string{"x#{session_id}", "x#(echo hi)", "work#2", "a:b", "tab\tname"} {
+		if !badNewSessionName(n) {
+			t.Errorf("badNewSessionName(%q) = false, want true", n)
+		}
+	}
+	for _, n := range []string{"c-foo", "c-shell-12ab", "café"} {
+		if badNewSessionName(n) {
+			t.Errorf("badNewSessionName(%q) = true, want false", n)
 		}
 	}
 }

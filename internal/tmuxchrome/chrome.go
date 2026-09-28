@@ -24,6 +24,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/skzv/ccmux/internal/tmux"
 )
 
 // Theme colors. Matches the TUI's Catppuccin Mocha palette so the
@@ -70,7 +72,7 @@ func Apply(ctx context.Context, session, projectLabel string, moshiReachable, ne
 		returnBinding = ResolveNestedReturnBinding(ctx)
 	}
 	for _, kv := range optionsWithNestedReturnBinding(session, projectLabel, moshiReachable, nested, prefix, returnBinding) {
-		args := append([]string{"set-option", "-t", session, "-q", kv[0]}, kv[1])
+		args := append([]string{"set-option", "-t", tmux.ExactSession(session), "-q", kv[0]}, kv[1])
 		cmd := exec.CommandContext(ctx, "tmux", args...)
 		// We intentionally ignore individual errors; a partial chrome is
 		// fine, vanilla is fine too. Only a fully broken tmux call needs
@@ -300,7 +302,7 @@ func windowOptions() [][]string {
 func applyWindowOptions(ctx context.Context, session string) {
 	targets := windowTargets(ctx, session)
 	if len(targets) == 0 {
-		targets = []string{session}
+		targets = []string{tmux.ExactSession(session)}
 	}
 	for _, target := range targets {
 		for _, kv := range windowOptions() {
@@ -310,8 +312,12 @@ func applyWindowOptions(ctx context.Context, session string) {
 	}
 }
 
+// windowTargets lists the session's windows as exact targets. Every
+// target here uses the "=name:" form: a bare `-t name` falls back to
+// prefix matching, so chroming (or resetting) c-foo while only
+// c-foo-app exists restyled c-foo-app.
 func windowTargets(ctx context.Context, session string) []string {
-	out, err := exec.CommandContext(ctx, "tmux", "list-windows", "-t", session, "-F", "#{window_index}").Output()
+	out, err := exec.CommandContext(ctx, "tmux", "list-windows", "-t", tmux.ExactSession(session), "-F", "#{window_index}").Output()
 	if err != nil {
 		return nil
 	}
@@ -325,7 +331,7 @@ func windowTargetsFromIndexes(session string, raw []byte) []string {
 		if idx == "" {
 			continue
 		}
-		out = append(out, session+":"+idx)
+		out = append(out, tmux.ExactSession(session)+idx)
 	}
 	return out
 }
@@ -438,11 +444,11 @@ func Reset(ctx context.Context, session string) error {
 		opts = append(opts, kv[0])
 	}
 	for _, key := range opts {
-		_ = exec.CommandContext(ctx, "tmux", "set-option", "-t", session, "-u", key).Run()
+		_ = exec.CommandContext(ctx, "tmux", "set-option", "-t", tmux.ExactSession(session), "-u", key).Run()
 	}
 	targets := windowTargets(ctx, session)
 	if len(targets) == 0 {
-		targets = []string{session}
+		targets = []string{tmux.ExactSession(session)}
 	}
 	for _, target := range targets {
 		for _, kv := range windowOptions() {

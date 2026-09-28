@@ -3,6 +3,9 @@ package tmuxchrome
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -130,9 +133,57 @@ func TestOptions_SuppressesNativeTmuxBellForwarding(t *testing.T) {
 
 func TestWindowTargetsFromIndexes_AllWindowsInSession(t *testing.T) {
 	got := windowTargetsFromIndexes("c-foo", []byte("1\n2\n\n10\n"))
-	want := []string{"c-foo:1", "c-foo:2", "c-foo:10"}
+	want := []string{"=c-foo:1", "=c-foo:2", "=c-foo:10"}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("windowTargetsFromIndexes = %#v, want %#v", got, want)
+	}
+}
+
+// TestApplyAndReset_TargetOnlyThatSession — Apply and Reset passed the
+// bare session name as `-t`, which tmux resolves by prefix when no
+// session has that exact name: chroming (or resetting) c-foo while only
+// c-foo-app exists restyled c-foo-app. Every target must be the exact
+// "=name:" form.
+func TestApplyAndReset_TargetOnlyThatSession(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh-script tmux fake is unix-only")
+	}
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "tmux.log")
+	script := "#!/bin/sh\nfor a in \"$@\"; do printf '%s|' \"$a\"; done >> '" + logPath + "'\necho >> '" + logPath + "'\n" +
+		"[ \"$1\" = list-windows ] && printf '0\\n1\\n'\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(dir, "tmux"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	resetPrefixCache()
+	t.Cleanup(resetPrefixCache)
+
+	if err := Apply(context.Background(), "c-foo", "foo", false, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := Reset(context.Background(), "c-foo"); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targets := 0
+	for _, call := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		args := strings.Split(strings.TrimSuffix(call, "|"), "|")
+		for i := 0; i+1 < len(args); i++ {
+			if args[i] != "-t" {
+				continue
+			}
+			targets++
+			if !strings.HasPrefix(args[i+1], "=c-foo:") {
+				t.Errorf("tmux %s targets %q, want the exact form =c-foo:", args[0], args[i+1])
+			}
+		}
+	}
+	if targets == 0 {
+		t.Fatalf("no -t targets logged; calls:\n%s", raw)
 	}
 }
 

@@ -102,6 +102,71 @@ func TestTokenStore_PurgeDropsExpired(t *testing.T) {
 	}
 }
 
+// TestTokenStore_ClaimHandsBackOnFailure — pairing claims the token,
+// writes authorized_keys, and only then spends it. A failed write hands
+// it back for a retry; while a claim is held, a replay of the same token
+// is refused.
+func TestTokenStore_ClaimHandsBackOnFailure(t *testing.T) {
+	s := NewTokenStore()
+	tok, err := s.Create(time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done, ok := s.Claim(tok)
+	if !ok {
+		t.Fatal("Claim of a fresh token failed")
+	}
+	if _, again := s.Claim(tok); again {
+		t.Error("a second Claim succeeded while the first was held")
+	}
+	if s.Consume(tok) {
+		t.Error("Consume succeeded while a Claim was held")
+	}
+	done(false)
+	done(true) // only the first call counts
+
+	done, ok = s.Claim(tok)
+	if !ok {
+		t.Fatal("token not usable again after done(false)")
+	}
+	done(true)
+	if _, ok := s.Claim(tok); ok {
+		t.Error("token still claimable after done(true)")
+	}
+	if _, ok := s.Claim("never-issued"); ok {
+		t.Error("an unknown token was claimable")
+	}
+}
+
+// TestTokenStore_ClaimConcurrentReplay — of many simultaneous claims of
+// one token, exactly one wins.
+func TestTokenStore_ClaimConcurrentReplay(t *testing.T) {
+	s := NewTokenStore()
+	tok, err := s.Create(time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	wins := 0
+	for range 20 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if done, ok := s.Claim(tok); ok {
+				mu.Lock()
+				wins++
+				mu.Unlock()
+				done(true)
+			}
+		}()
+	}
+	wg.Wait()
+	if wins != 1 {
+		t.Errorf("%d claims won, want exactly 1", wins)
+	}
+}
+
 // TestTokenStore_Concurrent — Create/Consume are safe under concurrent
 // use (meaningful under `go test -race`).
 func TestTokenStore_Concurrent(t *testing.T) {

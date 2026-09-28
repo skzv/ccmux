@@ -28,6 +28,12 @@ const attachPingInterval = 25 * time.Second
 // websocket and unblocks the read loop.
 const attachPingDeadline = 10 * time.Second
 
+// attachReadLimit caps one client→server message. The websocket
+// library's default is 32 KiB, and a message over it closes the
+// connection — so pasting a long block of text on the phone dropped
+// the whole terminal session.
+const attachReadLimit = 1 << 20
+
 // handleAttach upgrades GET /v1/sessions/{name}/attach to a WebSocket
 // and bridges it to a real `tmux attach` running in a PTY — giving the
 // mobile client a true interactive terminal (live streaming, real
@@ -51,6 +57,7 @@ func (s *server) handleAttach(w http.ResponseWriter, r *http.Request, name strin
 		return // Accept already wrote the error response
 	}
 	defer conn.CloseNow()
+	conn.SetReadLimit(attachReadLimit)
 
 	// Carry the request context — tmux attach gets cancelled if the
 	// daemon shuts down. Previously this used exec.Command (no ctx),

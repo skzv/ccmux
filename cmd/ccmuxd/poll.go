@@ -3,12 +3,12 @@ package main
 import (
 	"context"
 	"log"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/daemon"
-	"github.com/skzv/ccmux/internal/moshi"
 	"github.com/skzv/ccmux/internal/project"
 	"github.com/skzv/ccmux/internal/sleeplock"
 	"github.com/skzv/ccmux/internal/tmux"
@@ -34,8 +34,10 @@ const freshSessionWindow = 30 * time.Second
 // pollLoop is the heartbeat: capture-pane on each tmux session, derive
 // state, and trigger bell when transitioning to NEEDS_INPUT.
 func (s *server) pollLoop(ctx context.Context) {
-	interval := time.Duration(s.cfg.Daemon.PollIntervalSeconds) * time.Second
-	idleNeeds := time.Duration(s.cfg.Daemon.IdleSecondsForNeedsInput) * time.Second
+	d := s.cfg.Daemon
+	applyDaemonDefaults(&d)
+	interval := time.Duration(d.PollIntervalSeconds) * time.Second
+	idleNeeds := time.Duration(d.IdleSecondsForNeedsInput) * time.Second
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
@@ -73,6 +75,11 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 	ctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 
+	// listedAt anchors everything this tick decides from the session
+	// list: a kill or rename stamped after it may not be reflected in
+	// tss (Phase 1 skips the old name), and an entry renamed after it
+	// must survive Phase 3's GC even though tss doesn't list it.
+	listedAt := time.Now()
 	tss, err := s.list(ctx)
 	s.ensureClipboard(ctx, err == nil && len(tss) > 0)
 	if err != nil {
@@ -86,27 +93,27 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 		}
 		return
 	}
-	// Keep the moshi state cache warm — it drives the tmux status-bar
-	// "moshi reachable" badge in applyChrome.
-	s.refreshMoshiStateCached(ctx)
 
 	// Phase 1.
 	now := time.Now()
-	// tickStart anchors the Phase-3 GC: entries touched (renamed)
-	// after this instant post-date the live-name snapshot below and
-	// must survive this tick even though live[] doesn't know them.
-	tickStart := now
 	live := make(map[string]bool, len(tss))
 	snaps := make([]pollSnap, 0, len(tss))
 	var createdEvents []daemon.SessionEvent
 	s.mu.Lock()
+	s.pruneTombstonesLocked(now)
 	for _, ts := range tss {
+		if s.gone[ts.Name].After(listedAt) {
+			// Killed or renamed away through the daemon after this
+			// tick's list ran: tss is stale for this name. Tracking it
+			// again brought the old name back as a ghost, announced
+			// with a "created" event.
+			continue
+		}
 		live[ts.Name] = true
 		t, ok := s.seen[ts.Name]
 		agentID := s.sessionAgent(ts)
 		if !ok {
 			t = &tracked{
-				created:     ts.Created,
 				lastChange:  now,
 				state:       agent.StateUnknown,
 				agentID:     agentID,
@@ -124,12 +131,9 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 			}
 			s.seen[ts.Name] = t
 			createdEvents = append(createdEvents, daemon.SessionEvent{
-				At:   now,
-				Kind: "created",
-				Session: daemon.SessionState{
-					Name: ts.Name, Host: "local", State: string(agent.StateUnknown),
-					Path: ts.Path,
-				},
+				At:      now,
+				Kind:    "created",
+				Session: t.sessionState(ts.Name),
 			})
 		} else {
 			t.agentID = agentID
@@ -262,7 +266,7 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 		}
 	}
 	for name, t := range s.seen {
-		if !live[name] && !t.touched.After(tickStart) {
+		if !live[name] && !t.touched.After(listedAt) {
 			delete(s.seen, name)
 			// The session ended on its own or was killed outside the
 			// daemon (TUI/CLI `tmux kill`, a rename done in tmux).
@@ -340,8 +344,9 @@ type attentionDecision struct {
 //
 //   - Seen bit: an attached user is by definition watching → seen=true.
 //     A state change while NOT attached produces output the user
-//     should review → seen=false. Otherwise the previous seen value
-//     is preserved.
+//     should review → seen=false — except a new session's first
+//     classification (out of Unknown), which only counts when it lands
+//     on needs_input. Otherwise the previous seen value is preserved.
 //   - Bell: rings on EVERY fresh needs_input transition, attached or
 //     not. Delivery self-limits: tmux.RingBell writes BEL only to the
 //     clients attached to that session, so an unattached session is a
@@ -370,7 +375,11 @@ func decideAttention(prev, next agent.State, prevSeen, attached bool) attentionD
 		if next == agent.StateNeedsInput {
 			d.StateEventKind = "needs_input"
 		}
-		if !attached {
+		// Leaving Unknown is a new session's first classification, not
+		// a change the user missed: it keeps its "reviewed" mark unless
+		// it is already waiting for input.
+		firstLook := prev == agent.StateUnknown && next != agent.StateNeedsInput
+		if !attached && !firstLook {
 			d.NewSeen = false
 			d.SendPush = true
 		}
@@ -382,15 +391,85 @@ func decideAttention(prev, next agent.State, prevSeen, attached bool) attentionD
 // touched so a poll tick already in flight (whose Phase-1 live-set
 // snapshot predates the rename) doesn't GC the entry in Phase 3 —
 // which would reset promptCount, clear the seen bit, and emit a
-// spurious "created" event on the next tick. Called by handleRename
+// spurious "created" event on the next tick — and tombstoning the old
+// name so that tick doesn't re-track it either. Called by handleRename
 // after the tmux rename succeeds.
-func (s *server) renameTracked(oldName, newName string) {
+//
+// It returns the renamed session's state, read under the lock, for the
+// "created" event that announces the new name. A same-name rename
+// changes nothing (storing then deleting the one key used to drop the
+// entry altogether).
+func (s *server) renameTracked(oldName, newName string) daemon.SessionState {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if oldName == newName {
+		return s.trackedStateLocked(newName)
+	}
+	now := time.Now()
+	s.buryLocked(oldName, now)
+	delete(s.gone, newName)
 	if t, ok := s.seen[oldName]; ok {
-		t.touched = time.Now()
+		t.touched = now
 		s.seen[newName] = t
 		delete(s.seen, oldName)
+	}
+	return s.trackedStateLocked(newName)
+}
+
+// forgetKilled drops a session the daemon just killed from tracking and
+// tombstones its name, so a poll tick that listed it before the kill
+// doesn't bring it back.
+func (s *server) forgetKilled(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.seen, name)
+	s.buryLocked(name, time.Now())
+}
+
+// tombstoneTTL is how long a killed or renamed-away name stays
+// tombstoned. Only a poll tick whose list started before the kill can
+// still see the name, and every tick ends within its budget (10s).
+const tombstoneTTL = time.Minute
+
+// buryLocked tombstones name as of at. Caller holds s.mu.
+func (s *server) buryLocked(name string, at time.Time) {
+	if s.gone == nil {
+		s.gone = map[string]time.Time{}
+	}
+	s.gone[name] = at
+}
+
+// pruneTombstonesLocked drops tombstones older than tombstoneTTL.
+// Caller holds s.mu.
+func (s *server) pruneTombstonesLocked(now time.Time) {
+	for name, at := range s.gone {
+		if now.Sub(at) > tombstoneTTL {
+			delete(s.gone, name)
+		}
+	}
+}
+
+// trackedStateLocked is the SessionState for a tracked session, or an
+// "unknown", reviewed one when the daemon isn't tracking it yet (the
+// same default listSessions uses). Caller holds s.mu.
+func (s *server) trackedStateLocked(name string) daemon.SessionState {
+	if t, ok := s.seen[name]; ok {
+		return t.sessionState(name)
+	}
+	return daemon.SessionState{Name: name, Host: "local", State: string(agent.StateUnknown), Seen: true}
+}
+
+// sessionState is the wire view of a tracked session, for events.
+func (t *tracked) sessionState(name string) daemon.SessionState {
+	st := t.state
+	if st == "" {
+		st = agent.StateUnknown
+	}
+	return daemon.SessionState{
+		Name: name, Host: "local", Path: t.projectPath,
+		State: string(st), Agent: string(t.agentID),
+		LastChange: t.lastChange, PromptCount: t.promptCount,
+		Seen: t.seen,
 	}
 }
 
@@ -431,15 +510,40 @@ func lookupTmuxSession(snaps []pollSnap, name string) (tmux.Session, bool) {
 	return tmux.Session{}, false
 }
 
-// refreshMoshiStateCached keeps the moshi.Status cache warm for the
-// tmux status-bar badge. Cached for 60s so we don't shell out to
-// moshi-hook every 2-second poll tick.
-func (s *server) refreshMoshiStateCached(ctx context.Context) {
-	s.moshiMu.Lock()
-	defer s.moshiMu.Unlock()
-	if time.Since(s.moshiCheckAt) > 60*time.Second {
-		s.moshiState = moshi.Detect(ctx)
-		s.moshiCheckAt = time.Now()
+// moshiRefreshInterval is how often moshiLoop re-detects Moshi. It only
+// drives the status-bar badge, so a minute of staleness is invisible.
+const moshiRefreshInterval = 60 * time.Second
+
+// moshiLoop keeps the moshi.Status cache warm for applyChrome's
+// "reachable via Moshi" badge until ctx is cancelled. Detection runs
+// moshi-hook and `brew services list` with multi-second timeouts, so it
+// has its own ticker instead of running inside the poll tick (where it
+// could use up the tick's budget and fail every capture), and it holds
+// moshiMu only to store the result, so a create-session handler never
+// waits on it.
+func (s *server) moshiLoop(ctx context.Context) {
+	if s.detectMoshi == nil {
+		return
+	}
+	refresh := func() {
+		st := s.detectMoshi(ctx)
+		if ctx.Err() != nil {
+			return // cut short by shutdown: a partial answer, don't keep it
+		}
+		s.moshiMu.Lock()
+		s.moshiState = st
+		s.moshiMu.Unlock()
+	}
+	refresh()
+	t := time.NewTicker(moshiRefreshInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			refresh()
+		}
 	}
 }
 
@@ -458,6 +562,12 @@ func (s *server) startSleepManager() {
 		cutoff = 20
 	}
 	s.sleeper = sleeplock.NewManager(sleeplock.ParseMode(modeStr), cutoff)
+	// The marker lives next to the socket, so a daemon that died holding
+	// the very_dangerous override is cleaned up by the next one even if
+	// the user has since switched modes.
+	if sock, err := daemon.SocketPath(); err == nil {
+		s.sleeper.SetOverrideMarker(filepath.Join(filepath.Dir(sock), "sleep-override"))
+	}
 	s.sleeper.RevertStaleOverride()
 	log.Printf("ccmuxd: sleep manager initialized (mode=%s, low_battery_cutoff=%d%%)",
 		s.sleeper.Requested(), cutoff)

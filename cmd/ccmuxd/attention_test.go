@@ -83,6 +83,30 @@ func TestDecideAttention(t *testing.T) {
 			prevSeen: false, attached: false,
 			want: want{newSeen: false},
 		},
+		// === FIRST CLASSIFICATION of a new session (out of Unknown): it
+		//     starts reviewed, and its first state isn't news to review —
+		//     unless it's already waiting for input. ===
+		{
+			name: "unknown→active while unattended keeps seen, no push",
+			prev: agent.StateUnknown, next: agent.StateActive,
+			prevSeen: true, attached: false,
+			want: want{newSeen: true, emit: true, eventKind: "state_change"},
+		},
+		{
+			name: "unknown→idle while unattended keeps seen, no push",
+			prev: agent.StateUnknown, next: agent.StateIdle,
+			prevSeen: true, attached: false,
+			want: want{newSeen: true, emit: true, eventKind: "state_change"},
+		},
+		{
+			name: "unknown→needs_input while unattended still asks for attention",
+			prev: agent.StateUnknown, next: agent.StateNeedsInput,
+			prevSeen: true, attached: false,
+			want: want{
+				newSeen: false, bell: true, push: true,
+				emit: true, eventKind: "needs_input", incPromptCount: true,
+			},
+		},
 		// === SECOND NEEDS_INPUT IN A ROW: doesn't re-bell. ===
 		{
 			name: "needs_input→needs_input is not a fresh transition",

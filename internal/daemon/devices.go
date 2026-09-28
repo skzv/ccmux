@@ -110,6 +110,12 @@ func OpenDeviceStore(path string) (*DeviceStore, error) {
 	return s, nil
 }
 
+// ErrInvalidRegistration marks a registration rejected for what it
+// contains (missing key or token, bad provider or environment), as
+// opposed to one that failed to save — the HTTP layer answers 400 for
+// the first and 500 for the second.
+var ErrInvalidRegistration = errors.New("devicestore: invalid registration")
+
 // Register adds or refreshes one device's APNs token. Empty token or
 // env is rejected so a malformed mobile request can't corrupt the
 // store with junk that then gets pushed to APNs. Kept for legacy
@@ -123,12 +129,17 @@ func (s *DeviceStore) Register(publicKey, token, env string) error {
 // recording which gateway (APNs / FCM) is responsible. APNs records
 // require Environment to be set to development|production; FCM
 // records ignore environment but require a non-empty token.
+//
+// Invalid input returns an error wrapping ErrInvalidRegistration. A
+// registration that can't be written to disk is undone in memory too,
+// so the daemon never pushes to a device the caller was told failed to
+// register (and that a restart would forget).
 func (s *DeviceStore) RegisterWithProvider(publicKey, token, provider, env string) error {
 	if strings.TrimSpace(publicKey) == "" {
-		return errors.New("devicestore: public key required")
+		return fmt.Errorf("%w: public key required", ErrInvalidRegistration)
 	}
 	if strings.TrimSpace(token) == "" {
-		return errors.New("devicestore: token required")
+		return fmt.Errorf("%w: token required", ErrInvalidRegistration)
 	}
 	if provider == "" {
 		provider = ProviderAPNs
@@ -136,7 +147,7 @@ func (s *DeviceStore) RegisterWithProvider(publicKey, token, provider, env strin
 	switch provider {
 	case ProviderAPNs:
 		if env != "development" && env != "production" {
-			return fmt.Errorf("devicestore: env must be development|production for apns, got %q", env)
+			return fmt.Errorf("%w: env must be development|production for apns, got %q", ErrInvalidRegistration, env)
 		}
 	case ProviderFCM:
 		// FCM has no analogue to the APNs sandbox/production split —
@@ -144,22 +155,38 @@ func (s *DeviceStore) RegisterWithProvider(publicKey, token, provider, env strin
 		// empty env so a misconfigured client can't accidentally pin
 		// itself to a value the dispatcher would have to ignore later.
 		if env != "" {
-			return fmt.Errorf("devicestore: env must be empty for fcm, got %q", env)
+			return fmt.Errorf("%w: env must be empty for fcm, got %q", ErrInvalidRegistration, env)
 		}
 	default:
-		return fmt.Errorf("devicestore: unknown provider %q", provider)
+		return fmt.Errorf("%w: unknown provider %q", ErrInvalidRegistration, provider)
 	}
 	hash := HashPublicKey(publicKey)
-	s.mu.Lock()
-	s.byID[hash] = DeviceRegistration{
+	reg := DeviceRegistration{
 		PublicKeyHash: hash,
 		Token:         token,
 		Provider:      provider,
 		Environment:   env,
 		UpdatedAt:     time.Now(),
 	}
+	s.mu.Lock()
+	prev, hadPrev := s.byID[hash]
+	s.byID[hash] = reg
 	s.mu.Unlock()
-	return s.flush()
+	if err := s.flush(); err != nil {
+		s.mu.Lock()
+		// Undo only our own write: a concurrent Register for the same
+		// key may have replaced it since.
+		if s.byID[hash] == reg {
+			if hadPrev {
+				s.byID[hash] = prev
+			} else {
+				delete(s.byID, hash)
+			}
+		}
+		s.mu.Unlock()
+		return fmt.Errorf("devicestore: save registration: %w", err)
+	}
+	return nil
 }
 
 // All returns a snapshot of every registration. Cheap copy — the

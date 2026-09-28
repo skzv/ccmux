@@ -271,9 +271,12 @@ The daemon walks a three-tier discovery chain:
 Each tier returns its own sentinel error on "user can't use this source", so
 the chain falls through silently for the common cases. The cache is written
 on every successful refresh, so a degraded mode (e.g. CLI logged out) just
-keeps serving the previous good catalog.
+keeps serving the previous good catalog; a `claude -p` call that runs and
+fails also leaves the cache alone.
 - **Query:** `?refresh=true` forces a synchronous re-fetch before responding.
-  Returns the cached catalog on refresh failure.
+  Returns the cached catalog on refresh failure. Refreshes are single-flighted
+  and rate-limited to one run of the chain per 10 minutes: concurrent requests
+  share one fetch, and a request inside the window gets the last result.
 - **Response `200`:** `Catalog`.
 
 ```json
@@ -323,7 +326,9 @@ Stream of session lifecycle/state events; subscribe to live-update a view.
   lines (leading `:`) are ignorable.
 - If the per-subscriber buffer (256) overflows you get an
   `event: drops` / `data: <n>` frame; that means you missed `n` events and
-  should re-fetch `/v1/sessions` to resync.
+  should re-fetch `/v1/sessions` to resync. Events still buffered when the
+  overflow is noticed are discarded (and counted in `n`), so every event
+  after the frame is newer than that resync.
 
 ---
 
@@ -350,15 +355,19 @@ Redeem a pairing token: install the device's SSH public key into
 - **Errors:** `400` unparseable/multi-line public key or pre-key options;
   `401` invalid/expired token; `500` failed to write `authorized_keys`.
 - The key is validated **before** the token is consumed (a bad key doesn't
-  burn the token) and canonicalised (comments/options stripped). This
-  endpoint **is** reachable on the tailnet.
+  burn the token) and canonicalised (comments/options stripped). The token
+  is spent only once `authorized_keys` is written, so a `500` leaves it
+  usable for a retry; a concurrent request with the same token gets `401`.
+  This endpoint **is** reachable on the tailnet.
 
 #### `POST /v1/devices`
 Register/refresh a push token on an already-paired host (after the user
 grants notifications, or the OS rotates the token).
 - **Request:** `RegisterDeviceRequest`.
-- **Response:** `204`. `403` if `public_key` isn't in the host's
-  `~/.ssh/authorized_keys` (i.e. the device never paired).
+- **Response:** `204`. `400` for a missing token or a bad `provider`/`env`;
+  `403` if `public_key` isn't in the host's `~/.ssh/authorized_keys` (i.e.
+  the device never paired); `500` if the registration couldn't be saved (it
+  isn't kept).
 - The device is identified by the SSH `public_key` it paired with (stored
   only as a SHA-256 hash). `provider` ∈ `apns` (default) | `fcm`; APNs
   requires `env` ∈ `development | production`, FCM requires empty `env`.
@@ -546,10 +555,13 @@ type RegisterDeviceRequest struct {
 The daemon enforces these (and `400`s on violation); validate before sending
 for a better UX:
 
-- **tmux session names** must not contain `/`, `\`, `:`, or `.` (a tmux
-  target-spec injection guard).
-- **project names** for `POST /v1/projects` must be a single non-hidden path
-  segment — no `/`, `\`, no leading `.`.
+- **tmux session names** must not contain `/`, `\`, `:`, `.` or control
+  characters (a tmux target-spec injection guard). Names you create or rename
+  to also must not contain `#`: tmux expands formats in them. Leading and
+  trailing whitespace is trimmed.
+- **project names** for `POST /v1/projects`, and for `POST /v1/sessions`
+  without a `path`, must be a single non-hidden path segment — no `/`, `\`,
+  no leading `.`. A `path` may start with `~/` (the daemon's home).
 - **notes file paths** must be project-relative, contain no `..`, and end in
   `.md`.
 - request bodies are capped at **64 KiB**.

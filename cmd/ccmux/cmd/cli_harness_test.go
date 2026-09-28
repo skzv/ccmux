@@ -45,7 +45,7 @@ has-session)
     [ "$3" = "=$s:" ] && exit 0
   done
   exit 1 ;;
-list-sessions) exit 1 ;;
+list-sessions) echo "no server running on /tmp/tmux-fake/default" >&2; exit 1 ;;
 esac
 exit 0
 `

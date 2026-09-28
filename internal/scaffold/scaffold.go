@@ -91,13 +91,9 @@ func prepareDir(opts Options) (dir string, wroteSidecar bool, err error) {
 	return dir, wroteSidecar, nil
 }
 
-// newSession and setSessionAgent are the tmux calls StartSession makes,
-// swappable so its sidecar bookkeeping is testable without a tmux
-// server.
-var (
-	newSession      = tmux.New
-	setSessionAgent = tmux.SetSessionAgent
-)
+// newSession is the tmux call StartSession makes, swappable so its
+// sidecar bookkeeping is testable without a tmux server.
+var newSession = tmux.NewWithAgent
 
 // StartSession creates the project directory (PrepareDir) and opens a
 // detached tmux session running the chosen agent. It writes no project
@@ -109,25 +105,26 @@ func StartSession(ctx context.Context, opts Options) (string, error) {
 		return "", err
 	}
 	session := tmux.SessionNameForPath(dir)
-	if err := newSession(ctx, session, dir, LaunchCmd(opts)); err != nil {
+	// An existing project kept its recorded agent. If this session runs
+	// a different one, pin it on the session (as a resumed conversation
+	// does) so the daemon classifies the agent that's actually running —
+	// in the same tmux call that creates the session, so no poll tick
+	// sees it untagged and judges it by the project's agent.
+	launched := agent.IDClaude // what LaunchCmd runs for an empty Agent
+	if id, ok := agent.ParseID(string(opts.Agent)); ok {
+		launched = id
+	}
+	tag := ""
+	if launched != project.ReadAgent(dir) {
+		tag = string(launched)
+	}
+	if err := newSession(ctx, session, dir, LaunchCmd(opts), tag); err != nil {
 		if wroteSidecar {
 			// Don't leave the project recorded as an agent it never ran.
 			_ = os.Remove(project.AgentSidecarPath(dir))
 			_ = os.Remove(filepath.Dir(project.AgentSidecarPath(dir))) // only if now empty
 		}
 		return "", fmt.Errorf("start tmux session: %w", err)
-	}
-	// An existing project kept its recorded agent. If this session runs
-	// a different one, pin it on the session (as a resumed conversation
-	// does) so the daemon classifies the agent that's actually running.
-	// Best effort: on failure detection falls back to the project's
-	// recorded agent, and the session itself is fine.
-	launched := agent.IDClaude // what LaunchCmd runs for an empty Agent
-	if id, ok := agent.ParseID(string(opts.Agent)); ok {
-		launched = id
-	}
-	if launched != project.ReadAgent(dir) {
-		_ = setSessionAgent(ctx, session, string(launched))
 	}
 	return session, nil
 }

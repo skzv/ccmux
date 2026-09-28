@@ -185,6 +185,8 @@ type Discovered struct {
 	DialHost string
 	Version  string // ccmuxd version reported by /v1/health
 	Sessions int
+	// OS is what Tailscale reports for the peer (see Peer.OS).
+	OS string
 	// TailscaleSSH is propagated from the originating Peer so the
 	// UI + the SSH setup wizard can short-circuit the password-and-
 	// key install when Tailscale already handles auth.
@@ -220,8 +222,14 @@ func ScanTailnet(ctx context.Context, port int) (Scan, error) {
 	if err != nil {
 		return Scan{}, err
 	}
+	return scanPeers(ctx, peers, port), nil
+}
+
+// scanPeers is ScanTailnet's sweep over an already-read peer list, split
+// out so tests can drive it with fixtures instead of `tailscale status`.
+func scanPeers(ctx context.Context, peers []Peer, port int) Scan {
 	if len(peers) == 0 {
-		return Scan{}, nil
+		return Scan{}
 	}
 	type result struct {
 		peer Peer
@@ -256,6 +264,7 @@ func ScanTailnet(ctx context.Context, port int) (Scan, error) {
 				DialHost:     dialHostFor(p),
 				Version:      info.Version,
 				Sessions:     info.Sessions,
+				OS:           p.OS,
 				TailscaleSSH: p.TailscaleSSH,
 			}}
 		}(p)
@@ -272,7 +281,7 @@ func ScanTailnet(ctx context.Context, port int) (Scan, error) {
 			scan.NeedsInstall = append(scan.NeedsInstall, r.peer)
 		}
 	}
-	return scan, nil
+	return scan
 }
 
 // probeOne is the cheap "is there a ccmuxd here" check. 1-second hard

@@ -121,16 +121,18 @@ func TestPrepareDir_KeepsExistingProjectsAgent(t *testing.T) {
 	}
 }
 
-// fakeTmux swaps StartSession's tmux calls for the duration of a test.
+// fakeTmux swaps StartSession's tmux call for the duration of a test,
+// recording "session=tag" for every session created with an agent tag.
 func fakeTmux(t *testing.T, newErr error) *[]string {
 	t.Helper()
 	var tagged []string
-	origNew, origTag := newSession, setSessionAgent
-	t.Cleanup(func() { newSession, setSessionAgent = origNew, origTag })
-	newSession = func(context.Context, string, string, string) error { return newErr }
-	setSessionAgent = func(_ context.Context, session, id string) error {
-		tagged = append(tagged, session+"="+id)
-		return nil
+	origNew := newSession
+	t.Cleanup(func() { newSession = origNew })
+	newSession = func(_ context.Context, session, _, _, tag string) error {
+		if newErr == nil && tag != "" {
+			tagged = append(tagged, session+"="+tag)
+		}
+		return newErr
 	}
 	return &tagged
 }

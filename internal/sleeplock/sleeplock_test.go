@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -211,6 +213,135 @@ func TestManager_StopReleasesEverything(t *testing.T) {
 	}
 	// Second Stop must be a clean no-op.
 	m.Stop()
+}
+
+// TestManager_SetActiveAfterStopIsIgnored — the daemon's last poll tick
+// can still be running when shutdown calls Stop. Its SetActive(true)
+// used to re-apply `pmset disablesleep 1` (or start a fresh
+// systemd-inhibit) after Stop had released everything, leaving the
+// machine unable to sleep with no daemon left to undo it.
+func TestManager_SetActiveAfterStopIsIgnored(t *testing.T) {
+	var overrides []bool
+	starts := 0
+	m := NewManager(ModeVeryDangerous, 20)
+	m.startLockProc = func(Mode) *exec.Cmd { starts++; return fakeLockCmd() }
+	m.runOverride = func(_ context.Context, on bool) error {
+		overrides = append(overrides, on)
+		return nil
+	}
+	m.readBattery = func(context.Context) (BatteryStatus, error) {
+		return BatteryStatus{HasBattery: false}, nil
+	}
+
+	m.Stop()
+	m.SetActive(true)
+	defer m.releaseForTest()
+
+	if starts != 0 {
+		t.Errorf("lock process started %d times after Stop, want 0", starts)
+	}
+	for _, on := range overrides {
+		if on {
+			t.Errorf("system override applied after Stop (calls %v)", overrides)
+		}
+	}
+	if got := m.Effective(); got != ModeOff {
+		t.Errorf("Effective after Stop+SetActive = %q, want off", got)
+	}
+}
+
+// releaseForTest undoes whatever a (buggy) post-Stop SetActive engaged,
+// so a failing run doesn't leak a `sleep` holder process.
+func (m *Manager) releaseForTest() {
+	m.mu.Lock()
+	m.releaseLocked()
+	m.mu.Unlock()
+	m.monitorWG.Wait()
+}
+
+// TestManager_OverrideCallsAreBounded — runOverride runs under the
+// Manager's lock, so a sudo or pmset that never returns would wedge the
+// poll loop, the health endpoint and shutdown. Every call must carry a
+// deadline.
+func TestManager_OverrideCallsAreBounded(t *testing.T) {
+	m := NewManager(ModeVeryDangerous, 0)
+	m.startLockProc = func(Mode) *exec.Cmd { return fakeLockCmd() }
+	calls := 0
+	m.runOverride = func(ctx context.Context, on bool) error {
+		calls++
+		if _, ok := ctx.Deadline(); !ok {
+			t.Errorf("runOverride(on=%v) called without a deadline", on)
+		}
+		return nil
+	}
+	m.RevertStaleOverride()
+	m.SetActive(true)
+	m.Stop()
+	if calls != 3 {
+		t.Errorf("runOverride called %d times, want 3 (stale revert, apply, revert)", calls)
+	}
+}
+
+// TestManager_RevertStaleOverride_AnyModeViaMarker — a daemon killed in
+// very_dangerous mode leaves `pmset disablesleep 1` behind. If the user
+// then switches to safe, the next daemon must still revert it: the
+// marker file records that ccmuxd applied it. Without a marker nothing
+// runs sudo outside very_dangerous.
+func TestManager_RevertStaleOverride_AnyModeViaMarker(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		mode      Mode
+		marked    bool
+		revertErr error
+		want      []bool
+		keepMark  bool
+	}{
+		{"safe with marker reverts", ModeSafe, true, nil, []bool{false}, false},
+		{"off with marker reverts", ModeOff, true, nil, []bool{false}, false},
+		{"safe without marker leaves sudo alone", ModeSafe, false, nil, nil, false},
+		{"failed revert keeps the marker for the next start", ModeSafe, true, errors.New("sudo: a password is required"), []bool{false}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			marker := filepath.Join(t.TempDir(), "sleep-override")
+			if tc.marked {
+				if err := os.WriteFile(marker, nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			m := NewManager(tc.mode, 0)
+			m.SetOverrideMarker(marker)
+			var calls []bool
+			m.runOverride = func(_ context.Context, on bool) error { calls = append(calls, on); return tc.revertErr }
+			m.RevertStaleOverride()
+			if fmt.Sprint(calls) != fmt.Sprint(tc.want) {
+				t.Errorf("override calls = %v, want %v", calls, tc.want)
+			}
+			_, err := os.Stat(marker)
+			if exists := err == nil; exists != tc.keepMark {
+				t.Errorf("marker exists = %v, want %v", exists, tc.keepMark)
+			}
+		})
+	}
+}
+
+// TestManager_OverrideMarkerFollowsOverride — the marker exists exactly
+// while the override is applied.
+func TestManager_OverrideMarkerFollowsOverride(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "sleep-override")
+	m := NewManager(ModeVeryDangerous, 0)
+	m.SetOverrideMarker(marker)
+	m.startLockProc = func(Mode) *exec.Cmd { return fakeLockCmd() }
+	m.runOverride = func(context.Context, bool) error { return nil }
+	defer m.Stop()
+
+	m.SetActive(true)
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("marker missing while the override is applied: %v", err)
+	}
+	m.SetActive(false)
+	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("marker still present after the override was reverted (err=%v)", err)
+	}
 }
 
 // TestManager_RepeatedSetActive — idempotency on both sides.

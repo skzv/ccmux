@@ -223,6 +223,29 @@ func TestDiscover_FiltersAndProbes(t *testing.T) {
 	}
 }
 
+// TestScanPeers_ReachableKeepsOS — a peer that answers the ccmuxd probe
+// lost the OS Tailscale reported for it, so /v1/peers had to guess (it
+// called every such peer macOS).
+func TestScanPeers_ReachableKeepsOS(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(daemon.HealthInfo{OK: true, Version: "v0"})
+	}))
+	defer srv.Close()
+	host, portStr, err := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, _ := strconv.Atoi(portStr)
+
+	scan := scanPeers(context.Background(), []Peer{{HostName: "box", Addr: host, OS: "linux", Online: true}}, port)
+	if len(scan.Reachable) != 1 {
+		t.Fatalf("scan = %+v, want one reachable peer", scan)
+	}
+	if got := scan.Reachable[0].OS; got != "linux" {
+		t.Errorf("reachable peer OS = %q, want linux", got)
+	}
+}
+
 // TestDiscover_ProbeFailureIsSilent covers the other half of discover's
 // contract: an online peer with no ccmuxd at the configured port is
 // silently dropped, not surfaced as an error or a half-populated row.

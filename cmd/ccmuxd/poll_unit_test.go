@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"log"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -17,9 +19,10 @@ import (
 )
 
 // newPollTestServer builds a server whose poll seams are all injectable
-// and whose side-effect surfaces (sleep manager, moshi cache, bell) are
-// inert, so pollOnce can run hermetically without tmux, caffeinate, or
-// moshi-hook. list/capture are left nil — each test injects its own.
+// and whose side-effect surfaces (sleep manager, bell) are inert, so
+// pollOnce can run hermetically without tmux or caffeinate. detectMoshi
+// is nil, so moshiLoop never shells out to moshi-hook. list/capture are
+// left nil — each test injects its own.
 func newPollTestServer(t *testing.T) *server {
 	t.Helper()
 	s := &server{
@@ -32,9 +35,6 @@ func newPollTestServer(t *testing.T) *server {
 		},
 		bell: func(context.Context, string) error { return nil },
 	}
-	// Pre-warm the moshi cache timestamp so refreshMoshiStateCached
-	// never shells out during the test.
-	s.moshiCheckAt = time.Now()
 	return s
 }
 
@@ -105,6 +105,99 @@ func TestPollOnce_RenameDuringTickPreservesTracked(t *testing.T) {
 	}
 	if _, still := s.seen["old"]; still {
 		t.Error("old name still tracked after rename")
+	}
+}
+
+// TestPollOnce_KillDuringListDoesNotResurrect — a kill landing between
+// tmux.List and Phase 1's lock left the killed name in the tick's
+// session list. Phase 1 found no tracked entry (the kill had just
+// deleted it), so it tracked the dead session again and announced it
+// with a "created" event: a ghost row on every client.
+func TestPollOnce_KillDuringListDoesNotResurrect(t *testing.T) {
+	s := newPollTestServer(t)
+	s.kill = func(context.Context, string) error { return nil }
+	s.seen["c-dead"] = &tracked{state: agent.StateIdle, seen: true}
+	s.list = func(context.Context) ([]tmux.Session, error) {
+		// tmux has listed the session; the kill lands now.
+		rec := httptest.NewRecorder()
+		s.handleKill(rec, httptest.NewRequest(http.MethodPost, "/v1/sessions/c-dead/kill", nil), "c-dead")
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("kill: status %d", rec.Code)
+		}
+		return []tmux.Session{{Name: "c-dead", Path: "/tmp"}, {Name: "c-live", Path: "/tmp"}}, nil
+	}
+	s.capture = func(context.Context, string, int) (string, error) { return "x", nil }
+	ch := s.events.Subscribe()
+	defer s.events.Unsubscribe(ch)
+
+	s.pollOnce(context.Background(), time.Second)
+
+	if _, ok := s.seen["c-dead"]; ok {
+		t.Error("killed session is tracked again")
+	}
+	if _, ok := s.seen["c-live"]; !ok {
+		t.Error("the other listed session wasn't tracked")
+	}
+	for _, ev := range publishedEvents(ch) {
+		if ev.Kind == "created" && ev.Session.Name == "c-dead" {
+			t.Errorf("killed session announced as created: %+v", ev)
+		}
+	}
+}
+
+// TestPollOnce_RenameDuringListDoesNotResurrectOldName — the same race
+// for a rename: the stale list still has the old name. It must not be
+// re-tracked, and the entry moved to the new name (which the list
+// doesn't have yet) must survive the tick's GC.
+func TestPollOnce_RenameDuringListDoesNotResurrectOldName(t *testing.T) {
+	s := newPollTestServer(t)
+	s.seen["old"] = &tracked{state: agent.StateNeedsInput, promptCount: 4, seen: false}
+	s.list = func(context.Context) ([]tmux.Session, error) {
+		postRename(t, s, "old", "new")
+		return []tmux.Session{{Name: "old", Path: "/tmp"}}, nil
+	}
+	s.capture = func(context.Context, string, int) (string, error) { return "x", nil }
+	ch := s.events.Subscribe()
+	defer s.events.Unsubscribe(ch)
+
+	s.pollOnce(context.Background(), time.Second)
+
+	if _, ok := s.seen["old"]; ok {
+		t.Error("renamed-away name is tracked again")
+	}
+	if tr, ok := s.seen["new"]; !ok || tr.promptCount != 4 {
+		t.Errorf("renamed entry lost by the tick's GC (tracked=%v)", ok)
+	}
+	for _, ev := range publishedEvents(ch) {
+		if ev.Session.Name == "old" && ev.Kind == "created" {
+			t.Errorf("renamed-away name announced as created: %+v", ev)
+		}
+		if ev.Session.Name == "new" && ev.Kind == "killed" {
+			t.Errorf("renamed session announced as killed by the GC: %+v", ev)
+		}
+	}
+}
+
+// TestPollOnce_NewSessionStaysReviewedAfterFirstClassification — a
+// session the daemon just created starts as reviewed, but its first
+// Unknown→idle classification counted as a change the user missed and
+// flagged it for attention while nobody had even attached yet.
+func TestPollOnce_NewSessionStaysReviewedAfterFirstClassification(t *testing.T) {
+	s := newPollTestServer(t)
+	s.startedAt = time.Now().Add(-time.Hour) // not a restart baseline
+	s.list = func(context.Context) ([]tmux.Session, error) {
+		return []tmux.Session{{Name: "c-new", Path: "/tmp", Agent: tmux.ShellAgentTag, Created: time.Now()}}, nil
+	}
+	s.capture = func(context.Context, string, int) (string, error) { return "$ ", nil }
+
+	s.pollOnce(context.Background(), time.Second)
+
+	tr := s.seen["c-new"]
+	if tr == nil || tr.state != agent.StateIdle {
+		t.Fatalf("tracked = %+v, want idle", tr)
+	}
+	if !tr.seen {
+		t.Error("new session flagged unreviewed by its first classification")
 	}
 }
 

@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -408,6 +409,62 @@ func TestOpenDeviceStore_CorruptFilePreservedNotClobbered(t *testing.T) {
 	}
 	if _, ok := reopened.Lookup(testPubKey); !ok {
 		t.Error("registration after corrupt-file recovery did not persist")
+	}
+}
+
+// TestRegister_FailedSaveRollsBack — a registration that couldn't be
+// written stayed live in memory: the daemon pushed to a device whose
+// registration the phone was told had failed, and a restart silently
+// dropped it. A failed save must leave memory as it was, and must not
+// look like a bad request.
+func TestRegister_FailedSaveRollsBack(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "state")
+	s, err := OpenDeviceStore(filepath.Join(dir, "devices.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Register(testPubKey, "OLD", "production"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(dir); err != nil { // every save now fails
+		t.Fatal(err)
+	}
+
+	err = s.Register(testPubKey, "NEW", "production")
+	if err == nil {
+		t.Fatal("Register reported success though nothing could be saved")
+	}
+	if errors.Is(err, ErrInvalidRegistration) {
+		t.Errorf("a save failure is reported as invalid input: %v", err)
+	}
+	if reg, _ := s.Lookup(testPubKey); reg.Token != "OLD" {
+		t.Errorf("token after a failed update = %q, want the previous OLD", reg.Token)
+	}
+	if err := s.RegisterWithProvider("ssh-ed25519 AAAAother tablet", "T2", ProviderFCM, ""); err == nil {
+		t.Fatal("second Register reported success though nothing could be saved")
+	}
+	if n := len(s.All()); n != 1 {
+		t.Errorf("store holds %d registrations after failed saves, want 1", n)
+	}
+}
+
+// TestRegister_InvalidInputIsMarked — the HTTP layer answers 400 only
+// for input errors, which it recognises by ErrInvalidRegistration.
+func TestRegister_InvalidInputIsMarked(t *testing.T) {
+	s, err := OpenDeviceStore(filepath.Join(t.TempDir(), "devices.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ key, token, provider, env string }{
+		{"", "t", ProviderAPNs, "production"},
+		{testPubKey, "", ProviderAPNs, "production"},
+		{testPubKey, "t", ProviderAPNs, "staging"},
+		{testPubKey, "t", ProviderFCM, "production"},
+		{testPubKey, "t", "pigeon", ""},
+	} {
+		if err := s.RegisterWithProvider(tc.key, tc.token, tc.provider, tc.env); !errors.Is(err, ErrInvalidRegistration) {
+			t.Errorf("RegisterWithProvider(%+v) = %v, want ErrInvalidRegistration", tc, err)
+		}
 	}
 }
 
