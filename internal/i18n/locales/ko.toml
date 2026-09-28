@@ -539,3 +539,6 @@
 "polls tmux, classifies each session, rings the bell when an agent needs input, and keeps the machine awake while sessions are active" = "tmux를 폴링해 각 세션의 상태를 판별하고, 에이전트가 입력을 기다리면 벨을 울리며, 세션이 활성인 동안 컴퓨터가 잠들지 않게 합니다"
 "↑↓ %d/%d · esc: close" = "↑↓ %d/%d · esc: 닫기"
 "? / esc: close" = "? / esc: 닫기"
+"model not changed: %w" = "모델이 변경되지 않음: %w"
+"%w (and restoring the ccmux pin failed: %v)" = "%w (ccmux 고정 모델 복원도 실패함: %v)"
+"field is read-only: " = "읽기 전용 필드: "

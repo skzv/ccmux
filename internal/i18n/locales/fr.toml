@@ -539,3 +539,6 @@
 "polls tmux, classifies each session, rings the bell when an agent needs input, and keeps the machine awake while sessions are active" = "interroge tmux, classe chaque session, fait sonner la cloche quand un agent attend une réponse et garde la machine éveillée tant que des sessions sont actives"
 "↑↓ %d/%d · esc: close" = "↑↓ %d/%d · échap : fermer"
 "? / esc: close" = "? / échap : fermer"
+"model not changed: %w" = "modèle inchangé : %w"
+"%w (and restoring the ccmux pin failed: %v)" = "%w (et la restauration du modèle épinglé dans ccmux a échoué : %v)"
+"field is read-only: " = "champ en lecture seule : "

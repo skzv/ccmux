@@ -1049,17 +1049,17 @@ func applyModelChoiceCmd(c modelChoice) tea.Cmd {
 	return func() tea.Msg {
 		prev, err := config.Load()
 		if err != nil {
-			return claudeModelChangedMsg{New: c.Settings, Err: fmt.Errorf("model not changed: %w", err)}
+			return claudeModelChangedMsg{New: c.Settings, Err: fmt.Errorf(tr("model not changed: %w"), err)}
 		}
 		saved, err := setCcmuxClaudeDefault(c.Pin)
 		if err != nil {
-			return claudeModelChangedMsg{New: c.Settings, Err: fmt.Errorf("model not changed: %w", err)}
+			return claudeModelChangedMsg{New: c.Settings, Err: fmt.Errorf(tr("model not changed: %w"), err)}
 		}
 		backup, err := claudeconfig.SetModel(c.Settings)
 		if err != nil {
-			err = fmt.Errorf("model not changed: %w", err)
+			err = fmt.Errorf(tr("model not changed: %w"), err)
 			if _, rerr := setCcmuxClaudeDefault(prev.Claude.DefaultModel); rerr != nil {
-				err = fmt.Errorf("%w (and restoring the ccmux pin failed: %v)", err, rerr)
+				err = fmt.Errorf(tr("%w (and restoring the ccmux pin failed: %v)"), err, rerr)
 			}
 			return claudeModelChangedMsg{New: c.Settings, Err: err}
 		}

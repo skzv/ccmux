@@ -547,3 +547,6 @@
 "polls tmux, classifies each session, rings the bell when an agent needs input, and keeps the machine awake while sessions are active" = "轮询 tmux、判断每个会话的状态、在智能体等待输入时响铃，并在会话活跃期间阻止机器休眠"
 "↑↓ %d/%d · esc: close" = "↑↓ %d/%d · esc：关闭"
 "? / esc: close" = "? / esc：关闭"
+"model not changed: %w" = "模型未更改：%w"
+"%w (and restoring the ccmux pin failed: %v)" = "%w（恢复 ccmux 固定的模型也失败了：%v）"
+"field is read-only: " = "字段只读："

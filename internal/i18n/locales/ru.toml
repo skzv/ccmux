@@ -539,3 +539,6 @@
 "polls tmux, classifies each session, rings the bell when an agent needs input, and keeps the machine awake while sessions are active" = "опрашивает tmux, определяет состояние каждой сессии, звонит, когда агенту нужен ответ, и не даёт машине уснуть, пока сессии активны"
 "↑↓ %d/%d · esc: close" = "↑↓ %d/%d · esc: закрыть"
 "? / esc: close" = "? / esc: закрыть"
+"model not changed: %w" = "модель не изменена: %w"
+"%w (and restoring the ccmux pin failed: %v)" = "%w (и восстановить закреплённую в ccmux модель не удалось: %v)"
+"field is read-only: " = "поле только для чтения: "

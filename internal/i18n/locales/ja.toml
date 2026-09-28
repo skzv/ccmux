@@ -539,3 +539,6 @@
 "polls tmux, classifies each session, rings the bell when an agent needs input, and keeps the machine awake while sessions are active" = "tmux をポーリングして各セッションの状態を判定し、エージェントが入力を求めるとベルを鳴らし、セッションが動いている間はマシンをスリープさせません"
 "↑↓ %d/%d · esc: close" = "↑↓ %d/%d · esc: 閉じる"
 "? / esc: close" = "? / esc: 閉じる"
+"model not changed: %w" = "モデルは変更されていません: %w"
+"%w (and restoring the ccmux pin failed: %v)" = "%w (ccmux の固定モデルの復元にも失敗しました: %v)"
+"field is read-only: " = "読み取り専用の項目: "

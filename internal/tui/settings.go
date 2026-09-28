@@ -475,7 +475,7 @@ func (m settingsModel) Update(msg tea.Msg) (settingsModel, tea.Cmd) {
 				f := fields[m.cursor]
 				switch {
 				case f.readOnly:
-					m.errMsg = "field is read-only: " + f.hint
+					m.errMsg = tr("field is read-only: ") + f.hint
 				case len(f.options) > 0:
 					// Cycle-picker row (e.g. agents.default): advance to
 					// the next value and persist, no inline editor.
