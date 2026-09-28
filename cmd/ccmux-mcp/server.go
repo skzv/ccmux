@@ -80,10 +80,23 @@ const (
 // legitimate read or write; a Tool can ask for less (Tool.Timeout).
 const defaultToolTimeout = 30 * time.Second
 
+// errServerBusy answers a tools/call refused because the queue is full.
+// JSON-RPC reserves -32000..-32099 for implementation-defined server
+// errors.
+const errServerBusy = -32000
+
 // maxInFlight bounds how many tools/call requests run at once. Past it
-// the reader stops taking new frames until one finishes — backpressure,
-// not an error.
+// calls wait in a FIFO queue; the reader never blocks on it, so ping,
+// initialize, tools/list and notifications/cancelled stay prompt.
 const maxInFlight = 16
+
+// maxQueued bounds how many accepted tools/call requests may wait for a
+// slot, and maxQueuedBytes the params they hold between them (a frame
+// may be 4 MiB). A call past either is refused at once with
+// errServerBusy. maxQueuedBytes is a var only so tests can shrink it.
+const maxQueued = 1024
+
+var maxQueuedBytes = 64 << 20
 
 // Server holds the long-lived state for one ccmux-mcp process: the
 // daemon client it proxies to, the tool registry, and whether
@@ -114,11 +127,12 @@ func NewServer(client DaemonClient, allowMutate bool, version string) *Server {
 // `out`. Returns nil on EOF, error on unrecoverable I/O failure.
 //
 // Frames are read and parsed one at a time, but tool calls run
-// concurrently (see dispatch.go): one hung daemon call no longer
-// freezes the loop, so a ping or a notifications/cancelled behind it is
+// concurrently (see dispatch.go), and past the concurrency cap they
+// queue rather than stall the reader: hung daemon calls never freeze
+// the loop, so a ping or a notifications/cancelled behind them is
 // answered at once. Everything else — initialize, ping, tools/list,
 // errors — is answered inline, in order. At EOF, Run waits for the
-// calls still in flight so their responses are written.
+// calls still running or queued so their responses are written.
 func (s *Server) Run(ctx context.Context, in io.Reader, out io.Writer) error {
 	// MCP requests/responses can be large (full pane previews, project
 	// lists); 4 MiB is generous. (It is deliberately larger than the

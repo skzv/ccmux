@@ -370,3 +370,266 @@ func TestHealthProbeFailsFast(t *testing.T) {
 	}
 	l.finish()
 }
+
+// sendAsync writes frames from a goroutine: against a reader that
+// blocks, a plain send would hang the test instead of failing it.
+func (l *liveServer) sendAsync(frames ...string) {
+	go func() {
+		for _, f := range frames {
+			if _, err := l.in.Write([]byte(f + "\n")); err != nil {
+				return
+			}
+		}
+	}()
+}
+
+func listSessionsCall(id int) string {
+	return `{"jsonrpc":"2.0","id":` + itoa(id) + `,"method":"tools/call","params":{"name":"list_sessions"}}`
+}
+
+// fillSlots starts maxInFlight list_sessions calls (ids 0..maxInFlight-1)
+// that hang in the daemon, and waits until every one is inside it.
+func fillSlots(t *testing.T, l *liveServer, h *hungClient) {
+	t.Helper()
+	frames := make([]string, maxInFlight)
+	for i := range frames {
+		frames[i] = listSessionsCall(i)
+	}
+	l.sendAsync(frames...)
+	for i := 0; i < maxInFlight; i++ {
+		waitEntered(t, h, "sessions")
+	}
+}
+
+// TestPingAnsweredPastTheInFlightCap — past maxInFlight hung calls the
+// reader used to block waiting for a slot, so a ping behind them sat
+// unread until a call finished (up to the 30s tool backstop against a
+// hung daemon; clients drop the connection over far less). Excess calls
+// now queue without blocking the reader.
+func TestPingAnsweredPastTheInFlightCap(t *testing.T) {
+	h := newHungClient("sessions")
+	l := startLive(t, NewServer(h, false, "test"))
+	fillSlots(t, l, h)
+
+	start := time.Now()
+	l.sendAsync(listSessionsCall(100), listSessionsCall(101), listSessionsCall(102), listSessionsCall(103),
+		`{"jsonrpc":"2.0","id":"p","method":"ping"}`)
+	if id := frameID(t, l.next(500*time.Millisecond, "ping behind maxInFlight+4 hung calls")); id != `"p"` {
+		t.Fatalf("first response id = %s, want the ping", id)
+	}
+	t.Logf("ping answered in %v with %d hung calls ahead of it", time.Since(start), maxInFlight+4)
+	select {
+	case op := <-h.entered:
+		t.Fatalf("%s entered the daemon while every slot was taken", op)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(h.release)
+	for i := 0; i < maxInFlight+4; i++ {
+		l.next(5*time.Second, "hung or queued call after release")
+	}
+	if rest := l.finish(); len(rest) != 0 {
+		t.Errorf("unexpected extra frames: %q", rest)
+	}
+}
+
+// TestCancelQueuedCallNeverRuns — a notifications/cancelled for a call
+// still waiting for a slot used to sit unread behind it, and by the
+// time it was read the call had run. Now it's read at once: the call
+// never runs and, like any cancelled call, gets no response. A
+// cancelled mutation must not hold up the calls queued after it.
+func TestCancelQueuedCallNeverRuns(t *testing.T) {
+	h := newHungClient("sessions")
+	l := startLive(t, NewServer(h, true, "test"))
+	fillSlots(t, l, h)
+
+	l.sendAsync(
+		`{"jsonrpc":"2.0","id":"q-read","method":"tools/call","params":{"name":"get_daemon_health"}}`,
+		`{"jsonrpc":"2.0","id":"q-kill","method":"tools/call","params":{"name":"kill_session","arguments":{"name":"s"}}}`,
+		`{"jsonrpc":"2.0","id":"after","method":"tools/call","params":{"name":"get_daemon_health"}}`,
+		`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":"q-read"}}`,
+		`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":"q-kill"}}`,
+		`{"jsonrpc":"2.0","id":"p","method":"ping"}`,
+	)
+	if id := frameID(t, l.next(500*time.Millisecond, "ping after cancelling queued calls")); id != `"p"` {
+		t.Fatalf("first response id = %s, want the ping", id)
+	}
+
+	close(h.release)
+	seen := map[string]bool{}
+	for i := 0; i < maxInFlight+1; i++ {
+		seen[frameID(t, l.next(5*time.Second, "remaining calls"))] = true
+	}
+	for _, f := range l.finish() {
+		seen[frameID(t, f)] = true
+	}
+	if seen[`"q-read"`] || seen[`"q-kill"`] {
+		t.Errorf("a cancelled queued call got a response: %v", seen)
+	}
+	if !seen[`"after"`] {
+		t.Errorf("the call queued after a cancelled mutation never completed: %v", seen)
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	health, kills := 0, 0
+	for _, ev := range h.order {
+		switch ev {
+		case "health:start":
+			health++
+		case "kill:start":
+			kills++
+		}
+	}
+	if kills != 0 || health != 1 {
+		t.Errorf("daemon saw %d kill and %d health calls, want 0 and 1 (only the uncancelled one): %v", kills, health, h.order)
+	}
+}
+
+// TestQueueOverflowIsBusyAtOnce — the queue has a hard cap; a call past
+// it is refused immediately with errServerBusy rather than blocking the
+// reader (or growing without bound).
+func TestQueueOverflowIsBusyAtOnce(t *testing.T) {
+	h := newHungClient("sessions")
+	h.entered = make(chan string, maxInFlight+maxQueued+1)
+	l := startLive(t, NewServer(h, false, "test"))
+	fillSlots(t, l, h)
+
+	frames := make([]string, 0, maxQueued+1)
+	for i := 0; i < maxQueued; i++ {
+		frames = append(frames, listSessionsCall(1000+i))
+	}
+	frames = append(frames, `{"jsonrpc":"2.0","id":"over","method":"tools/call","params":{"name":"list_sessions"}}`)
+	l.sendAsync(frames...)
+	frame := l.next(2*time.Second, "the call past the queue cap")
+	var resp rpcResponse
+	if err := json.Unmarshal([]byte(frame), &resp); err != nil {
+		t.Fatalf("decode %q: %v", frame, err)
+	}
+	if string(resp.ID) != `"over"` || resp.Error == nil || resp.Error.Code != errServerBusy {
+		t.Fatalf("call past the queue cap = %s, want a %d busy error for id \"over\"", frame, errServerBusy)
+	}
+	if !strings.Contains(resp.Error.Message, "busy") {
+		t.Errorf("busy error message = %q, want it to say the server is busy", resp.Error.Message)
+	}
+
+	close(h.release)
+	for i := 0; i < maxInFlight+maxQueued; i++ {
+		if frame := l.next(5*time.Second, "accepted call after release"); strings.Contains(frame, `"error"`) {
+			t.Fatalf("an accepted call failed: %s", frame)
+		}
+	}
+	if rest := l.finish(); len(rest) != 0 {
+		t.Errorf("unexpected extra frames: %d", len(rest))
+	}
+}
+
+// TestQueueByteBudgetIsBusy — queued calls hold their params until they
+// run, so the queue is bounded in bytes too: past the budget a call is
+// refused at once instead of buffering up to maxQueued 4 MiB frames.
+func TestQueueByteBudgetIsBusy(t *testing.T) {
+	prev := maxQueuedBytes
+	maxQueuedBytes = 1024
+	t.Cleanup(func() { maxQueuedBytes = prev })
+
+	h := newHungClient("sessions")
+	l := startLive(t, NewServer(h, false, "test"))
+	fillSlots(t, l, h)
+	pad := strings.Repeat("x", 600)
+	padded := func(id string) string {
+		return `{"jsonrpc":"2.0","id":"` + id + `","method":"tools/call","params":{"name":"list_sessions","arguments":{"pad":"` + pad + `"}}}`
+	}
+	l.sendAsync(padded("fits"), padded("over"))
+	frame := l.next(2*time.Second, "the call past the byte budget")
+	var resp rpcResponse
+	if err := json.Unmarshal([]byte(frame), &resp); err != nil {
+		t.Fatalf("decode %q: %v", frame, err)
+	}
+	if string(resp.ID) != `"over"` || resp.Error == nil || resp.Error.Code != errServerBusy {
+		t.Fatalf("call past the byte budget = %s, want a %d busy error for id \"over\"", frame, errServerBusy)
+	}
+	close(h.release)
+	for i := 0; i < maxInFlight+1; i++ {
+		l.next(5*time.Second, "accepted call after release")
+	}
+	l.finish()
+}
+
+// TestEOFRunsQueuedCallsThenReturns — EOF with calls still queued: Run
+// keeps its promise to answer everything it accepted, then returns.
+func TestEOFRunsQueuedCallsThenReturns(t *testing.T) {
+	h := newHungClient("sessions")
+	l := startLive(t, NewServer(h, false, "test"))
+	fillSlots(t, l, h)
+	l.sendAsync(listSessionsCall(100), listSessionsCall(101), listSessionsCall(102), listSessionsCall(103),
+		`{"jsonrpc":"2.0","id":"p","method":"ping"}`)
+	// The ping's answer proves every call before it was read.
+	if id := frameID(t, l.next(500*time.Millisecond, "ping behind queued calls")); id != `"p"` {
+		t.Fatalf("first response id = %s, want the ping", id)
+	}
+	_ = l.in.Close()
+	select {
+	case err := <-l.done:
+		t.Fatalf("Run returned (%v) with calls still hung and queued", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(h.release)
+	ids := map[string]bool{}
+	for i := 0; i < maxInFlight+4; i++ {
+		ids[frameID(t, l.next(5*time.Second, "queued call after EOF"))] = true
+	}
+	for _, want := range []string{"100", "101", "102", "103"} {
+		if !ids[want] {
+			t.Errorf("queued call %s was not answered after EOF", want)
+		}
+	}
+	select {
+	case err := <-l.done:
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return after EOF once its calls finished")
+	}
+}
+
+// brokenWriter fails every write: stdout has gone away.
+type brokenWriter struct{}
+
+func (brokenWriter) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }
+
+// TestWriteFailureDropsQueuedCalls — once stdout is gone Run stops, and
+// calls still queued must never run (nobody can read their answers) —
+// nor may Run wait on them.
+func TestWriteFailureDropsQueuedCalls(t *testing.T) {
+	h := newHungClient("sessions")
+	defer close(h.release)
+	inR, inW := io.Pipe()
+	defer inW.Close()
+	done := make(chan error, 1)
+	go func() { done <- NewServer(h, false, "test").Run(context.Background(), inR, brokenWriter{}) }()
+
+	go func() {
+		for i := 0; i < maxInFlight+4; i++ {
+			if _, err := inW.Write([]byte(listSessionsCall(i) + "\n")); err != nil {
+				return
+			}
+		}
+		_, _ = inW.Write([]byte(`{"jsonrpc":"2.0","id":"p","method":"ping"}` + "\n"))
+	}()
+	for i := 0; i < maxInFlight; i++ {
+		waitEntered(t, h, "sessions")
+	}
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "write stdout") {
+			t.Fatalf("Run = %v, want the write failure", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Run did not stop after stdout failed with calls queued")
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if starts := strings.Count(strings.Join(h.order, " "), "sessions:start"); starts != maxInFlight {
+		t.Errorf("%d calls entered the daemon, want only the %d that held slots before stdout failed", starts, maxInFlight)
+	}
+}
