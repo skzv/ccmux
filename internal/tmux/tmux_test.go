@@ -1,6 +1,7 @@
 package tmux
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -415,5 +416,23 @@ func TestValidSessionName_IsAValidTarget(t *testing.T) {
 		if !ValidTarget(name) {
 			t.Errorf("ValidTarget(%q) = false for a name ccmux accepts or generates", name)
 		}
+	}
+}
+
+// TestKillRenameRefuseSessionIDs — Kill and Rename refuse a "$" name
+// before running tmux, whoever the caller: the TUI kills and renames by
+// names read back from tmux, and a session created outside ccmux as
+// "$5" would otherwise have the session with ID $5 killed or renamed in
+// its place. (Run against an empty private server, so the old code
+// can't reach a real session either.)
+func TestKillRenameRefuseSessionIDs(t *testing.T) {
+	t.Setenv("TMUX_TMPDIR", t.TempDir())
+	t.Setenv("TMUX", "")
+	ctx := context.Background()
+	if err := Kill(ctx, "$1"); !errors.Is(err, ErrSessionIDTarget) {
+		t.Errorf("Kill($1) = %v, want ErrSessionIDTarget", err)
+	}
+	if err := Rename(ctx, "$1", "x"); !errors.Is(err, ErrSessionIDTarget) {
+		t.Errorf("Rename($1, x) = %v, want ErrSessionIDTarget", err)
 	}
 }

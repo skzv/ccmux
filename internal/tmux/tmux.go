@@ -304,7 +304,16 @@ func NewWithAgent(ctx context.Context, name, dir, cmdline, agentTag string) erro
 func escapeFormat(s string) string { return strings.ReplaceAll(s, "#", "##") }
 
 // Kill terminates the named session.
+//
+// A name starting with "$" is refused (ErrSessionIDTarget): tmux would
+// read it as a session ID and kill whichever session has that ID. Every
+// caller that takes a name from a user checks ValidTarget first; this
+// also covers a name read back from tmux's own session list — a session
+// created outside ccmux as "$5" — which no target can reach by name.
 func Kill(ctx context.Context, name string) error {
+	if strings.HasPrefix(name, "$") {
+		return fmt.Errorf("tmux kill-session %q: %w", name, ErrSessionIDTarget)
+	}
 	cmd := command(ctx, "tmux", "kill-session", "-t", exactSession(name))
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("tmux kill-session: %w (%s)", err, strings.TrimSpace(string(out)))
@@ -312,8 +321,13 @@ func Kill(ctx context.Context, name string) error {
 	return nil
 }
 
-// Rename renames a session.
+// Rename renames a session. As with Kill, an old name starting with "$"
+// is refused (ErrSessionIDTarget): it would rename the session with
+// that ID.
 func Rename(ctx context.Context, oldName, newName string) error {
+	if strings.HasPrefix(oldName, "$") {
+		return fmt.Errorf("tmux rename-session %q: %w", oldName, ErrSessionIDTarget)
+	}
 	// "--" so a new name starting with "-" is a name, not a flag.
 	cmd := command(ctx, "tmux", "rename-session", "-t", exactSession(oldName), "--", newName)
 	if out, err := cmd.CombinedOutput(); err != nil {
