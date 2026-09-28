@@ -80,9 +80,11 @@ func TestPollOnce_FreshSessionStillNotifies(t *testing.T) {
 	s.list = func(context.Context) ([]tmux.Session, error) {
 		return []tmux.Session{{Name: "c-new", Path: "/tmp", Created: time.Now()}}, nil
 	}
-	pane := "working..."
+	pane := "Claude Code v2\n" + promptPane // started up, waiting at its input box
 	s.capture = func(context.Context, string, int) (string, error) { return pane, nil }
-	pollNTimes(s, 2)
+	pollNTimes(s, 3)
+	pane = "working..." + promptPane // a turn: output above the box
+	pollNTimes(s, 1)
 	pane = promptPane
 	pollNTimes(s, 3)
 	if bells != 1 {

@@ -195,9 +195,24 @@ type tick struct {
 // does and counts bells and the pushes maybePushForStateTransition
 // would send (it only notifies needs_input and active → idle).
 func runTurns(tn *turn, attached bool, ticks []tick) (bells, pushes int) {
+	evTicks := make([]evTick, len(ticks))
+	for i, tk := range ticks {
+		evTicks[i] = evTick{tk.next, evidence{spinning: tk.spinning}}
+	}
+	return runEvidence(tn, attached, evTicks)
+}
+
+// evTick is a tick with its full evidence.
+type evTick struct {
+	next agent.State
+	ev   evidence
+}
+
+// runEvidence is runTurns for ticks with any evidence.
+func runEvidence(tn *turn, attached bool, ticks []evTick) (bells, pushes int) {
 	state, seen := agent.StateUnknown, true
 	for _, tk := range ticks {
-		d := tn.attend(state, tk.next, tk.spinning, seen, attached)
+		d := tn.attend(state, tk.next, tk.ev, seen, attached)
 		if d.RingBell {
 			bells++
 		}

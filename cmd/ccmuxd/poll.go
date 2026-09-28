@@ -66,6 +66,11 @@ type paneMemory struct {
 	// working-spinner title belongs to a live agent (see liveTitle).
 	title       string
 	titleChange time.Time
+	// output is the tail of what the agent printed above its input area
+	// last tick, and hasInput whether that input area was on screen (see
+	// agent.TurnView) — for agents that keep the two apart.
+	output   string
+	hasInput bool
 }
 
 // redrawGraceTicks is how many ticks after a resize or pane switch a
@@ -243,7 +248,7 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 		lastCh   time.Time // when the body last changed, redraws aside
 		mem      paneMemory
 		newState agent.State
-		spinning bool // a live working-spinner title (see liveTitle)
+		ev       evidence
 	}
 	results := make([]result, 0, len(snaps))
 	staleAfter := spinnerStaleAfter(idleNeeds)
@@ -255,6 +260,7 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 			continue
 		}
 		now := time.Now()
+		first := !mem.observed
 		redraw := mem.track(obs)
 		pane := obs.body
 		lastCh := sn.lastCh
@@ -264,20 +270,30 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 		if obs.title != mem.title {
 			mem.title, mem.titleChange = obs.title, now
 		}
-		title := liveTitle(obs.title, later(lastCh, mem.titleChange), now, staleAfter)
-		// ClassifyStateFrom routes through ClassifyWithTitle when the
-		// agent implements TitleAwareAgent, otherwise falls back to the
-		// legacy body-only Classify. So agents that don't implement
-		// the new path keep their exact pre-Phase-1 behavior. It also
-		// takes the previous state, which a skip_state_update rule
-		// (a transient overlay) keeps instead of reclassifying.
 		newSt := agent.StateIdle // a plain shell has no agent state to detect
-		spinning := false
+		var ev evidence
 		if sn.agentID != shellAgentID {
-			newSt = agent.ClassifyStateFrom(agent.ByID(sn.agentID), sn.prevSt, pane, title, lastCh, idleNeeds)
-			spinning = isSpinnerTitle(title)
+			a := agent.ByID(sn.agentID)
+			view := agent.ReadTurn(a, pane)
+			title := liveTitle(obs.title, later(lastCh, mem.titleChange), now, staleAfter)
+			// ClassifyStateFrom routes through ClassifyWithTitle when the
+			// agent implements TitleAwareAgent, otherwise falls back to
+			// the legacy body-only Classify. It also takes the previous
+			// state, which a skip_state_update rule (a transient overlay)
+			// keeps instead of reclassifying.
+			newSt = agent.ClassifyStateFrom(a, sn.prevSt, pane, title, lastCh, idleNeeds)
+			ev = evidence{spinning: isSpinnerTitle(title), busy: view.Busy, separated: view.Separated}
+			if view.Separated {
+				// New output above the input area since last tick. Not on
+				// a first look (nothing to compare with), a redraw (a
+				// resize re-wraps the output), or when either tick had no
+				// input area to measure from (the agent starting up in a
+				// shell, or gone from one).
+				ev.output = !first && !redraw && view.HasInput && mem.hasInput && view.Output != mem.output
+				mem.output, mem.hasInput = view.Output, view.HasInput
+			}
 		}
-		results = append(results, result{name: sn.ts.Name, pane: pane, lastCh: lastCh, mem: mem, newState: newSt, spinning: spinning})
+		results = append(results, result{name: sn.ts.Name, pane: pane, lastCh: lastCh, mem: mem, newState: newSt, ev: ev})
 	}
 
 	// Phase 3.
@@ -306,9 +322,9 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 			t.last = r.pane
 			t.state = r.newState
 			t.seen = ts.Attached || r.newState != agent.StateNeedsInput
-			if r.spinning {
+			if r.ev.spinning || r.ev.busy {
 				// Caught mid-turn: its end is news.
-				t.spinnerSeen, t.worked = true, true
+				t.spinnerSeen, t.worked = r.ev.spinning, true
 			}
 			stateEvents = append(stateEvents, daemon.SessionEvent{
 				At:      time.Now(),
@@ -322,7 +338,7 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 		}
 		t.last = r.pane
 		t.lastChange = r.lastCh
-		decision := t.attend(t.state, r.newState, r.spinning, t.seen, ts.Attached)
+		decision := t.attend(t.state, r.newState, r.ev, t.seen, ts.Attached)
 		t.seen = decision.NewSeen
 		if decision.RingBell {
 			bellNames = append(bellNames, r.name)
@@ -651,24 +667,47 @@ func isNews(in attentionInput) bool {
 	}
 }
 
+// evidence is what one tick's capture says about the agent working, for
+// turn.attend.
+type evidence struct {
+	spinning bool // a live working-spinner title (see liveTitle)
+	// busy: the body shows a turn running in a way typing can't produce
+	// (agent.TurnView.Busy — Claude's `esc to interrupt` status line, an
+	// agent's working footer).
+	busy bool
+	// separated: the agent keeps its output apart from the user's input
+	// (agent.TurnReader), and output reports new output above its input
+	// area since last tick.
+	separated, output bool
+}
+
 // turn is a session's turn bookkeeping: what decides whether the agent
 // did real work since the user last heard from it, so that only the
-// end of a real turn notifies.
+// end of a real turn notifies. Typing into the agent's input box, a
+// redraw, and a new session's startup change the pane too; none of
+// them is work.
 //
-// Evidence of work:
+// Evidence of work, strongest first:
 //
 //   - A live working-spinner title (see liveTitle) — the agent itself
-//     broadcasting that it's working. Once a session has shown one
-//     (spinnerSeen), it is the only evidence that counts: the agent is
-//     known to announce its turns, so a body change without it is the
-//     user typing into the input box, or a redraw.
-//   - Otherwise (agents that don't set a title, or a session that
-//     hasn't shown a spinner yet), the session classifying as active —
-//     except during startup: a session created while the daemon
-//     watched is in startup until it first settles (needs_input, idle
-//     or error), and its startup output is not a turn. A spinner does
-//     count during startup: an agent launched with a first prompt is
-//     working on it.
+//     broadcasting that it's working — or a body that shows a turn
+//     running (evidence.busy). These count even during startup: an
+//     agent launched with a first prompt is working on it.
+//   - For an agent that keeps its output apart from its input box
+//     (Claude Code), new output above the box. Typing only changes the
+//     box, so this tells a turn from the user typing, however short the
+//     turn — one that starts and ends between two polls still left its
+//     answer above the box. Nothing else about the body counts.
+//   - For any other agent, the session classifying as active — the
+//     generic fallback, which can't tell the agent's output from the
+//     user's typing. Once the session has shown a spinner (spinnerSeen)
+//     the agent is known to announce its turns, so this no longer
+//     counts: typing then doesn't notify, at the cost of missing a turn
+//     that ends between two polls.
+//
+// A session created while the daemon watched is in startup until it
+// first settles (needs_input, idle or error): only the strongest
+// evidence counts then, since its startup output is not a turn.
 type turn struct {
 	spinnerSeen bool
 	worked      bool
@@ -676,15 +715,9 @@ type turn struct {
 }
 
 // attend folds one classified tick into the bookkeeping and decides the
-// attention side effects. spinning reports a live working-spinner
-// title this tick.
-func (tn *turn) attend(prev, next agent.State, spinning, prevSeen, attached bool) attentionDecision {
-	work := spinning
-	if spinning {
-		tn.spinnerSeen = true
-	} else if !tn.spinnerSeen && !tn.startup {
-		work = next == agent.StateActive
-	}
+// attention side effects.
+func (tn *turn) attend(prev, next agent.State, ev evidence, prevSeen, attached bool) attentionDecision {
+	work := tn.isWork(next, ev)
 	tn.worked = tn.worked || work
 	d := decideAttention(attentionInput{
 		Prev: prev, Next: next, PrevSeen: prevSeen, Attached: attached,
@@ -697,6 +730,24 @@ func (tn *turn) attend(prev, next agent.State, spinning, prevSeen, attached bool
 		tn.startup = false
 	}
 	return d
+}
+
+// isWork reports whether this tick is evidence of the agent working
+// (see turn).
+func (tn *turn) isWork(next agent.State, ev evidence) bool {
+	if ev.spinning {
+		tn.spinnerSeen = true
+	}
+	switch {
+	case ev.spinning || ev.busy:
+		return true
+	case tn.startup:
+		return false
+	case ev.separated:
+		return ev.output
+	default:
+		return !tn.spinnerSeen && next == agent.StateActive
+	}
 }
 
 // renameTracked moves the tracked entry oldName→newName, stamping it

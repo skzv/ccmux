@@ -385,6 +385,9 @@ func compileRegexList(srcs []string) []*regexp.Regexp {
 	return out
 }
 
+// Verdict is the state a match of r classifies as.
+func (r *Rule) Verdict() State { return parseState(r.State) }
+
 // parseState maps the TOML state strings to State. Unknown
 // values fall to StateUnknown so a typo can't silently produce a
 // "blocked" classification.
