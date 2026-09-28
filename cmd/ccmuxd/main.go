@@ -539,10 +539,11 @@ type server struct {
 	detectMoshi func(ctx context.Context) moshi.Status
 
 	// models is the Claude model catalog service. Reads from disk
-	// cache; refreshes from the Anthropic Models API in the background
-	// every 24h when an API key is set. Always non-nil — falls back
-	// to a curated in-binary list when no key is present so the
-	// picker still has something useful to show. See internal/claudemodels.
+	// cache; refreshes it in the background weekly (modelRefreshLoop)
+	// from the `claude` CLI, else the Anthropic Models API when an API
+	// key is set. Always non-nil — falls back to a curated in-binary
+	// list when neither answers so the picker still has something
+	// useful to show. See internal/claudemodels.
 	models *claudemodels.Service
 
 	// Poll-loop seams. Defaulted by newServer to the real tmux-backed

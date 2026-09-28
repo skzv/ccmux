@@ -444,7 +444,7 @@ all against a real, isolated tmux server.
 
 | CUJ | Entry point | End state |
 |---|---|---|
-| Discover projects | `GET /v1/projects` / TUI Projects screen | every dir under the projects root with `CLAUDE.md` or `.git` is listed |
+| Discover projects | `GET /v1/projects` / TUI Projects screen | every non-hidden dir directly under the projects root is listed |
 | Create a new project | `ccmux new <name>` / TUI new-project form / `POST /v1/projects` | the project directory exists and an agent session is running — and nothing else is created (no `CLAUDE.md`, no `docs/`, no `git init`) |
 | Attach-or-create for a project | TUI Projects Enter | rejoin the running session or create a distinctly-named new one |
 

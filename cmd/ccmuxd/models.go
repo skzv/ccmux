@@ -20,7 +20,8 @@ import (
 const modelRefreshInterval = 7 * 24 * time.Hour
 
 // modelRefreshLoop runs an immediate startup refresh, then re-fetches
-// the catalog on a 24h interval until ctx is cancelled. Runs in its
+// the catalog every modelRefreshInterval (weekly) until ctx is
+// cancelled. Runs in its
 // own goroutine so a slow API call can't stall the poll loop.
 //
 // Startup behavior: kick a refresh on boot so first-attach users

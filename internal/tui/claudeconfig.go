@@ -882,7 +882,7 @@ func readFileOr(path, fallback string) string {
 func (m claudeModel) catalogLoaded() bool { return len(m.catalog.Models) > 0 }
 
 // loadCatalog reads the daemon's models.json cache from disk. The
-// daemon writes this file on its 24h refresh tick; the TUI just
+// daemon writes this file on its weekly refresh; the TUI just
 // consumes it as a static snapshot. A missing/corrupt file falls
 // through to the curated in-binary list so the picker is never
 // empty on a fresh install or with the daemon stopped.

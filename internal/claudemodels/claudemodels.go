@@ -5,20 +5,24 @@
 // time Anthropic shipped a new model — users had to wait for a ccmux
 // release just to see the new family in the picker.
 //
-// This package replaces that with live discovery: hit Anthropic's
-// Models API when an API key is present, cache the result for 24h on
-// disk, and fall back to a curated in-binary list otherwise. The
-// daemon refreshes the cache every 24h in the background; callers
-// read the merged result via Service.Catalog.
+// This package replaces that with live discovery: ask the user's
+// `claude` CLI (`claude -p`), then Anthropic's Models API when an API
+// key is present, and fall back to a curated in-binary list otherwise
+// (see Service.Refresh). The result is cached on disk; the daemon
+// refreshes it weekly in the background (Service.MaxAge, and the
+// daemon's own weekly tick), and no two runs of the discovery chain
+// are closer than 10 minutes (Service.MinRefreshInterval), however
+// often a refresh is forced. Callers read the merged result via
+// Service.Catalog.
 //
-// Auth model: ANTHROPIC_API_KEY only. The vast majority of ccmux
-// users authenticate to Claude Code via `claude auth login` and
-// don't have an API key set — that's fine, they get the curated
-// fallback list (which ships updated with every ccmux release).
-// Users who want live discovery set ANTHROPIC_API_KEY in their
-// shell. There is no OAuth path: internal/claudeauth deliberately
-// doesn't expose tokens, and rebuilding that boundary just for
-// this feature wasn't worth the surface area.
+// Auth model: the CLI tier works for every logged-in Claude Code user —
+// subscription (`claude auth login`) or API key — since claude handles
+// its own auth. The Models API tier needs ANTHROPIC_API_KEY in the
+// daemon's environment. Without either, users get the curated
+// fallback list (which ships updated with every ccmux release). There
+// is no OAuth path of our own: internal/claudeauth deliberately
+// doesn't expose tokens, and rebuilding that boundary just for this
+// feature wasn't worth the surface area.
 package claudemodels
 
 import (
