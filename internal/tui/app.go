@@ -1086,16 +1086,16 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.toasts.Set(toastError, tr("reload config: ")+err.Error(), 5*time.Second)
 		} else {
 			a.startupConfigErr = nil
-			a.adoptConfig(cfg)
+			cmd := a.adoptConfig(cfg)
 			a.toasts.Set(toastSuccess, tr("config reloaded"), 2*time.Second)
+			return a, cmd
 		}
 		return a, nil
 
 	case configSavedMsg:
 		// A screen persisted a change via config.Update. Adopt the saved
 		// state so every screen — and any later save — sees it.
-		a.adoptConfig(msg.Cfg)
-		return a, nil
+		return a, a.adoptConfig(msg.Cfg)
 
 	case refreshAfterDetachMsg:
 		// Returning from tmux attach. Also clears the loading overlay
@@ -1198,12 +1198,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// config.toml. Adopt the saved config: every TUI launch reads
 		// ANTHROPIC_MODEL from a.cfg, which otherwise kept the old pin
 		// until restart. Then let the Agents tab reload and toast.
+		var adopt tea.Cmd
 		if msg.Cfg != nil {
-			a.adoptConfig(*msg.Cfg)
+			adopt = a.adoptConfig(*msg.Cfg)
 		}
 		var cmd tea.Cmd
 		a.agentsM, cmd = a.agentsM.Update(msg)
-		return a, cmd
+		return a, tea.Batch(adopt, cmd)
 
 	case projectAgentSwitchedMsg:
 		// Applied straight to the list: neither another active screen
@@ -1928,12 +1929,15 @@ func editorReloadMsg(source string) tea.Msg {
 
 // adoptConfig makes cfg (fresh from disk) the app's config: re-applies
 // the runtime-only overlays and pushes it into every screen that caches
-// a copy.
-func (a *App) adoptConfig(cfg config.Config) {
+// a copy. The returned command re-lists projects when the projects root
+// changed — without it, Projects and Notes kept showing the old root's
+// projects until the user pressed `r`.
+func (a *App) adoptConfig(cfg config.Config) tea.Cmd {
 	if a.runtimeOverrides != nil {
 		a.runtimeOverrides(&cfg)
 	}
 	a.overlayDetectedTier(&cfg)
+	rootChanged := project.ResolveRoot(cfg.Projects.Root) != project.ResolveRoot(a.cfg.Projects.Root)
 	a.cfg = cfg
 	// A config.toml edit may have changed `lang` — re-apply it so a
 	// $EDITOR-based language switch takes effect without a restart.
@@ -1946,6 +1950,13 @@ func (a *App) adoptConfig(cfg config.Config) {
 	a.projectsM.SetDefaultAgent(cfg.Agents.Default)
 	a.projectsM.SetAgentCommands(cfg.AgentCommands())
 	a.projectsM.SetProjectsRoot(cfg.Projects.Root)
+	if !rootChanged {
+		return nil
+	}
+	// Notes showed a project from the old root; it follows Projects, so
+	// start over from the new list.
+	a.notes.SetProject(nil)
+	return a.refreshProjectsCmd()
 }
 
 // overlayDetectedTier shows the auto-detected Claude tier when the user

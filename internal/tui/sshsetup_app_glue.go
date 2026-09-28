@@ -113,7 +113,7 @@ func persistWizardAdded(a App, target sshsetup.Target, addedUsers []string) App 
 		}
 		return a
 	}
-	a.adoptConfig(saved)
+	_ = a.adoptConfig(saved) // hosts only: the projects root is unchanged
 	return a
 }
 
@@ -165,7 +165,7 @@ func persistWizardCorrection(a App, original, final sshsetup.Target) App {
 		}
 		return a
 	}
-	a.adoptConfig(saved)
+	_ = a.adoptConfig(saved) // hosts only: the projects root is unchanged
 	return a
 }
 
