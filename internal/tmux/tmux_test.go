@@ -342,8 +342,24 @@ func TestPaneTitle_MissingSessionIsEmpty(t *testing.T) {
 
 func TestSessionAgentsStayScopedToTheirSession(t *testing.T) {
 	sessions := []Session{{Name: "one", Path: "/same/project"}, {Name: "two", Path: "/same/project"}, {Name: "three"}}
-	applySessionAgents(sessions, []byte("one\tmuse\ntwo\tcodex\nthree\t\n"))
+	applySessionTags(sessions, []byte("one\tmuse\t\ntwo\tcodex\tcodex\nthree\t\t\n"))
 	if sessions[0].Agent != "muse" || sessions[1].Agent != "codex" || sessions[2].Agent != "" {
+		t.Fatal(sessions)
+	}
+	// The spinner mark is read back per session too (see
+	// SetSessionSpinner), and a session without one has none.
+	if sessions[0].Spinner != "" || sessions[1].Spinner != "codex" || sessions[2].Spinner != "" {
+		t.Fatal(sessions)
+	}
+}
+
+// TestSessionTags_OldFormat — a line with only the name and the agent
+// (a tmux wrapper, or a test fake, that prints two columns) still tags
+// its session, with no spinner mark.
+func TestSessionTags_OldFormat(t *testing.T) {
+	sessions := []Session{{Name: "one"}, {Name: "two"}}
+	applySessionTags(sessions, []byte("one\tclaude\ntwo\t\n"))
+	if sessions[0].Agent != "claude" || sessions[0].Spinner != "" || sessions[1].Agent != "" {
 		t.Fatal(sessions)
 	}
 }

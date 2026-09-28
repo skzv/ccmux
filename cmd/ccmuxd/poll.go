@@ -54,6 +54,9 @@ type pollTrack struct {
 	// listed is the session's list-sessions row as of the last tick
 	// (attached, windows, created — for sessionState).
 	listed tmux.Session
+	// spinnerMarked is the agent this daemon last asked to record on the
+	// session as showing a working spinner (see spinnerMarkDue).
+	spinnerMarked agent.ID
 }
 
 // paneMemory is what the poll loop remembers between ticks about the
@@ -354,7 +357,8 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 			name       string
 			prev, next agent.State
 		}
-		anyActive bool
+		spinnerMarks []spinnerMark
+		anyActive    bool
 	)
 	s.mu.Lock()
 	for _, r := range results {
@@ -375,13 +379,23 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 			t.lastChange = r.lastCh
 			t.state = r.newState
 			t.seen = ts.Attached || r.newState != agent.StateNeedsInput
+			// What an earlier daemon learned by watching, the session
+			// keeps (see spinnerMarkDue).
+			marked := ts.Spinner != "" && ts.Spinner == string(r.agentID)
+			t.spinnerSeen = r.ev.spinning || marked
 			// Whatever it is in the middle of — a turn, a startup — is not
 			// news: nothing it does notifies until the daemon has seen it
 			// settle (see turn). One capture can't tell a turn in flight
 			// from a session waiting, so that holds whatever this one
-			// classified as.
-			t.joined, t.joinedAt = true, time.Now()
-			t.spinnerSeen = r.ev.spinning
+			// classified as — unless its agent is known to show a spinner
+			// title while it works (marked) and shows none now. A working
+			// one would, so it has settled, and its next turn is news
+			// however soon it starts.
+			t.joined = !(marked && settled(r.newState) && !isSpinnerTitle(strings.TrimSpace(r.mem.title)))
+			t.joinedAt = time.Now()
+			if t.spinnerMarkDue(ts) {
+				spinnerMarks = append(spinnerMarks, spinnerMark{r.name, t.agentID})
+			}
 			stateEvents = append(stateEvents, daemon.SessionEvent{
 				At:      time.Now(),
 				Kind:    "state_change",
@@ -411,6 +425,9 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 		ev.still = time.Since(quietSince) >= idleNeeds
 		prevSeen := t.seen
 		decision := t.attend(t.state, r.newState, ev, t.seen, ts.Attached)
+		if t.spinnerMarkDue(ts) {
+			spinnerMarks = append(spinnerMarks, spinnerMark{r.name, t.agentID})
+		}
 		t.seen = decision.NewSeen
 		if decision.RingBell {
 			bellNames = append(bellNames, r.name)
@@ -473,7 +490,43 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 	for _, p := range pushes {
 		s.maybePushForStateTransition(p.name, p.prev, p.next)
 	}
+	if s.markSpinner != nil {
+		for _, m := range spinnerMarks {
+			if err := s.markSpinner(ctx, m.name, string(m.agent)); err != nil {
+				log.Printf("ccmuxd: record %s's spinner on session %s: %v", m.agent, m.name, err)
+			}
+		}
+	}
 	s.sleeper.SetActive(anyActive)
+}
+
+// spinnerMark is a session whose agent the poll tick records as
+// showing a working spinner (see spinnerMarkDue).
+type spinnerMark struct {
+	name  string
+	agent agent.ID
+}
+
+// spinnerMarkDue reports whether the session's own record of the agent
+// that shows a working spinner there (its @ccmux_spinner option, read
+// back as ts.Spinner) needs writing: the daemon has learned that its
+// agent does (turn.spinnerSeen) and the session doesn't say so. It asks
+// once per agent per daemon lifetime, and notes that it did. Caller
+// holds s.mu.
+//
+// spinnerSeen changes what counts as a turn — once an agent is known to
+// announce its turns with a spinner, the session merely classifying as
+// active (the user typing) no longer does — and it is learned by
+// watching. Kept only in the daemon's memory, every restart forgot it,
+// and the first thing typed into each such session afterwards notified
+// as the end of a turn. The session keeps it instead, and the first
+// look after a restart reads it back (Phase 3).
+func (t *tracked) spinnerMarkDue(ts tmux.Session) bool {
+	if !t.spinnerSeen || t.agentID == shellAgentID || ts.Spinner == string(t.agentID) || t.spinnerMarked == t.agentID {
+		return false
+	}
+	t.spinnerMarked = t.agentID
+	return true
 }
 
 // observation is one tick's reading of a session's agent pane.
@@ -798,7 +851,8 @@ type evidence struct {
 //     user's typing. Once the session has shown a spinner (spinnerSeen)
 //     the agent is known to announce its turns, so this no longer
 //     counts: typing then doesn't notify, at the cost of missing a turn
-//     that ends between two polls.
+//     that ends between two polls. The session itself keeps what was
+//     learned, so a daemon restart doesn't forget it (spinnerMarkDue).
 //
 // A session created while the daemon watched is in startup until it
 // first settles (needs_input, idle or error): only the strongest
@@ -821,7 +875,11 @@ type evidence struct {
 // its end notified — every turn a restart caught, unless Claude showed
 // both its spinner title and its status line. The price is that a turn
 // started within an idle window of the first look isn't announced
-// either: the daemon can't tell it from one already running.
+// either: the daemon can't tell it from one already running. Except when
+// it can: a session whose agent is known to show a spinner title while
+// it works (the session's own record, see spinnerMarkDue) and shows none
+// on the first look isn't working, so a settled first look ends joined
+// at once.
 //
 // Each notification needs a turn of its own: worked is cleared whenever
 // the session settles into needs_input, idle or error, whether or not

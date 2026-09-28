@@ -165,6 +165,43 @@ func TestIntegration_NewWithAgentTagsSession(t *testing.T) {
 	}
 }
 
+// TestIntegration_SessionSpinnerMark — the daemon records on a session
+// that its agent shows a working-spinner title, and reads it back from
+// the session list after a restart. On a real tmux the mark must land
+// on that session only, survive a rename, and not disturb its agent tag.
+func TestIntegration_SessionSpinnerMark(t *testing.T) {
+	ctx := isolatedServer(t)
+	if err := NewWithAgent(ctx, "c-spin", os.TempDir(), "sleep 300", "codex"); err != nil {
+		t.Fatal(err)
+	}
+	if err := New(ctx, "c-spin-sibling", os.TempDir(), "sleep 300"); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetSessionSpinner(ctx, "c-spin", "codex"); err != nil {
+		t.Fatalf("SetSessionSpinner: %v", err)
+	}
+	if err := Rename(ctx, "c-spin", "c-spun"); err != nil {
+		t.Fatal(err)
+	}
+	sessions, err := List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]Session{}
+	for _, s := range sessions {
+		got[s.Name] = s
+	}
+	if s := got["c-spun"]; s.Spinner != "codex" || s.Agent != "codex" {
+		t.Errorf("c-spun: spinner %q, agent %q; want codex, codex (sessions %+v)", s.Spinner, s.Agent, sessions)
+	}
+	if s := got["c-spin-sibling"]; s.Spinner != "" {
+		t.Errorf("the mark leaked onto another session: %q", s.Spinner)
+	}
+	if err := SetSessionSpinner(ctx, "c-gone", "codex"); err == nil {
+		t.Error("SetSessionSpinner on a missing session: no error")
+	}
+}
+
 // TestIntegration_ListNoServerVersusUnreachable — tmux exits 1 both
 // when there is no server and when it can't reach one. Only the first
 // is "no sessions": reading an unreachable server as empty made the

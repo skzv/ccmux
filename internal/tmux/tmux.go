@@ -167,7 +167,11 @@ func CheckTarget(name string) error {
 
 // Session is the static metadata about a tmux session.
 type Session struct {
-	Agent      string    // optional explicit agent for a resumed conversation
+	Agent string // optional explicit agent for a resumed conversation
+	// Spinner is the agent (its ID) the daemon has seen announce its turns
+	// with a working-spinner title in this session — the session's
+	// @ccmux_spinner option, set by SetSessionSpinner — or "" for none.
+	Spinner    string
 	Name       string    // tmux session name, e.g. "c-foo"
 	Created    time.Time // tmux's create timestamp
 	LastAttach time.Time // tmux's last activity timestamp
@@ -212,13 +216,18 @@ func List(ctx context.Context) ([]Session, error) {
 		return nil, fmt.Errorf("tmux list-sessions: %w", withStderr(err))
 	}
 	sessions := parseList(out)
-	tags, err := command(ctx, "tmux", "list-sessions", "-F", "#{session_name}\t#{@ccmux_agent}").Output()
+	tags, err := command(ctx, "tmux", "list-sessions", "-F", sessionTagsFormat).Output()
 	if err != nil {
 		return nil, fmt.Errorf("read tmux session agents: %w", withStderr(err))
 	}
-	applySessionAgents(sessions, tags)
+	applySessionTags(sessions, tags)
 	return sessions, nil
 }
+
+// sessionTagsFormat reads the user options ccmux keeps on each session
+// (see applySessionTags): what it runs (@ccmux_agent) and the agent seen
+// with a working-spinner title there (@ccmux_spinner).
+const sessionTagsFormat = "#{session_name}\t#{" + agentOption + "}\t#{" + spinnerOption + "}"
 
 // noServerRunning reports whether a failed tmux command's stderr means
 // there is simply no tmux server: "no server running on <socket>" (a
@@ -635,20 +644,57 @@ const agentOption = "@ccmux_agent"
 // workspace's default agent or other sessions running in that workspace.
 // A session ccmux creates itself should get its tag from NewWithAgent.
 func SetSessionAgent(ctx context.Context, name, id string) error {
-	if out, err := command(ctx, "tmux", "set-option", "-t", exactPane(name), agentOption, id).CombinedOutput(); err != nil {
-		return fmt.Errorf("set session agent: %w (%s)", err, strings.TrimSpace(string(out)))
+	if err := setSessionOption(ctx, name, agentOption, id); err != nil {
+		return fmt.Errorf("set session agent: %w", err)
 	}
 	return nil
 }
 
-func applySessionAgents(sessions []Session, raw []byte) {
-	byName := make(map[string]string, len(sessions))
+// spinnerOption is the tmux user option on which the daemon records the
+// agent it has seen show a working-spinner title in a session (read
+// back by List as Session.Spinner).
+const spinnerOption = "@ccmux_spinner"
+
+// SetSessionSpinner records on session name that agent id announces its
+// turns there with a working-spinner title. The daemon learns that by
+// watching, and relies on it to tell the agent's turns from the user
+// typing into it; kept in the session itself, it outlives a daemon
+// restart instead of being learned again (with a notification for
+// whatever was typed first).
+func SetSessionSpinner(ctx context.Context, name, id string) error {
+	if err := setSessionOption(ctx, name, spinnerOption, id); err != nil {
+		return fmt.Errorf("set session spinner: %w", err)
+	}
+	return nil
+}
+
+// setSessionOption sets the user option (an "@…" name) on the session
+// called name.
+func setSessionOption(ctx context.Context, name, option, value string) error {
+	if out, err := command(ctx, "tmux", "set-option", "-t", exactPane(name), option, value).CombinedOutput(); err != nil {
+		return fmt.Errorf("%w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// applySessionTags fills in each session's Agent and Spinner from raw,
+// the output of `list-sessions -F sessionTagsFormat`.
+func applySessionTags(sessions []Session, raw []byte) {
+	type tags struct{ agent, spinner string }
+	byName := make(map[string]tags, len(sessions))
 	for _, line := range strings.Split(string(raw), "\n") {
-		if parts := strings.SplitN(line, "\t", 2); len(parts) == 2 {
-			byName[parts[0]] = parts[1]
+		parts := strings.SplitN(line, "\t", 3)
+		if len(parts) < 2 {
+			continue
 		}
+		tg := tags{agent: parts[1]}
+		if len(parts) == 3 {
+			tg.spinner = parts[2]
+		}
+		byName[parts[0]] = tg
 	}
 	for i := range sessions {
-		sessions[i].Agent = byName[sessions[i].Name]
+		tg := byName[sessions[i].Name]
+		sessions[i].Agent, sessions[i].Spinner = tg.agent, tg.spinner
 	}
 }

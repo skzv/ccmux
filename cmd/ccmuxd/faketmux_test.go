@@ -28,6 +28,10 @@ type fakeTmux struct {
 	// keys landed in, whether targeted by id or through a session's
 	// active pane.
 	sent []string
+	// marks records every spinner mark written as "<session>=<agent>";
+	// the session's list row carries it from then on (Session.Spinner),
+	// as tmux keeps a session's options.
+	marks []string
 }
 
 type fakePane struct {
@@ -169,6 +173,24 @@ func (f *fakeTmux) wire(s *server) {
 		f.sent = append(f.sent, p.ID+"="+keys)
 		return nil
 	}
+	s.markSpinner = func(_ context.Context, name, id string) error {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		ts, ok := f.session[name]
+		if !ok {
+			return errNoFakeSession
+		}
+		ts.Spinner = id
+		f.session[name] = ts
+		f.marks = append(f.marks, name+"="+id)
+		return nil
+	}
+}
+
+func (f *fakeTmux) spinnerMarks() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.marks...)
 }
 
 func (f *fakeTmux) sentKeys() []string {

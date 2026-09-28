@@ -571,6 +571,11 @@ type server struct {
 	// agentPaneID).
 	sendKeysPane func(ctx context.Context, paneID, keys string) error
 	sendKeys     func(ctx context.Context, name, keys string) error
+	// markSpinner records on a session that agentID announces its turns
+	// there with a working-spinner title (tmux.SetSessionSpinner), so a
+	// restarted daemon reads it back rather than learning it again (see
+	// spinnerMarkDue in poll.go). nil skips recording.
+	markSpinner func(ctx context.Context, name, agentID string) error
 
 	// Session-handler seams, defaulted to tmux.Has / tmux.Kill /
 	// tmux.Rename so the create/kill/rename handlers' bookkeeping is
@@ -663,6 +668,7 @@ func newServer(cfg config.Config) *server {
 		capturePane:     tmux.CapturePaneID,
 		sendKeysPane:    tmux.SendKeysPane,
 		sendKeys:        tmux.SendKeys,
+		markSpinner:     tmux.SetSessionSpinner,
 		detectMoshi:     moshi.Detect,
 		bell:            notificationBell(cfg.Notifications),
 		readAgent:       project.ReadAgent,
