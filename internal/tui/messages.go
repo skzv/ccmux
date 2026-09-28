@@ -211,7 +211,8 @@ type newProjectSubmitMsg struct {
 	Mosh bool
 
 	// Agent is the AI agent the user picked in the form's agent row
-	// (claude / codex / antigravity). Empty defaults to claude downstream.
+	// (claude / codex / antigravity). Empty runs the project's recorded
+	// agent downstream (Claude when it has none; scaffold.SessionAgent).
 	// Carried through daemon.NewProjectRequest so the remote honors it.
 	Agent agent.ID
 

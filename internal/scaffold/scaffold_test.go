@@ -121,20 +121,26 @@ func TestPrepareDir_KeepsExistingProjectsAgent(t *testing.T) {
 	}
 }
 
+// started is one session StartSession created through fakeTmux.
+type started struct {
+	session, launch, tag string
+}
+
 // fakeTmux swaps StartSession's tmux call for the duration of a test,
-// recording "session=tag" for every session created with an agent tag.
-func fakeTmux(t *testing.T, newErr error) *[]string {
+// recording every session it creates with its launch command and agent
+// tag.
+func fakeTmux(t *testing.T, newErr error) *[]started {
 	t.Helper()
-	var tagged []string
+	var created []started
 	origNew := newSession
 	t.Cleanup(func() { newSession = origNew })
-	newSession = func(_ context.Context, session, _, _, tag string) error {
-		if newErr == nil && tag != "" {
-			tagged = append(tagged, session+"="+tag)
+	newSession = func(_ context.Context, session, _, launch, tag string) error {
+		if newErr == nil {
+			created = append(created, started{session, launch, tag})
 		}
 		return newErr
 	}
-	return &tagged
+	return &created
 }
 
 // TestStartSession_FailedStartLeavesAgentUnchanged — a sidecar recorded
@@ -166,13 +172,15 @@ func TestStartSession_FailedStartLeavesAgentUnchanged(t *testing.T) {
 	}
 }
 
-// TestStartSession_TagsSessionWhenAgentDiffersFromProject — the project
-// keeps its recorded agent, so a session started with a different one
-// is pinned to what it runs (tmux @ccmux_agent) for the daemon's
-// classifier. A session running the project's own agent isn't tagged.
-func TestStartSession_TagsSessionWhenAgentDiffersFromProject(t *testing.T) {
+// TestStartSession_TagsSessionWithTheAgentItRuns — the project keeps
+// its recorded agent, so a session started with a different one is
+// pinned to what it runs (tmux @ccmux_agent) for the daemon's
+// classifier; a session running the project's own agent is pinned to
+// it too, so switching the project's agent later doesn't change how
+// the running session is read.
+func TestStartSession_TagsSessionWithTheAgentItRuns(t *testing.T) {
 	hermeticHome(t)
-	tagged := fakeTmux(t, nil)
+	created := fakeTmux(t, nil)
 	dir := filepath.Join(t.TempDir(), "proj")
 	if err := project.SetAgent(dir, agent.IDCodex); err != nil {
 		t.Fatal(err)
@@ -184,11 +192,11 @@ func TestStartSession_TagsSessionWhenAgentDiffersFromProject(t *testing.T) {
 	if got := project.ReadAgent(dir); got != agent.IDCodex {
 		t.Errorf("project agent switched to %q", got)
 	}
-	if want := []string{session + "=claude"}; len(*tagged) != 1 || (*tagged)[0] != want[0] {
-		t.Errorf("session tags = %v, want %v", *tagged, want)
+	if len(*created) != 1 || (*created)[0].session != session || (*created)[0].tag != "claude" {
+		t.Errorf("sessions = %+v, want %s tagged claude", *created, session)
 	}
 
-	*tagged = nil
+	*created = nil
 	fresh := filepath.Join(t.TempDir(), "fresh")
 	if _, err := StartSession(context.Background(), Options{Name: "fresh", Dir: fresh, Agent: agent.IDCodex}); err != nil {
 		t.Fatal(err)
@@ -196,8 +204,45 @@ func TestStartSession_TagsSessionWhenAgentDiffersFromProject(t *testing.T) {
 	if got := project.ReadAgent(fresh); got != agent.IDCodex {
 		t.Errorf("new project ReadAgent = %q, want codex", got)
 	}
-	if len(*tagged) != 0 {
-		t.Errorf("session running the project's own agent was tagged: %v", *tagged)
+	if len(*created) != 1 || (*created)[0].tag != "codex" {
+		t.Errorf("sessions = %+v, want one tagged codex", *created)
+	}
+}
+
+// TestStartSession_EmptyAgentRunsTheProjectsAgent — with no agent
+// named, StartSession launched Claude even in an existing project whose
+// .ccmux/agent sidecar records another agent, so POST /v1/projects for
+// an existing Codex project with no agent in the request (or `ccmux
+// new` with no --agent and no default) ran Claude. The project's own
+// agent must run, tagged as such; Claude only when there is no sidecar.
+func TestStartSession_EmptyAgentRunsTheProjectsAgent(t *testing.T) {
+	hermeticHome(t)
+	created := fakeTmux(t, nil)
+	codexProj := filepath.Join(t.TempDir(), "codexproj")
+	if err := project.SetAgent(codexProj, agent.IDCodex); err != nil {
+		t.Fatal(err)
+	}
+	plain := filepath.Join(t.TempDir(), "plain")
+
+	for _, tc := range []struct {
+		dir  string
+		want agent.ID
+	}{{codexProj, agent.IDCodex}, {plain, agent.IDClaude}} {
+		*created = nil
+		opts := Options{Name: filepath.Base(tc.dir), Dir: tc.dir}
+		if got := SessionAgent(opts, tc.dir); got != tc.want {
+			t.Errorf("%s: SessionAgent = %q, want %q", tc.dir, got, tc.want)
+		}
+		if _, err := StartSession(context.Background(), opts); err != nil {
+			t.Fatal(err)
+		}
+		wantLaunch := LaunchCmd(Options{Agent: tc.want})
+		if len(*created) != 1 || (*created)[0].launch != wantLaunch || (*created)[0].tag != string(tc.want) {
+			t.Errorf("%s: sessions = %+v, want launch %q tagged %s", tc.dir, *created, wantLaunch, tc.want)
+		}
+		if got := project.ReadAgent(tc.dir); got != tc.want {
+			t.Errorf("%s: ReadAgent = %q, want %q", tc.dir, got, tc.want)
+		}
 	}
 }
 

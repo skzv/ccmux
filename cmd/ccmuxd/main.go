@@ -1923,17 +1923,21 @@ func (s *server) createProject(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	session, err := scaffold.StartSession(ctx, scaffold.Options{
+	opts := scaffold.Options{
 		Name:     name,
 		Dir:      dir,
 		Agent:    chosenAgent,
 		Commands: s.freshCommands(),
-	})
+	}
+	// What StartSession runs: the requested agent, else the existing
+	// project's recorded one.
+	launched := scaffold.SessionAgent(opts, dir)
+	session, err := scaffold.StartSession(ctx, opts)
 	if err != nil {
 		http.Error(w, "start: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if !s.confirmStarted(ctx, w, session, agent.ByID(chosenAgent).Binary()) {
+	if !s.confirmStarted(ctx, w, session, agent.ByID(launched).Binary()) {
 		return
 	}
 	// Apply ccmux chrome on the session before the client ssh-attaches.

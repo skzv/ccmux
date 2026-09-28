@@ -29,8 +29,20 @@ import (
 type Options struct {
 	Name     string         // project name; becomes the directory basename when Dir is empty
 	Dir      string         // target directory (absolute). Empty → ./<Name> resolved to absolute.
-	Agent    agent.ID       // which agent to launch; empty defaults to claude
+	Agent    agent.ID       // which agent to launch; empty → the project's recorded agent (SessionAgent)
 	Commands agent.Commands // optional configured agent executable paths
+}
+
+// SessionAgent is the agent StartSession runs for opts in the project
+// directory dir: opts.Agent when it names one, else the agent the
+// project records in its .ccmux/agent sidecar — Claude only when there
+// is none (project.ReadAgent). Opening an existing Codex project with
+// no agent named used to launch Claude.
+func SessionAgent(opts Options, dir string) agent.ID {
+	if id, ok := agent.ParseID(string(opts.Agent)); ok {
+		return id
+	}
+	return project.ReadAgent(dir)
 }
 
 // LaunchCmd is the tmux launch command for a new project's session.
@@ -105,20 +117,16 @@ func StartSession(ctx context.Context, opts Options) (string, error) {
 		return "", err
 	}
 	session := tmux.SessionNameForPath(dir)
-	// An existing project kept its recorded agent. If this session runs
-	// a different one, pin it on the session (as a resumed conversation
-	// does) so the daemon classifies the agent that's actually running —
-	// in the same tmux call that creates the session, so no poll tick
-	// sees it untagged and judges it by the project's agent.
-	launched := agent.IDClaude // what LaunchCmd runs for an empty Agent
-	if id, ok := agent.ParseID(string(opts.Agent)); ok {
-		launched = id
-	}
-	tag := ""
-	if launched != project.ReadAgent(dir) {
-		tag = string(launched)
-	}
-	if err := newSession(ctx, session, dir, LaunchCmd(opts), tag); err != nil {
+	// Run the agent named, else the project's own (SessionAgent), and
+	// pin it on the session — in the same tmux call that creates it —
+	// so the daemon classifies the agent that's actually running: an
+	// existing project keeps its recorded agent even when this session
+	// runs another, and the project's agent may be switched later while
+	// this session still runs the old one.
+	launched := SessionAgent(opts, dir)
+	launch := opts
+	launch.Agent = launched
+	if err := newSession(ctx, session, dir, LaunchCmd(launch), string(launched)); err != nil {
 		if wroteSidecar {
 			// Don't leave the project recorded as an agent it never ran.
 			_ = os.Remove(project.AgentSidecarPath(dir))

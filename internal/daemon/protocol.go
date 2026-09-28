@@ -137,8 +137,9 @@ type NewBareSessionResponse struct {
 type NewProjectRequest struct {
 	Name string `json:"name"`
 	// Agent picks which AI agent the remote daemon launches inside
-	// the new session. One of "claude" / "codex" / "antigravity" / "gemini"; empty (omitted by older
-	// clients) defaults to claude on the daemon side for back-compat.
+	// the new session: an agent id ("claude", "codex", …). Empty
+	// (omitted by older clients) runs the agent an existing project
+	// records in its .ccmux/agent sidecar, and Claude for a new one.
 	Agent string `json:"agent,omitempty"`
 }
 

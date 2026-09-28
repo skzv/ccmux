@@ -240,7 +240,8 @@ the daemon's hostname.
 #### `POST /v1/projects`
 Create a brand-new project (**directory only** — no `CLAUDE.md`/`docs/`/git)
 under the projects root, and start an agent session inside it.
-- **Request:** `NewProjectRequest` — `name` required.
+- **Request:** `NewProjectRequest` — `name` required. Without `agent`, an
+  existing directory's recorded agent (`.ccmux/agent`) runs, else Claude.
 - **Response `200`:** `NewProjectResponse`. Idempotent like
   `POST /v1/sessions`: if the project's session already runs, it is returned
   and nothing is started.

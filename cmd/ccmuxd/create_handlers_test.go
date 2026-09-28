@@ -258,6 +258,35 @@ func TestCreateProject_ExistingSession(t *testing.T) {
 	}
 }
 
+// TestCreateProject_NoAgentRunsTheProjectsAgent — POST /v1/projects for
+// an existing project with no agent in the request launched Claude
+// whatever the project's .ccmux/agent sidecar recorded. The project's
+// own agent must run, tagged on the session, and a failed start must
+// name that agent's binary.
+func TestCreateProject_NoAgentRunsTheProjectsAgent(t *testing.T) {
+	s, root, logPath := newCreateTestServer(t)
+	dir := mkdir(t, filepath.Join(root, "proj"))
+	if err := project.SetAgent(dir, agent.IDCodex); err != nil {
+		t.Fatal(err)
+	}
+	if rec := post(t, s.createProject, "/v1/projects", daemon.NewProjectRequest{Name: "proj"}); rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	codex := agent.LaunchCmd(agent.IDCodex, false, agent.Commands{})
+	assertTaggedAtCreation(t, logPath, "c-proj", "codex")
+	if creates := tmuxCallsWith(t, logPath, "new-session|"); len(creates) != 1 || !strings.Contains(creates[0], "|"+codex+"|;|") {
+		t.Errorf("new-session = %q, want it to launch %q", creates, codex)
+	}
+	if got := project.ReadAgent(dir); got != agent.IDCodex {
+		t.Errorf("project agent = %q, want codex kept", got)
+	}
+
+	s.startGrace = 100 * time.Millisecond // the session dies at once
+	if rec := post(t, s.createProject, "/v1/projects", daemon.NewProjectRequest{Name: "proj"}); rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "is codex installed") {
+		t.Errorf("dead session: status %d body %q, want 502 naming codex", rec.Code, rec.Body)
+	}
+}
+
 // TestCreateEndpoints_SessionThatExitsImmediately — with the agent's
 // binary missing (and no --continue shell fallback) the session died at
 // once, yet every create endpoint answered 200 for a session that no
