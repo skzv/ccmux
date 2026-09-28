@@ -4,6 +4,8 @@ package cmd
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -171,5 +173,63 @@ func TestUsageError_Classifies(t *testing.T) {
 	}
 	if msg := usageError(os.ErrPermission).Error(); strings.Contains(msg, "didn't respond") || strings.Contains(msg, "daemon start") {
 		t.Errorf("other failure: %q, want a plain read error", msg)
+	}
+}
+
+// TestDaemonDown_CommandsSayHowToStartIt — with ccmuxd not running,
+// `ccmux notes list` (and read/search, pair, shell) printed the raw
+// "dial unix …: connect: connection refused" with no hint, while
+// `ccmux usage` said to start the daemon. Every command that needs the
+// local daemon must give the same hint, whether the socket is missing
+// or stale (a crashed daemon's, nothing listening: "connection refused").
+func TestDaemonDown_CommandsSayHowToStartIt(t *testing.T) {
+	commands := [][]string{
+		{"notes", "list", "proj"},
+		{"notes", "read", "proj", "README.md"},
+		{"notes", "search", "proj", "needle"},
+		{"pair"},
+		{"shell", "--agent", "shell"},
+		{"usage"},
+	}
+	for socket, dialErr := range map[string]string{
+		"missing": "no such file or directory",
+		"stale":   "connection refused",
+	} {
+		for _, args := range commands {
+			t.Run(socket+"/"+strings.Join(args[:min(2, len(args))], "-"), func(t *testing.T) {
+				e := newCLIEnv(t)
+				if socket == "stale" {
+					e.staleDaemonSocket()
+				} else {
+					e.daemonSocketPath() // a $HOME short enough to dial; nothing there
+				}
+				res := e.run("", args...)
+				if res.code == 0 {
+					t.Fatalf("ccmux %v with no daemon exited 0; stdout %q", args, res.stdout)
+				}
+				if !strings.Contains(res.stderr, "ccmux daemon start") {
+					t.Errorf("ccmux %v with no daemon: stderr should say how to start it: %s", args, res.stderr)
+				}
+				if !strings.Contains(res.stderr, dialErr) {
+					t.Errorf("setup: a %s socket should fail the dial with %q: %s", socket, dialErr, res.stderr)
+				}
+			})
+		}
+	}
+}
+
+// TestDaemonDownErr_OnlyForAFailedDial — the start hint is for a
+// daemon that can't be reached at all; a daemon that answered with an
+// error is reported by the caller, unchanged.
+func TestDaemonDownErr_OnlyForAFailedDial(t *testing.T) {
+	dial := &net.OpError{Op: "dial", Net: "unix", Err: os.ErrNotExist}
+	if err := daemonDownErr(fmt.Errorf("ccmuxd x GET /v1/notes: %w", dial)); err == nil || !strings.Contains(err.Error(), "ccmux daemon start") {
+		t.Errorf("wrapped dial failure: %v, want the start hint", err)
+	}
+	if err := daemonDownErr(errors.New("ccmuxd x GET /v1/notes: status 404: project not found")); err != nil {
+		t.Errorf("an answer from the daemon: %v, want nil", err)
+	}
+	if err := notesErr(false, dial); err != dial {
+		t.Errorf("a peer's dial failure: %v, want it unchanged (the start hint is for this device)", err)
 	}
 }

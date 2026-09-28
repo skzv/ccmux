@@ -41,21 +41,34 @@ func resolveNotesAddr(cfg config.Config, host string) (addr string, local bool, 
 	return "", false, fmt.Errorf("unknown host %q — configure it with `ccmux host add`", host)
 }
 
-// notesClientFor returns a daemon client for the given host plus the
-// project-host label to report in output ("local" or the host name).
-func notesClientFor(cfg config.Config, host string) (*daemon.Client, string, error) {
+// notesClientFor returns a daemon client for the given host, and
+// whether it is this device's own ccmuxd.
+func notesClientFor(cfg config.Config, host string) (*daemon.Client, bool, error) {
 	addr, local, err := resolveNotesAddr(cfg, host)
 	if err != nil {
-		return nil, "", err
+		return nil, false, err
 	}
 	if local {
 		cli, err := daemon.LocalClient()
 		if err != nil {
-			return nil, "", fmt.Errorf("local daemon: %w", err)
+			return nil, false, fmt.Errorf("local daemon: %w", err)
 		}
-		return cli, "local", nil
+		return cli, true, nil
 	}
-	return daemon.RemoteClient(addr), host, nil
+	return daemon.RemoteClient(addr), false, nil
+}
+
+// notesErr explains a failed notes call. When the local ccmuxd isn't
+// running it says so and how to start it, as every other command does
+// (it used to print the raw "connection refused"); anything else, and
+// any error from a peer, is reported as is.
+func notesErr(local bool, err error) error {
+	if local {
+		if down := daemonDownErr(err); down != nil {
+			return down
+		}
+	}
+	return err
 }
 
 // newNotesCmd: `ccmux notes {list,read,search}` — cross-device access to
@@ -82,13 +95,13 @@ func newNotesCmd() *cobra.Command {
 			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 			defer cancel()
 			cfg, _ := config.Load()
-			cli, _, err := notesClientFor(cfg, host)
+			cli, local, err := notesClientFor(cfg, host)
 			if err != nil {
 				return err
 			}
 			entries, err := cli.Notes(ctx, args[0])
 			if err != nil {
-				return err
+				return notesErr(local, err)
 			}
 			tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 			fmt.Fprintln(tw, "REL\tDIR\tMODIFIED")
@@ -109,13 +122,13 @@ func newNotesCmd() *cobra.Command {
 			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 			defer cancel()
 			cfg, _ := config.Load()
-			cli, _, err := notesClientFor(cfg, host)
+			cli, local, err := notesClientFor(cfg, host)
 			if err != nil {
 				return err
 			}
 			nc, err := cli.NoteContent(ctx, args[0], args[1])
 			if err != nil {
-				return err
+				return notesErr(local, err)
 			}
 			// The daemon strips control sequences from note bodies,
 			// but a peer running an older ccmuxd doesn't.
@@ -132,13 +145,13 @@ func newNotesCmd() *cobra.Command {
 			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 			defer cancel()
 			cfg, _ := config.Load()
-			cli, _, err := notesClientFor(cfg, host)
+			cli, local, err := notesClientFor(cfg, host)
 			if err != nil {
 				return err
 			}
 			hits, err := cli.SearchNotes(ctx, args[0], args[1])
 			if err != nil {
-				return err
+				return notesErr(local, err)
 			}
 			for _, h := range hits {
 				fmt.Printf("%s:%d: %s\n", safeField(h.Rel), h.LineNum, safeField(h.Snippet))

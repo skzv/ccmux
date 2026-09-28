@@ -36,6 +36,11 @@ listen_tailnet = true.`,
 			defer cancel()
 			resp, err := cli.CreatePairToken(ctx)
 			if err != nil {
+				// A daemon that isn't running shows up here, as a
+				// failed dial: LocalClient itself never fails for it.
+				if down := daemonDownErr(err); down != nil {
+					return down
+				}
 				return fmt.Errorf("pair token: %w", err)
 			}
 			fmt.Println("Scan with a mobile client (expires in 5 minutes):")

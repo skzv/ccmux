@@ -113,6 +113,9 @@ func runShellLocal(ctx context.Context, name, path, agentFlag string) error {
 		Agent: agentFlag,
 	})
 	if err != nil {
+		if down := daemonDownErr(err); down != nil {
+			return down
+		}
 		return fmt.Errorf("new bare session: %w", err)
 	}
 	if !canAttachHere() {

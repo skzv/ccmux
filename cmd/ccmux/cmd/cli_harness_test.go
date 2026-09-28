@@ -195,6 +195,36 @@ func (e *cliEnv) runStdin(dir string, stdin *os.File, args ...string) cliResult 
 // limit — so call it before creating anything else under e.home.
 func (e *cliEnv) fakeDaemon(h http.Handler) {
 	e.t.Helper()
+	ln, err := net.Listen("unix", e.daemonSocketPath())
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	srv := &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second}
+	go func() { _ = srv.Serve(ln) }()
+	e.t.Cleanup(func() { _ = srv.Close() })
+}
+
+// staleDaemonSocket leaves a socket file at the daemon's path with
+// nothing listening on it — what a crashed ccmuxd leaves behind — so a
+// dial fails with "connection refused" rather than "no such file". Like
+// fakeDaemon, call it before creating anything else under e.home.
+func (e *cliEnv) staleDaemonSocket() {
+	e.t.Helper()
+	ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: e.daemonSocketPath(), Net: "unix"})
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	ln.SetUnlinkOnClose(false)
+	if err := ln.Close(); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
+// daemonSocketPath moves $HOME under /tmp — t.TempDir() on macOS is too
+// long for the 104-byte unix-socket path limit — and returns the
+// child's ccmuxd socket path there, its directory created.
+func (e *cliEnv) daemonSocketPath() string {
+	e.t.Helper()
 	home, err := os.MkdirTemp("/tmp", "cxd")
 	if err != nil {
 		e.t.Fatal(err)
@@ -213,13 +243,7 @@ func (e *cliEnv) fakeDaemon(h http.Handler) {
 	if err := os.MkdirAll(sockDir, 0o700); err != nil {
 		e.t.Fatal(err)
 	}
-	ln, err := net.Listen("unix", filepath.Join(sockDir, "ccmuxd.sock"))
-	if err != nil {
-		e.t.Fatal(err)
-	}
-	srv := &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second}
-	go func() { _ = srv.Serve(ln) }()
-	e.t.Cleanup(func() { _ = srv.Close() })
+	return filepath.Join(sockDir, "ccmuxd.sock")
 }
 
 // tmuxCalls returns every fake-tmux invocation so far, e.g.

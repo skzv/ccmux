@@ -44,15 +44,27 @@ const usageTimeout = 15 * time.Second
 // "(start ccmuxd first)" — including a daemon that was running but hung,
 // where starting it is exactly the wrong advice.
 func usageError(err error) error {
-	var opErr *net.OpError
-	switch {
-	case errors.Is(err, context.DeadlineExceeded):
+	if errors.Is(err, context.DeadlineExceeded) {
 		return fmt.Errorf("ccmuxd didn't respond within %v — it may be wedged; try `ccmux daemon restart`: %w", usageTimeout, err)
-	case errors.As(err, &opErr) && opErr.Op == "dial":
-		return fmt.Errorf("can't reach ccmuxd — start it with `ccmux daemon start`: %w", err)
-	default:
-		return fmt.Errorf("read usage from ccmuxd: %w", err)
 	}
+	if down := daemonDownErr(err); down != nil {
+		return down
+	}
+	return fmt.Errorf("read usage from ccmuxd: %w", err)
+}
+
+// daemonDownErr is how every command reports a call to the local ccmuxd
+// that couldn't even connect — no socket, or a stale one nothing listens
+// on ("connection refused"): the error with the start hint. It returns
+// nil for any other failure (the daemon answered with an error, or
+// didn't answer in time), which the caller reports its own way. `notes`,
+// `pair` and `shell` used to print the raw dial error with no hint.
+func daemonDownErr(err error) error {
+	var opErr *net.OpError
+	if errors.As(err, &opErr) && opErr.Op == "dial" {
+		return fmt.Errorf("can't reach ccmuxd — start it with `ccmux daemon start`: %w", err)
+	}
+	return nil
 }
 
 func writeUsage(w io.Writer, data daemon.AgentUsage, asJSON bool) error {
