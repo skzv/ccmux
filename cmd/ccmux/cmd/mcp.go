@@ -75,7 +75,7 @@ registered it changes nothing. ` + "`ccmux uninstall`" + ` does this for you.`,
 // non-wizard path to registering ccmux-mcp as a user-scope MCP server
 // in Claude Code (~/.claude.json).
 func newMCPRegisterCmd() *cobra.Command {
-	var allowMutate bool
+	var allowMutate, force bool
 	c := &cobra.Command{
 		Use:   "register",
 		Short: "Register ccmux-mcp as a user-scope MCP server in Claude Code",
@@ -95,13 +95,18 @@ kill_session). Read-only by default — safe to leave it on, the agent can
 only see, not type.
 
 Idempotent: re-running with the same mode changes nothing; running with
-the other mode replaces the entry.`,
+the other mode replaces the entry. An existing "ccmux" entry that runs
+something other than ccmux-mcp is someone else's server: register
+refuses to touch it unless you pass --force.`,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return setupwizard.RegisterMCPForCLI(context.Background(), os.Stdout, allowMutate)
+			return setupwizard.RegisterMCP(context.Background(), os.Stdout,
+				setupwizard.RegisterOptions{AllowMutate: allowMutate, Force: force})
 		},
 	}
 	c.Flags().BoolVar(&allowMutate, "allow-mutate", false,
 		"expose mutating tools (spawn_session, send_keys, kill_session). Off by default.")
+	c.Flags().BoolVar(&force, "force", false,
+		`replace an existing "ccmux" MCP entry that runs something other than ccmux-mcp`)
 	return c
 }
 
@@ -111,17 +116,25 @@ func newMCPStatusCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
 		Short: "Report whether ccmux-mcp is registered with Claude Code",
-		RunE: func(_ *cobra.Command, _ []string) error {
-			mode, ok, err := setupwizard.MCPStatus()
+		RunE: func(c *cobra.Command, _ []string) error {
+			st, err := setupwizard.MCPRegistrationStatus()
 			if err != nil {
 				return err
 			}
-			if !ok {
-				fmt.Printf("✗ ccmux-mcp is NOT registered as a user-scope MCP server in %s\n", setupwizard.MCPUserConfigPath())
-				fmt.Println("  register it with: ccmux mcp register [--allow-mutate]")
-				return nil
+			out := c.OutOrStdout()
+			switch {
+			case st.Present && !st.Ours:
+				// An entry named "ccmux" that runs something else is
+				// not ccmux-mcp; it used to be reported as registered.
+				fmt.Fprintf(out, "✗ ccmux-mcp is NOT registered: the \"ccmux\" MCP server in %s runs %q, not ccmux-mcp\n",
+					setupwizard.MCPUserConfigPath(), safeField(st.Command))
+				fmt.Fprintln(out, "  replace it with: ccmux mcp register --force [--allow-mutate]")
+			case !st.Present:
+				fmt.Fprintf(out, "✗ ccmux-mcp is NOT registered as a user-scope MCP server in %s\n", setupwizard.MCPUserConfigPath())
+				fmt.Fprintln(out, "  register it with: ccmux mcp register [--allow-mutate]")
+			default:
+				fmt.Fprintf(out, "✓ ccmux-mcp is registered in %s (%s)\n", setupwizard.MCPUserConfigPath(), st.Mode)
 			}
-			fmt.Printf("✓ ccmux-mcp is registered in %s (%s)\n", setupwizard.MCPUserConfigPath(), mode)
 			return nil
 		},
 	}

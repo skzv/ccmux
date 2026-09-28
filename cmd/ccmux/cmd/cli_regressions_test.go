@@ -445,6 +445,43 @@ func TestResume_AgentListCoversEveryAgent(t *testing.T) {
 
 // --- ccmux mcp unregister / uninstall ----------------------------------------
 
+// TestMCPStatusAndRegister_ForeignEntry — `mcp status` called any
+// "ccmux" entry registered and `mcp register --allow-mutate` overwrote
+// one that runs some other server. Status must say it isn't ccmux-mcp;
+// register must refuse without --force and replace it with it.
+func TestMCPStatusAndRegister_ForeignEntry(t *testing.T) {
+	e := newCLIEnv(t)
+	cfgPath := filepath.Join(e.home, ".claude.json")
+	body := `{"mcpServers":{"ccmux":{"type":"stdio","command":"/opt/tools/my-ccmux-bridge"}}}`
+	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	st := e.run("", "mcp", "status")
+	if st.code != 0 || !strings.Contains(st.stdout, "NOT registered") || !strings.Contains(st.stdout, "my-ccmux-bridge") {
+		t.Errorf("mcp status (exit %d) should report the foreign entry as not ccmux-mcp:\n%s%s", st.code, st.stdout, st.stderr)
+	}
+
+	reg := e.run("", "mcp", "register", "--allow-mutate")
+	if reg.code == 0 {
+		t.Errorf("register over a foreign entry should fail without --force:\n%s", reg.stdout)
+	}
+	if raw, _ := os.ReadFile(cfgPath); string(raw) != body {
+		t.Errorf("register without --force changed ~/.claude.json:\n%s", raw)
+	}
+
+	forced := e.run("", "mcp", "register", "--allow-mutate", "--force")
+	if forced.code != 0 {
+		t.Fatalf("register --force exit %d\n%s%s", forced.code, forced.stdout, forced.stderr)
+	}
+	if raw, _ := os.ReadFile(cfgPath); !strings.Contains(string(raw), `"ccmux-mcp"`) {
+		t.Errorf("register --force didn't install ccmux-mcp:\n%s", raw)
+	}
+	if st := e.run("", "mcp", "status"); !strings.Contains(st.stdout, "✓ ccmux-mcp is registered") {
+		t.Errorf("after --force, status = %s", st.stdout)
+	}
+}
+
 // TestMCPUnregister_RemovesEntryKeepsTheRest — `ccmux mcp unregister`
 // (no claude CLI on PATH, so it edits ~/.claude.json directly) removes
 // only the ccmux server and is a no-op when re-run.

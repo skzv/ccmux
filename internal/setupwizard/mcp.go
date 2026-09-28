@@ -340,7 +340,13 @@ func stepMCP(ctx context.Context, out io.Writer) error {
 	}
 	reportStaleSettingsCleanup(out, "  "+stMuted.Render("•")+" ")
 
-	if existing, ok := cfg.entry(ccmuxMCPName); ok {
+	if existing, ok := cfg.entry(ccmuxMCPName); ok && !runsCCMUXMCP(existing.Command) {
+		// Someone else's server holds the name. Never overwrite it
+		// from the wizard; say how to replace it deliberately.
+		fmt.Fprintf(out, "  %s an MCP server named %q already exists and runs %q, not ccmux-mcp — left alone\n", stWarn.Render("⚠"), ccmuxMCPName, existing.Command)
+		fmt.Fprintln(out, stMuted.Render("    replace it with `ccmux mcp register --force` if that's what you want"))
+		return nil
+	} else if ok {
 		// Already wired up. Report what mode it's in so the user can
 		// see whether `--allow-mutate` is on without opening the file.
 		fmt.Fprintf(out, "  %s ccmux-mcp is already wired into Claude Code (%s)\n", stOK.Render("✓"), mcpMode(existing))
@@ -419,15 +425,41 @@ func containsArg(args []string, want string) bool {
 	return false
 }
 
-// RegisterMCPForCLI is the public surface the `ccmux mcp register`
+// RegisterMCPForCLI is RegisterMCP without --force: a foreign entry
+// named "ccmux" is refused rather than replaced.
+func RegisterMCPForCLI(ctx context.Context, out io.Writer, allowMutate bool) error {
+	return RegisterMCP(ctx, out, RegisterOptions{AllowMutate: allowMutate})
+}
+
+// RegisterOptions are `ccmux mcp register`'s flags.
+type RegisterOptions struct {
+	// AllowMutate registers ccmux-mcp with --allow-mutate.
+	AllowMutate bool
+	// Force replaces an entry named "ccmux" that runs something other
+	// than ccmux-mcp — someone else's server. Without it that entry is
+	// left alone and registration fails.
+	Force bool
+}
+
+// ErrForeignMCPEntry is returned when an MCP server named "ccmux" that
+// doesn't run ccmux-mcp is in the way.
+var ErrForeignMCPEntry = errors.New(`an MCP server named "ccmux" that isn't ccmux-mcp is already registered`)
+
+// RegisterMCP is the public surface the `ccmux mcp register`
 // subcommand calls. Same effect as the wizard step but skips all the
-// prompts — the CLI takes its decision from --allow-mutate. Idempotent:
-// if the entry already exists with the same mode nothing is touched and
-// the report says so; a different mode replaces the entry.
+// prompts — the CLI takes its decision from its flags. Idempotent: if
+// ccmux-mcp is already registered in the same mode nothing is touched
+// and the report says so; a different mode replaces the entry.
+//
+// An entry named "ccmux" that runs some other command used to count as
+// ccmux-mcp: "already registered" for the same mode, silently
+// overwritten for the other. It is someone else's server, so it's only
+// replaced with opts.Force.
 //
 // Lives in this package rather than cmd/ccmux/cmd so the registration
 // logic stays alongside the wizard step that shares it.
-func RegisterMCPForCLI(ctx context.Context, out io.Writer, allowMutate bool) error {
+func RegisterMCP(ctx context.Context, out io.Writer, opts RegisterOptions) error {
+	allowMutate := opts.AllowMutate
 	if !claudeCodeInstalled() {
 		fmt.Fprintln(out, "✗ Claude Code not found (no `claude` on PATH, no ~/.claude.json) — install it first, then re-run")
 		return nil
@@ -437,14 +469,21 @@ func RegisterMCPForCLI(ctx context.Context, out io.Writer, allowMutate bool) err
 	if err != nil {
 		return fmt.Errorf("read %s: %w", displayUserConfigPath(), err)
 	}
-	reportStaleSettingsCleanup(out, "  ")
 
 	want := mcpModeReadOnly
 	if allowMutate {
 		want = mcpModeMutate
 	}
 	existing, ok := cfg.entry(ccmuxMCPName)
-	if ok && mcpMode(existing) == want {
+	ours := ok && runsCCMUXMCP(existing.Command)
+	if ok && !ours {
+		if !opts.Force {
+			return fmt.Errorf("%w in %s: it runs %q; pass --force to replace it with ccmux-mcp", ErrForeignMCPEntry, displayUserConfigPath(), existing.Command)
+		}
+		fmt.Fprintf(out, "  replacing the %q MCP server that ran %q (--force)\n", ccmuxMCPName, existing.Command)
+	}
+	reportStaleSettingsCleanup(out, "  ")
+	if ours && mcpMode(existing) == want {
 		fmt.Fprintf(out, "✓ ccmux-mcp already registered (%s) — nothing to do\n", want)
 		return nil
 	}
@@ -561,16 +600,43 @@ func unregisterCCMUXMCP(ctx context.Context) (string, error) {
 // Code reads), and in what mode. Powers `ccmux mcp status`. Returns
 // ("", false, nil) when not registered; ("", false, err) on I/O or
 // parse failure.
+//
+// Only an entry that runs ccmux-mcp counts: one named "ccmux" running
+// something else used to be reported as registered.
+// MCPRegistrationStatus tells that case apart.
 func MCPStatus() (mode string, registered bool, err error) {
+	st, err := MCPRegistrationStatus()
+	if err != nil || !st.Ours {
+		return "", false, err
+	}
+	return st.Mode, true, nil
+}
+
+// MCPRegistration describes the "ccmux" entry in Claude Code's user
+// config.
+type MCPRegistration struct {
+	Present bool   // an entry named "ccmux" exists
+	Ours    bool   // …and it runs ccmux-mcp
+	Command string // what the entry runs
+	Mode    string // read-only / with --allow-mutate (only when Ours)
+}
+
+// MCPRegistrationStatus reads the "ccmux" MCP entry, distinguishing
+// ccmux-mcp from a foreign server that happens to use the name.
+func MCPRegistrationStatus() (MCPRegistration, error) {
 	cfg, err := readUserMCPConfig()
 	if err != nil {
-		return "", false, err
+		return MCPRegistration{}, err
 	}
 	existing, ok := cfg.entry(ccmuxMCPName)
 	if !ok {
-		return "", false, nil
+		return MCPRegistration{}, nil
 	}
-	return mcpMode(existing), true, nil
+	st := MCPRegistration{Present: true, Command: existing.Command, Ours: runsCCMUXMCP(existing.Command)}
+	if st.Ours {
+		st.Mode = mcpMode(existing)
+	}
+	return st, nil
 }
 
 // MCPUserConfigPath is the file MCPStatus reads, for CLI messages.

@@ -41,7 +41,7 @@ Codex, Cursor, and any other MCP-aware client follow the same shape — point a 
 Two paths register it for you:
 
 - **Setup wizard.** `ccmux setup` includes a "ccmux-mcp registration (Claude Code)" step that detects Claude Code and offers to register the entry — with a follow-up prompt for `--allow-mutate`. Idempotent; re-running detects the existing registration and reports the mode.
-- **CLI.** `ccmux mcp register [--allow-mutate]` does the same thing without the wizard chrome (re-running with the other mode switches it). `ccmux mcp status` reports whether ccmux is registered in `~/.claude.json` and in which mode.
+- **CLI.** `ccmux mcp register [--allow-mutate]` does the same thing without the wizard chrome (re-running with the other mode switches it). `ccmux mcp status` reports whether ccmux is registered in `~/.claude.json` and in which mode. Only an entry that runs `ccmux-mcp` counts: a `ccmux` entry that runs something else is reported as such, left alone by the wizard, and replaced by `ccmux mcp register` only with `--force`.
 
 `ccmux mcp unregister` is the inverse: `claude mcp remove --scope user ccmux` when the CLI is on PATH, otherwise the same backed-up direct edit of `~/.claude.json`. It only removes an entry that runs `ccmux-mcp`, and is a no-op when nothing is registered. `ccmux uninstall` runs it, so removing ccmux doesn't leave Claude Code trying to start a deleted binary.
 
