@@ -16,6 +16,10 @@
 //     in so anything we don't model survives a round-trip.
 //   - Never touch credentials. We only read/write config.toml. Tokens
 //     live in auth.json which we leave alone.
+//
+// On top of that, writes keep the user's formatting: WriteSettings
+// patches the existing text (internal/tomlpatch) so a toggle changes
+// one line instead of re-encoding the file and dropping its comments.
 package codexconfig
 
 import (
@@ -28,6 +32,7 @@ import (
 	"github.com/BurntSushi/toml"
 
 	"github.com/skzv/ccmux/internal/configfile"
+	"github.com/skzv/ccmux/internal/tomlpatch"
 )
 
 // Paths returns the canonical file locations Codex uses on this host.
@@ -158,11 +163,24 @@ func WriteSettings(s *Settings) (backup string, err error) {
 	if err := enc.Encode(out); err != nil {
 		return backup, err
 	}
-	if err := configfile.WriteAtomic(p.Config, buf.Bytes(), 0o644); err != nil {
+	data := buf.Bytes()
+	// Patch the user's file rather than replace it, so a toggle in the
+	// Codex tab changes one line and leaves their comments and layout
+	// alone. If it can't be patched safely, write the encoding whole.
+	if prev, err := os.ReadFile(p.Config); err == nil {
+		if patched, err := patchTOML(prev, data); err == nil {
+			data = patched
+		}
+	}
+	if err := configfile.WriteAtomic(p.Config, data, 0o644); err != nil {
 		return backup, err
 	}
 	return backup, nil
 }
+
+// patchTOML is tomlpatch.Patch; tests swap it to force the full-rewrite
+// fallback.
+var patchTOML = tomlpatch.Patch
 
 // backupFile delegates to the shared helper so all three agent-config
 // packages rotate identically.

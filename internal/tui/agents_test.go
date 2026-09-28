@@ -48,6 +48,40 @@ func TestAgents_CodexThinkingModeKeyPersistsAndRefreshes(t *testing.T) {
 	}
 }
 
+// TestAgents_CodexEffortKeyKeepsConfigComments — `r` on the Codex tab
+// changes model_reasoning_effort in ~/.codex/config.toml and nothing
+// else: the user's comments and layout survive.
+func TestAgents_CodexEffortKeyKeepsConfigComments(t *testing.T) {
+	homes := setIsolatedAgentHomes(t)
+	p := filepath.Join(homes.codex, "config.toml")
+	orig := `# my codex setup
+model = "gpt-5-codex"   # pinned
+
+[mcp_servers.docs] # docs lookup
+command = "npx"
+args = ["-y", "docs-mcp"]
+`
+	if err := os.WriteFile(p, []byte(orig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := newAgents(styles.Default(), DefaultKeymap())
+	m = switchAgentsSubtab(t, m, agent.IDCodex)
+	m, _ = m.Update(keyMsg("r"))
+	if m.codex.err != "" {
+		t.Fatalf("codex.err = %q", m.codex.err)
+	}
+
+	got, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := strings.Replace(orig, "model = \"gpt-5-codex\"   # pinned\n",
+		"model = \"gpt-5-codex\"   # pinned\nmodel_reasoning_effort = \"high\"\n", 1)
+	if string(got) != want {
+		t.Errorf("effort key rewrote the codex config:\n--- got\n%s\n--- want\n%s", got, want)
+	}
+}
+
 func TestAgents_AntigravityThinkingModeKeyPersistsAndRefreshes(t *testing.T) {
 	setIsolatedAgentHomes(t)
 	m := newAgents(styles.Default(), DefaultKeymap())
