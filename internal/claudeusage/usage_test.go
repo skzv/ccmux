@@ -423,25 +423,28 @@ func TestScanFile_DedupesRepeatedUsageLines(t *testing.T) {
 	}
 }
 
-func TestAlreadyCounted(t *testing.T) {
-	seen := map[string]struct{}{}
-	if alreadyCounted(seen, "m1", "r1") {
-		t.Error("first sighting of a pair must count")
+// TestDedupe_KeysOnBothIDs pins the dedupe key: a (message.id,
+// requestId) pair counts once, the same message id under a new
+// requestId is a new pair, and a line missing either id is never
+// deduped — nor remembered, so its repeat isn't deduped either.
+func TestDedupe_KeysOnBothIDs(t *testing.T) {
+	ts := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
+	line := func(msgID, reqID string) []byte {
+		return []byte(fmt.Sprintf(`{"type":"assistant","timestamp":%q,"requestId":%q,"message":{"id":%q,"usage":{"input_tokens":1}}}`, ts, reqID, msgID))
 	}
-	if !alreadyCounted(seen, "m1", "r1") {
-		t.Error("second sighting of the same pair must dedup")
+	f := newFileRecords("s.jsonl")
+	for _, pair := range [][2]string{
+		{"m1", "r1"}, {"m1", "r1"}, // one pair: counted once
+		{"m1", "r2"},           // retry under a new requestId: counted
+		{"", "r1"}, {"", "r1"}, // missing message id: both counted
+		{"m1", ""}, {"m1", ""}, // missing requestId: both counted
+	} {
+		f.Line(line(pair[0], pair[1]), time.Time{})
 	}
-	if alreadyCounted(seen, "m1", "r2") {
-		t.Error("same message id under a new requestId is a new pair")
-	}
-	// Each call below is made twice on purpose: a pair missing either
-	// half must not be remembered, so the repeat can't dedup either.
-	for _, pair := range [][2]string{{"", "r1"}, {"m1", ""}} {
-		first := alreadyCounted(seen, pair[0], pair[1])
-		second := alreadyCounted(seen, pair[0], pair[1])
-		if first || second {
-			t.Errorf("pair %q must never dedup (first=%v, second=%v)", pair, first, second)
-		}
+	var r scanResult
+	r.tally(f.events(time.Now().Add(-2*time.Hour), time.Now()), time.Time{})
+	if r.assistantCount != 6 || r.total.Input != 6 {
+		t.Errorf("assistantCount = %d, input = %d, want 6/6", r.assistantCount, r.total.Input)
 	}
 }
 
@@ -504,27 +507,6 @@ func TestScanFile_OversizedLineSkippedRestStillCounted(t *testing.T) {
 	// The oversized user-prompt line itself is skipped, not counted.
 	if r.userPrompts != 0 {
 		t.Errorf("userPrompts = %d, want 0 (the oversized line is dropped whole)", r.userPrompts)
-	}
-}
-
-// TestForEachLine_SkipsOversizedAndFlushesFinalPartial pins the line
-// iterator's contract with a small cap: oversized lines are dropped
-// whole, surrounding lines are delivered, and a final line without a
-// trailing newline still arrives.
-func TestForEachLine_SkipsOversizedAndFlushesFinalPartial(t *testing.T) {
-	in := "aaa\n" + strings.Repeat("x", 4096) + "\nbbb\r\nccc"
-	var got []string
-	forEachLine(strings.NewReader(in), 64, func(line []byte) {
-		got = append(got, string(line))
-	})
-	want := []string{"aaa", "bbb", "ccc"}
-	if len(got) != len(want) {
-		t.Fatalf("lines = %q, want %q", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Errorf("line[%d] = %q, want %q", i, got[i], want[i])
-		}
 	}
 }
 

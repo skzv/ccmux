@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/skzv/ccmux/internal/jsonl"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -276,7 +275,9 @@ const SessionBlock = 5 * time.Hour
 //
 // Walk is safe to call concurrently with itself, but is not designed
 // for high frequency — Bubble Tea dashboards should poll it every 5-10
-// seconds at most.
+// seconds at most. Transcripts parsed by an earlier walk are cached in
+// memory (see transcripts), so a repeat walk reads only the bytes
+// appended since.
 func Walk(block time.Duration) (*Aggregate, error) {
 	return walk(time.Now(), block, true)
 }
@@ -310,6 +311,7 @@ func walk(now time.Time, d time.Duration, block bool) (*Aggregate, error) {
 	}
 	if _, err := os.Stat(root); err != nil {
 		if os.IsNotExist(err) {
+			transcripts.Sweep(root, nil, now)
 			if block {
 				agg.WindowStart = now
 			}
@@ -324,11 +326,13 @@ func walk(now time.Time, d time.Duration, block bool) (*Aggregate, error) {
 	if block {
 		lookback = 2 * d
 	}
-	cutoff := now.Add(-lookback)
+	span := transcripts.Span(now, lookback)
+	cutoff := span.Cutoff
 
 	type fileTask struct {
 		path string
 		proj string
+		info fs.FileInfo
 	}
 	// Cache project-name lookups per directory. The encoded directory
 	// name (e.g. "-Users-skz-Projects-my-plain-blog") is lossy because
@@ -337,14 +341,23 @@ func walk(now time.Time, d time.Duration, block bool) (*Aggregate, error) {
 	// field out of the first JSONL we open in each dir — Claude Code
 	// records the real absolute path on every entry — and using
 	// filepath.Base(cwd). One cache entry per encoded dir keeps the
-	// cost to one peek per project, not one per transcript file.
+	// cost to one peek per project, not one per transcript file, and
+	// only directories holding a file inside the lookback are peeked.
 	projCache := map[string]string{}
+	present := map[string]bool{} // every transcript listed, for the cache sweep
 	var tasks []fileTask
 	if err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil // skip unreadable
 		}
 		if d.IsDir() || !strings.HasSuffix(d.Name(), ".jsonl") {
+			return nil
+		}
+		present[path] = true
+		// Skip files whose mtime is older than the lookback — saves IO
+		// when the user has a huge transcript history.
+		info, _ := d.Info()
+		if info != nil && info.ModTime().Before(cutoff) {
 			return nil
 		}
 		rel, _ := filepath.Rel(root, path)
@@ -358,18 +371,15 @@ func walk(now time.Time, d time.Duration, block bool) (*Aggregate, error) {
 			}
 			projCache[encoded] = proj
 		}
-		// Skip files whose mtime is older than the lookback — saves IO
-		// when the user has a huge transcript history.
-		if info, _ := d.Info(); info != nil && info.ModTime().Before(cutoff) {
-			return nil
-		}
-		tasks = append(tasks, fileTask{path, proj})
+		tasks = append(tasks, fileTask{path, proj, info})
 		return nil
 	}); err != nil {
 		return nil, err
 	}
 
-	// Scan files in parallel; results are merged once all are in,
+	// Bring each file's cached records up to date in parallel — only
+	// bytes appended since the last walk are read — and replay them
+	// over this walk's span. Results are merged once all are in,
 	// because the block boundaries depend on every file's timestamps.
 	results := make([]fileEvents, len(tasks))
 	var wg sync.WaitGroup
@@ -380,10 +390,13 @@ func walk(now time.Time, d time.Duration, block bool) (*Aggregate, error) {
 		go func(i int, task fileTask) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			results[i] = fileEvents{proj: task.proj, events: scanFile(task.path, cutoff, now).events}
+			transcripts.Parse(task.path, task.info, span, func(f *fileRecords) {
+				results[i] = fileEvents{proj: task.proj, events: f.events(cutoff, now)}
+			})
 		}(i, t)
 	}
 	wg.Wait()
+	transcripts.Sweep(root, present, now)
 
 	from := cutoff
 	if block {
@@ -511,7 +524,10 @@ func (r *scanResult) tally(events []usageEvent, from time.Time) {
 }
 
 // scanFile parses one JSONL and returns the per-file scan result over
-// `cutoff..now`. Two distinct things are counted:
+// `cutoff..now`, uncached. walk gets the same events from the
+// transcript cache — parseLine per line, replay per walk — without
+// re-reading bytes an earlier walk already parsed. Two distinct things
+// are counted:
 //
 //   - assistant messages with a `usage` block → token totals + Aggregate.Messages
 //   - prompts the human actually sent → Aggregate.UserPrompts. Tool-result
@@ -544,103 +560,10 @@ func (r *scanResult) tally(events []usageEvent, from time.Time) {
 // Lines missing either id are counted unconditionally (fail open — we'd
 // rather slightly over-count than silently drop usage).
 func scanFile(path string, cutoff, now time.Time) (r scanResult) {
-	defer func() { r.tally(r.events, time.Time{}) }()
-	f, err := os.Open(path)
-	if err != nil {
-		return r
-	}
-	defer f.Close()
-	// Subagent transcripts: the "user" turns there are the parent
-	// agent's instructions and tool results, never the human.
-	subagent := strings.Contains(filepath.ToSlash(path), "/subagents/")
-	seenUsage := map[string]struct{}{}
-	maxTS := now.Add(futureSkewTolerance)
-	pendingPrompt := -1 // index in r.events of a prompt awaiting its response
-	pendingCmd := false // a slash command awaiting a response
-	forEachLine(f, maxScanLineBytes, func(line []byte) {
-		// Two cheap byte-level pre-filters: only json-decode lines that
-		// might be assistant-usage or user-prompt records.
-		hasUsage := maybeContains(line, []byte(`"usage":`))
-		isUser := maybeContains(line, []byte(`"type":"user"`))
-		if !hasUsage && !isUser {
-			return
-		}
-
-		var m struct {
-			Type             string `json:"type"`
-			Timestamp        string `json:"timestamp"`
-			RequestID        string `json:"requestId"`
-			IsMeta           bool   `json:"isMeta"`
-			IsCompactSummary bool   `json:"isCompactSummary"`
-			IsSidechain      bool   `json:"isSidechain"`
-			Message          struct {
-				ID      string          `json:"id"`
-				Role    string          `json:"role"`
-				Model   string          `json:"model"`
-				Content json.RawMessage `json:"content"`
-				Usage   *struct {
-					Input         int `json:"input_tokens"`
-					Output        int `json:"output_tokens"`
-					CacheCreation int `json:"cache_creation_input_tokens"`
-					CacheRead     int `json:"cache_read_input_tokens"`
-					CacheBreakout *struct {
-						OneHour int `json:"ephemeral_1h_input_tokens"`
-					} `json:"cache_creation"`
-				} `json:"usage"`
-			} `json:"message"`
-		}
-		if err := json.Unmarshal(line, &m); err != nil {
-			return
-		}
-		ts, err := time.Parse(time.RFC3339, m.Timestamp)
-		if err != nil || ts.Before(cutoff) || ts.After(maxTS) {
-			return
-		}
-
-		if m.Message.Usage != nil {
-			// The first response after a prompt is the API call it
-			// triggered — sidechain calls belong to a subagent.
-			if !m.IsSidechain {
-				if pendingPrompt >= 0 {
-					if ts.After(r.events[pendingPrompt].ts) {
-						r.events[pendingPrompt].ts = ts
-					}
-					pendingPrompt = -1
-				}
-				if pendingCmd {
-					r.events = append(r.events, usageEvent{ts: ts, prompt: true})
-					pendingCmd = false
-				}
-			}
-			// Assistant API response with usage — counted once per
-			// (message.id, requestId) pair; see the function comment.
-			if !alreadyCounted(seenUsage, m.Message.ID, m.RequestID) {
-				t := Tokens{
-					Input:         m.Message.Usage.Input,
-					Output:        m.Message.Usage.Output,
-					CacheCreation: m.Message.Usage.CacheCreation,
-					CacheRead:     m.Message.Usage.CacheRead,
-				}
-				if cb := m.Message.Usage.CacheBreakout; cb != nil {
-					t.CacheCreation1h = cb.OneHour
-				}
-				r.events = append(r.events, usageEvent{ts: ts, tokens: t, model: m.Message.Model})
-			}
-		}
-
-		if m.Type != "user" || subagent || m.IsMeta || m.IsCompactSummary || m.IsSidechain {
-			return
-		}
-		switch promptKindOf(m.Message.Content) {
-		case humanPrompt:
-			r.events = append(r.events, usageEvent{ts: ts, prompt: true})
-			pendingPrompt, pendingCmd = len(r.events)-1, false
-		case commandPrompt:
-			pendingCmd = true
-		case turnBoundary:
-			pendingCmd = false
-		}
-	})
+	f := newFileRecords(path)
+	_ = jsonl.ParseFile(path, maxScanLineBytes, cutoff, f)
+	r.events = f.events(cutoff, now)
+	r.tally(r.events, time.Time{})
 	return r
 }
 
@@ -655,32 +578,6 @@ const maxScanLineBytes = 1 << 25
 // letting a badly future-dated message (broken RTC, TZ mishap) pollute
 // the current window.
 const futureSkewTolerance = 2 * time.Minute
-
-// forEachLine invokes fn for every line in rd of at most maxLen bytes;
-// a longer line is skipped and iteration continues (see internal/jsonl
-// for why bufio.Scanner can't be used here).
-func forEachLine(rd io.Reader, maxLen int, fn func(line []byte)) {
-	sc := jsonl.NewScanner(rd, maxLen)
-	for sc.Scan() {
-		fn(sc.Bytes())
-	}
-}
-
-// alreadyCounted reports whether this (message.id, requestId) pair has
-// already contributed usage in this file, recording it if not. When
-// either id is missing there is nothing safe to key on, so the line is
-// treated as new (never deduped) — fail open.
-func alreadyCounted(seen map[string]struct{}, msgID, requestID string) bool {
-	if msgID == "" || requestID == "" {
-		return false
-	}
-	key := msgID + "\x00" + requestID
-	if _, dup := seen[key]; dup {
-		return true
-	}
-	seen[key] = struct{}{}
-	return false
-}
 
 // promptKind classifies a type:"user" transcript record for the quota
 // counter. Records flagged isMeta / isCompactSummary / isSidechain, and
