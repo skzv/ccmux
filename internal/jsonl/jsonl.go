@@ -4,6 +4,12 @@
 // silently lost — a single pasted screenshot or huge tool result in a
 // transcript used to truncate previews, message counts and token
 // totals. Scanner here skips just the oversized line and keeps going.
+//
+// Cursor and Cache build on Scanner to follow append-only transcripts:
+// a Cursor reads only the lines appended since its last read, and a
+// Cache keeps each file's parsed records between walks so a periodic
+// usage refresh stops re-parsing hundreds of megabytes it has already
+// seen.
 package jsonl
 
 import (
@@ -21,6 +27,12 @@ type Scanner struct {
 	err     error
 	done    bool
 	skipped int
+	// n counts the bytes read so far; lastNL is n just after the most
+	// recent newline, so a Cursor knows how far complete lines reach.
+	n, lastNL int64
+	// eol reports whether the current line ended with a newline, as
+	// opposed to being cut off by the end of the input.
+	eol bool
 }
 
 // NewScanner reads lines from r, skipping any longer than maxLen bytes.
@@ -39,6 +51,7 @@ func (s *Scanner) Scan() bool {
 	tooLong := false
 	for {
 		chunk, err := s.br.ReadSlice('\n')
+		s.n += int64(len(chunk))
 		if !tooLong && len(chunk) > 0 {
 			s.buf = append(s.buf, chunk...)
 			if len(s.buf) > s.max {
@@ -47,12 +60,14 @@ func (s *Scanner) Scan() bool {
 		}
 		switch err {
 		case nil: // end of a line
+			s.lastNL = s.n
 			if tooLong {
 				s.skipped++
 				tooLong = false
 				continue
 			}
 			s.buf = trimLineEnding(s.buf)
+			s.eol = true
 			return true
 		case bufio.ErrBufferFull: // same line continues
 			continue
@@ -67,6 +82,7 @@ func (s *Scanner) Scan() bool {
 			}
 			if len(s.buf) > 0 {
 				s.buf = trimLineEnding(s.buf)
+				s.eol = false
 				return true
 			}
 			return false
