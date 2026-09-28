@@ -143,8 +143,8 @@ Use --dry-run to preview the commands without executing them.`,
 // input or non-interactive stdin so scripted `ccmux update` calls
 // don't pause for input.
 func promptYesNo(question string) bool {
-	if fi, err := os.Stdin.Stat(); err != nil || (fi.Mode()&os.ModeCharDevice) == 0 {
-		// Not a terminal — don't prompt.
+	if !stdinIsTerminal() {
+		// Not a terminal (a pipe, a file, /dev/null) — don't prompt.
 		return false
 	}
 	fmt.Printf("\n? %s [y/N] ", question)

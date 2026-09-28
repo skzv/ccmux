@@ -4,13 +4,34 @@ package cmd
 
 import (
 	"net/http"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
 
+	"github.com/creack/pty"
+
 	"github.com/skzv/ccmux/internal/conversations"
 	"github.com/skzv/ccmux/internal/daemon"
 )
+
+// TestStdinIsTerminal_PTYIsATerminal — the terminal-driver check behind
+// the setup nudge and `ccmux update`'s prompt still accepts a real
+// terminal (its /dev/null counterpart is in root_test.go).
+func TestStdinIsTerminal_PTYIsATerminal(t *testing.T) {
+	ptmx, tty, err := pty.Open()
+	if err != nil {
+		t.Skipf("no pty available: %v", err)
+	}
+	defer ptmx.Close()
+	defer tty.Close()
+	orig := os.Stdin
+	os.Stdin = tty
+	defer func() { os.Stdin = orig }()
+	if !stdinIsTerminal() {
+		t.Error("stdinIsTerminal() = false on a pty")
+	}
+}
 
 // bareSessionDaemon is a fake ccmuxd answering POST /v1/sessions/bare
 // with session name; hits counts the calls.

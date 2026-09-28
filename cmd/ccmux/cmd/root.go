@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/project"
@@ -130,14 +131,11 @@ func maybeNudgeSetup() {
 }
 
 // stdinIsTerminal reports whether stdin is an interactive terminal, so we
-// don't prompt in scripts or pipes.
-func stdinIsTerminal() bool {
-	fi, err := os.Stdin.Stat()
-	if err != nil {
-		return false
-	}
-	return fi.Mode()&os.ModeCharDevice != 0
-}
+// don't prompt in scripts or pipes. It asks the terminal driver: a
+// character-device check also passes /dev/null, so `ccmux </dev/null`
+// (a launcher, cron, CI) was offered the setup wizard — and, reading
+// EOF as the default "yes", ran it.
+func stdinIsTerminal() bool { return term.IsTerminal(int(os.Stdin.Fd())) }
 
 // promptYesNoDefaultYes blocks on a single y/N answer that defaults to
 // YES (empty input counts as yes).

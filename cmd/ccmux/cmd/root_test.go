@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"bytes"
+	"io"
+	"os"
 	"strings"
 	"testing"
 
@@ -35,6 +37,40 @@ func TestShouldNudgeSetup(t *testing.T) {
 		if got := shouldNudgeSetup(tc.cfg, tc.interactive); got != tc.want {
 			t.Errorf("%s: shouldNudgeSetup = %v, want %v", tc.name, got, tc.want)
 		}
+	}
+}
+
+// TestStdinIsTerminal_DevNullIsNotATerminal — stdinIsTerminal checked
+// for a character device, which /dev/null is: `ccmux </dev/null` got
+// the first-run setup nudge (whose EOF answer counts as "yes"), and
+// `ccmux update </dev/null` printed its y/N question to nobody.
+func TestStdinIsTerminal_DevNullIsNotATerminal(t *testing.T) {
+	null, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	origIn, origOut := os.Stdin, os.Stdout
+	t.Cleanup(func() {
+		os.Stdin, os.Stdout = origIn, origOut
+		_ = null.Close()
+	})
+	os.Stdin = null
+	if stdinIsTerminal() {
+		t.Error("stdinIsTerminal() = true with stdin on " + os.DevNull)
+	}
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+	answer := promptYesNo("Re-run setup?")
+	os.Stdout = origOut
+	_ = w.Close()
+	printed, _ := io.ReadAll(r)
+	_ = r.Close()
+	if answer || len(printed) != 0 {
+		t.Errorf("promptYesNo with stdin on %s = %v, printed %q; want false without asking", os.DevNull, answer, printed)
 	}
 }
 
