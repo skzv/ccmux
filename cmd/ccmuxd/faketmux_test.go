@@ -32,6 +32,9 @@ type fakeTmux struct {
 	// the session's list row carries it from then on (Session.Spinner),
 	// as tmux keeps a session's options.
 	marks []string
+	// reviews records every review record written, per session; the
+	// session's list row carries the latest (Session.Review).
+	reviews map[string][]tmux.Review
 }
 
 type fakePane struct {
@@ -53,6 +56,40 @@ func (f *fakeTmux) addSession(ts tmux.Session, panes ...*fakePane) {
 	}
 	f.session[ts.Name] = ts
 	f.sessions[ts.Name] = panes
+}
+
+// renameSession renames a session behind the daemon's back, the way
+// `tmux rename-session` does: same panes, same options (its tags and
+// review record), same creation time — only the name changes.
+func (f *fakeTmux) renameSession(oldName, newName string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	ts, panes := f.session[oldName], f.sessions[oldName]
+	ts.Name = newName
+	delete(f.session, oldName)
+	delete(f.sessions, oldName)
+	f.session[newName], f.sessions[newName] = ts, panes
+	for i, n := range f.order {
+		if n == oldName {
+			f.order[i] = newName
+		}
+	}
+}
+
+// setAttached attaches a client to the session, or detaches it.
+func (f *fakeTmux) setAttached(name string, attached bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	ts := f.session[name]
+	ts.Attached = attached
+	f.session[name] = ts
+}
+
+// reviewWrites returns every review record written on the session, in order.
+func (f *fakeTmux) reviewWrites(name string) []tmux.Review {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]tmux.Review(nil), f.reviews[name]...)
 }
 
 // removeSession ends a session.
@@ -183,6 +220,21 @@ func (f *fakeTmux) wire(s *server) {
 		ts.Spinner = id
 		f.session[name] = ts
 		f.marks = append(f.marks, name+"="+id)
+		return nil
+	}
+	s.markReview = func(_ context.Context, name string, r tmux.Review) error {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		ts, ok := f.session[name]
+		if !ok {
+			return errNoFakeSession
+		}
+		ts.Review = r
+		f.session[name] = ts
+		if f.reviews == nil {
+			f.reviews = map[string][]tmux.Review{}
+		}
+		f.reviews[name] = append(f.reviews[name], r)
 		return nil
 	}
 }

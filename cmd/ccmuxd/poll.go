@@ -57,6 +57,9 @@ type pollTrack struct {
 	// spinnerMarked is the agent this daemon last asked to record on the
 	// session as showing a working spinner (see spinnerMarkDue).
 	spinnerMarked agent.ID
+	// reviewAsked is the review record this daemon last asked to write on
+	// the session (see reviewDue).
+	reviewAsked tmux.Review
 }
 
 // paneMemory is what the poll loop remembers between ticks about the
@@ -232,6 +235,7 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 				// Created while we watched: its startup isn't a turn.
 				t.startup = true
 			}
+			t.restoreReview(ts)
 			s.seen[ts.Name] = t
 		}
 		s.noteSessionLocked(t, ts)
@@ -358,6 +362,7 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 			prev, next agent.State
 		}
 		spinnerMarks []spinnerMark
+		reviews      []reviewMark
 		anyActive    bool
 	)
 	s.mu.Lock()
@@ -373,12 +378,22 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 		if t.baseline {
 			// First look at a pre-existing session: record where it
 			// stands, with no bell, push or prompt count. It keeps its
-			// "reviewed" mark unless it is sitting waiting for input.
+			// "reviewed" mark unless it is sitting waiting for input —
+			// or, when the session carries the review record of a daemon
+			// that watched it before (see reviewDue), what that record
+			// says, as long as the session is still where the record
+			// left it. One that has moved on since (a turn that was
+			// running when the daemon went away has ended) is judged as
+			// if there were no record: a prompt nobody has looked at
+			// through a daemon isn't marked reviewed.
 			t.baseline = false
 			t.last = r.pane
 			t.lastChange = r.lastCh
 			t.state = r.newState
 			t.seen = ts.Attached || r.newState != agent.StateNeedsInput
+			if rec := ts.Review; rec.Recorded && rec.State == string(r.newState) {
+				t.seen = ts.Attached || rec.Seen
+			}
 			// What an earlier daemon learned by watching, the session
 			// keeps (see spinnerMarkDue).
 			marked := ts.Spinner != "" && ts.Spinner == string(r.agentID)
@@ -395,6 +410,9 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 			t.joinedAt = time.Now()
 			if t.spinnerMarkDue(ts) {
 				spinnerMarks = append(spinnerMarks, spinnerMark{r.name, t.agentID})
+			}
+			if rec, due := t.reviewDue(ts); due {
+				reviews = append(reviews, reviewMark{r.name, rec})
 			}
 			stateEvents = append(stateEvents, daemon.SessionEvent{
 				At:      time.Now(),
@@ -436,6 +454,9 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 		t.state = r.newState
 		if decision.IncPromptCount {
 			t.promptCount++
+		}
+		if rec, due := t.reviewDue(ts); due {
+			reviews = append(reviews, reviewMark{r.name, rec})
 		}
 		// Besides a state change: the agent in the foreground changed, or
 		// a client attached or detached (which also marks the session
@@ -497,7 +518,71 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 			}
 		}
 	}
+	if s.markReview != nil {
+		for _, m := range reviews {
+			// A session named "$…" can't be targeted by name (see
+			// tmux.SetSessionReview): it just goes unrecorded.
+			if err := s.markReview(ctx, m.name, m.review); err != nil && !errors.Is(err, tmux.ErrSessionIDTarget) {
+				log.Printf("ccmuxd: record session %s's review: %v", m.name, err)
+			}
+		}
+	}
 	s.sleeper.SetActive(anyActive)
+}
+
+// reviewMark is a session whose review record the poll tick writes (see
+// reviewDue).
+type reviewMark struct {
+	name   string
+	review tmux.Review
+}
+
+// reviewDue reports whether the session's own record of what the user
+// has seen there (its review options, read back this tick as ts.Review)
+// needs writing, and returns the record: the reviewed flag, the prompt
+// count or the session's state has changed since it was written. It
+// asks once per change and notes what it asked for, so a write that
+// fails isn't retried on every tick — the next change writes the whole
+// record again. Caller holds s.mu.
+//
+// Kept only in the daemon's memory, both were lost on every restart
+// (every `ccmux update`, every upgrade): sessions waiting for input came
+// back unreviewed and every prompt count went back to 0, and a session
+// renamed straight through tmux lost them the same way. Like the spinner
+// mark (spinnerMarkDue), the session keeps them instead — tmux user
+// options travel with it through a rename — and the first look reads
+// them back (restoreReview, and the baseline in pollOnce's Phase 3).
+// The state is kept so that first look can tell whether the session is
+// still where the record left it.
+//
+// A plain shell that has nothing worth keeping (reviewed, no prompts,
+// no record yet) is left alone, so a tmux session the user made outside
+// ccmux isn't written to just for being listed.
+func (t *tracked) reviewDue(ts tmux.Session) (tmux.Review, bool) {
+	want := tmux.Review{Recorded: true, Seen: t.seen, Prompts: t.promptCount, State: string(t.state)}
+	switch {
+	case want == ts.Review, want == t.reviewAsked:
+		return want, false
+	case !ts.Review.Recorded && t.agentID == shellAgentID && want.Seen && want.Prompts == 0:
+		return want, false
+	}
+	t.reviewAsked = want
+	return want, true
+}
+
+// restoreReview takes what the session's own review record (ts.Review;
+// see reviewDue) says into a session the daemon is tracking for the
+// first time: its prompt count, and whether its latest prompt has been
+// reviewed — as it stood when the record was written, or reviewed now if
+// a client is attached. The baseline first look re-checks the reviewed
+// flag against the session's state (pollOnce, Phase 3).
+func (t *tracked) restoreReview(ts tmux.Session) {
+	rec := ts.Review
+	if !rec.Recorded {
+		return
+	}
+	t.promptCount = rec.Prompts
+	t.seen = rec.Seen || ts.Attached
 }
 
 // spinnerMark is a session whose agent the poll tick records as

@@ -154,6 +154,17 @@ List every tmux session this daemon manages, with daemon-derived state.
   `c-` session its project's recorded agent; any other session (tagged
   `shell`, or made outside ccmux) is `shell` unless an agent is running
   in its foreground right now, in which case it is that agent.
+- `prompt_count` and `seen` survive a daemon restart (`ccmux update`, a
+  brew upgrade) and a rename done straight through tmux. The daemon keeps
+  them on the session itself, as the tmux user options `@ccmux_seen`,
+  `@ccmux_prompts` and `@ccmux_state` (the state they were written in),
+  rewritten only when one of them changes. Its first look at a session
+  reads them back: the prompt count as recorded, and the reviewed flag as
+  recorded while the session is still in that state. A session whose
+  state changed while no daemon watched it (a turn that was running when
+  the daemon stopped has ended since) is judged as it stands instead:
+  waiting for input means unreviewed. A plain shell session with nothing
+  to remember gets no record.
 
 #### `POST /v1/sessions`
 Create-or-attach a **project-bound** agent session (idempotent on the tmux
@@ -375,6 +386,8 @@ Stream of session lifecycle/state events; subscribe to live-update a view.
   `state_change` with its current state, and triggers no bell or push
   until it has settled once — the end of whatever it was in the middle
   of isn't announced (see "What counts as a turn" under Pairing & push).
+  Its `prompt_count` and `seen` come from the record kept on the session
+  (see `GET /v1/sessions`), not from zero.
 - Heartbeats: `: connected` on open, `: ping` comment every 20s — comment
   lines (leading `:`) are ignorable.
 - If the per-subscriber buffer (256) overflows you get an
@@ -517,8 +530,9 @@ type SessionState struct {
 	Windows     int       `json:"windows"`
 	Created     time.Time `json:"created"`
 	LastChange  time.Time `json:"last_change"`  // pane content last changed
-	PromptCount int       `json:"prompt_count"` // # needs-input transitions seen
+	PromptCount int       `json:"prompt_count"` // turns that ended in needs_input; kept across restarts
 	Agent       string    `json:"agent,omitempty"`
+	Seen        bool      `json:"seen"`         // the user has reviewed the latest prompt; kept across restarts
 }
 
 // GET /v1/health

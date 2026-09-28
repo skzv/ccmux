@@ -576,6 +576,11 @@ type server struct {
 	// restarted daemon reads it back rather than learning it again (see
 	// spinnerMarkDue in poll.go). nil skips recording.
 	markSpinner func(ctx context.Context, name, agentID string) error
+	// markReview writes a session's review record — its reviewed flag,
+	// prompt count and state (tmux.SetSessionReview) — so a restarted
+	// daemon, or one that finds the session renamed behind its back,
+	// reads them back (see reviewDue in poll.go). nil skips recording.
+	markReview func(ctx context.Context, name string, r tmux.Review) error
 
 	// Session-handler seams, defaulted to tmux.Has / tmux.Kill /
 	// tmux.Rename so the create/kill/rename handlers' bookkeeping is
@@ -669,6 +674,7 @@ func newServer(cfg config.Config) *server {
 		sendKeysPane:    tmux.SendKeysPane,
 		sendKeys:        tmux.SendKeys,
 		markSpinner:     tmux.SetSessionSpinner,
+		markReview:      tmux.SetSessionReview,
 		detectMoshi:     moshi.Detect,
 		bell:            notificationBell(cfg.Notifications),
 		readAgent:       project.ReadAgent,
@@ -791,8 +797,11 @@ func (s *server) listSessions(w http.ResponseWriter, r *http.Request) {
 			// A session the poll loop hasn't tickled yet: treat as
 			// seen=true (nothing for the user to review yet) rather
 			// than implicitly unseen, otherwise restarting ccmuxd
-			// would resurface every old session as "needs attention".
+			// would resurface every old session as "needs attention" —
+			// unless the session carries a daemon's review record,
+			// which the poll loop's first look will read back too.
 			t = &tracked{state: agent.StateUnknown, seen: true}
+			t.restoreReview(ts)
 		}
 		// For sessions we've seen via the poll loop this is already
 		// populated. For pre-existing sessions (e.g. the daemon just

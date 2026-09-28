@@ -19,7 +19,7 @@ type SessionState struct {
 	Windows     int       `json:"windows"`      // tmux window count
 	Created     time.Time `json:"created"`      // session creation time
 	LastChange  time.Time `json:"last_change"`  // pane content last changed
-	PromptCount int       `json:"prompt_count"` // # of times we've seen a needs-input transition
+	PromptCount int       `json:"prompt_count"` // turns ended in needs_input; kept on the session, like Seen
 	// Agent is the AI agent driving this session, sourced from the
 	// project's .ccmux/agent sidecar. One of "claude" / "codex" /
 	// "antigravity" / "gemini". Empty for sessions
@@ -34,7 +34,10 @@ type SessionState struct {
 	// rollup (needs_input > unseen-idle > working > seen-idle > unknown)
 	// and the bell/push suppression for the currently-attached session.
 	// Defaults to true (a session you've never had output from is by
-	// definition reviewed-empty, not unreviewed).
+	// definition reviewed-empty, not unreviewed). The daemon records it
+	// on the tmux session (with PromptCount) and reads it back after a
+	// restart, as long as the session is still in the state it was
+	// recorded in.
 	Seen bool `json:"seen"`
 }
 
