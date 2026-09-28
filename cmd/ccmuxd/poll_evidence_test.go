@@ -110,3 +110,114 @@ func TestTurn_BusyBodyIsWork(t *testing.T) {
 		t.Errorf("startup output: bells=%d pushes=%d, want 0/0", bells, pushes)
 	}
 }
+
+// TestTurn_EveryNotificationNeedsItsOwnTurn — the turn evidence was
+// cleared only on entering needs_input, so a turn that ended in idle
+// ("finished") or error (a crash) left it set, and the next thing that
+// merely changed the state notified as if it were a turn's end.
+func TestTurn_EveryNotificationNeedsItsOwnTurn(t *testing.T) {
+	spin := evidence{spinning: true}
+	for _, tc := range []struct {
+		name   string
+		ticks  []evTick
+		pushes int
+	}{
+		{"finished in idle, then typing and a pause", []evTick{
+			{agent.StateIdle, evidence{}}, // waiting (e.g. codex at its caret)
+			{agent.StateActive, spin}, {agent.StateActive, spin},
+			{agent.StateIdle, evidence{}},                                        // finished: push
+			{agent.StateActive, evidence{}}, {agent.StateNeedsInput, evidence{}}, // typing, pause
+		}, 1},
+		{"crashed to a shell, then the agent relaunched", []evTick{
+			{agent.StateNeedsInput, evidence{separated: true}},
+			{agent.StateActive, spin}, {agent.StateError, evidence{separated: true}}, // crash: no push
+			{agent.StateActive, evidence{separated: true}},     // typing `claude`, its startup
+			{agent.StateNeedsInput, evidence{separated: true}}, // back at the input box
+		}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bells, pushes := runEvidence(&turn{}, false, tc.ticks)
+			if bells != 0 || pushes != tc.pushes {
+				t.Errorf("bells=%d pushes=%d, want 0/%d (only the turn's own end)", bells, pushes, tc.pushes)
+			}
+		})
+	}
+}
+
+// codexPane is a Codex session: a transcript over its bare `> ` caret,
+// which codex's rules read as waiting (idle).
+func codexPane(transcript string) string {
+	return "OpenAI Codex\n\n" + transcript + "\n> "
+}
+
+// TestPollOnce_TypingAfterAFinishedTurnDoesNotNotify — on a real poll
+// loop: a Codex turn ends at its caret (idle: the "finished" push), and
+// the user then types a reply and pauses. That notified again (bell,
+// push, prompt count) because the finished turn's evidence was still
+// set.
+func TestPollOnce_TypingAfterAFinishedTurnDoesNotNotify(t *testing.T) {
+	s := newPollTestServer(t)
+	pushes := countPushes(t, s)
+	bells := countBells(s)
+	p := &fakePane{Pane: tmux.Pane{ID: "%1", Width: 120, Height: 40, Title: "codex"}, body: codexPane("")}
+	f := newFakeTmux()
+	f.addSession(tmux.Session{Name: "c-codex", Path: "/tmp", Agent: "codex", Created: time.Now().Add(-time.Hour)}, p)
+	f.wire(s)
+	pollNTimes(s, 1)
+
+	f.update(func() { p.body, p.Title = codexPane("> fix it\n\n• Working"), "⠋ codex" })
+	pollNTimes(s, 1)
+	f.update(func() { p.Title = "⠙ codex" })
+	pollNTimes(s, 1)
+	f.update(func() { p.body, p.Title = codexPane("> fix it\n\n• Fixed."), "codex" })
+	pollNTimes(s, 3)
+	tr := s.seen["c-codex"]
+	if tr.state != agent.StateIdle || pushes() != 1 {
+		t.Fatalf("setup: turn end: state=%s pushes=%d, want idle/1", tr.state, pushes())
+	}
+
+	f.update(func() { p.body = codexPane("> fix it\n\n• Fixed.") + "and the test" })
+	pollNTimes(s, 1) // typing
+	pollNTimes(s, 3) // the pause
+	if got := pushes(); got != 1 || *bells != 0 || tr.promptCount != 0 {
+		t.Errorf("typing after a finished turn notified: pushes=%d bells=%d promptCount=%d, want 1/0/0", got, *bells, tr.promptCount)
+	}
+}
+
+// TestPollOnce_RelaunchAfterACrashDoesNotNotify — Claude crashes
+// mid-turn (error: marked unreviewed, no push), and the user types
+// `claude` into the fallback shell to bring it back. Its input box reappearing notified as
+// the end of a turn (bell, push, prompt count): the crashed turn's
+// evidence was still set.
+func TestPollOnce_RelaunchAfterACrashDoesNotNotify(t *testing.T) {
+	shortSpinnerStaleness(t)
+	s := newPollTestServer(t)
+	pushes := countPushes(t, s)
+	bells := countBells(s)
+	idle, working := readFixture(t, "claude_v2_idle.txt"), readFixture(t, "claude_v2_working.txt")
+	p := &fakePane{Pane: tmux.Pane{ID: "%1", Width: 120, Height: 40, Title: "✳ Claude Code"}, body: idle}
+	f := newFakeTmux()
+	f.addSession(tmux.Session{Name: "c-relaunch", Path: "/tmp", Created: time.Now().Add(-time.Hour)}, p)
+	f.wire(s)
+	pollNTimes(s, 1)
+
+	f.update(func() { p.body, p.Title = working, "⠋ Refactor poll loop" })
+	pollNTimes(s, 1)
+	f.update(func() { p.body = crashedPane })
+	pollNTimes(s, 5) // the spinner goes stale: error
+	tr := s.seen["c-relaunch"]
+	if tr.state != agent.StateError || tr.seen {
+		t.Fatalf("setup: crash: state=%s seen=%v, want error, unreviewed", tr.state, tr.seen)
+	}
+
+	f.update(func() { p.body = crashedPane + "claude" })
+	pollNTimes(s, 1) // typing `claude`
+	f.update(func() { p.body, p.Title = idle, "✳ Claude Code" })
+	pollNTimes(s, 4) // Claude is back at its input box
+	if tr.state != agent.StateNeedsInput {
+		t.Fatalf("state = %s after the relaunch, want needs_input", tr.state)
+	}
+	if got := pushes(); got != 0 || *bells != 0 || tr.promptCount != 0 {
+		t.Errorf("relaunching after a crash notified: pushes=%d bells=%d promptCount=%d, want 0", got, *bells, tr.promptCount)
+	}
+}

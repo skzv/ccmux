@@ -61,9 +61,10 @@ type paneMemory struct {
 	// as a redraw after a resize or pane switch (see track).
 	width, height int
 	redrawTicks   int
-	// title is the pane's OSC title last tick, and titleChange when it
-	// last changed: with the body's last change, the evidence that a
-	// working-spinner title belongs to a live agent (see liveTitle).
+	// title is the pane's OSC title last tick, and titleChange when the
+	// daemon last saw it change between two reads (zero until then): the
+	// evidence that a working-spinner title belongs to a live agent (see
+	// liveTitle).
 	title       string
 	titleChange time.Time
 	// output is the tail of what the agent printed above its input area
@@ -610,8 +611,9 @@ type attentionInput struct {
 	PrevSeen   bool // the reviewed flag before this tick
 	Attached   bool // a tmux client is attached
 	// Work is whether this tick shows the agent working, and Worked
-	// whether it has worked since the session last entered needs_input
-	// (this tick included) — see turn.
+	// whether it has worked since its last turn ended — since it last
+	// settled into needs_input, idle or error (this tick included). See
+	// turn.
 	Work, Worked bool
 	// Joined: the daemon first saw this session already running and it
 	// hasn't settled since (see turn). Nothing it does is news yet.
@@ -735,6 +737,13 @@ type evidence struct {
 // stands (the baseline) and stays joined until it first settles.
 // Nothing is news until then: not the end of a turn it was caught in
 // the middle of, and not a crash. Its next turn is.
+//
+// Each notification needs a turn of its own: worked is cleared whenever
+// the session settles into needs_input, idle or error, whether or not
+// that settle was announced. A turn that ended in idle ("finished") or
+// error (a crash) left it set before, so the next thing that merely
+// changed the state — the user typing and pausing, or relaunching the
+// agent in the crashed pane — notified again.
 type turn struct {
 	spinnerSeen bool
 	worked      bool
@@ -756,10 +765,13 @@ func (tn *turn) attend(prev, next agent.State, ev evidence, prevSeen, attached b
 		Prev: prev, Next: next, PrevSeen: prevSeen, Attached: attached,
 		Work: work, Worked: tn.worked, Joined: tn.joined,
 	})
-	if next == agent.StateNeedsInput && prev != agent.StateNeedsInput {
-		tn.worked = false // the turn ended: the next prompt needs new work
-	}
 	if settled(next) {
+		if next != prev {
+			// The turn ended, into whatever state — decided just now,
+			// announced or not. The next notification needs a turn of
+			// its own.
+			tn.worked = false
+		}
 		tn.startup, tn.joined = false, false
 	}
 	return d

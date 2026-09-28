@@ -241,24 +241,27 @@ func runEvidence(tn *turn, attached bool, ticks []evTick) (bells, pushes int) {
 }
 
 // TestDecideAttention_AttachedSuppressesPushNotBell — an attached user
-// through two turns must never receive a push (their phone doesn't need
-// to buzz while they're watching), but the bell must ring at the end of
-// each turn — BEL is delivered by tmux to attached clients only, so the
-// attached terminal is precisely who the ring is for. (The pre-fix
-// expectation of zero bells while attached, combined with
-// delivery-to-attached-only, made the bell path dead code — the PR #156
-// regression.)
+// through three turns must never receive a push (their phone doesn't
+// need to buzz while they're watching), but the bell must ring at the
+// end of each turn that ends waiting for input — BEL is delivered by
+// tmux to attached clients only, so the attached terminal is precisely
+// who the ring is for. (The pre-fix expectation of zero bells while
+// attached, combined with delivery-to-attached-only, made the bell path
+// dead code — the PR #156 regression.) A turn that ends in idle rings
+// nothing, and the prompt after it needs a turn of its own.
 func TestDecideAttention_AttachedSuppressesPushNotBell(t *testing.T) {
 	bells, pushes := runTurns(&turn{}, true, []tick{
 		{agent.StateActive, false},
 		{agent.StateActive, false},
-		{agent.StateNeedsInput, false},
+		{agent.StateNeedsInput, false}, // turn 1: bell
 		{agent.StateActive, false},
-		{agent.StateIdle, false},
-		{agent.StateNeedsInput, false},
+		{agent.StateIdle, false},       // turn 2 finishes: no bell
+		{agent.StateNeedsInput, false}, // not a turn
+		{agent.StateActive, false},
+		{agent.StateNeedsInput, false}, // turn 3: bell
 	})
 	if bells != 2 {
-		t.Errorf("attached session rang the bell %d times across the sequence; expected 2 (one per turn)", bells)
+		t.Errorf("attached session rang the bell %d times across the sequence; expected 2 (one per turn ending at a prompt)", bells)
 	}
 	if pushes != 0 {
 		t.Errorf("attached session sent %d pushes across the sequence; expected 0", pushes)
