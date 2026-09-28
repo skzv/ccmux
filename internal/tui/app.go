@@ -203,6 +203,7 @@ type App struct {
 	confirm confirmationModal
 
 	helpOpen         bool
+	helpScroll       int                        // first help line shown when the overlay is taller than the terminal
 	usageOpen        bool                       // `u` opens the full usage overlay; esc/u closes
 	convPreview      conversationPreviewOverlay // `p` opens the transcript-preview overlay on the Conversations screen
 	projectInfoOpen  bool                       // `i` on Projects opens the per-project info overlay; esc/i closes
@@ -1303,6 +1304,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			case "left", "p":
 				a.tour.Prev()
+			case "up", "k":
+				a.tour.ScrollBy(-1, a.width, a.height)
+			case "down", "j":
+				a.tour.ScrollBy(1, a.width, a.height)
 			case "esc", "q":
 				a.tour.Close()
 				a.markTourShown()
@@ -1310,12 +1315,25 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 
-		// Help overlay takes precedence — `?` or `esc` close it, every
-		// other key passes through normally so muscle memory still works.
+		// Help overlay takes precedence — `?` or `esc` close it, the
+		// arrows scroll it when it's taller than the terminal, and every
+		// other key is swallowed.
 		if a.helpOpen {
 			switch msg.String() {
 			case "?", "esc":
 				a.helpOpen = false
+			case "up", "k":
+				a.helpScroll = maxInt(0, minInt(a.helpScroll, a.helpScrollMax())-1)
+			case "down", "j":
+				a.helpScroll = minInt(a.helpScroll+1, a.helpScrollMax())
+			case "pgup":
+				a.helpScroll = maxInt(0, minInt(a.helpScroll, a.helpScrollMax())-maxInt(1, a.height-helpChromeRows))
+			case "pgdown", " ":
+				a.helpScroll = minInt(a.helpScroll+maxInt(1, a.height-helpChromeRows), a.helpScrollMax())
+			case "home", "g":
+				a.helpScroll = 0
+			case "end", "G":
+				a.helpScroll = a.helpScrollMax()
 			}
 			return a, nil
 		}
@@ -1384,6 +1402,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// `?` opens the help overlay from any screen.
 		if msg.String() == "?" && !a.modalCapturingText() {
 			a.helpOpen = true
+			a.helpScroll = 0
 			return a, nil
 		}
 

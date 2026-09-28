@@ -522,3 +522,6 @@
 "Kill" = "Завершить"
 "Confirm" = "Подтвердить"
 "Cancel" = "Отмена"
+"↑↓ scroll %d/%d · ? or esc to close" = "↑↓ прокрутка %d/%d · ? или esc — закрыть"
+"↑↓ scroll %d/%d" = "↑↓ прокрутка %d/%d"
+"(make the terminal taller to browse this agent's hooks, MCP servers, commands and skills)" = "(увеличьте высоту терминала, чтобы просмотреть хуки, MCP-серверы, команды и навыки этого агента)"

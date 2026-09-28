@@ -428,6 +428,23 @@ func (b agentBrowser) View(width, height int) string {
 	return lipgloss.JoinVertical(lipgloss.Left, body, "", hint)
 }
 
+// agentBrowserMinHeight is the fewest rows the browser renders in (its
+// geometry floors smaller heights to this).
+const agentBrowserMinHeight = 10
+
+// ViewFit is View for a host that may not have agentBrowserMinHeight
+// rows left under its own header: on a short terminal it returns a
+// one-line hint instead of a browser clipped mid-pane.
+func (b agentBrowser) ViewFit(width, height int) string {
+	if height < agentBrowserMinHeight {
+		if !b.HasItems() {
+			return ""
+		}
+		return b.st.Muted.Width(maxInt(1, width)).Render(tr("(make the terminal taller to browse this agent's hooks, MCP servers, commands and skills)"))
+	}
+	return b.View(width, height)
+}
+
 // renderHint produces the muted hint line under the panes. The hint
 // shifts based on focus so the keystrokes that actually do something
 // are always present.

@@ -522,3 +522,6 @@
 "Kill" = "Terminar"
 "Confirm" = "Confirmar"
 "Cancel" = "Cancelar"
+"↑↓ scroll %d/%d · ? or esc to close" = "↑↓ desplazar %d/%d · ? o esc para cerrar"
+"↑↓ scroll %d/%d" = "↑↓ desplazar %d/%d"
+"(make the terminal taller to browse this agent's hooks, MCP servers, commands and skills)" = "(agranda la terminal en altura para explorar los hooks, servidores MCP, comandos y skills de este agente)"

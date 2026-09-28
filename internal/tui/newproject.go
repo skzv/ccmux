@@ -258,12 +258,19 @@ func (m newProjectFormModel) View(width int) string {
 	title := st.Emphasis.Render(tr("New project"))
 	hint := st.Subtitle.Render(tr("ccmux creates the directory and starts your agent — nothing else. Run /init or openspec yourself."))
 
-	nameLabel := st.Muted.Render(padLabel(tr("name"), 10))
-	hostLabel := st.Muted.Render(padLabel(tr("device"), 10))
-	agentLabel := st.Muted.Render(padLabel(tr("agent"), 10))
-	nameField := m.name.View()
-	hostField := m.renderHostPicker()
-	agentField := m.renderAgentPicker()
+	const labelW = 10
+	nameLabel := st.Muted.Render(padLabel(tr("name"), labelW))
+	hostLabel := st.Muted.Render(padLabel(tr("device"), labelW))
+	agentLabel := st.Muted.Render(padLabel(tr("agent"), labelW))
+	// Keep every row on one line after its label (see the new-session
+	// form): at phone widths the rows wrapped under the label column.
+	textW := width - 4 // the pane's border + padding
+	fieldW := maxInt(4, textW-labelW-2)
+	narrow := textW < 60
+	m.name.Width = maxInt(1, minInt(m.name.Width, fieldW-1))
+	nameField := truncate(m.name.View(), fieldW)
+	hostField := truncate(m.renderHostPicker(), fieldW)
+	agentField := truncate(m.renderAgentPicker(), fieldW)
 
 	// Three-state focus marker. Each row gets either the ▌ cursor
 	// (when focused) or two spaces of padding so the columns stay
@@ -279,16 +286,18 @@ func (m newProjectFormModel) View(width int) string {
 
 	keys := st.Muted.Render(tr("tab: next field   ←/→: pick device/agent   enter: create   esc: cancel"))
 
-	parts := []string{
-		title,
-		hint,
+	parts := []string{title}
+	if !narrow {
+		parts = append(parts, hint)
+	}
+	parts = append(parts,
 		"",
-		nameLabel + nameField,
-		hostLabel + hostField,
-		agentLabel + agentField,
+		nameLabel+nameField,
+		hostLabel+hostField,
+		agentLabel+agentField,
 		"",
 		keys,
-	}
+	)
 	if m.err != "" {
 		parts = append(parts, st.StatusError.Render("⚠ "+m.err))
 	}

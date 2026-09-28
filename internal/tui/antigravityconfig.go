@@ -119,7 +119,7 @@ func (m antigravityConfigModel) View(width, height int) string {
 // surface in one bordered block.
 func (m antigravityConfigModel) ViewBody(width, height int) string {
 	headerStr := m.viewBodyHeader(width)
-	browserView := m.browser.View(width, m.browserHeight(width, height))
+	browserView := m.browser.ViewFit(width, height-lipgloss.Height(headerStr))
 	return lipgloss.JoinVertical(lipgloss.Left, headerStr, browserView)
 }
 

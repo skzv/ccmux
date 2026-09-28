@@ -684,11 +684,16 @@ func (m settingsModel) renderSingleColumn(width, height int) string {
 		m.renderMoshiBlock(),
 		"",
 	}
-	lines = append(lines, m.renderFieldGroups(paneInner, true)...)
+	fieldLines, cursorLine := m.renderFieldGroups(paneInner, true)
+	cursorLine += len(lines)
+	lines = append(lines, fieldLines...)
 	if m.saveMsg != "" && time.Since(m.savedAt) < 3*time.Second {
 		lines = append(lines, "", m.st.StatusGood.Render(m.saveMsg))
 	}
 	lines = append(lines, m.staticBlocks()...)
+	// Scroll with the cursor rather than overflow the pane (which lost
+	// its bottom border and every row below the fold on 80x24).
+	lines = fitPaneLines(lines, paneInner, height-2, cursorLine)
 	return m.st.Pane.Width(width - 2).Height(height - 2).MaxWidth(width).Render(strings.Join(lines, "\n"))
 }
 
@@ -706,10 +711,13 @@ func (m settingsModel) renderListPane(width, height int, focused bool) string {
 		m.renderMoshiBlock(),
 		"",
 	}
-	lines = append(lines, m.renderFieldGroups(contentW, false)...)
+	fieldLines, cursorLine := m.renderFieldGroups(contentW, false)
+	cursorLine += len(lines)
+	lines = append(lines, fieldLines...)
 	lines = append(lines, m.staticBlocks()...)
-	// The pane's own Width word-wraps any over-long line (e.g. the
-	// Hosts empty-state blurb) at word boundaries.
+	// Wrapped to the pane (the Hosts empty-state blurb is long) and
+	// scrolled with the cursor so the list never outgrows its pane.
+	lines = fitPaneLines(lines, contentW, height-2, cursorLine)
 	return m.paneStyle(focused).Width(width - 2).Height(height - 2).Render(strings.Join(lines, "\n"))
 }
 
@@ -755,6 +763,13 @@ func (m settingsModel) renderDetailPane(width, height int, focused bool) string 
 			lines = append(lines, "", m.st.StatusGood.Render(m.saveMsg))
 		}
 	}
+	// Never taller than the pane; while editing keep the editor (at the
+	// end) in view.
+	focus := -1
+	if m.editing {
+		focus = len(lines) - 1
+	}
+	lines = fitPaneLines(lines, contentW, height-2, focus)
 	return m.paneStyle(focused).Width(width - 2).Height(height - 2).Render(strings.Join(lines, "\n"))
 }
 
@@ -770,7 +785,7 @@ func (m settingsModel) paneStyle(focused bool) lipgloss.Style {
 // inlineDetail is true (the narrow single-column layout) the active
 // field's hint + editor render on the lines below it; in the wide
 // layout the rows render alone and the detail pane carries that content.
-func (m settingsModel) renderFieldGroups(contentW int, inlineDetail bool) []string {
+func (m settingsModel) renderFieldGroups(contentW int, inlineDetail bool) (lines []string, cursorLine int) {
 	fields := m.fields()
 	groups := groupedFields(fields)
 	// Walk the flat field list in editableFields() order so the group
@@ -779,7 +794,7 @@ func (m settingsModel) renderFieldGroups(contentW int, inlineDetail bool) []stri
 	for i, f := range fields {
 		indexByLabel[f.label] = i
 	}
-	var lines []string
+	cursorLine = -1
 	for gi, g := range groups {
 		if len(g.fields) == 0 {
 			continue
@@ -790,6 +805,9 @@ func (m settingsModel) renderFieldGroups(contentW int, inlineDetail bool) []stri
 		lines = append(lines, m.st.Subtitle.Render(g.label))
 		for _, f := range g.fields {
 			idx := indexByLabel[f.label]
+			if idx == m.cursor {
+				cursorLine = len(lines)
+			}
 			lines = append(lines, m.renderFieldRow(f, idx == m.cursor, contentW))
 			if inlineDetail && idx == m.cursor {
 				lines = append(lines, "  "+m.st.Muted.Render(f.hint))
@@ -804,7 +822,7 @@ func (m settingsModel) renderFieldGroups(contentW int, inlineDetail bool) []stri
 			}
 		}
 	}
-	return lines
+	return lines, cursorLine
 }
 
 // staticBlocks returns the read-only Sleep prevention / Daemon / Hosts

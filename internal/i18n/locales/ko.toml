@@ -522,3 +522,6 @@
 "Kill" = "종료"
 "Confirm" = "확인"
 "Cancel" = "취소"
+"↑↓ scroll %d/%d · ? or esc to close" = "↑↓ 스크롤 %d/%d · ? 또는 esc로 닫기"
+"↑↓ scroll %d/%d" = "↑↓ 스크롤 %d/%d"
+"(make the terminal taller to browse this agent's hooks, MCP servers, commands and skills)" = "(이 에이전트의 훅, MCP 서버, 명령, 스킬을 보려면 터미널 높이를 늘리세요)"

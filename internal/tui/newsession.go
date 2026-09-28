@@ -262,15 +262,25 @@ func (m newSessionFormModel) View(width int) string {
 	title := st.Emphasis.Render(tr("New session"))
 	hint := st.Subtitle.Render(tr("Spawn a tmux session running the picked agent (or a bare shell) on the picked device."))
 
-	nameLabel := st.Muted.Render(padLabel(tr("name"), 12))
-	workLabel := st.Muted.Render(padLabel(tr("working dir"), 12))
-	hostLabel := st.Muted.Render(padLabel(tr("device"), 12))
-	agentLabel := st.Muted.Render(padLabel(tr("agent"), 12))
+	const labelW = 12
+	nameLabel := st.Muted.Render(padLabel(tr("name"), labelW))
+	workLabel := st.Muted.Render(padLabel(tr("working dir"), labelW))
+	hostLabel := st.Muted.Render(padLabel(tr("device"), labelW))
+	agentLabel := st.Muted.Render(padLabel(tr("agent"), labelW))
 
-	nameField := m.name.View()
-	workField := m.workdir.View()
-	hostField := m.renderHostPicker()
-	agentField := m.renderAgentPicker()
+	// Each row must fit on one line after its label and the focus
+	// marker; at phone widths the rows used to wrap back under the
+	// label column and push the form off the screen.
+	textW := width - 4 // the pane's border + padding
+	fieldW := maxInt(4, textW-labelW-2)
+	narrow := textW < 60
+	m.name.Width = maxInt(1, minInt(m.name.Width, fieldW-1))
+	m.workdir.Width = maxInt(1, minInt(m.workdir.Width, fieldW-1))
+
+	nameField := truncate(m.name.View(), fieldW)
+	workField := truncate(m.workdir.View(), fieldW)
+	hostField := truncate(m.renderHostPicker(narrow), fieldW)
+	agentField := truncate(m.renderAgentPicker(narrow), fieldW)
 	rows := []*string{&nameField, &workField, &hostField, &agentField}
 	for i, r := range rows {
 		if i == m.focus {
@@ -281,17 +291,19 @@ func (m newSessionFormModel) View(width int) string {
 	}
 
 	keys := st.Muted.Render(tr("tab: next field   ←/→: pick device/agent   enter: create   esc: cancel"))
-	parts := []string{
-		title,
-		hint,
+	parts := []string{title}
+	if !narrow {
+		parts = append(parts, hint) // T2: the rows say it all on a phone
+	}
+	parts = append(parts,
 		"",
-		nameLabel + nameField,
-		workLabel + workField,
-		hostLabel + hostField,
-		agentLabel + agentField,
+		nameLabel+nameField,
+		workLabel+workField,
+		hostLabel+hostField,
+		agentLabel+agentField,
 		"",
 		keys,
-	}
+	)
 	if m.err != "" {
 		parts = append(parts, st.StatusError.Render("⚠ "+m.err))
 	}
@@ -449,12 +461,22 @@ func launchCmdForBareSessionWithCommands(id agent.ID, commands agent.Commands) s
 // renderHostPicker mirrors the helper on newProjectFormModel — same
 // visual treatment (‹ Name › when focused, plain when not, count
 // hint either way).
-func (m newSessionFormModel) renderHostPicker() string {
+func (m newSessionFormModel) renderHostPicker(narrow bool) string {
 	cur := m.currentHost().Label
 	if len(m.hosts) <= 1 {
-		return m.st.Muted.Render(cur + "  (only host available)")
+		if narrow {
+			return m.st.Muted.Render(cur)
+		}
+		return m.st.Muted.Render(cur + "  " + tr("(only host available)"))
 	}
-	hint := fmt.Sprintf("%d of %d", m.hostIdx+1, len(m.hosts))
+	if narrow {
+		// Drop the "n of m" counter: the value is what matters.
+		if m.focus == 2 {
+			return "‹ " + m.st.Emphasis.Render(cur) + " ›"
+		}
+		return cur
+	}
+	hint := fmt.Sprintf("%d/%d", m.hostIdx+1, len(m.hosts))
 	if m.focus == 2 {
 		return "‹ " + m.st.Emphasis.Render(cur) + " ›   " + m.st.Muted.Render("("+hint+")")
 	}
@@ -462,12 +484,21 @@ func (m newSessionFormModel) renderHostPicker() string {
 }
 
 // renderAgentPicker mirrors renderHostPicker for the agent row.
-func (m newSessionFormModel) renderAgentPicker() string {
+func (m newSessionFormModel) renderAgentPicker(narrow bool) string {
 	cur := m.currentAgent().Label
 	if len(m.agents) <= 1 {
-		return m.st.Muted.Render(cur + "  (only agent available)")
+		if narrow {
+			return m.st.Muted.Render(cur)
+		}
+		return m.st.Muted.Render(cur + "  " + tr("(only agent available)"))
 	}
-	hint := fmt.Sprintf("%d of %d", m.agentIdx+1, len(m.agents))
+	if narrow {
+		if m.focus == 3 {
+			return "‹ " + m.st.Emphasis.Render(cur) + " ›"
+		}
+		return cur
+	}
+	hint := fmt.Sprintf("%d/%d", m.agentIdx+1, len(m.agents))
 	if m.focus == 3 {
 		return "‹ " + m.st.Emphasis.Render(cur) + " ›   " + m.st.Muted.Render("("+hint+")")
 	}

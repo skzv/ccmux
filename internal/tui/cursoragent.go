@@ -218,7 +218,7 @@ func (m cursorAgentModel) View(width, height int) string {
 // surface in one bordered block.
 func (m cursorAgentModel) ViewBody(width, height int) string {
 	headerStr := m.viewBodyHeader()
-	browserView := m.browser.View(width, m.browserHeight(height))
+	browserView := m.browser.ViewFit(width, height-lipgloss.Height(headerStr))
 	return lipgloss.JoinVertical(lipgloss.Left, headerStr, browserView)
 }
 

@@ -283,7 +283,10 @@ func (m agentsModel) View(width, height int) string {
 		body = m.st.Muted.Render(tr("Grok settings are managed by the grok CLI (~/.grok/config.toml + AGENTS.md)."))
 	}
 	inner := lipgloss.JoinVertical(lipgloss.Left, header, "", body)
-	return m.st.Pane.Width(width - 2).Height(height - 2).MaxWidth(width).Render(inner)
+	// Never taller than the pane: overflowing content was clipped off the
+	// bottom of the frame together with the pane's bottom border.
+	lines := fitPaneLines(strings.Split(inner, "\n"), innerW, height-2, -1)
+	return m.st.Pane.Width(width - 2).Height(height - 2).MaxWidth(width).Render(strings.Join(lines, "\n"))
 }
 
 // renderSubtabs draws the • Claude  • Codex  • Antigravity  • Cursor
@@ -307,16 +310,37 @@ func (m agentsModel) renderSubtabs(width int) string {
 			parts = append(parts, dot+" "+m.st.Muted.Render(label))
 		}
 	}
+	avail := max(1, width-4)
 	// The "(tab / h·l: switch agent)" hint is T2 — dropped on narrow.
-	if isNarrow(width) {
-		return strings.Join(parts, "\n")
+	if !isNarrow(width) {
+		subtabs := strings.Join(parts, "   ")
+		hint := "   " + m.st.Muted.Render(tr("(tab / h·l: switch agent)"))
+		if lipgloss.Width(subtabs+hint) <= avail {
+			subtabs += hint
+		}
+		if lipgloss.Width(subtabs) <= avail {
+			return subtabs
+		}
 	}
-	subtabs := strings.Join(parts, "   ")
-	hint := "   " + m.st.Muted.Render(tr("(tab / h·l: switch agent)"))
-	if lipgloss.Width(subtabs+hint) <= width-4 {
-		subtabs += hint
+	// Too wide for one row: flow the tabs onto as few rows as fit,
+	// breaking only between tabs. (Below 120 columns this used to stack
+	// one agent per row — eight rows of the Agents pane before any
+	// settings.)
+	var rows []string
+	row := ""
+	for _, p := range parts {
+		switch {
+		case row == "":
+			row = p
+		case lipgloss.Width(row)+2+lipgloss.Width(p) <= avail:
+			row += "  " + p
+		default:
+			rows = append(rows, row)
+			row = p
+		}
 	}
-	return lipgloss.NewStyle().Width(max(1, width-4)).Render(subtabs)
+	rows = append(rows, row)
+	return strings.Join(rows, "\n")
 }
 
 // agentConfigSubtabs is the fixed set of agents that get a config

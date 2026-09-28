@@ -439,12 +439,25 @@ func (m claudeModel) View(width, height int) string {
 func (m claudeModel) ViewBody(width, height int) string {
 	m.narrow = isNarrow(width)
 	headerStr := m.viewBodyHeader()
-	browserView := m.browser.View(width, m.browserHeight(height))
-	body := lipgloss.JoinVertical(lipgloss.Left, headerStr, browserView)
+	backup := ""
 	if !m.narrow && m.lastBackup != "" {
-		body = lipgloss.JoinVertical(lipgloss.Left, body, m.st.Muted.Render("last write backed up to "+summarizePath(m.lastBackup)))
+		backup = m.st.Muted.Render("last write backed up to " + summarizePath(m.lastBackup))
+	}
+	browserH := height - lipgloss.Height(headerStr)
+	if backup != "" {
+		browserH--
+	}
+	body := lipgloss.JoinVertical(lipgloss.Left, headerStr, m.browserView(width, browserH))
+	if backup != "" {
+		body = lipgloss.JoinVertical(lipgloss.Left, body, backup)
 	}
 	return body
+}
+
+// browserView renders the embedded browser in the rows left under the
+// settings header.
+func (m claudeModel) browserView(width, height int) string {
+	return m.browser.ViewFit(width, height)
 }
 
 // viewBodyHeader builds the settings-rows header stacked above the

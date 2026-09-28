@@ -530,3 +530,6 @@
 "Kill" = "终止"
 "Confirm" = "确认"
 "Cancel" = "取消"
+"↑↓ scroll %d/%d · ? or esc to close" = "↑↓ 滚动 %d/%d · 按 ? 或 esc 关闭"
+"↑↓ scroll %d/%d" = "↑↓ 滚动 %d/%d"
+"(make the terminal taller to browse this agent's hooks, MCP servers, commands and skills)" = "（把终端调高一些，才能浏览这个智能体的 hooks、MCP 服务器、命令和技能）"

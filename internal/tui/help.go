@@ -121,7 +121,26 @@ func helpForScreen(s Screen, km Keymap) []HelpItem {
 // blink-past error can still be recalled.
 func (a App) renderHelpOverlay(width, height int) string {
 	st := a.styles
+	lines, modalW := a.helpLines(width)
+	visible, footer := helpWindow(lines, a.helpScroll, height)
+	if footer == "" {
+		footer = tr("press ? or esc to close")
+	}
+	// One row, always: helpWindow budgeted exactly one for it.
+	footer = truncate(footer, maxInt(1, modalW-2*st.Spacing.SM))
+	body := strings.Join(append(visible, "", st.Muted.Render(footer)), "\n")
+	modal := st.PaneFocused.Width(modalW).Render(body)
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, modal)
+}
+
+// helpLines builds the help text wrapped to the modal's text column for
+// a width-column terminal, and the modal width it was wrapped for.
+func (a App) helpLines(width int) ([]string, int) {
+	st := a.styles
 	screenName := a.screen.String()
+	modalW := minInt(96, width-4)
+	// The text column: the pane's Width includes its horizontal padding.
+	textW := maxInt(1, modalW-2*st.Spacing.SM)
 
 	perScreen := helpForScreen(a.screen, a.keys)
 	global := globalHelp(a.keys)
@@ -151,20 +170,14 @@ func (a App) renderHelpOverlay(width, height int) string {
 	if len(perScreen) > 0 {
 		lines = append(lines, st.Subtitle.Render(tr("On this screen")))
 		for _, it := range perScreen {
-			lines = append(lines, fmt.Sprintf("  %s   %s",
-				st.Key.Render(padRight(it.Key, maxKeyW)),
-				st.Muted.Render(it.Desc),
-			))
+			lines = append(lines, helpRow(st.Key.Render(padRight(it.Key, maxKeyW)), it.Desc, st.Muted, textW)...)
 		}
 		lines = append(lines, "")
 	}
 
 	lines = append(lines, st.Subtitle.Render(tr("Anywhere")))
 	for _, it := range global {
-		lines = append(lines, fmt.Sprintf("  %s   %s",
-			st.Key.Render(padRight(it.Key, maxKeyW)),
-			st.Muted.Render(it.Desc),
-		))
+		lines = append(lines, helpRow(st.Key.Render(padRight(it.Key, maxKeyW)), it.Desc, st.Muted, textW)...)
 	}
 
 	if log := a.toasts.Log(); len(log) > 0 {
@@ -181,22 +194,69 @@ func (a App) renderHelpOverlay(width, height int) string {
 				color = st.StatusWarning
 			}
 			ago := humanDuration(time.Since(t.At))
-			lines = append(lines, fmt.Sprintf("  %s   %s",
-				st.Muted.Render(ago+" "+tr("ago")),
-				color.Render(label),
-			))
+			lines = append(lines, helpRow(st.Muted.Render(ago+" "+tr("ago")), label, color, textW)...)
 		}
 	}
 
 	lines = append(lines, "", st.Subtitle.Render(tr("Help improve ccmux")),
 		st.Muted.Render(tr("Report issues, improve translations, or submit a PR.")),
 		st.Muted.Render("ccmux contribute"))
-	lines = append(lines, "", st.Muted.Render(tr("press ? or esc to close")))
+	// Wrap to the text column up front so the line count is what's drawn.
+	return strings.Split(lipgloss.NewStyle().Width(textW).Render(strings.Join(lines, "\n")), "\n"), modalW
+}
 
-	modalW := minInt(96, width-4)
-	body := strings.Join(lines, "\n")
-	modal := st.PaneFocused.Width(modalW).Render(body)
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, modal)
+// helpChromeRows is what the help modal spends around its scrollable
+// text: the border (top + bottom), the blank line and the footer.
+const helpChromeRows = 4
+
+// helpWindow picks the slice of the help text that fits a height-row
+// terminal, starting at offset (clamped). When everything fits it
+// returns all lines and an empty footer; otherwise the footer is a
+// scroll hint with the position. The overlay used to be as tall as its
+// text: on an 80x24 terminal the top of it (the screen's own bindings)
+// was cut off with no way to scroll to it.
+func helpWindow(lines []string, offset, height int) (visible []string, footer string) {
+	room := height - helpChromeRows
+	if room < 1 {
+		room = 1
+	}
+	if len(lines) <= room {
+		return lines, ""
+	}
+	maxOff := len(lines) - room
+	offset = maxInt(0, minInt(offset, maxOff))
+	return lines[offset : offset+room],
+		fmt.Sprintf(tr("↑↓ scroll %d/%d · ? or esc to close"), offset+1, maxOff+1)
+}
+
+// helpScrollMax is the largest useful helpScroll for the current screen
+// and terminal size — 0 when the help fits.
+func (a App) helpScrollMax() int {
+	lines, _ := a.helpLines(a.width)
+	return maxInt(0, len(lines)-maxInt(1, a.height-helpChromeRows))
+}
+
+// helpRow lays out one "key   description" row in a textW-wide column.
+// A description too long for the line wraps under itself (a hanging
+// indent) instead of back under the key column.
+func helpRow(key, desc string, descStyle lipgloss.Style, textW int) []string {
+	prefix := "  " + key + "   "
+	indent := lipgloss.Width(prefix)
+	descW := textW - indent
+	if descW < 12 {
+		return []string{prefix + descStyle.Render(desc)}
+	}
+	wrapped := strings.Split(lipgloss.NewStyle().Width(descW).Render(desc), "\n")
+	out := make([]string, len(wrapped))
+	for i, l := range wrapped {
+		l = strings.TrimRight(l, " ")
+		if i == 0 {
+			out[i] = prefix + descStyle.Render(l)
+		} else {
+			out[i] = strings.Repeat(" ", indent) + descStyle.Render(l)
+		}
+	}
+	return out
 }
 
 func padRight(s string, n int) string {

@@ -139,7 +139,7 @@ func (m codexConfigModel) View(width, height int) string {
 // the sub-tab row + body share one continuous block.
 func (m codexConfigModel) ViewBody(width, height int) string {
 	headerStr := m.viewBodyHeader(width)
-	browserView := m.browser.View(width, m.browserHeight(width, height))
+	browserView := m.browser.ViewFit(width, height-lipgloss.Height(headerStr))
 	return lipgloss.JoinVertical(lipgloss.Left, headerStr, browserView)
 }
 

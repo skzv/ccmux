@@ -227,3 +227,38 @@ func windowAroundCursor(cursor, total, budget int) (start, end int) {
 	}
 	return start, end
 }
+
+// fitPaneLines word-wraps lines to width and returns at most rows of the
+// result: the window that keeps unwrapped line `focus` in view (-1 keeps
+// the top). A pane rendered from the result never outgrows its height —
+// taller content used to be clipped from the bottom of the frame, taking
+// the pane's bottom border (and every row below the fold) with it.
+func fitPaneLines(lines []string, width, rows, focus int) []string {
+	if rows < 1 {
+		rows = 1
+	}
+	wrap := lipgloss.NewStyle().Width(maxInt(1, width))
+	var out []string
+	focusStart, focusEnd := -1, -1
+	for i, line := range lines {
+		if i == focus {
+			focusStart = len(out)
+		}
+		out = append(out, strings.Split(wrap.Render(line), "\n")...)
+		if i == focus {
+			focusEnd = len(out) - 1
+		}
+	}
+	if len(out) <= rows {
+		return out
+	}
+	start := 0
+	if focusStart >= 0 {
+		// Keep some context above the focused line, and all of it in view.
+		start = maxInt(0, minInt(focusStart-rows/3, len(out)-rows))
+		if focusEnd >= start+rows {
+			start = focusEnd - rows + 1
+		}
+	}
+	return out[start : start+rows]
+}
