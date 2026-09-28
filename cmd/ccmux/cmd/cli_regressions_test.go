@@ -353,13 +353,29 @@ func TestKill_NothingToKillNamesBothCandidates(t *testing.T) {
 // --- conversation IDs --------------------------------------------------------
 
 // seedClaudeTranscript writes a minimal Claude Code transcript for id
-// under $HOME/.claude/projects and returns its path.
+// under $HOME/.claude/projects and returns its path. The conversation
+// ran in $HOME/work/app, which exists, so it can be resumed.
 func (e *cliEnv) seedClaudeTranscript(id, prompt string) string {
 	e.t.Helper()
-	dir := e.mkdir(".claude/projects/-work-app")
+	return e.seedClaudeTranscriptIn(e.mkdir("work/app"), id, prompt)
+}
+
+// seedClaudeTranscriptIn is seedClaudeTranscript for a conversation
+// that ran in cwd, which needn't exist.
+func (e *cliEnv) seedClaudeTranscriptIn(cwd, id, prompt string) string {
+	e.t.Helper()
+	dir := e.mkdir(filepath.Join(".claude", "projects", strings.ReplaceAll(cwd, "/", "-")))
 	p := filepath.Join(dir, id+".jsonl")
-	body := `{"type":"user","cwd":"/work/app","message":{"role":"user","content":"` + prompt + `"},"timestamp":"2026-09-01T10:00:00.000Z"}` + "\n"
-	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+	line, err := json.Marshal(map[string]any{
+		"type":      "user",
+		"cwd":       cwd,
+		"message":   map[string]string{"role": "user", "content": prompt},
+		"timestamp": "2026-09-01T10:00:00.000Z",
+	})
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	if err := os.WriteFile(p, append(line, '\n'), 0o644); err != nil {
 		e.t.Fatal(err)
 	}
 	return p
@@ -417,6 +433,39 @@ func TestResume_TagsSessionInTheCreatingTmuxCall(t *testing.T) {
 	}
 	if hasCall(e.tmuxCallsWith("set-option"), "@ccmux_agent") {
 		t.Errorf("a separate set-option @ccmux_agent call leaves the session untagged in between; tmux calls:\n%s", strings.Join(e.tmuxCalls(), "\n"))
+	}
+}
+
+// TestResume_RefusesMissingProjectFolder — `ccmux resume` of a
+// conversation whose project folder was deleted or moved started the
+// session anyway; tmux put it in $HOME, where the agent can't find the
+// conversation. It must refuse with the folder named and create
+// nothing, as the TUI does — but still reattach to a session an earlier
+// resume left running.
+func TestResume_RefusesMissingProjectFolder(t *testing.T) {
+	e := newCLIEnv(t)
+	id := "3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b"
+	gone := filepath.Join(e.home, "deleted", "app")
+	e.seedClaudeTranscriptIn(gone, id, "fix the login redirect")
+
+	res := e.run("", "resume", id)
+	if res.code == 0 {
+		t.Fatalf("resume in a missing folder succeeded; stdout: %s", res.stdout)
+	}
+	if !strings.Contains(res.stderr, gone) || !strings.Contains(res.stderr, "no longer exists") {
+		t.Errorf("error doesn't say which folder is missing: %s", res.stderr)
+	}
+	if calls := e.tmuxCallsWith("new-session"); len(calls) != 0 {
+		t.Errorf("a session was created for a missing folder: %v", calls)
+	}
+
+	name := conversations.ResumeSessionName(id)
+	e.env["FAKE_TMUX_SESSIONS"] = name
+	if res := e.run("", "resume", id); res.code != 0 {
+		t.Errorf("a running resume session wasn't reattached: exit %d\n%s", res.code, res.stderr)
+	}
+	if calls := e.tmuxCallsWith("new-session"); len(calls) != 0 {
+		t.Errorf("reattaching created a session: %v", calls)
 	}
 }
 

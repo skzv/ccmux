@@ -3,6 +3,8 @@ package cmd
 import (
 	"context"
 	"errors"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/skzv/ccmux/internal/agent"
@@ -134,5 +136,30 @@ func TestEnsureResumeSession_TagFailureKillsNewSession(t *testing.T) {
 	}
 	if _, ok := st.sessions[name]; !ok {
 		t.Errorf("killed %s, a session this call didn't create", name)
+	}
+}
+
+// TestEnsureResumeSession_MissingFolderRefused — a conversation whose
+// project folder is gone got a new session anyway, started by tmux in
+// $HOME where the agent can't find the conversation. It must be refused
+// without creating anything; a session an earlier resume left running
+// is still reattached.
+func TestEnsureResumeSession_MissingFolderRefused(t *testing.T) {
+	st := fakeResumeTmux(t)
+	ctx := context.Background()
+	gone := filepath.Join(t.TempDir(), "deleted")
+	c := conversations.Conversation{ID: "0198a3c2-1b2c-7d3e-8f9a-0b1c2d3e4f5a", Agent: agent.IDCodex, Project: gone}
+
+	if _, _, err := ensureResumeSession(ctx, c, "codex resume x"); err == nil || !strings.Contains(err.Error(), gone) {
+		t.Fatalf("resume in a missing folder: err = %v, want one naming %s", err, gone)
+	}
+	if len(st.sessions) != 0 {
+		t.Errorf("a session was created for a missing folder: %v", st.sessions)
+	}
+
+	name := conversations.ResumeSessionName(c.ID)
+	st.sessions[name] = string(agent.IDCodex)
+	if got, existed, err := ensureResumeSession(ctx, c, "codex resume x"); err != nil || !existed || got != name {
+		t.Errorf("running session: name=%q existed=%v err=%v, want a reattach to %q", got, existed, err, name)
 	}
 }

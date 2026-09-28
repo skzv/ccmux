@@ -218,7 +218,8 @@ func resumeNow(target conversations.Conversation) error {
 // named by conversations.ResumeSessionName, the same helper the TUI
 // uses — or, when that session already exists (the conversation was
 // resumed earlier and is still running), reports existed=true so the
-// caller attaches to it instead of failing.
+// caller attaches to it instead of failing. A new session is refused
+// when the conversation's project folder no longer exists.
 //
 // A new session gets its agent tag from the same tmux invocation that
 // creates it (tmux.NewWithAgent). Tagging it with a second call left a
@@ -235,6 +236,14 @@ func ensureResumeSession(ctx context.Context, target conversations.Conversation,
 			return "", false, fmt.Errorf("tag tmux session %s with its agent: %w", name, err)
 		}
 		return name, true, nil
+	}
+	// A new session needs the conversation's folder, as in the TUI: tmux
+	// quietly starts a session whose folder is gone in $HOME, where the
+	// agent can't find the conversation (or carries on in the wrong
+	// tree). A session an earlier resume left running is reattached
+	// above whatever became of the folder.
+	if err := target.ValidateResumeFolder(); err != nil {
+		return "", false, err
 	}
 	if err := resumeTmuxNew(ctx, name, target.Project, cmdline, tag); err != nil {
 		if has, _ := resumeTmuxHas(ctx, name); !has {
