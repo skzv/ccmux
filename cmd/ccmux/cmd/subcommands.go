@@ -37,7 +37,8 @@ import (
 // it via the agent's LaunchCmd(continue=true) — Claude by default, or
 // whichever agent the project's .ccmux/agent sidecar records.
 func newAttachCmd() *cobra.Command {
-	return &cobra.Command{
+	var host string
+	c := &cobra.Command{
 		Use:   "attach [session|project|path]",
 		Short: "Attach to a project's agent session (creates one if missing)",
 		Long: `Attach to a project's agent session, creating it if it isn't running.
@@ -48,7 +49,15 @@ is a project under the projects root (~/Projects,
 projects.root in config, or --projects), so ` + "`ccmux attach auth-redesign`" + `
 works from any directory. Anything with a "/" (./scratch, ../x, /abs/x)
 is a path. With no argument, the current directory is used. A directory
-that doesn't exist is an error — the session is never started elsewhere.`,
+that doesn't exist is an error — the session is never started elsewhere.
+A project's own session is found by its directory, so a same-named
+project elsewhere keeps its session.
+
+With --host, the session is on that configured host (` + "`ccmux host list`" + `):
+a running session's name, or a project name (or absolute path) there,
+whose session that host's ccmuxd starts if it isn't running. The attach
+goes over ssh — or mosh, for a host added with --mosh — with the host's
+user and ssh port.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
 			arg := ""
@@ -56,6 +65,10 @@ that doesn't exist is an error — the session is never started elsewhere.`,
 				arg = args[0]
 			}
 			ctx := context.Background()
+			if !isLocalHost(host) {
+				cfg, _ := config.Load()
+				return runRemoteAttach(ctx, c.OutOrStdout(), cfg, host, arg)
+			}
 			// A live session's own name — what `ccmux list` prints,
 			// e.g. c-shell-abc — attaches as-is, the way `ccmux kill`
 			// resolves it. Mapped as a project it became c-c-shell-abc
@@ -115,6 +128,8 @@ that doesn't exist is an error — the session is never started elsewhere.`,
 			return attachWithChrome(session, filepath.Base(dir), detachOthersForAttachIntent(created))
 		},
 	}
+	c.Flags().StringVar(&host, "host", "", hostFlagUsage)
+	return c
 }
 
 // resolveAttachDir maps `ccmux attach`'s argument to a directory.
@@ -314,7 +329,10 @@ const listTmuxTimeout = 15 * time.Second
 
 // newListCmd: `ccmux list [--json]` — list sessions.
 func newListCmd() *cobra.Command {
-	var asJSON bool
+	var (
+		asJSON bool
+		host   string
+	)
 	c := &cobra.Command{
 		Use:   "list",
 		Short: "List running sessions (every agent, plus bare shells)",
@@ -322,12 +340,25 @@ func newListCmd() *cobra.Command {
 sessions and bare shells — with the state ccmuxd classified them in.
 
 When ccmuxd isn't running (or doesn't answer), the list comes straight
-from tmux instead, and STATE is "unknown": only the daemon classifies.`,
+from tmux instead, and STATE is "unknown": only the daemon classifies.
+
+With --host, the sessions are that configured host's, as its ccmuxd
+lists them (HOST shows the host's name).`,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
 			var sessions []daemon.SessionState
-			if cli, err := daemon.LocalClient(); err == nil {
+			if !isLocalHost(host) {
+				cfg, _ := config.Load()
+				ss, err := runRemoteList(context.Background(), cfg, host)
+				if err != nil {
+					return err
+				}
+				sessions = ss
+				if sessions == nil {
+					sessions = []daemon.SessionState{}
+				}
+			} else if cli, err := daemon.LocalClient(); err == nil {
 				if ss, e := cli.Sessions(ctx); e == nil {
 					sessions = ss
 				}
@@ -375,21 +406,34 @@ from tmux instead, and STATE is "unknown": only the daemon classifies.`,
 		},
 	}
 	c.Flags().BoolVar(&asJSON, "json", false, "output JSON instead of a table")
+	c.Flags().StringVar(&host, "host", "", hostFlagUsage)
 	return c
 }
 
-// newKillCmd: `ccmux kill <project>`
+// newKillCmd: `ccmux kill <project|session> [--host <name>]`
 func newKillCmd() *cobra.Command {
-	return &cobra.Command{
+	var host string
+	c := &cobra.Command{
 		Use:   "kill <project|session>",
 		Short: "Kill a session by project name or full session name",
-		Args:  cobra.ExactArgs(1),
+		Long: `Kill a session. The argument is the name of a running session (as
+` + "`ccmux list`" + ` prints it), else a project: a name under the projects root,
+or a path. A project's own session is the one killed — found by its
+directory, so a same-named project elsewhere keeps its session.
+
+With --host, the session is on that configured host (` + "`ccmux host list`" + `)
+and its ccmuxd kills it; a project is a project name or an absolute path
+on that host.`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
 			ctx := context.Background()
+			cfg, _ := config.Load()
+			if !isLocalHost(host) {
+				return runRemoteKill(ctx, c.OutOrStdout(), cfg, host, args[0])
+			}
 			if err := refuseSessionID("kill", args[0]); err != nil {
 				return err
 			}
-			cfg, _ := config.Load()
 			root, err := cliProjectsRoot(cfg)
 			if err != nil {
 				return err
@@ -400,7 +444,7 @@ func newKillCmd() *cobra.Command {
 			}
 			name, err := resolveKillTarget(args[0], sessions, func(arg string) (string, bool) {
 				return resolveAttachDir(arg, root)
-			})
+			}, "ccmux kill")
 			if err != nil {
 				return err
 			}
@@ -411,6 +455,8 @@ func newKillCmd() *cobra.Command {
 			return nil
 		},
 	}
+	c.Flags().StringVar(&host, "host", "", hostFlagUsage)
+	return c
 }
 
 // refuseSessionID refuses an argument tmux would read as a session ID
@@ -441,7 +487,10 @@ func refuseSessionID(verb, arg string) error {
 // session with ID $1" and killed it, whatever it was called. Any other
 // name a target can't carry (a path, a dotted project name) is only
 // mapped as a project, which always yields a valid target.
-func resolveKillTarget(arg string, sessions []tmux.Session, projectDir func(string) (dir string, found bool)) (string, error) {
+//
+// killCmd is the command the error suggests for killing a same-named
+// project's session by name ("ccmux kill", or with its --host).
+func resolveKillTarget(arg string, sessions []tmux.Session, projectDir func(string) (dir string, found bool), killCmd string) (string, error) {
 	switch err := tmux.CheckTarget(arg); {
 	case errors.Is(err, tmux.ErrSessionIDTarget):
 		return "", fmt.Errorf("refusing to kill %q: %w", arg, err)
@@ -466,7 +515,7 @@ func resolveKillTarget(arg string, sessions []tmux.Session, projectDir func(stri
 	plain := tmux.SessionNameForPath(dir)
 	for _, s := range sessions {
 		if s.Name == plain && plain != mapped {
-			msg += fmt.Sprintf("; %s runs in %s — kill it by name: ccmux kill %s", plain, s.Path, plain)
+			msg += fmt.Sprintf("; %s runs in %s — kill it by name: %s %s", plain, s.Path, killCmd, plain)
 		}
 	}
 	return "", errors.New(msg)

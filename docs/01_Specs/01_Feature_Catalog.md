@@ -158,10 +158,11 @@ A "Claude" screen in the TUI that surfaces and edits the settings Claude Code it
 | Command                           | Phase | Notes                                                                  |
 | --------------------------------- | ----- | ---------------------------------------------------------------------- |
 | `ccmux`                           | P1    | Launch TUI.                                                            |
-| `ccmux attach [project]`          | P1    | Attach to session for project (default: cwd), or a running session by name. Direct shim for `cc`. |
+| `ccmux attach [project]`          | P1    | Attach to session for project (default: cwd), or a running session by name. Direct shim for `cc`. `--host <name>` attaches to a configured host's session over ssh/mosh, starting the project's session there if needed. |
 | `ccmux new <name> [--agent <id>]` | P1    | Create the project directory + start an agent session. No scaffolding. |
-| `ccmux list [--json]`             | P1    | List sessions. JSON for scripting.                                     |
-| `ccmux kill <project>`            | P1    | Kill a session.                                                        |
+| `ccmux list [--json]`             | P1    | List sessions. JSON for scripting. `--host <name>` lists a configured host's. |
+| `ccmux kill <project>`            | P1    | Kill a session (a project's own, found by directory). `--host <name>` kills it on a configured host. |
+| `ccmux rename <old> <new>`        | P1    | Rename a session. `--host <name>` renames it on a configured host.     |
 | `ccmux setup`                     | P1    | First-run wizard.                                                      |
 | `ccmux doctor`                    | P1    | Health check.                                                          |
 | `ccmuxd` (daemon binary)          | P1    | Usually managed by launchd; can be run manually.                       |

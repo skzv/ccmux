@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -414,10 +415,38 @@ const maxErrorBodyBytes = 1024
 // "status N" with the explanation dropped on the floor.
 func (c *Client) statusError(method, path string, resp *http.Response) error {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
-	if msg := strings.TrimSpace(string(body)); msg != "" {
-		return fmt.Errorf("ccmuxd %s %s %s: status %d: %s", c.addr, method, path, resp.StatusCode, msg)
+	return &StatusError{
+		Addr: c.addr, Method: method, Path: path,
+		Code: resp.StatusCode, Message: strings.TrimSpace(string(body)),
 	}
-	return fmt.Errorf("ccmuxd %s %s %s: status %d", c.addr, method, path, resp.StatusCode)
+}
+
+// StatusError is the error a Client call returns when ccmuxd answers
+// 400 or above: the status, and the handler's plain-text reason ("session
+// not found", …). Callers that must tell a missing session (404) or a
+// name clash (409) from other failures — `ccmux kill/rename --host` —
+// read Code (see StatusCode) instead of matching the message.
+type StatusError struct {
+	Addr, Method, Path string
+	Code               int
+	Message            string // the response body, trimmed; "" when empty
+}
+
+func (e *StatusError) Error() string {
+	if e.Message != "" {
+		return fmt.Sprintf("ccmuxd %s %s %s: status %d: %s", e.Addr, e.Method, e.Path, e.Code, e.Message)
+	}
+	return fmt.Sprintf("ccmuxd %s %s %s: status %d", e.Addr, e.Method, e.Path, e.Code)
+}
+
+// StatusCode is the HTTP status of the StatusError in err's chain, or 0
+// when the daemon never answered (unreachable, timed out) or err is nil.
+func StatusCode(err error) int {
+	var se *StatusError
+	if errors.As(err, &se) {
+		return se.Code
+	}
+	return 0
 }
 
 func (c *Client) getJSON(ctx context.Context, path string, out any) error {

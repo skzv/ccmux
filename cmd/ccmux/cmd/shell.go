@@ -193,9 +193,22 @@ func runShellRemote(ctx context.Context, name, path, host, agentFlag string) err
 // session named "%1" (which the daemon allows) attached to whichever
 // session held pane %1.
 func remoteShellTmuxAttach(session string) string {
+	return remoteTmuxAttach(session, false)
+}
+
+// remoteTmuxAttach is the remote command that attaches to session on a
+// host over ssh/mosh (`ccmux shell --host`, `ccmux attach --host`):
+// tmux found through the PATH prepend, the exact `=name:` target, and
+// -d when detachOthers (exclusive attach mode) is set.
+func remoteTmuxAttach(session string, detachOthers bool) string {
+	flags := ""
+	if detachOthers {
+		flags = " -d"
+	}
 	return fmt.Sprintf(
-		`%s tmux attach-session -t %s`,
+		`%s tmux attach-session%s -t %s`,
 		remoteShellAttachPath,
+		flags,
 		shellQuote(tmux.ExactSession(session)),
 	)
 }

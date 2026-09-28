@@ -2,6 +2,8 @@ package daemon
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -119,6 +121,38 @@ func TestClient_ErrorBodySurfacedInError(t *testing.T) {
 	}
 	if !strings.Contains(perr.Error(), "status 404") || !strings.Contains(perr.Error(), "session not found") {
 		t.Errorf("POST error should carry status and body: %q", perr)
+	}
+}
+
+// TestClient_StatusCode — `ccmux kill/rename --host` tell a missing
+// session (404) and a name clash (409) from everything else by the
+// status the daemon answered, not by matching its text. A daemon that
+// never answered has no status.
+func TestClient_StatusCode(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "a session named \"b\" already exists", http.StatusConflict)
+	}))
+	defer srv.Close()
+
+	resetClientCacheForTest()
+	cli := RemoteClient(strings.TrimPrefix(srv.URL, "http://"))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := cli.Rename(ctx, "a", "b")
+	if got := StatusCode(fmt.Errorf("wrapped: %w", err)); got != http.StatusConflict {
+		t.Errorf("StatusCode = %d, want 409 (err %v)", got, err)
+	}
+	var se *StatusError
+	if !errors.As(err, &se) || se.Message != `a session named "b" already exists` || se.Path != "/v1/sessions/a/rename" {
+		t.Errorf("StatusError = %+v", se)
+	}
+
+	srv.Close()
+	if err := cli.Kill(ctx, "a"); err == nil || StatusCode(err) != 0 {
+		t.Errorf("unreachable daemon: err %v, StatusCode %d; want an error with no status", err, StatusCode(err))
+	}
+	if StatusCode(nil) != 0 {
+		t.Error("StatusCode(nil) != 0")
 	}
 }
 

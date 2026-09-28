@@ -26,19 +26,11 @@ func resolveNotesAddr(cfg config.Config, host string) (addr string, local bool, 
 	if host == "" {
 		return "", true, nil
 	}
-	for _, h := range cfg.Hosts {
-		if h.Name == host {
-			port := h.Port
-			if port == 0 {
-				port = cfg.Daemon.TailnetPort
-			}
-			if port == 0 {
-				port = defaultTailnetPort
-			}
-			return fmt.Sprintf("%s:%d", h.Address, port), false, nil
-		}
+	rh, err := lookupHost(cfg, host)
+	if err != nil {
+		return "", false, err
 	}
-	return "", false, fmt.Errorf("unknown host %q — configure it with `ccmux host add`", host)
+	return rh.addr, false, nil
 }
 
 // notesClientFor returns a daemon client for the given host, and

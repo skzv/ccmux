@@ -78,12 +78,12 @@ func TestResolveKillTarget(t *testing.T) {
 		{"/x/Projects/web", []string{"c-web"}, "c-web"},                                            // a path, gone: its folder's name
 	}
 	for _, tc := range cases {
-		got, err := resolveKillTarget(tc.arg, named(tc.live...), noProjectDir)
+		got, err := resolveKillTarget(tc.arg, named(tc.live...), noProjectDir, "ccmux kill")
 		if err != nil || got != tc.want {
 			t.Errorf("resolveKillTarget(%q, live=%v) = %q, %v; want %q", tc.arg, tc.live, got, err, tc.want)
 		}
 	}
-	if _, err := resolveKillTarget("c-foo", nil, noProjectDir); err == nil {
+	if _, err := resolveKillTarget("c-foo", nil, noProjectDir, "ccmux kill"); err == nil {
 		t.Error("nothing live: want an error, not a guessed target")
 	}
 }
@@ -106,15 +106,15 @@ func TestResolveKillTarget_ByDirectory(t *testing.T) {
 	tagged := tmux.PathTaggedSessionName(mine)
 	dirOf := func(string) (string, bool) { return mine, true }
 
-	got, err := resolveKillTarget("api", []tmux.Session{{Name: "c-api", Path: other}, {Name: tagged, Path: mine}}, dirOf)
+	got, err := resolveKillTarget("api", []tmux.Session{{Name: "c-api", Path: other}, {Name: tagged, Path: mine}}, dirOf, "ccmux kill")
 	if err != nil || got != tagged {
 		t.Errorf("kill api with its tagged session running = %q, %v; want %s", got, err, tagged)
 	}
-	got, err = resolveKillTarget("api", []tmux.Session{{Name: "c-api", Path: mine}, {Name: "c-api-2", Path: mine}}, dirOf)
+	got, err = resolveKillTarget("api", []tmux.Session{{Name: "c-api", Path: mine}, {Name: "c-api-2", Path: mine}}, dirOf, "ccmux kill")
 	if err != nil || got != "c-api" {
 		t.Errorf("kill api with its plain session running = %q, %v; want c-api", got, err)
 	}
-	_, err = resolveKillTarget("api", []tmux.Session{{Name: "c-api", Path: other}}, dirOf)
+	_, err = resolveKillTarget("api", []tmux.Session{{Name: "c-api", Path: other}}, dirOf, "ccmux kill")
 	if err == nil {
 		t.Fatal("only the other project's c-api runs: want an error, not a kill of it")
 	}
@@ -134,7 +134,7 @@ func TestResolveKillTarget_RefusesSessionIDs(t *testing.T) {
 		got, err := resolveKillTarget(arg, named(arg, tmux.SessionNameForPath(arg)), func(a string) (string, bool) {
 			mapped = true
 			return noProjectDir(a)
-		})
+		}, "ccmux kill")
 		if err == nil {
 			t.Errorf("resolveKillTarget(%q) = %q, want an error", arg, got)
 			continue
@@ -160,7 +160,7 @@ func TestResolveKillTarget_RefusesSessionIDs(t *testing.T) {
 func TestResolveKillTarget_InvalidTargetsOnlyMapAsProjects(t *testing.T) {
 	for _, arg := range []string{"my.app", "/x/Projects/web", "$x/web", "a:b"} {
 		mapped := tmux.SessionNameForPath(arg)
-		got, err := resolveKillTarget(arg, named(arg, mapped), noProjectDir)
+		got, err := resolveKillTarget(arg, named(arg, mapped), noProjectDir, "ccmux kill")
 		if err != nil || got != mapped {
 			t.Errorf("resolveKillTarget(%q) = %q, %v; want %q", arg, got, err, mapped)
 		}

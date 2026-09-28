@@ -7,16 +7,24 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/tmux"
 )
 
-// newRenameCmd: `ccmux rename <old-name> <new-name>` — renames a tmux session.
+// newRenameCmd: `ccmux rename <old-name> <new-name> [--host <name>]` —
+// renames a tmux session, on this machine or on a configured host.
 func newRenameCmd() *cobra.Command {
-	return &cobra.Command{
+	var host string
+	c := &cobra.Command{
 		Use:   "rename <old-name> <new-name>",
 		Short: "Rename a tmux session",
-		Args:  cobra.ExactArgs(2),
-		RunE: func(_ *cobra.Command, args []string) error {
+		Long: `Rename a tmux session. The new name may use letters, digits, hyphens and
+underscores, and may not start with a hyphen.
+
+With --host, the session is on that configured host (` + "`ccmux host list`" + `)
+and its ccmuxd renames it.`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(c *cobra.Command, args []string) error {
 			oldName, newName := args[0], args[1]
 			// The old name goes into a tmux target: the daemon's rule
 			// (tmux.ValidTarget). `rename '$4' x` renamed whichever
@@ -29,13 +37,19 @@ func newRenameCmd() *cobra.Command {
 			if !tmux.ValidSessionName(newName) {
 				return fmt.Errorf("invalid session name %q: use only letters, digits, hyphens and underscores, not starting with a hyphen", newName)
 			}
+			if !isLocalHost(host) {
+				cfg, _ := config.Load()
+				return runRemoteRename(context.Background(), c.OutOrStdout(), cfg, host, oldName, newName)
+			}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			if err := tmux.Rename(ctx, oldName, newName); err != nil {
 				return err
 			}
-			fmt.Printf("renamed %s → %s\n", oldName, newName)
+			fmt.Fprintf(c.OutOrStdout(), "renamed %s → %s\n", oldName, newName)
 			return nil
 		},
 	}
+	c.Flags().StringVar(&host, "host", "", hostFlagUsage)
+	return c
 }

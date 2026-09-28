@@ -372,6 +372,7 @@ bell = true                          # ring local terminal BEL on needs_input
 - **Local** — manages tmux sessions on this machine; prevents sleep while sessions are active
 - **Server** — daemon binds an HTTP API to your Tailscale interface for remote ccmux clients
 - **Mixed** — dashboard shows local + remote sessions, color-coded by origin
+- Same from a shell: `ccmux list`, `attach`, `kill` and `rename` take `--host <name>` for any host you added with `ccmux host add`. `ccmux kill --host mini api` kills the mini's `api` session, not yours
 
 ### 🩺 Setup, doctor, update
 

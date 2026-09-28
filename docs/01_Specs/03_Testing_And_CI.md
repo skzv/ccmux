@@ -439,6 +439,8 @@ all against a real, isolated tmux server.
 | Rename a session | `ccmux rename <old> <new>` / TUI `r` | the tmux session is renamed; the old name is gone |
 | Kill a session | `ccmux kill <project\|session>` / TUI `x`+confirm | the tmux session no longer exists |
 | Attach to a session | `ccmux attach [project]` / TUI Enter | the attach argv targets the correct session (`tmux attach`/`switch-client`, or `mosh`/`ssh` for remote) |
+| Act on a remote host's session | `ccmux list\|attach\|kill\|rename --host <name>` / TUI remote row Enter, `x`, `R` | the host's ccmuxd lists / starts / kills / renames it; this machine's same-named session is untouched (`internal/e2e/remote_host_test.go` runs two daemons) |
+| Two projects, one folder name | `ccmux attach`/`new`/`kill` / TUI project Enter / `POST /v1/sessions`, `/v1/projects` | each project gets its own session (`c-api` stays with whichever directory had it, the other gets `c-api-<tag>`), found by directory (`internal/e2e/samename_test.go`) |
 
 ### Project lifecycle
 
