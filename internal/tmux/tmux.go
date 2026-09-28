@@ -171,7 +171,11 @@ type Session struct {
 	// Spinner is the agent (its ID) the daemon has seen announce its turns
 	// with a working-spinner title in this session — the session's
 	// @ccmux_spinner option, set by SetSessionSpinner — or "" for none.
-	Spinner    string
+	Spinner string
+	// Review is the daemon's record of the user's attention to this
+	// session (see Review), read back from its options; Recorded is
+	// false when it has none.
+	Review     Review
 	Name       string    // tmux session name, e.g. "c-foo"
 	Created    time.Time // tmux's create timestamp
 	LastAttach time.Time // tmux's last activity timestamp
@@ -225,9 +229,11 @@ func List(ctx context.Context) ([]Session, error) {
 }
 
 // sessionTagsFormat reads the user options ccmux keeps on each session
-// (see applySessionTags): what it runs (@ccmux_agent) and the agent seen
-// with a working-spinner title there (@ccmux_spinner).
-const sessionTagsFormat = "#{session_name}\t#{" + agentOption + "}\t#{" + spinnerOption + "}"
+// (see applySessionTags): what it runs (@ccmux_agent), the agent seen
+// with a working-spinner title there (@ccmux_spinner), and the daemon's
+// review record (@ccmux_seen, @ccmux_prompts, @ccmux_state; see Review).
+const sessionTagsFormat = "#{session_name}\t#{" + agentOption + "}\t#{" + spinnerOption + "}" +
+	"\t#{" + seenOption + "}\t#{" + promptsOption + "}\t#{" + stateOption + "}"
 
 // noServerRunning reports whether a failed tmux command's stderr means
 // there is simply no tmux server: "no server running on <socket>" (a
@@ -677,24 +683,30 @@ func setSessionOption(ctx context.Context, name, option, value string) error {
 	return nil
 }
 
-// applySessionTags fills in each session's Agent and Spinner from raw,
-// the output of `list-sessions -F sessionTagsFormat`.
+// applySessionTags fills in each session's Agent, Spinner and Review
+// from raw, the output of `list-sessions -F sessionTagsFormat`. A line
+// with fewer columns (an older format) leaves the missing ones empty.
 func applySessionTags(sessions []Session, raw []byte) {
-	type tags struct{ agent, spinner string }
+	type tags struct {
+		agent, spinner string
+		review         Review
+	}
 	byName := make(map[string]tags, len(sessions))
 	for _, line := range strings.Split(string(raw), "\n") {
-		parts := strings.SplitN(line, "\t", 3)
+		parts := strings.SplitN(line, "\t", 6)
 		if len(parts) < 2 {
 			continue
 		}
-		tg := tags{agent: parts[1]}
-		if len(parts) == 3 {
-			tg.spinner = parts[2]
+		col := func(i int) string {
+			if i < len(parts) {
+				return parts[i]
+			}
+			return ""
 		}
-		byName[parts[0]] = tg
+		byName[parts[0]] = tags{agent: parts[1], spinner: col(2), review: parseReview(col(3), col(4), col(5))}
 	}
 	for i := range sessions {
 		tg := byName[sessions[i].Name]
-		sessions[i].Agent, sessions[i].Spinner = tg.agent, tg.spinner
+		sessions[i].Agent, sessions[i].Spinner, sessions[i].Review = tg.agent, tg.spinner, tg.review
 	}
 }

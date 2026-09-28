@@ -355,12 +355,60 @@ func TestSessionAgentsStayScopedToTheirSession(t *testing.T) {
 
 // TestSessionTags_OldFormat — a line with only the name and the agent
 // (a tmux wrapper, or a test fake, that prints two columns) still tags
-// its session, with no spinner mark.
+// its session, with no spinner mark and no review record.
 func TestSessionTags_OldFormat(t *testing.T) {
 	sessions := []Session{{Name: "one"}, {Name: "two"}}
 	applySessionTags(sessions, []byte("one\tclaude\ntwo\t\n"))
 	if sessions[0].Agent != "claude" || sessions[0].Spinner != "" || sessions[1].Agent != "" {
 		t.Fatal(sessions)
+	}
+	if sessions[0].Review.Recorded || sessions[1].Review.Recorded {
+		t.Fatalf("a two-column line read as a review record: %+v", sessions)
+	}
+}
+
+// TestSessionTags_Review — the daemon's review record (SetSessionReview)
+// is read back per session from the same list-sessions call as the agent
+// tag: each session gets its own, and one without a record has none.
+func TestSessionTags_Review(t *testing.T) {
+	sessions := []Session{{Name: "one"}, {Name: "two"}, {Name: "three"}}
+	applySessionTags(sessions, []byte(
+		"one\tclaude\t\t1\t3\tneeds_input\n"+
+			"two\tcodex\tcodex\t0\t12\tidle\n"+
+			"three\t\t\t\t\t\n"))
+	want := []Review{
+		{Recorded: true, Seen: true, Prompts: 3, State: "needs_input"},
+		{Recorded: true, Seen: false, Prompts: 12, State: "idle"},
+		{},
+	}
+	for i, s := range sessions {
+		if s.Review != want[i] {
+			t.Errorf("%s: review = %+v, want %+v", s.Name, s.Review, want[i])
+		}
+	}
+	if sessions[1].Spinner != "codex" || sessions[1].Agent != "codex" {
+		t.Errorf("the review columns shifted the tags: %+v", sessions[1])
+	}
+}
+
+// TestParseReview — only a seen flag the daemon writes ("0"/"1") makes a
+// record; a count that isn't a non-negative number reads as 0.
+func TestParseReview(t *testing.T) {
+	for _, tc := range []struct {
+		seen, prompts, state string
+		want                 Review
+	}{
+		{"1", "4", "needs_input", Review{Recorded: true, Seen: true, Prompts: 4, State: "needs_input"}},
+		{"0", "0", "active", Review{Recorded: true, State: "active"}},
+		{"0", "", "", Review{Recorded: true}},
+		{"0", "-3", "idle", Review{Recorded: true, State: "idle"}},
+		{"1", "lots", "idle", Review{Recorded: true, Seen: true, State: "idle"}},
+		{"", "4", "needs_input", Review{}},
+		{"yes", "4", "needs_input", Review{}},
+	} {
+		if got := parseReview(tc.seen, tc.prompts, tc.state); got != tc.want {
+			t.Errorf("parseReview(%q, %q, %q) = %+v, want %+v", tc.seen, tc.prompts, tc.state, got, tc.want)
+		}
 	}
 }
 

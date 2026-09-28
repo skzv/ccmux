@@ -4,6 +4,7 @@ package tmux
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -199,6 +200,69 @@ func TestIntegration_SessionSpinnerMark(t *testing.T) {
 	}
 	if err := SetSessionSpinner(ctx, "c-gone", "codex"); err == nil {
 		t.Error("SetSessionSpinner on a missing session: no error")
+	}
+}
+
+// TestIntegration_SessionReview — the daemon's review record lands on
+// the session it names only, is read back by List, is rewritten in
+// place, and moves with the session through a rename done in tmux.
+func TestIntegration_SessionReview(t *testing.T) {
+	ctx := isolatedServer(t)
+	if err := NewWithAgent(ctx, "c-rev", os.TempDir(), "sleep 300", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	if err := New(ctx, "c-rev-sibling", os.TempDir(), "sleep 300"); err != nil {
+		t.Fatal(err)
+	}
+	list := func() map[string]Session {
+		t.Helper()
+		sessions, err := List(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := map[string]Session{}
+		for _, s := range sessions {
+			got[s.Name] = s
+		}
+		return got
+	}
+	if r := list()["c-rev"].Review; r.Recorded {
+		t.Fatalf("a new session carries a review record: %+v", r)
+	}
+	first := Review{Recorded: true, Seen: false, Prompts: 2, State: "needs_input"}
+	if err := SetSessionReview(ctx, "c-rev", first); err != nil {
+		t.Fatalf("SetSessionReview: %v", err)
+	}
+	if r := list()["c-rev"].Review; r != first {
+		t.Errorf("read back %+v, want %+v", r, first)
+	}
+	second := Review{Recorded: true, Seen: true, Prompts: 3, State: "active"}
+	if err := SetSessionReview(ctx, "c-rev", second); err != nil {
+		t.Fatal(err)
+	}
+	if err := Rename(ctx, "c-rev", "c-rev2"); err != nil {
+		t.Fatal(err)
+	}
+	got := list()
+	if s := got["c-rev2"]; s.Review != second || s.Agent != "claude" {
+		t.Errorf("after a rename: review %+v, agent %q; want %+v, claude", s.Review, s.Agent, second)
+	}
+	if r := got["c-rev-sibling"].Review; r.Recorded {
+		t.Errorf("the record leaked onto another session: %+v", r)
+	}
+	if err := SetSessionReview(ctx, "c-gone", second); err == nil {
+		t.Error("SetSessionReview on a missing session: no error")
+	}
+	// "=$N:" is the session whose ID is $N, whatever it is called: a
+	// session named "$0" can't be reached by name, and the record must
+	// not land on session $0 instead.
+	if err := SetSessionReview(ctx, "$0", Review{Recorded: true, Prompts: 9}); !errors.Is(err, ErrSessionIDTarget) {
+		t.Errorf("SetSessionReview on %q: err = %v, want ErrSessionIDTarget", "$0", err)
+	}
+	for name, s := range list() {
+		if s.Review.Prompts == 9 {
+			t.Errorf("a record meant for %q landed on %q", "$0", name)
+		}
 	}
 }
 
