@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"os"
 	"path/filepath"
@@ -28,6 +29,8 @@ type pollSnap struct {
 	follow   bool
 	baseline bool
 	pane     paneMemory
+	// attached is whether a client was attached as of the previous tick.
+	attached bool
 }
 
 // pollTrack is the poll loop's per-session memory beyond the wire
@@ -174,6 +177,9 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 	// must survive Phase 3's GC even though tss doesn't list it.
 	listedAt := time.Now()
 	tss, err := s.list(ctx)
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return // shutting down
+	}
 	s.ensureClipboard(ctx, err == nil && len(tss) > 0)
 	if err != nil {
 		// Surface the failure (rate-limited — this fires every tick
@@ -204,6 +210,7 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 		}
 		live[ts.Name] = true
 		t, ok := s.seen[ts.Name]
+		wasAttached := ok && t.listed.Attached
 		if !ok {
 			t = &tracked{
 				lastChange: now,
@@ -241,6 +248,7 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 			follow:   t.follow,
 			baseline: t.baseline,
 			pane:     t.pane,
+			attached: wasAttached,
 		})
 	}
 	s.mu.Unlock()
@@ -266,6 +274,12 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 		mem := sn.pane
 		obs, err := s.observe(ctx, sn.ts.Name, mem.id)
 		if err != nil {
+			if errors.Is(ctx.Err(), context.Canceled) {
+				// The daemon is shutting down (the tick's own budget ends
+				// in DeadlineExceeded): every capture left fails the same
+				// way, so there is nothing to log, and nothing to decide.
+				return
+			}
 			log.Printf("ccmuxd: capture-pane %s: %v", sn.ts.Name, err)
 			continue
 		}
@@ -340,7 +354,8 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 		if !ok {
 			continue
 		}
-		ts, _ := lookupTmuxSession(snaps, r.name)
+		sn, _ := lookupSnap(snaps, r.name)
+		ts := sn.ts
 		t.pane = r.mem
 		t.agentID = r.agentID
 		if t.baseline {
@@ -373,6 +388,7 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 			// one did carries over.
 			t.turn = turn{startup: true}
 		}
+		prevSeen := t.seen
 		decision := t.attend(t.state, r.newState, r.ev, t.seen, ts.Attached)
 		t.seen = decision.NewSeen
 		if decision.RingBell {
@@ -383,10 +399,14 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 		if decision.IncPromptCount {
 			t.promptCount++
 		}
-		if decision.EmitStateEvent || r.switched {
+		// Besides a state change: the agent in the foreground changed, or
+		// a client attached or detached (which also marks the session
+		// reviewed) — fields event-stream clients show, which they'd
+		// otherwise only see on the next state change.
+		if decision.EmitStateEvent || r.switched || ts.Attached != sn.attached || t.seen != prevSeen {
 			kind := decision.StateEventKind
 			if kind == "" {
-				kind = "state_change" // the agent changed, the state didn't
+				kind = "state_change"
 			}
 			stateEvents = append(stateEvents, daemon.SessionEvent{
 				At:      time.Now(),
@@ -1078,16 +1098,16 @@ func (s *server) projectAgent(projectPath string) agent.ID {
 	return project.ReadAgent(projectPath)
 }
 
-// lookupTmuxSession returns the snapshotted tmux.Session for `name`
-// from the Phase 1 snaps, so Phase 3 can attach ts.Path to events
-// without re-locking or re-shelling out.
-func lookupTmuxSession(snaps []pollSnap, name string) (tmux.Session, bool) {
+// lookupSnap returns the Phase 1 snapshot for `name` — its tmux.Session
+// and what the session looked like before this tick — so Phase 3 can
+// use them without re-locking or re-shelling out.
+func lookupSnap(snaps []pollSnap, name string) (pollSnap, bool) {
 	for _, sn := range snaps {
 		if sn.ts.Name == name {
-			return sn.ts, true
+			return sn, true
 		}
 	}
-	return tmux.Session{}, false
+	return pollSnap{}, false
 }
 
 // moshiRefreshInterval is how often moshiLoop re-detects Moshi. It only

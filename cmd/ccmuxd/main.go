@@ -904,14 +904,38 @@ func (s *server) createSession(w http.ResponseWriter, r *http.Request) {
 	// ccmux-styled bar.
 	s.applyChrome(ctx, session, req.Project)
 
-	writeJSON(w, daemon.SessionState{
+	writeJSON(w, s.startedSessionState(ctx, daemon.SessionState{
 		Name: session, Host: "local", Project: req.Project, Path: path,
-		State: string(agent.StateUnknown), Created: time.Now(),
-		Agent: string(launched),
+		State: string(agent.StateUnknown), Agent: string(launched),
 		// What GET /v1/sessions reports for a session nobody has had a
 		// chance to miss anything in yet.
 		Seen: true,
-	})
+	}))
+}
+
+// startedSessionState completes the answer for a session a create
+// handler just started: its window count, creation time and attached
+// flag as tmux lists them, and — as the poll loop records for a new
+// session — its content as last changed when it started. The response
+// used to carry windows:0 and a zero last_change, which GET
+// /v1/sessions never reports for a live session. If tmux can't list it,
+// the session still has the one window it was created with.
+func (s *server) startedSessionState(ctx context.Context, st daemon.SessionState) daemon.SessionState {
+	st.Created, st.Windows = time.Now(), 1
+	if ts, ok, err := s.lookupSession(ctx, st.Name); err == nil && ok {
+		if !ts.Created.IsZero() {
+			st.Created = ts.Created
+		}
+		st.Windows = max(ts.Windows, 1)
+		st.Attached = ts.Attached
+	}
+	st.LastChange = st.Created
+	s.mu.Lock()
+	if t, ok := s.seen[st.Name]; ok && !t.lastChange.IsZero() {
+		st.LastChange = t.lastChange // a poll tick got to it first
+	}
+	s.mu.Unlock()
+	return st
 }
 
 // requireDir checks that path is an existing directory, answering 404

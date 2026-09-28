@@ -159,6 +159,8 @@ a requested agent to `<project>/.ccmux/agent`.
 - **Request:** `NewSessionRequest` — `project` required.
 - **Response `200`:** `SessionState`. For a session that already runs in the
   requested directory: its real state, agent and path; nothing is started.
+  For a new one: state `unknown`, `seen: true`, its `windows` and `created`
+  as tmux lists them, and `last_change` = `created`.
 - **Errors:** `400` missing `project` / bad name / unknown `agent` / path not
   a directory / decode error; `404` project path not found; `409` a session
   of that name runs in a different directory; `500` tmux failure; `502` the
@@ -359,6 +361,11 @@ Stream of session lifecycle/state events; subscribe to live-update a view.
 - `killed` is sent for every session that disappears, however it ended
   (this API, a `tmux kill` from the TUI/CLI, the agent exiting). A rename
   arrives as `killed` for the old name followed by `created` for the new.
+- `state_change` is also sent when the state stays the same but the
+  session's `attached` flag changes (a client attached or detached;
+  attaching also sets `seen`), or its `agent` does (an agent started or
+  exited in the foreground of a session that follows it — see "What
+  counts as a turn" below).
 - A session the daemon first sees without having watched it being created
   (after a daemon restart, or renamed directly in tmux) gets one
   `state_change` with its current state and never triggers a bell or push.
