@@ -83,8 +83,11 @@ type conversationsModel struct {
 	// filter (the global view). Set by the App when the user enters
 	// the screen via the Projects-tab `c` keybind.
 	projectFilter string
-	search        textinput.Model
-	searchActive  bool
+	// realPaths caches symlink resolution for the project filter (see
+	// realPath). Reset with each new list.
+	realPaths    map[string]string
+	search       textinput.Model
+	searchActive bool
 
 	// loadErr holds the last walker error so the screen can surface
 	// it instead of going silent. Cleared on a successful load.
@@ -216,6 +219,7 @@ func (m *conversationsModel) SetList(list []conversations.Conversation) {
 		selectedID = sel.ID
 	}
 	m.list = list
+	m.realPaths = map[string]string{}
 	m.loading = false
 	m.loadErr = ""
 	// A refresh invalidates any armed delete: the list the user armed
@@ -306,11 +310,44 @@ func (m conversationsModel) Selected() *conversations.Conversation {
 func (m conversationsModel) filtered() []conversations.Conversation {
 	var out []conversations.Conversation
 	for _, c := range m.list {
-		if projectPathMatches(c.Project, m.projectFilter) && conversations.MatchesQuery(c, m.search.Value()) {
+		if m.inProjectFilter(c.Project) && conversations.MatchesQuery(c, m.search.Value()) {
 			out = append(out, c)
 		}
 	}
 	return out
+}
+
+// inProjectFilter reports whether a conversation recorded in path
+// belongs to the project filter: as recorded, or with symlinks
+// resolved on both sides. Agents record their real working directory,
+// while a project reached through a symlink (or anything under
+// /tmp → /private/tmp on macOS) has the linked path, so `c` on such a
+// project found none of the conversations its own menu listed.
+func (m conversationsModel) inProjectFilter(path string) bool {
+	if projectPathMatches(path, m.projectFilter) {
+		return true
+	}
+	if !filepath.IsAbs(path) || !filepath.IsAbs(m.projectFilter) {
+		return false
+	}
+	return projectPathMatches(m.realPath(path), m.realPath(m.projectFilter))
+}
+
+// realPath is p with symlinks resolved (p itself, cleaned, when that
+// fails — a deleted directory). Results are cached per list: the filter
+// runs on every render.
+func (m conversationsModel) realPath(p string) string {
+	if r, ok := m.realPaths[p]; ok {
+		return r
+	}
+	r := filepath.Clean(p)
+	if real, err := filepath.EvalSymlinks(p); err == nil {
+		r = real
+	}
+	if m.realPaths != nil {
+		m.realPaths[p] = r
+	}
+	return r
 }
 
 // projectPathMatches reports whether a conversation's project path
