@@ -277,11 +277,30 @@ func run() error {
 	stopTailnet()
 	shutCtx, shutCancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer shutCancel()
-	if tailnetSrv != nil {
-		_ = tailnetSrv.Shutdown(shutCtx)
-	}
-	_ = httpSrv.Shutdown(shutCtx)
+	srv.shutdownHTTP(shutCtx, tailnetSrv, httpSrv)
 	return nil
+}
+
+// shutdownHTTP gracefully stops the HTTP servers (nil entries are
+// skipped). The event streams are ended first: Shutdown waits for every
+// in-flight handler, and an SSE handler only returns when its client
+// goes away, so any connected client used to hold SIGTERM for the whole
+// shutdown timeout.
+func (s *server) shutdownHTTP(ctx context.Context, servers ...*http.Server) {
+	s.stopEventStreams()
+	for _, hs := range servers {
+		if hs != nil {
+			_ = hs.Shutdown(ctx)
+		}
+	}
+}
+
+// stopEventStreams ends every /v1/events stream, now and for any that
+// open later. Idempotent.
+func (s *server) stopEventStreams() {
+	if s.streamsDone != nil {
+		s.stopStreams.Do(func() { close(s.streamsDone) })
+	}
 }
 
 // startBackground starts everything with a side effect outside this
@@ -465,6 +484,10 @@ type server struct {
 
 	tokens *daemon.TokenStore
 	events *daemon.EventBus
+	// streamsDone is closed (once, via stopEventStreams) when the daemon
+	// shuts down, ending the long-lived /v1/events handlers.
+	streamsDone chan struct{}
+	stopStreams sync.Once
 
 	// tailnetLive is true while the tailnet HTTP listener is serving.
 	tailnetLive atomic.Bool
@@ -620,6 +643,7 @@ func newServer(cfg config.Config) *server {
 		startGrace:      defaultStartGrace,
 		tokens:          daemon.NewTokenStore(),
 		events:          daemon.NewEventBus(),
+		streamsDone:     make(chan struct{}),
 		devices:         devices,
 		apnsSender:      sender,
 		fcmSender:       fcmSender,
@@ -1650,6 +1674,8 @@ func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case <-r.Context().Done():
+			return
+		case <-s.streamsDone: // daemon shutting down (nil: never)
 			return
 		case <-hb.C:
 			if _, err := fmt.Fprintf(w, ": ping\n\n"); err != nil {
