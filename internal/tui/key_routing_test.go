@@ -2,11 +2,13 @@ package tui
 
 import (
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/conversations"
+	"github.com/skzv/ccmux/internal/project"
 	"github.com/skzv/ccmux/internal/sshsetup"
 )
 
@@ -36,6 +38,7 @@ func TestCtrlC_QuitsFromEveryOverlay(t *testing.T) {
 			a.sshWizard.Open(sshsetup.Target{User: "alice", Host: "sputnik"}, nil)
 		}},
 		{"notes info panel", func(a *App) { a.screen = ScreenNotes; a.notes.noteInfo.open = true }},
+		{"notes project picker", func(a *App) { a.screen = ScreenNotes; a.notes.pickingProject = true }},
 		{"project menu", func(a *App) { a.screen = ScreenProjects; a.projectsM.menu = &projectMenuModel{} }},
 		{"projects filter", func(a *App) { a.screen = ScreenProjects; a.projectsM.enterFilter() }},
 		{"sessions rename form", func(a *App) { f := newRenameForm(a.styles, "c-x"); a.sessionsM.renameForm = &f }},
@@ -109,6 +112,66 @@ func TestNoteInfo_OwnsKeysWhileOpen(t *testing.T) {
 	if a.screen != ScreenSessions {
 		t.Errorf("digit after closing the panel should switch screens, got %v", a.screen)
 	}
+}
+
+// TestNotesProjectPicker_OwnsKeys — the Notes project picker (`p` /
+// space) is a modal list, but it wasn't in Notes' capturesInput and the
+// App didn't route keys to it: q opened the quit dialog over it, digits
+// switched screens under it, i/T/M/? opened overlays, and esc dismissed
+// a toast instead of closing the picker.
+func TestNotesProjectPicker_OwnsKeys(t *testing.T) {
+	newPickerApp := func(t *testing.T) App {
+		t.Helper()
+		a := newAppForTest(t)
+		a.width, a.height = 120, 40
+		a.screen = ScreenNotes
+		a.notes.SetProjects([]project.Project{
+			{Name: "alpha", Host: "local", Path: "/p/alpha"},
+			{Name: "beta", Host: "local", Path: "/p/beta"},
+		})
+		a, _ = updateApp(t, a, keyRunes("p"))
+		if !a.notes.pickingProject {
+			t.Fatal("setup: p did not open the Notes project picker")
+		}
+		return a
+	}
+
+	for _, key := range []string{"q", "1", "5", "i", "T", "M", "?", "u", "r"} {
+		t.Run(key, func(t *testing.T) {
+			a := newPickerApp(t)
+			a, _ = updateApp(t, a, keyRunes(key))
+			switch {
+			case a.confirm.open():
+				t.Errorf("%q opened the quit confirmation over the picker", key)
+			case a.screen != ScreenNotes:
+				t.Errorf("%q switched to %v under the picker", key, a.screen)
+			case a.helpOpen || a.tour.Active() || a.matrix.Active() || a.notes.noteInfo.open || a.usageOpen:
+				t.Errorf("%q opened an overlay over the picker", key)
+			case !a.notes.pickingProject:
+				t.Errorf("%q closed the picker", key)
+			}
+		})
+	}
+
+	t.Run("esc closes the picker, not the toast", func(t *testing.T) {
+		a := newPickerApp(t)
+		a.toasts.Set(toastInfo, "hello", time.Minute)
+		a, _ = updateApp(t, a, tea.KeyMsg{Type: tea.KeyEsc})
+		if a.notes.pickingProject {
+			t.Error("esc did not close the picker")
+		}
+		if !a.toasts.Active() {
+			t.Error("esc dismissed the toast instead of closing the picker")
+		}
+	})
+
+	t.Run("j moves the picker cursor", func(t *testing.T) {
+		a := newPickerApp(t)
+		a, _ = updateApp(t, a, keyRunes("j"))
+		if a.notes.projCursor != 1 {
+			t.Errorf("picker cursor = %d after j, want 1", a.notes.projCursor)
+		}
+	})
 }
 
 // TestConversations_RefreshKeyReloadsList — `r` on Conversations only

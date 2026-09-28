@@ -178,6 +178,12 @@ type App struct {
 	sessionsTickGen    int
 	sessionsTickAt     time.Time
 
+	// projectsLoadGen / projectsAppliedGen do the same for project
+	// refreshes (Init, every detach, `r` on Projects), which overlap
+	// and finish out of order just like session refreshes.
+	projectsLoadGen    int
+	projectsAppliedGen int
+
 	screen   Screen
 	sessions []daemon.SessionState
 	projects []project.Project
@@ -314,6 +320,10 @@ func New(cfg config.Config, version string) App {
 		tour:           newTour(st),
 		matrix:         newMatrix(),
 		sshWizard:      newSSHWizard(st),
+		// Init's refreshes carry initRefreshGen; later ones count on
+		// from it.
+		sessionsLoadGen: initRefreshGen,
+		projectsLoadGen: initRefreshGen,
 	}
 	a.dashboard.SetConfig(cfg)
 	a.dashboard.SetVersion(version)
@@ -323,6 +333,7 @@ func New(cfg config.Config, version string) App {
 	a.sessionsM.SetAgentCommands(cfg.AgentCommands())
 	a.projectsM.SetDefaultAgent(cfg.Agents.Default)
 	a.projectsM.SetAgentCommands(cfg.AgentCommands())
+	a.projectsM.SetProjectsRoot(cfg.Projects.Root)
 	// Hide per-agent subscription-tier rows in Settings for agents the
 	// user can't run (PATH binary or a setup-pinned command). Detected
 	// once here via fast LookPath probes; Claude always shows regardless.
@@ -357,8 +368,11 @@ func availableAgentIDs(commands agent.Commands) []agent.ID {
 // Init is called once at startup.
 func (a App) Init() tea.Cmd {
 	cmds := []tea.Cmd{
-		a.refreshSessionsCmd(),
-		a.refreshProjectsCmd(),
+		// Not refreshSessionsCmd / refreshProjectsCmd: their generation
+		// bump would land on this value receiver's copy. New reserved
+		// initRefreshGen for these two.
+		a.sessionsRefreshCmd(initRefreshGen),
+		a.projectsRefreshCmd(initRefreshGen),
 		a.refreshUsageCmd(),
 		detectTierCmd(),
 		detectMoshiCmd(),
@@ -855,6 +869,14 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case projectsLoadedMsg:
 		if msg.Err == nil {
+			// Like sessions: never let an older refresh that finished
+			// late replace a newer list. Gen 0 is unnumbered.
+			if msg.Gen != 0 {
+				if msg.Gen < a.projectsAppliedGen {
+					return a, nil
+				}
+				a.projectsAppliedGen = msg.Gen
+			}
 			a.projects = msg.Projects
 			a.projectsM.SetProjects(a.projects)
 			// Notes screen needs the full list for its project picker.
@@ -1094,8 +1116,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case attachExitedMsg:
 		// Tmux exited (user detached, or the exec itself failed).
 		// Clear the overlay, surface an error toast if any, refresh.
+		// Bubble Tea turned mouse reporting off to hand the terminal
+		// over and doesn't turn it back on when it takes it back, so
+		// re-enable it — otherwise the wheel is dead after any attach.
 		a.stopAttaching()
-		cmds := []tea.Cmd{a.refreshSessionsCmd(), a.refreshProjectsCmd()}
+		cmds := []tea.Cmd{tea.EnableMouseCellMotion, a.refreshSessionsCmd(), a.refreshProjectsCmd()}
 		if msg.Err != nil {
 			// If the failure smells like SSH auth (ssh / mosh
 			// exit 255 with "permission denied" in the stderr-as-
@@ -1110,9 +1135,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// setup finishes the right job: Network-tab Enter
 				// opens a shell; a session attach just signals ready.
 				resume := sshWizardResume{OpenShell: msg.RemoteSSHTarget.OpenShellOnSetup}
-				return a, func() tea.Msg {
+				return a, tea.Batch(tea.EnableMouseCellMotion, func() tea.Msg {
 					return openSSHWizardMsg{target: *target, resume: resume}
-				}
+				})
 			}
 			until := time.Now().Add(5 * time.Second)
 			cmds = append(cmds, func() tea.Msg {
@@ -1147,6 +1172,39 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.sessionsM, cmd = a.sessionsM.Update(msg)
 		return a, cmd
 
+	case notesEntriesLoadedMsg, notesPreviewLoadedMsg, notesSearchResultMsg:
+		// Results of a Notes load. Like the preview plumbing above they
+		// go to their owner whatever screen is active: forwarded only to
+		// the active screen, a listing that finished after the user
+		// pressed another digit was dropped and Notes spun forever.
+		var cmd tea.Cmd
+		a.notes, cmd = a.notes.Update(msg)
+		return a, cmd
+
+	case cursorLoadedMsg:
+		// The Cursor sub-tab's SQLite read — same off-screen routing.
+		var cmd tea.Cmd
+		a.agentsM, cmd = a.agentsM.Update(msg)
+		return a, cmd
+
+	case claudeModelChangedMsg:
+		// The Agents tab's model pick also pinned the model in
+		// config.toml. Adopt the saved config: every TUI launch reads
+		// ANTHROPIC_MODEL from a.cfg, which otherwise kept the old pin
+		// until restart. Then let the Agents tab reload and toast.
+		if msg.Cfg != nil {
+			a.adoptConfig(*msg.Cfg)
+		}
+		var cmd tea.Cmd
+		a.agentsM, cmd = a.agentsM.Update(msg)
+		return a, cmd
+
+	case projectAgentSwitchedMsg:
+		// Applied straight to the list: neither another active screen
+		// nor a form open over Projects may swallow it.
+		a.projectsM.SetProjectAgent(msg.Path, msg.Agent)
+		return a, nil
+
 	case tea.MouseMsg:
 		if a.confirm.open() {
 			return a.updateConfirmationMouse(msg)
@@ -1180,8 +1238,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		if a.confirm.open() {
-			// The confirmation handles ctrl+c itself (quit, and release
-			// the mouse capture it turned on).
+			// The confirmation handles ctrl+c itself.
 			return a.updateConfirmationKey(msg)
 		}
 		// ctrl+c quits from ANYWHERE — every overlay, wizard, form and
@@ -1453,11 +1510,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, cmd
 		}
 
-		// Notes info panel (`i`): like the other info overlays it owns
-		// the keyboard until `i` / esc closes it. Without this, a digit
-		// switched screens underneath the panel and left it open on the
-		// Notes model.
-		if a.screen == ScreenNotes && a.notes.noteInfo.open {
+		// Notes info panel (`i`) and project picker (`p` / space): like
+		// the other modals they own the keyboard until they close.
+		// Without this, a digit switched screens underneath them, q
+		// opened the quit dialog over the picker, and esc dismissed a
+		// toast instead of closing it.
+		if a.screen == ScreenNotes && (a.notes.noteInfo.open || a.notes.pickingProject) {
 			var cmd tea.Cmd
 			a.notes, cmd = a.notes.Update(msg)
 			return a, cmd
@@ -1863,6 +1921,7 @@ func (a *App) adoptConfig(cfg config.Config) {
 	a.sessionsM.SetAgentCommands(cfg.AgentCommands())
 	a.projectsM.SetDefaultAgent(cfg.Agents.Default)
 	a.projectsM.SetAgentCommands(cfg.AgentCommands())
+	a.projectsM.SetProjectsRoot(cfg.Projects.Root)
 }
 
 // overlayDetectedTier shows the auto-detected Claude tier when the user
@@ -2185,7 +2244,12 @@ func shortHostname(h string) string {
 // overwrite a newer one.
 func (a *App) refreshSessionsCmd() tea.Cmd {
 	a.sessionsLoadGen++
-	gen := a.sessionsLoadGen
+	return a.sessionsRefreshCmd(a.sessionsLoadGen)
+}
+
+// sessionsRefreshCmd is refreshSessionsCmd for an already-assigned
+// generation.
+func (a App) sessionsRefreshCmd(gen int) tea.Cmd {
 	hosts := append([]config.Host(nil), a.cfg.Hosts...)
 	tailnetPort := a.cfg.Daemon.TailnetPort
 	if tailnetPort == 0 {
@@ -2200,8 +2264,15 @@ func (a *App) refreshSessionsCmd() tea.Cmd {
 
 // refreshProjectsCmd discovers local projects plus every configured
 // host's and discovered peer's projects, concurrently — see
-// collectProjects (refresh.go).
-func (a App) refreshProjectsCmd() tea.Cmd {
+// collectProjects (refresh.go). Numbered like refreshSessionsCmd.
+func (a *App) refreshProjectsCmd() tea.Cmd {
+	a.projectsLoadGen++
+	return a.projectsRefreshCmd(a.projectsLoadGen)
+}
+
+// projectsRefreshCmd is refreshProjectsCmd for an already-assigned
+// generation.
+func (a App) projectsRefreshCmd(gen int) tea.Cmd {
 	root := a.cfg.Projects.Root
 	hosts := append([]config.Host(nil), a.cfg.Hosts...)
 	tailnetPort := a.cfg.Daemon.TailnetPort
@@ -2209,7 +2280,9 @@ func (a App) refreshProjectsCmd() tea.Cmd {
 		tailnetPort = 7474
 	}
 	return func() tea.Msg {
-		return collectProjects(root, hosts, tailnetPort)
+		msg := collectProjects(root, hosts, tailnetPort)
+		msg.Gen = gen
+		return msg
 	}
 }
 
@@ -2270,22 +2343,9 @@ func (a App) attachSelectedSession() (App, tea.Cmd) {
 	}
 
 	// Local sessions resolved by the helper that handles the
-	// nested-tmux case.
-	for _, ls := range []string{"", "local"} {
-		if sel.Host == ls {
-			label := sel.Project
-			if label == "" {
-				label = sel.Name
-			}
-			tick := a.startAttaching(attachKindAttach, label)
-			return a, tea.Batch(tick, a.localAttachCmd(sel.Name, sel.Project))
-		}
-	}
-	// Also resolve to local when the host's name matches THIS
-	// machine — auto-discovered local rows now use the hostname (e.g.
-	// "sputnik") instead of the literal "local", so plain string
-	// matching against "local" alone misses that case.
-	if h := a.localHostStatus(); h != nil && h.Name == sel.Host {
+	// nested-tmux case. Only rows refresh marked local count: a peer
+	// that shares this machine's hostname is still a remote host.
+	if isLocalSessionHost(sel.Host) {
 		label := sel.Project
 		if label == "" {
 			label = sel.Name
@@ -2377,18 +2437,6 @@ func (a App) attachSelectedSession() (App, tea.Cmd) {
 	}
 }
 
-// localHostStatus returns the hostStatus for THIS machine (if loaded
-// yet). Used by attach to recognize that a session whose Host matches
-// our hostname is actually local, not remote.
-func (a App) localHostStatus() *hostStatus {
-	for i := range a.hosts {
-		if a.hosts[i].Local {
-			return &a.hosts[i]
-		}
-	}
-	return nil
-}
-
 // dialAddrFor extracts the bare host (no port) from a discovered
 // peer's Address. Discovered Address is "<tailnet-ip>:<port>" — mosh
 // wants just the host. Returns "" if there's nothing usable.
@@ -2477,13 +2525,18 @@ func launchCmdForProjectPathWithCommands(projectPath string, commands agent.Comm
 // devices); in exclusive mode it kicks them. The preference is the
 // attaching CLIENT's — "do I want to bump whoever else is viewing
 // this" — so the local config is the right source.
+//
+// The target is tmux's exact form `=name:` (see tmux.AttachArgs): a
+// bare `-t name` resolves by prefix and fnmatch, so it could land in
+// c-foo-app when c-foo was gone, and read api.v2 as session "api",
+// pane "v2".
 func remoteTmuxAttach(session string, detachOthers bool) string {
 	flags := ""
 	if detachOthers {
 		flags = " -d"
 	}
 	return "PATH=/opt/homebrew/bin:/usr/local/bin:/home/linuxbrew/.linuxbrew/bin:/snap/bin:$PATH" +
-		" tmux attach-session" + flags + " -t " + shellQuote(session)
+		" tmux attach-session" + flags + " -t " + shellQuote("="+session+":")
 }
 
 // remoteNewSessionAttachProcess builds the ssh/mosh process for a session
@@ -2606,7 +2659,7 @@ func (a App) conversationsForProject(projectPath string) []conversations.Convers
 // network round-trips and the user gets dropped into a fully-running
 // remote tmux session from a single Enter press.
 func (a App) attachOrCreateRemote(p project.Project, host string) tea.Cmd {
-	hs := a.lookupHostByName(host)
+	hs := a.lookupRemoteHost(host)
 	if hs == nil {
 		return func() tea.Msg {
 			return toastMsg{Text: fmt.Sprintf(tr("no reachable daemon for host: %s"), host), Kind: toastError, Until: time.Now().Add(5 * time.Second)}
@@ -2627,9 +2680,13 @@ func (a App) attachOrCreateRemote(p project.Project, host string) tea.Cmd {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			cli := daemon.RemoteClient(hostAddr)
+			// Continue stays false, as for local projects (#188): a
+			// new session must not pick up the directory's most recent
+			// conversation — often a headless run the user never saw.
+			// The daemon attaches to the project's session instead of
+			// creating one when it is already running.
 			ss, err := cli.NewSession(ctx, daemon.NewSessionRequest{
-				Project:  projectName,
-				Continue: true,
+				Project: projectName,
 			})
 			if err != nil {
 				return toastMsg{Text: tr("remote start: ") + err.Error(), Kind: toastError, Until: time.Now().Add(6 * time.Second)}
@@ -2645,12 +2702,14 @@ func (a App) attachOrCreateRemote(p project.Project, host string) tea.Cmd {
 	)
 }
 
-// lookupHostByName returns the hostStatus row matching `name` (set
-// by refresh). Used to convert a project's Host label back into the
-// daemon address + ssh dial host pair.
-func (a App) lookupHostByName(name string) *hostStatus {
+// lookupRemoteHost returns the remote hostStatus row matching `name`
+// (set by refresh). Used to convert a session's or project's Host label
+// back into the daemon address + ssh dial host pair. The Local row is
+// skipped: its name is this machine's hostname, which a tailnet peer
+// can share, and the peer's rows must still resolve to the peer.
+func (a App) lookupRemoteHost(name string) *hostStatus {
 	for i := range a.hosts {
-		if a.hosts[i].Name == name {
+		if !a.hosts[i].Local && a.hosts[i].Name == name {
 			return &a.hosts[i]
 		}
 	}

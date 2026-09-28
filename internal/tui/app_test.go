@@ -257,12 +257,30 @@ func TestRemoteTmuxAttach(t *testing.T) {
 	if !strings.Contains(got, "$PATH") {
 		t.Errorf("PATH suffix should keep existing $PATH: %q", got)
 	}
-	if !strings.HasSuffix(got, "'c-foo'") {
-		t.Errorf("session name not quoted as expected: %q", got)
+	if !strings.HasSuffix(got, "'=c-foo:'") {
+		t.Errorf("session target not quoted as expected: %q", got)
 	}
 	tricky := remoteTmuxAttach("c'foo", false)
-	if !strings.HasSuffix(tricky, `'c'\''foo'`) {
+	if !strings.HasSuffix(tricky, `'=c'\''foo:'`) {
 		t.Errorf("single-quote escaping failed: %q", tricky)
+	}
+}
+
+// TestRemoteTmuxAttach_ExactTarget — the remote attach used a loose
+// `-t 'name'` target, which tmux resolves by prefix and fnmatch: with
+// c-foo gone (just killed on the remote) it attached to c-foo-app, and
+// a dotted name like api.v2 was read as session "api", pane "v2". The
+// local attach already uses the exact `=name:` form; so must remote.
+func TestRemoteTmuxAttach_ExactTarget(t *testing.T) {
+	for _, detach := range []bool{false, true} {
+		got := remoteTmuxAttach("c-foo", detach)
+		if !strings.HasSuffix(got, " -t '=c-foo:'") {
+			t.Errorf("detachOthers=%v: attach target = %q, want the exact -t '=c-foo:'", detach, got)
+		}
+	}
+	msg := remoteSessionStartedMsg{SessionName: "api.v2", DialHost: "mini"}
+	if _, _, remoteCmd := remoteNewSessionAttachProcess(msg); !strings.HasSuffix(remoteCmd, " -t '=api.v2:'") {
+		t.Errorf("new-session remote attach target = %q, want -t '=api.v2:'", remoteCmd)
 	}
 }
 

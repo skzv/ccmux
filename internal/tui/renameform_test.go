@@ -50,6 +50,33 @@ func TestRenameForm_EmptyNameRejected(t *testing.T) {
 	}
 }
 
+// TestRenameForm_RejectsNamesTheCLIRejects — the form skipped the rule
+// `ccmux rename` and the daemon enforce, so `api.v2` went to tmux,
+// which silently renamed the session to `api_v2` (or split the dot as
+// a pane target) while the toast claimed api.v2.
+func TestRenameForm_RejectsNamesTheCLIRejects(t *testing.T) {
+	for _, bad := range []string{"api.v2", "-x", "a:b", "a/b", "a b", "näme"} {
+		f := newTestRenameForm(t, "c-old")
+		f.input.SetValue(bad)
+		f2, cmd := f.Update(keyMsg("enter"))
+		if cmd != nil {
+			if _, ok := cmd().(renameSessionSubmitMsg); ok {
+				t.Errorf("%q was submitted; the CLI and daemon reject it", bad)
+			}
+		}
+		if f2.err == "" {
+			t.Errorf("%q: no inline error", bad)
+		}
+	}
+	f := newTestRenameForm(t, "c-old")
+	f.input.SetValue("api_v2")
+	if _, cmd := f.Update(keyMsg("enter")); cmd == nil {
+		t.Error("a valid name was not submitted")
+	} else if _, ok := cmd().(renameSessionSubmitMsg); !ok {
+		t.Error("a valid name was not submitted")
+	}
+}
+
 // TestRenameForm_SameNameEmitsCancel — renaming to the same name should
 // dismiss without a round-trip to tmux (cancel, not submit).
 func TestRenameForm_SameNameEmitsCancel(t *testing.T) {

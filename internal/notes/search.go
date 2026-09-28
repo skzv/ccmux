@@ -32,6 +32,10 @@ type SearchHit struct {
 //
 // `limit` caps the number of hits returned (0 → default 100) so a
 // pathological query against a huge docs tree doesn't lock the TUI.
+//
+// When ctx ends before the search does, the hits found so far are
+// returned together with ctx's error, so a caller with a time budget
+// can show them as partial results instead of none.
 func (v Vault) Search(ctx context.Context, query string, limit int) ([]SearchHit, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
@@ -146,7 +150,9 @@ func (v Vault) searchRipgrep(ctx context.Context, query string, limit int) ([]Se
 	}
 	waitErr := cmd.Wait() // Always reap, including early limit/error exits.
 	if ctx.Err() != nil {
-		return nil, ctx.Err()
+		// Out of time: rg was killed, but what it already streamed is
+		// real. Keep it (see Search).
+		return hits, ctx.Err()
 	}
 	if scanErr != nil {
 		return nil, fmt.Errorf("read rg output: %w", scanErr)
@@ -232,11 +238,10 @@ func (v Vault) searchFallback(ctx context.Context, query string, limit int) ([]S
 		}
 		return nil
 	})
-	if err != nil {
-		return nil, err
-	}
 	sortHits(hits)
-	return hits, nil
+	// The walk only fails when ctx ends; the hits found until then are
+	// returned with that error (see Search).
+	return hits, err
 }
 
 // hitFor builds a SearchHit from raw rg/fallback fields, normalizing

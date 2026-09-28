@@ -6,6 +6,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/skzv/ccmux/internal/tmux"
 	"github.com/skzv/ccmux/internal/tui/styles"
 )
 
@@ -45,6 +46,13 @@ func (m renameFormModel) Update(msg tea.Msg) (renameFormModel, tea.Cmd) {
 			newName := strings.TrimSpace(m.input.Value())
 			if newName == "" {
 				m.err = tr("name cannot be empty")
+				return m, nil
+			}
+			// The rule `ccmux rename` and the daemon apply. Without it
+			// tmux took `api.v2` and quietly renamed the session to
+			// `api_v2` while the toast said api.v2.
+			if !tmux.ValidSessionName(newName) {
+				m.err = tr("use only letters, digits, - and _ (not starting with -)")
 				return m, nil
 			}
 			if newName == m.oldName {

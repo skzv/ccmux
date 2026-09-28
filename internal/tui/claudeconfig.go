@@ -982,10 +982,11 @@ func applyModelChoiceCmd(c modelChoice) tea.Cmd {
 		if err != nil {
 			return claudeModelChangedMsg{New: c.Settings, Err: err}
 		}
-		if perr := setCcmuxClaudeDefault(c.Pin); perr != nil {
+		saved, perr := setCcmuxClaudeDefault(c.Pin)
+		if perr != nil {
 			return claudeModelChangedMsg{New: c.Settings, Backup: backup, Err: perr}
 		}
-		return claudeModelChangedMsg{New: c.toastValue(), Backup: backup}
+		return claudeModelChangedMsg{New: c.toastValue(), Backup: backup, Cfg: &saved}
 	}
 }
 
@@ -994,11 +995,11 @@ func applyModelChoiceCmd(c modelChoice) tea.Cmd {
 // the picker handler) so a test can verify the precise behavior
 // without standing up a Bubble Tea program. Trims whitespace so an
 // accidental stray space in a future caller can't leak to the launch
-// command (where it would set ANTHROPIC_MODEL=" haiku ").
-func setCcmuxClaudeDefault(model string) error {
-	_, err := config.Update(func(c *config.Config) error {
+// command (where it would set ANTHROPIC_MODEL=" haiku "). Returns the
+// saved config, which the App adopts so its launches use the new pin.
+func setCcmuxClaudeDefault(model string) (config.Config, error) {
+	return config.Update(func(c *config.Config) error {
 		c.Claude.DefaultModel = strings.TrimSpace(model)
 		return nil
 	})
-	return err
 }

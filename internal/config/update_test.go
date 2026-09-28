@@ -99,3 +99,54 @@ func TestUpdate_AppliesToOnDiskState(t *testing.T) {
 		t.Errorf("edits didn't compose: hosts=%v theme=%q", got.Hosts, got.Theme)
 	}
 }
+
+// TestLoad_LegacyAPITierIsUnset — every save before v0.6.1 wrote the
+// then-default `tier = "api"`, and v0.6.1 started treating "api" as an
+// explicit choice that hides the auto-detected Claude plan: a Max
+// subscriber upgrading with an old config.toml saw "api". A file with
+// no schema_version predates the distinction, so its "api" is unset.
+func TestLoad_LegacyAPITierIsUnset(t *testing.T) {
+	withFakeHome(t)
+	writeConfigFile(t, "theme = \"nord\"\n\n[subscription]\n  tier = \"api\"\n  [subscription.tiers]\n    codex = \"plus\"\n")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Subscription.TierFor("claude"); got != "" {
+		t.Errorf("legacy claude tier = %q, want unset", got)
+	}
+	if got := cfg.Subscription.TierFor("codex"); got != "plus" {
+		t.Errorf("codex tier = %q, want plus (only the old claude default is reinterpreted)", got)
+	}
+	if cfg.Theme != "nord" {
+		t.Errorf("theme = %q, want the file's nord", cfg.Theme)
+	}
+}
+
+// TestSave_VersionedAPITierIsExplicit — once a file carries the
+// current schema version, "api" is the user's choice and must stick,
+// and every save writes the version so the legacy rule never reapplies.
+func TestSave_VersionedAPITierIsExplicit(t *testing.T) {
+	withFakeHome(t)
+	p := writeConfigFile(t, "[subscription]\n  tier = \"max5x\"\n")
+	if _, err := Update(func(c *Config) error {
+		c.Subscription.SetTierFor("claude", "api")
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "schema_version = ") {
+		t.Fatalf("saved config has no schema_version:\n%s", data)
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Subscription.TierFor("claude"); got != "api" {
+		t.Errorf("explicit api after a save = %q, want api", got)
+	}
+}

@@ -265,6 +265,43 @@ func TestSearch_OversizedLineSkipped(t *testing.T) {
 	}
 }
 
+// expiringCtx reports no error for its first `left` Err() calls and
+// context.DeadlineExceeded after that: a search budget that runs out
+// part-way through a walk, deterministically.
+type expiringCtx struct {
+	context.Context
+	left int
+}
+
+func (c *expiringCtx) Err() error {
+	if c.left > 0 {
+		c.left--
+		return nil
+	}
+	return context.DeadlineExceeded
+}
+
+// TestSearchFallback_TimeoutKeepsPartialHits — the fallback walk threw
+// away everything it had matched when the budget ran out mid-walk.
+func TestSearchFallback_TimeoutKeepsPartialHits(t *testing.T) {
+	v := Vault{Root: t.TempDir()}
+	for _, name := range []string{"a.md", "b.md", "c.md"} {
+		if err := os.WriteFile(filepath.Join(v.Root, name), []byte("match\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Enough budget for the root and a.md (its entry plus two line
+	// reads), not for b.md.
+	ctx := &expiringCtx{Context: context.Background(), left: 4}
+	hits, err := v.searchFallback(ctx, "match", 100)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want the deadline", err)
+	}
+	if len(hits) != 1 || hits[0].Rel != "a.md" {
+		t.Errorf("hits = %+v, want a.md's, found before the budget ran out", hits)
+	}
+}
+
 func TestSearch_FallbackStopsBeforeUnreadResults(t *testing.T) {
 	v := Vault{Root: t.TempDir()}
 	// The oversized line must not be read after either limit is satisfied.

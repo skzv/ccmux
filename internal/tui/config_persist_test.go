@@ -138,6 +138,66 @@ func TestSettingsSave_RefusedWhenConfigUnparseable(t *testing.T) {
 	if got, _ := os.ReadFile(p); string(got) != broken {
 		t.Errorf("unparseable config.toml was overwritten:\n%s", got)
 	}
+	// The row applied the new value before saving it, so a refused save
+	// still showed a value that was never written.
+	if got, want := m.cfg.Agents.Default, config.Defaults().Agents.Default; got != want {
+		t.Errorf("after a refused save the row shows agents.default = %q, want the unchanged %q", got, want)
+	}
+
+	// Same for the inline editor (projects.root).
+	for i, f := range editableFields() {
+		if f.label == "projects.root" {
+			m.cursor = i
+		}
+	}
+	m.errMsg = ""
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	newRoot := t.TempDir()
+	m.editor.SetValue(newRoot)
+	m, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil || m.errMsg == "" {
+		t.Error("the inline editor's save should have been refused")
+	}
+	if got, want := m.cfg.Projects.Root, config.Defaults().Projects.Root; got != want {
+		t.Errorf("after a refused save projects.root = %q, want the unchanged %q", got, want)
+	}
+}
+
+// TestSettingsSave_RefusedDoesNotLeakIntoApp — the Settings copy of the
+// config shares its per-agent Tiers map with App.cfg, so applying a
+// tier to it before a save that then failed changed the tier the
+// dashboard used too.
+func TestSettingsSave_RefusedDoesNotLeakIntoApp(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	p, err := config.Path()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := config.Save(config.Defaults()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte("[[hosts]]\nname = \"mini\"\naddress =\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Defaults()
+	cfg.Subscription.SetTierFor("codex", "plus")
+	appCfg := cfg // App.cfg and the Settings copy share the Tiers map
+	m := newSettings(styles.Default(), DefaultKeymap(), cfg, "test")
+	for i, f := range m.fields() {
+		if f.label == "codex.tier" {
+			m.cursor = i
+		}
+	}
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.errMsg == "" {
+		t.Fatal("setup: the save should have been refused")
+	}
+	if got := appCfg.Subscription.TierFor("codex"); got != "plus" {
+		t.Errorf("a refused Settings save changed the App's codex tier to %q", got)
+	}
+	if got := m.cfg.Subscription.TierFor("codex"); got != "plus" {
+		t.Errorf("a refused Settings save shows codex tier %q", got)
+	}
 }
 
 // TestEditorReloadMsg_RoutesBySource — editing an agent config from the

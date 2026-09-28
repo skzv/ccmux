@@ -82,6 +82,11 @@ func persistWizardAdded(a App, target sshsetup.Target, addedUsers []string) App 
 		return a
 	}
 	shortHost := networkHostShortName(target.Host)
+	// 22 is the default: leave it unset, as persistWizardCorrection does.
+	sshPort := target.Port
+	if sshPort == 22 {
+		sshPort = 0
+	}
 	addHosts := func(cfg *config.Config) {
 		for _, u := range addedUsers {
 			name := fmt.Sprintf("%s@%s", u, shortHost)
@@ -94,7 +99,7 @@ func persistWizardAdded(a App, target sshsetup.Target, addedUsers []string) App 
 				Name:    name,
 				Address: target.Host,
 				User:    u,
-				SSHPort: target.Port,
+				SSHPort: sshPort,
 				Mosh:    true,
 			})
 		}

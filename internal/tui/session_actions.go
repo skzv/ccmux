@@ -17,19 +17,15 @@ import (
 // old path dropped the host and always ran tmux locally: picking the
 // mini's row and confirming a kill killed the laptop's session.
 
-// isLocalSessionHost reports whether a session row's Host label means
-// "this machine". Refresh stamps local rows "local"; an empty label is
-// the daemon wire default; and a row can also carry this machine's own
-// hostname (the Devices-panel name of the Local host row). Mirrors the
-// resolution attachSelectedSession uses.
-func (a App) isLocalSessionHost(host string) bool {
-	if host == "" || host == "local" {
-		return true
-	}
-	if h := a.localHostStatus(); h != nil && h.Name == host {
-		return true
-	}
-	return false
+// isLocalSessionHost reports whether a session row belongs to this
+// machine. Refresh stamps every local row "local" (the daemon and the
+// direct-tmux fallback alike) and "" is the daemon wire default; any
+// other label is the key of the remote host the row came from. This
+// machine's hostname is deliberately NOT local: a tailnet peer can
+// share it (two Linux boxes named `raspberrypi`), and matching it
+// killed, renamed and attached the peer's sessions here instead.
+func isLocalSessionHost(host string) bool {
+	return host == "" || host == "local"
 }
 
 // remoteDaemonAddr resolves a remote session row's host label to the
@@ -38,8 +34,8 @@ func (a App) isLocalSessionHost(host string) bool {
 // daemon address in Address). ok is false when the host is unknown or
 // has no daemon to talk to (a mobile peer, a peer without ccmuxd).
 func (a App) remoteDaemonAddr(host string) (addr string, ok bool) {
-	hs := a.lookupHostByName(host)
-	if hs == nil || hs.Local || hs.Mobile || hs.NeedsInstall || hs.Address == "" {
+	hs := a.lookupRemoteHost(host)
+	if hs == nil || hs.Mobile || hs.NeedsInstall || hs.Address == "" {
 		return "", false
 	}
 	return hs.Address, true
@@ -60,7 +56,7 @@ func sessionDisplayName(host, name string) string {
 // ccmuxd for remote rows. An unknown / daemon-less remote host is
 // refused with a toast — never silently retargeted at the local server.
 func (a App) killSessionTargetCmd(host, name string) tea.Cmd {
-	if a.isLocalSessionHost(host) {
+	if isLocalSessionHost(host) {
 		return killSessionCmd(name)
 	}
 	addr, ok := a.remoteDaemonAddr(host)
@@ -73,7 +69,7 @@ func (a App) killSessionTargetCmd(host, name string) tea.Cmd {
 // renameSessionTargetCmd is killSessionTargetCmd's twin for `R`: a
 // remote row is renamed through its host's ccmuxd rename endpoint.
 func (a App) renameSessionTargetCmd(host, oldName, newName string) tea.Cmd {
-	if a.isLocalSessionHost(host) {
+	if isLocalSessionHost(host) {
 		return renameSessionCmd(oldName, newName)
 	}
 	addr, ok := a.remoteDaemonAddr(host)

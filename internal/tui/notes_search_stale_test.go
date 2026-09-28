@@ -5,7 +5,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/skzv/ccmux/internal/notes"
 	"github.com/skzv/ccmux/internal/project"
 	"github.com/skzv/ccmux/internal/tui/styles"
 )
@@ -86,4 +88,37 @@ func TestNotes_StaleSearchResultDropped(t *testing.T) {
 	if got := m.selectedPath(); strings.HasPrefix(got, dirA) {
 		t.Errorf("Enter would open %q from the previous project", got)
 	}
+}
+
+// TestNotesSearch_TimeoutShowsPartialResults — the TUI ran the local
+// search with `hits, _ :=`: when its 3s budget ran out the partial hits
+// were discarded (and any other error ignored), so a slow search on a
+// big tree just said "(no matches)". A timed-out search now reports
+// what it found, flagged as partial, and the list says so.
+func TestNotesSearch_TimeoutShowsPartialResults(t *testing.T) {
+	dir := notesProjectDir(t, "a.md", "# a\n\nneedle here\n")
+	m := newNotes(styles.Default(), DefaultKeymap())
+	m.SetSize(120, 40)
+	m = loadNotesProject(t, m, project.Project{Name: "p", Host: "local", Path: dir})
+
+	orig := notesSearchTimeout
+	notesSearchTimeout = time.Nanosecond
+	res, ok := m.runSearch("needle")().(notesSearchResultMsg)
+	notesSearchTimeout = orig
+	if !ok {
+		t.Fatal("runSearch did not produce a notesSearchResultMsg")
+	}
+	if !res.Partial || res.Err != "" {
+		t.Fatalf("timed-out search: Partial=%v Err=%q, want Partial and no error", res.Partial, res.Err)
+	}
+
+	// What the list shows for a partial result set.
+	res.Hits = []notes.SearchHit{{Path: filepath.Join(dir, "a.md"), Rel: "a.md", LineNum: 3, Snippet: "needle here"}}
+	m, _ = m.Update(res)
+	assertPresent(t, m.View(120, 30), "timed out", "a.md:3")
+
+	// A complete search clears the flag.
+	res.Partial = false
+	m, _ = m.Update(res)
+	assertAbsent(t, m.View(120, 30), "timed out")
 }

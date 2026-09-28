@@ -32,6 +32,8 @@ type sessionsLoadedMsg struct {
 type projectsLoadedMsg struct {
 	Projects []project.Project
 	Err      error
+	// Gen is the refreshProjectsCmd generation, as sessionsLoadedMsg's.
+	Gen int
 }
 
 // openSSHWizardMsg asks the App to open the SSH setup wizard for a
@@ -212,6 +214,13 @@ type newProjectSubmitMsg struct {
 	// (claude / codex / antigravity). Empty defaults to claude downstream.
 	// Carried through daemon.NewProjectRequest so the remote honors it.
 	Agent agent.ID
+
+	// Root and Commands are stamped by the Projects screen for a local
+	// create: the App's projects root (which honors --projects) and
+	// agent command overrides. The create used to re-read them from
+	// config.toml, which never carries the per-run --projects root.
+	Root     string
+	Commands agent.Commands
 }
 
 // projectAgentSwitchedMsg fires after a successful "a" press on the
@@ -403,6 +412,9 @@ type notesSearchResultMsg struct {
 	Err   string
 	Host  string
 	Path  string
+	// Partial marks a search that ran out of time: Hits is what was
+	// found before the budget ended, not every match.
+	Partial bool
 }
 
 // usageTickMsg fires periodically to refresh the dashboard's usage panel.
@@ -548,10 +560,13 @@ type conversationResumedMsg struct {
 type claudeReloadMsg struct{}
 
 // claudeModelChangedMsg signals that SetModel completed. Carries the
-// backup path so the screen can surface "backup at …" in a toast.
+// backup path so the screen can surface "backup at …" in a toast, and
+// Cfg — ccmux's config as saved with the new model pin (nil when the
+// pin wasn't written) — for the App to adopt.
 type claudeModelChangedMsg struct {
 	New    string
 	Backup string
+	Cfg    *config.Config
 	Err    error
 }
 

@@ -265,7 +265,7 @@ func TestClaudeModel_PickFullIDWritesBothTargets(t *testing.T) {
 func TestClaudeModel_PickAliasWritesSettingsClearsPin(t *testing.T) {
 	fakeClaudeDir(t)
 	// Pre-seed a pin so we can prove it gets cleared.
-	if err := setCcmuxClaudeDefault("claude-opus-4-8"); err != nil {
+	if _, err := setCcmuxClaudeDefault("claude-opus-4-8"); err != nil {
 		t.Fatal(err)
 	}
 	m := newClaude(styles.Default(), DefaultKeymap())
@@ -288,7 +288,7 @@ func TestClaudeModel_PickAliasWritesSettingsClearsPin(t *testing.T) {
 func TestClaudeModel_PickInheritClearsBoth(t *testing.T) {
 	dir := fakeClaudeDir(t)
 	writeClaudeSettings(t, dir, `{"model":"sonnet"}`)
-	if err := setCcmuxClaudeDefault("claude-opus-4-8"); err != nil {
+	if _, err := setCcmuxClaudeDefault("claude-opus-4-8"); err != nil {
 		t.Fatal(err)
 	}
 	m := newClaude(styles.Default(), DefaultKeymap())
@@ -303,6 +303,38 @@ func TestClaudeModel_PickInheritClearsBoth(t *testing.T) {
 	cfg, _ := config.Load()
 	if cfg.Claude.DefaultModel != "" {
 		t.Errorf("inherit should clear the pin; got %q", cfg.Claude.DefaultModel)
+	}
+}
+
+// TestModelPin_AdoptedByApp — the pin is saved to config.toml off the
+// UI goroutine, but App.cfg — which every TUI launch reads for
+// ANTHROPIC_MODEL (cfg.AgentCommands().ClaudeModel) — kept the old
+// value, so sessions started from the TUI ignored the model the user
+// had just picked until ccmux restarted. The saved config must be
+// adopted, even if the save lands after the user left the Agents tab.
+func TestModelPin_AdoptedByApp(t *testing.T) {
+	fakeClaudeDir(t)
+	a := New(config.Defaults(), "test")
+	a.tour.Close()
+	a.width, a.height = 120, 40
+	a.screen = ScreenAgents
+	a, _ = updateApp(t, a, keyRunes("m"))
+	if !a.agentsM.claude.PickerOpen() {
+		t.Fatal("setup: m did not open the model picker")
+	}
+	a.agentsM.claude.pickerCursor = choiceIndexBySettings(t, a.agentsM.claude, "claude-opus-4-8")
+	a, cmd := updateApp(t, a, keyMsg("enter"))
+	if cmd == nil {
+		t.Fatal("picking a model returned no save command")
+	}
+	saved := cmd()
+	a, _ = updateApp(t, a, keyRunes("1")) // the save lands after the user moved on
+	a, _ = updateApp(t, a, saved)
+	if got := a.cfg.AgentCommands().ClaudeModel; got != "claude-opus-4-8" {
+		t.Errorf("TUI launches would use ANTHROPIC_MODEL %q, want the just-pinned claude-opus-4-8", got)
+	}
+	if got := a.agentsM.claude.ccmuxDefaultModel; got != "claude-opus-4-8" {
+		t.Errorf("Agents tab still shows pin %q after the save landed", got)
 	}
 }
 

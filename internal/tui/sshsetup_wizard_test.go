@@ -516,3 +516,24 @@ func equalStrings(a, b []string) bool {
 	}
 	return true
 }
+
+// TestSSHWizard_FitsPhoneWidth — the wizard card had a 44-column floor,
+// so on a 40-column terminal (an iPhone in portrait) the card plus its
+// border overflowed and Bubble Tea chopped the right edge off, hiding
+// the key hints. Like the tour's card, it must fit in the terminal.
+func TestSSHWizard_FitsPhoneWidth(t *testing.T) {
+	steps := []sshWizardStep{
+		sshWizardConfirm, sshWizardUser, sshWizardProbing, sshWizardPassword,
+		sshWizardRunning, sshWizardEnumerate, sshWizardError, sshWizardHostKeyMismatch, sshWizardDone,
+	}
+	for _, w := range []int{40, 36} {
+		for _, step := range steps {
+			m := newSSHWizard(styles.Default())
+			m.Open(sshsetup.Target{User: "alice", Host: "raspberrypi"}, nil)
+			m.step = step
+			m.err = "ssh: handshake failed: ssh: unable to authenticate, attempted methods [none password]"
+			m.others = []string{"bob", "carol"}
+			assertNoOverflow(t, m.View(w, 40), w)
+		}
+	}
+}

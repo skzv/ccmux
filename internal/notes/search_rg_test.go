@@ -4,6 +4,7 @@ package notes
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeRipgrep puts a shell-script `rg` first on PATH. It records its
@@ -271,5 +273,28 @@ func TestSearch_BackendsAgreeUnderCap(t *testing.T) {
 		if key(got) != key(fallback) {
 			t.Fatalf("run %d: rg hits %s\nfallback hits %s", i, key(got), key(fallback))
 		}
+	}
+}
+
+// TestSearchRipgrep_TimeoutKeepsPartialHits — when the search budget ran
+// out, the hits rg had already streamed were thrown away and the TUI
+// showed "(no matches)". They come back with the deadline error so the
+// caller can show them as partial results.
+func TestSearchRipgrep_TimeoutKeepsPartialHits(t *testing.T) {
+	v := Vault{Root: t.TempDir()}
+	match := `{"type":"match","data":{"path":{"text":"` + filepath.Join(v.Root, "a.md") +
+		`"},"lines":{"text":"first match\n"},"line_number":3}}`
+	t.Setenv("CCMUX_TEST_RG_OUT", match)
+	// exec, so the deadline's kill reaches the sleeping process (and
+	// closes its stdout) rather than an sh that leaves sleep behind.
+	fakeRipgrepScript(t, "printf '%s\\n' \"$CCMUX_TEST_RG_OUT\"\nexec sleep 10\n")
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	hits, err := v.Search(ctx, "match", 100)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want the deadline", err)
+	}
+	if len(hits) != 1 || hits[0].Rel != "a.md" || hits[0].LineNum != 3 {
+		t.Errorf("hits = %+v, want the one streamed before the deadline", hits)
 	}
 }

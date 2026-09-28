@@ -28,7 +28,7 @@ func TestModelPin_SetWritesConfigToml(t *testing.T) {
 		t.Fatalf("seed save: %v", err)
 	}
 
-	if err := setCcmuxClaudeDefault("claude-opus-4-8"); err != nil {
+	if _, err := setCcmuxClaudeDefault("claude-opus-4-8"); err != nil {
 		t.Fatalf("setCcmuxClaudeDefault: %v", err)
 	}
 	got, err := config.Load()
@@ -43,7 +43,7 @@ func TestModelPin_SetWritesConfigToml(t *testing.T) {
 	}
 
 	// Whitespace must be trimmed so it can't leak into ANTHROPIC_MODEL.
-	if err := setCcmuxClaudeDefault("  haiku  "); err != nil {
+	if _, err := setCcmuxClaudeDefault("  haiku  "); err != nil {
 		t.Fatalf("set with whitespace: %v", err)
 	}
 	got, _ = config.Load()
@@ -52,7 +52,7 @@ func TestModelPin_SetWritesConfigToml(t *testing.T) {
 	}
 
 	// Empty clears the pin.
-	if err := setCcmuxClaudeDefault(""); err != nil {
+	if _, err := setCcmuxClaudeDefault(""); err != nil {
 		t.Fatalf("set empty: %v", err)
 	}
 	got, _ = config.Load()

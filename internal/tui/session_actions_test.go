@@ -167,15 +167,75 @@ func TestKillSession_RoutesByHost(t *testing.T) {
 	}
 }
 
-// TestKillSession_LocalHostnameRowIsLocal — a row labelled with this
-// machine's own hostname is local and must use the local seam.
-func TestKillSession_LocalHostnameRowIsLocal(t *testing.T) {
-	rec := recordSessionRouting(t)
-	a := twoHostSessionsApp(t)
-	drainCmd(a.killSessionTargetCmd("sputnik", "c-ccmux"))
-	if len(rec.localKills) != 1 || len(rec.remoteKills) != 0 {
-		t.Fatalf("hostname-labelled row: local=%v remote=%v, want local only", rec.localKills, rec.remoteKills)
-	}
+// samePeerNameApp is two Linux boxes both called `raspberrypi`: this
+// machine (the Local host row) and a discovered tailnet peer whose
+// sessions therefore carry the host label "raspberrypi".
+func samePeerNameApp(t *testing.T) App {
+	t.Helper()
+	a := newSessionsApp(t)
+	a.width, a.height = 120, 40
+	m, _ := a.Update(sessionsLoadedMsg{
+		Sessions: []daemon.SessionState{
+			{Name: "c-here", Host: "local"},
+			{Name: "c-pi", Host: "raspberrypi"},
+		},
+		Hosts: []hostStatus{
+			{Name: "raspberrypi", Local: true, Source: "local", Address: "unix:///tmp/s.sock", OK: true, DaemonOK: true},
+			{Name: "raspberrypi", Source: "discovered", Discovered: true, Address: "100.64.0.7:7474", DialHost: "raspberrypi-1", OK: true, DaemonOK: true},
+		},
+		At: time.Now(),
+	})
+	return selectSession(t, m.(App), "raspberrypi", "c-pi")
+}
+
+// TestSessionActions_PeerNamedLikeThisMachineStaysRemote — a tailnet
+// peer with the same short hostname as this machine: its rows were
+// taken for local ones (the label matched the Local host row's name),
+// so x/y killed, R renamed and Enter attached a session on THIS
+// machine, and the kill modal hid the host. Local rows are the ones
+// refresh stamps "local"; everything else goes to its host's daemon.
+func TestSessionActions_PeerNamedLikeThisMachineStaysRemote(t *testing.T) {
+	t.Run("kill", func(t *testing.T) {
+		rec := recordSessionRouting(t)
+		a := samePeerNameApp(t)
+		a, _ = sendKey(t, a, keyRunes("x"))
+		if view := a.View(); !strings.Contains(view, "on raspberrypi") {
+			t.Errorf("kill confirmation must name the peer's host:\n%s", view)
+		}
+		_, cmd := sendKey(t, a, keyRunes("y"))
+		drainCmd(cmd)
+		if len(rec.localKills) != 0 {
+			t.Fatalf("the peer's session was killed on this machine: %v", rec.localKills)
+		}
+		if want := "100.64.0.7:7474|raspberrypi|c-pi"; strings.Join(rec.remoteKills, ",") != want {
+			t.Errorf("remote kills = %v, want %s", rec.remoteKills, want)
+		}
+	})
+	t.Run("rename", func(t *testing.T) {
+		rec := recordSessionRouting(t)
+		a := samePeerNameApp(t)
+		a, _ = sendKey(t, a, keyRunes("R"))
+		a.sessionsM.renameForm.input.SetValue("c-renamed")
+		a, cmd := sendKey(t, a, tea.KeyMsg{Type: tea.KeyEnter})
+		for _, m := range drainCmd(cmd) {
+			var next tea.Cmd
+			a, next = updateApp(t, a, m)
+			drainCmd(next)
+		}
+		if len(rec.localRenames) != 0 {
+			t.Fatalf("the peer's session was renamed on this machine: %v", rec.localRenames)
+		}
+		if want := "100.64.0.7:7474|raspberrypi|c-pi→c-renamed"; strings.Join(rec.remoteRenames, ",") != want {
+			t.Errorf("remote renames = %v, want %s", rec.remoteRenames, want)
+		}
+	})
+	t.Run("attach", func(t *testing.T) {
+		a := samePeerNameApp(t)
+		a, _ = sendKey(t, a, tea.KeyMsg{Type: tea.KeyEnter}) // cmd not run: it would exec ssh
+		if a.attach.kind != attachKindRemote {
+			t.Fatalf("Enter on the peer's row started a %v attach, want a remote one", a.attach.kind)
+		}
+	})
 }
 
 // TestRenameSession_RoutesByHost — `R` on a remote row renames through

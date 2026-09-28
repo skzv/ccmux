@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"strings"
 	"time"
@@ -504,10 +506,9 @@ func (m *settingsModel) startEdit(f editableField) {
 	m.errMsg = ""
 }
 
-// commit validates the textinput value, applies it to the config, and
-// saves to disk. Failures keep the user in edit mode with an inline
-// error message; success closes the editor and shows a transient
-// "saved ✓" flash.
+// commit validates the textinput value and saves it to disk. Failures
+// keep the user in edit mode with an inline error message; success
+// closes the editor and shows a transient "saved ✓" flash.
 func (m settingsModel) commit() (settingsModel, tea.Cmd) {
 	fields := m.fields()
 	if m.cursor < 0 || m.cursor >= len(fields) {
@@ -516,14 +517,8 @@ func (m settingsModel) commit() (settingsModel, tea.Cmd) {
 	}
 	raw := m.editor.Value()
 	f := fields[m.cursor]
-	if err := f.set(&m.cfg, raw); err != nil {
-		m.errMsg = err.Error()
-		return m, nil
-	}
-	saved, err := persistField(f, raw)
-	if err != nil {
-		m.errMsg = tr("save: ") + err.Error()
-		m.lastErr = err.Error()
+	saved, ok := m.saveField(f, raw)
+	if !ok {
 		return m, nil
 	}
 	m.editing = false
@@ -539,8 +534,49 @@ func (m settingsModel) commit() (settingsModel, tea.Cmd) {
 // this screen's copy wholesale — that copy can be stale (hosts added by
 // the SSH wizard since) or carry display-only state (the auto-detected
 // subscription tier, --projects), none of which may be written back.
+// A value the setter rejects comes back as a fieldValueError.
 func persistField(f editableField, raw string) (config.Config, error) {
-	return config.Update(func(c *config.Config) error { return f.set(c, raw) })
+	return config.Update(func(c *config.Config) error {
+		if err := f.set(c, raw); err != nil {
+			return fieldValueError{err}
+		}
+		return nil
+	})
+}
+
+// fieldValueError is a value a field's setter rejected, as opposed to a
+// failure to read or write config.toml.
+type fieldValueError struct{ error }
+
+// saveField persists raw for f and only then shows it. The row used to
+// apply the value to m.cfg first, so a save that failed (config.toml
+// unparseable, disk error) still displayed a value never written — and
+// since m.cfg shares its Tiers map with App.cfg, a tier change leaked
+// into the dashboard too. On success the value is applied through the
+// same setter to a copy with its own map (keeping the display-only
+// state a wholesale swap to `saved` would drop until the App adopts it
+// via configSavedMsg). On failure it sets errMsg and reports false.
+func (m *settingsModel) saveField(f editableField, raw string) (config.Config, bool) {
+	lang := i18n.Current()
+	saved, err := persistField(f, raw)
+	if err != nil {
+		// The language row's setter switches the UI language as it
+		// runs; undo that when the value wasn't saved.
+		i18n.SetLanguage(string(lang))
+		var bad fieldValueError
+		if errors.As(err, &bad) {
+			m.errMsg = bad.Error()
+		} else {
+			m.errMsg = tr("save: ") + err.Error()
+			m.lastErr = err.Error()
+		}
+		return saved, false
+	}
+	next := m.cfg
+	next.Subscription.Tiers = maps.Clone(m.cfg.Subscription.Tiers)
+	_ = f.set(&next, raw) // accepted a moment ago by the same setter
+	m.cfg = next
+	return saved, true
 }
 
 func savedCmd(cfg config.Config) tea.Cmd {
@@ -563,14 +599,8 @@ func (m settingsModel) cycleField(f editableField) (settingsModel, tea.Cmd) {
 			break
 		}
 	}
-	if err := f.set(&m.cfg, next); err != nil {
-		m.errMsg = err.Error()
-		return m, nil
-	}
-	saved, err := persistField(f, next)
-	if err != nil {
-		m.errMsg = tr("save: ") + err.Error()
-		m.lastErr = err.Error()
+	saved, ok := m.saveField(f, next)
+	if !ok {
 		return m, nil
 	}
 	m.errMsg = ""
@@ -584,16 +614,9 @@ func (m settingsModel) cycleField(f editableField) (settingsModel, tea.Cmd) {
 // reloads on return. Used for the prose-heavy fields (initial_prompt,
 // gitignore_body) that are awkward inside a one-line textinput.
 func (m settingsModel) openEditor() (settingsModel, tea.Cmd) {
+	// An editor set in config.toml wins; empty leaves the choice to
+	// openEditorCmd ($VISUAL, $EDITOR, then an installed editor).
 	editor := strings.TrimSpace(m.cfg.Editor)
-	if editor == "" {
-		editor = os.Getenv("VISUAL")
-	}
-	if editor == "" {
-		editor = os.Getenv("EDITOR")
-	}
-	if editor == "" {
-		editor = "vi"
-	}
 	cfgPath, err := config.Path()
 	if err != nil {
 		m.errMsg = err.Error()

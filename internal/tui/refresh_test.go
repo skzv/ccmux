@@ -6,12 +6,16 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
 
+	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/daemon"
+	"github.com/skzv/ccmux/internal/project"
 	"github.com/skzv/ccmux/internal/tailnet"
 )
 
@@ -257,6 +261,32 @@ func TestRefreshProjects_HungHostDoesNotStarveOthers(t *testing.T) {
 	}
 }
 
+// TestRefreshProjects_RemoteAgentKept — the remote daemon reports each
+// project's agent, but fetchRemoteProjects dropped it, so every remote
+// project showed (and was labelled) as Claude.
+func TestRefreshProjects_RemoteAgentKept(t *testing.T) {
+	stubRefreshSeams(t, nil)
+	mini := startFakeCcmuxd(t, false, nil, []daemon.ProjectInfo{
+		{Name: "api", Path: "/Users/me/Projects/api", Agent: "codex"},
+		{Name: "legacy", Path: "/Users/me/Projects/legacy"},
+	})
+	a := App{cfg: config.Config{
+		Projects: config.ProjectsConfig{Root: t.TempDir()},
+		Hosts:    []config.Host{{Name: "mac-mini", Address: mini.host, Port: mini.port}},
+	}}
+	msg := a.refreshProjectsCmd()().(projectsLoadedMsg)
+	agents := map[string]agent.ID{}
+	for _, p := range msg.Projects {
+		agents[p.Name] = p.Agent
+	}
+	if agents["api"] != agent.IDCodex {
+		t.Errorf("remote codex project has agent %q, want codex", agents["api"])
+	}
+	if got, ok := agents["legacy"]; !ok || got != "" {
+		t.Errorf("remote project without an agent = %q (present %v), want unset (reads as claude)", got, ok)
+	}
+}
+
 // TestSessionsLoaded_StaleGenerationDropped — overlapping refreshes
 // finish out of order when a host is slow; an older result must not
 // overwrite a newer list. Unnumbered (Gen 0) results always apply.
@@ -319,4 +349,144 @@ func TestTick_DoesNotStackRefreshes(t *testing.T) {
 	if a.sessionsLoadGen != 3 {
 		t.Fatalf("overdue in-flight refresh should not block the tick (loadGen=%d)", a.sessionsLoadGen)
 	}
+}
+
+// newRefreshGenApp is a real New() App (Init's refreshes carry the
+// generation New reserved for them) with HOME sandboxed.
+func newRefreshGenApp(t *testing.T) App {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	a := New(config.Defaults(), "test")
+	a.tour.Close()
+	return a
+}
+
+// TestSessionsRefresh_InitGenerationIsReserved — Init has a value
+// receiver, so the generation bump in refreshSessionsCmd happened on a
+// copy: Init's refresh and the first real one (the 2s tick's) were
+// both generation 1. Init's older list could then overwrite the tick's
+// newer one, and its landing cleared the tick's in-flight marker early.
+func TestSessionsRefresh_InitGenerationIsReserved(t *testing.T) {
+	a := newRefreshGenApp(t)
+	a, _ = updateApp(t, a, tickMsg{At: time.Now()})
+	tickGen := a.sessionsTickGen
+	if tickGen <= initRefreshGen {
+		t.Fatalf("the first tick's refresh got generation %d, which Init's refresh already carries", tickGen)
+	}
+	// Init's refresh lands after the tick's: it is older and is dropped,
+	// and it must not clear the tick's in-flight marker.
+	a, _ = updateApp(t, a, sessionsLoadedMsg{Gen: initRefreshGen, Sessions: []daemon.SessionState{{Name: "c-stale", Host: "local"}}, At: time.Now()})
+	if a.sessionsTickGen != tickGen {
+		t.Errorf("Init's result cleared the tick's in-flight refresh (tickGen=%d)", a.sessionsTickGen)
+	}
+	a, _ = updateApp(t, a, sessionsLoadedMsg{Gen: tickGen, Sessions: []daemon.SessionState{{Name: "c-new", Host: "local"}}, At: time.Now()})
+	a, _ = updateApp(t, a, sessionsLoadedMsg{Gen: initRefreshGen, Sessions: []daemon.SessionState{{Name: "c-stale", Host: "local"}}, At: time.Now()})
+	if len(a.sessions) != 1 || a.sessions[0].Name != "c-new" {
+		t.Errorf("sessions = %+v, want the tick's newer list", a.sessions)
+	}
+}
+
+// TestProjectsLoaded_StaleGenerationDropped — project refreshes overlap
+// too (Init, every detach, `r` on Projects) and a slow host makes them
+// finish out of order; projectsLoadedMsg carried no generation, so an
+// older list could replace a newer one.
+func TestProjectsLoaded_StaleGenerationDropped(t *testing.T) {
+	stubRefreshSeams(t, nil)
+	a := newRefreshGenApp(t)
+	a.cfg.Projects.Root = t.TempDir()
+	older := a.refreshProjectsCmd()().(projectsLoadedMsg)
+	newer := a.refreshProjectsCmd()().(projectsLoadedMsg)
+	newer.Projects = []project.Project{{Name: "fresh", Host: "local", Path: "/p/fresh"}}
+	older.Projects = []project.Project{{Name: "stale", Host: "local", Path: "/p/stale"}}
+	a, _ = updateApp(t, a, newer)
+	a, _ = updateApp(t, a, older)
+	if len(a.projects) != 1 || a.projects[0].Name != "fresh" {
+		t.Errorf("projects = %+v, want the newer refresh's list", a.projects)
+	}
+}
+
+// localDaemonStub serves /v1/sessions and /v1/health on the local
+// ccmuxd socket under a short sandbox HOME. Each handler sleeps its
+// delay (or, with a negative delay, hangs until the client gives up).
+func localDaemonStub(t *testing.T, sessionsDelay, healthDelay time.Duration) {
+	t.Helper()
+	home, err := os.MkdirTemp("/tmp", "cxh") // unix socket paths must stay short
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(home) })
+	t.Setenv("HOME", home)
+	t.Setenv("TMUX_TMPDIR", home) // the direct-tmux fallback must never see the user's server
+	t.Setenv("TMUX", "")
+	sock := filepath.Join(home, ".local", "state", "ccmux", "ccmuxd.sock")
+	if err := os.MkdirAll(filepath.Dir(sock), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wait := func(r *http.Request, d time.Duration) bool {
+		if d < 0 {
+			<-r.Context().Done()
+			return false
+		}
+		select {
+		case <-time.After(d):
+			return true
+		case <-r.Context().Done():
+			return false
+		}
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/sessions", func(w http.ResponseWriter, r *http.Request) {
+		if wait(r, sessionsDelay) {
+			_ = json.NewEncoder(w).Encode([]daemon.SessionState{{Name: "c-here", State: "idle"}})
+		}
+	})
+	mux.HandleFunc("/v1/health", func(w http.ResponseWriter, r *http.Request) {
+		if wait(r, healthDelay) {
+			_ = json.NewEncoder(w).Encode(daemon.HealthInfo{OK: true, Hostname: "fakehost.local", Version: "v-test", Sessions: 1})
+		}
+	})
+	srv := &http.Server{Handler: mux}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+}
+
+// TestLocalProbe_SlowDaemonStaysOnline — /v1/health ran on the context
+// /v1/sessions had just used up, so a slow but live daemon answered the
+// session list, then "failed" health: the status bar said offline and
+// the local row's name flipped from the hostname to "local". Health has
+// its own budget now, and a daemon that listed the sessions is up.
+func TestLocalProbe_SlowDaemonStaysOnline(t *testing.T) {
+	orig := hostProbeTimeout
+	hostProbeTimeout = time.Second
+	t.Cleanup(func() { hostProbeTimeout = orig })
+
+	t.Run("slow health", func(t *testing.T) {
+		localDaemonStub(t, 700*time.Millisecond, 500*time.Millisecond)
+		p := realProbeLocalSessions()
+		if p.host == nil || !p.host.DaemonOK {
+			t.Fatalf("a slow but live daemon was reported offline: %+v", p.host)
+		}
+		if p.host.Name != "fakehost" || p.host.Version != "v-test" {
+			t.Errorf("local row = %q %q, want the daemon's health (fakehost, v-test)", p.host.Name, p.host.Version)
+		}
+		if !hasSession(p.sessions, "local", "c-here") {
+			t.Errorf("sessions = %+v", p.sessions)
+		}
+	})
+	t.Run("health never answers", func(t *testing.T) {
+		localDaemonStub(t, 0, -1)
+		p := realProbeLocalSessions()
+		if p.host == nil || !p.host.DaemonOK || !p.host.OK {
+			t.Fatalf("daemon listed the sessions but was reported down: %+v", p.host)
+		}
+		hn, _ := os.Hostname()
+		if want := shortHostname(hn); want != "" && p.host.Name != want {
+			t.Errorf("local row name = %q, want this machine's hostname %q", p.host.Name, want)
+		}
+	})
 }

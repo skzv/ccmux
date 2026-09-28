@@ -3,12 +3,27 @@ package tui
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/skzv/ccmux/internal/config"
+	"github.com/skzv/ccmux/internal/project"
 )
+
+// resolveProjectsOverride resolves a `--projects` / `ccmux DIR` root the
+// way the CLI subcommands do (project.ResolveRoot: "~" expanded, made
+// absolute) and checks it is a directory. filepath.Abs alone left a
+// quoted or `--projects=~/work` tilde unexpanded, so the TUI refused a
+// root the rest of the CLI accepted.
+func resolveProjectsOverride(raw string) (string, error) {
+	root := project.ResolveRoot(raw)
+	if fi, err := os.Stat(root); err != nil {
+		return "", fmt.Errorf("projects dir %q: %w", root, err)
+	} else if !fi.IsDir() {
+		return "", fmt.Errorf("projects dir %q is not a directory", root)
+	}
+	return root, nil
+}
 
 // Run is the main entrypoint called from cmd/ccmux. Loads config, builds
 // the App, runs Bubble Tea, returns any program-level error.
@@ -30,16 +45,11 @@ func Run(version string, projectsOverride string, expandNotes bool) error {
 
 	cfg, cfgErr := config.Load()
 	if projectsOverride != "" {
-		abs, err := filepath.Abs(projectsOverride)
+		root, err := resolveProjectsOverride(projectsOverride)
 		if err != nil {
-			return fmt.Errorf("resolve %q: %w", projectsOverride, err)
+			return err
 		}
-		if fi, err := os.Stat(abs); err != nil {
-			return fmt.Errorf("projects dir %q: %w", abs, err)
-		} else if !fi.IsDir() {
-			return fmt.Errorf("projects dir %q is not a directory", abs)
-		}
-		projectsOverride = abs
+		projectsOverride = root
 	}
 	// Per-run overrides, re-applied whenever the app adopts a fresh
 	// config from disk and never saved. `--expand-notes` can force the

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -42,21 +43,120 @@ func pickEditor() string {
 	return "vi"
 }
 
-// openEditorCmd builds the tea.Cmd that suspends the TUI, exec's
-// `editor path`, and dispatches `onSuccess` when the editor returns
+// openEditorCmd builds the tea.Cmd that suspends the TUI, runs the
+// editor on path, and dispatches `onSuccess` when the editor returns
 // cleanly. An editor failure emits an error toast instead. The
 // callback is a tea.Msg, not a tea.Cmd, so each caller picks the
 // reload message its screen listens for (e.g. notesReloadMsg,
-// claudeReloadMsg, configReloadMsg).
+// claudeReloadMsg, configReloadMsg). editor is a command line, as in
+// $EDITOR ("code --wait"); empty means pickEditor's choice.
 func openEditorCmd(editor, path string, onSuccess tea.Msg) tea.Cmd {
+	return tea.Exec(&editorProcess{editor: editor, path: path}, func(err error) tea.Msg { return editorExited(err, onSuccess) })
+}
+
+// editorProcess runs the editor for tea.Exec. The command line is
+// resolved in Run — once Bubble Tea has handed over the terminal — so
+// the PATH lookups stay off the Update goroutine.
+type editorProcess struct {
+	editor, path   string
+	stdin          io.Reader
+	stdout, stderr io.Writer
+}
+
+func (e *editorProcess) SetStdin(r io.Reader)  { e.stdin = r }
+func (e *editorProcess) SetStdout(w io.Writer) { e.stdout = w }
+func (e *editorProcess) SetStderr(w io.Writer) { e.stderr = w }
+
+func (e *editorProcess) Run() error {
+	argv := editorArgv(e.editor)
 	// nocontext: the user's $EDITOR in the foreground; it ends when they quit it.
-	c := exec.Command(editor, path)
-	return tea.ExecProcess(c, func(err error) tea.Msg {
-		if err != nil {
-			return toastMsg{Text: "editor: " + err.Error(), Kind: toastError, Until: nowPlus(5)}
+	c := exec.Command(argv[0], append(argv[1:], e.path)...)
+	c.Stdin, c.Stdout, c.Stderr = e.stdin, e.stdout, e.stderr
+	return c.Run()
+}
+
+// editorArgv turns an editor command line into argv. It used to be run
+// as a single program name, so EDITOR="code --wait" looked for a binary
+// called "code --wait". When the program isn't on PATH (a stale
+// `editor = "nvim"` on a machine without nvim), or editor is empty,
+// pickEditor's choice is used instead.
+func editorArgv(editor string) []string {
+	if argv := splitCommandLine(editor); len(argv) > 0 {
+		if _, err := exec.LookPath(argv[0]); err == nil {
+			return argv
 		}
-		return onSuccess
-	})
+	}
+	if argv := splitCommandLine(pickEditor()); len(argv) > 0 {
+		return argv
+	}
+	return []string{"vi"}
+}
+
+// splitCommandLine splits a command line such as an $EDITOR value into
+// words the way a POSIX shell would for the simple cases: whitespace
+// separates words, single quotes group literally, double quotes group
+// with backslash escapes, and a backslash outside quotes escapes the
+// next character. No expansion of any kind — just enough for editor
+// settings like `code --wait` or `"/Applications/Sublime Text.app/…/subl" -w`.
+func splitCommandLine(s string) []string {
+	var (
+		words   []string
+		cur     strings.Builder
+		inWord  bool
+		quote   rune // 0, '\'', or '"'
+		escaped bool
+	)
+	for _, r := range s {
+		switch {
+		case escaped:
+			cur.WriteRune(r)
+			escaped = false
+		case quote == '\'':
+			if r == '\'' {
+				quote = 0
+			} else {
+				cur.WriteRune(r)
+			}
+		case quote == '"':
+			switch r {
+			case '"':
+				quote = 0
+			case '\\':
+				escaped = true
+			default:
+				cur.WriteRune(r)
+			}
+		case r == '\'' || r == '"':
+			quote, inWord = r, true
+		case r == '\\':
+			escaped, inWord = true, true
+		case r == ' ' || r == '\t' || r == '\n':
+			if inWord {
+				words = append(words, cur.String())
+				cur.Reset()
+				inWord = false
+			}
+		default:
+			cur.WriteRune(r)
+			inWord = true
+		}
+	}
+	if inWord {
+		words = append(words, cur.String())
+	}
+	return words
+}
+
+// editorExited is openEditorCmd's return path. Bubble Tea turns mouse
+// reporting off while the editor owns the terminal and doesn't turn it
+// back on afterwards, so it is re-enabled here alongside the result —
+// the reload message on success, an error toast on failure.
+func editorExited(err error, onSuccess tea.Msg) tea.Msg {
+	result := onSuccess
+	if err != nil {
+		result = toastMsg{Text: "editor: " + err.Error(), Kind: toastError, Until: nowPlus(5)}
+	}
+	return tea.BatchMsg{tea.EnableMouseCellMotion, func() tea.Msg { return result }}
 }
 
 // keyMatches is a small wrapper because we use the binding-style API but

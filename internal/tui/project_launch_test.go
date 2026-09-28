@@ -1,12 +1,19 @@
 package tui
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/skzv/ccmux/internal/agent"
+	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/project"
 )
 
@@ -119,5 +126,64 @@ func TestLaunchCmdForProject_AgreesWithPathFlavor(t *testing.T) {
 					launchCmdForProject(p), launchCmdForProjectPath(dir), a.ID())
 			}
 		})
+	}
+}
+
+// runCmdTree runs cmd and every command nested in the message it
+// returns (tea.Batch / tea.Sequence results, which are slices of
+// commands), collecting the leaf messages.
+func runCmdTree(cmd tea.Cmd) []tea.Msg {
+	if cmd == nil {
+		return nil
+	}
+	msg := cmd()
+	if v := reflect.ValueOf(msg); v.IsValid() && v.Kind() == reflect.Slice {
+		var out []tea.Msg
+		for i := 0; i < v.Len(); i++ {
+			if c, ok := v.Index(i).Interface().(tea.Cmd); ok {
+				out = append(out, runCmdTree(c)...)
+			}
+		}
+		return out
+	}
+	if msg == nil {
+		return nil
+	}
+	return []tea.Msg{msg}
+}
+
+// TestRemoteProjectEnter_StartsFreshSession — #188 on remote hosts:
+// Enter on a remote project asked its daemon for a session with
+// Continue: true, so the agent resumed whatever conversation it last
+// had in that directory (often a headless one) instead of starting the
+// new session the user asked for.
+func TestRemoteProjectEnter_StartsFreshSession(t *testing.T) {
+	var got []daemon.NewSessionRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/v1/sessions" {
+			var req daemon.NewSessionRequest
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			got = append(got, req)
+			_ = json.NewEncoder(w).Encode(daemon.SessionState{Name: "c-alpha"})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+
+	a := newAppForTest(t)
+	a.hosts = []hostStatus{{Name: "mac-mini", Source: "configured", Address: strings.TrimPrefix(srv.URL, "http://"), DialHost: "mac-mini", OK: true, DaemonOK: true}}
+	msgs := runCmdTree(a.attachOrCreateRemote(project.Project{Name: "alpha", Host: "mac-mini", Path: "/Users/me/Projects/alpha"}, "mac-mini"))
+	if len(got) != 1 {
+		t.Fatalf("remote daemon saw %d create requests, want 1 (msgs %#v)", len(got), msgs)
+	}
+	if got[0].Continue {
+		t.Error("remote project Enter asked for --continue; it must start a fresh session")
+	}
+	if got[0].Project != "alpha" {
+		t.Errorf("create request project = %q, want alpha", got[0].Project)
+	}
+	if _, ok := findMsg[remoteSessionStartedMsg](msgs); !ok {
+		t.Errorf("no remoteSessionStartedMsg to attach with, got %#v", msgs)
 	}
 }

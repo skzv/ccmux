@@ -87,26 +87,30 @@ func (m confirmationModal) confirmLabel() string {
 	}
 }
 
+// Mouse reporting is program-wide (tea.WithMouseCellMotion in Run), so
+// the dialogs below never toggle it: turning it off on close left the
+// mouse wheel dead for the rest of the run.
+
 func (a App) openQuitConfirmation() (App, tea.Cmd) {
 	a.confirm = newQuitConfirmation()
-	return a, tea.EnableMouseCellMotion
+	return a, nil
 }
 
 // openKillSessionConfirmation opens the kill modal for the session
-// `name` on host label `host`. Local labels ("", "local", this
-// machine's hostname) collapse to "" so the modal and the kill route
-// agree on what "local" means.
+// `name` on host label `host`. Local labels ("" and "local") collapse
+// to "" so the modal and the kill route agree on what "local" means;
+// every other host is named in the modal.
 func (a App) openKillSessionConfirmation(host, name string) (App, tea.Cmd) {
-	if a.isLocalSessionHost(host) {
+	if isLocalSessionHost(host) {
 		host = ""
 	}
 	a.confirm = newKillSessionConfirmation(host, name)
-	return a, tea.EnableMouseCellMotion
+	return a, nil
 }
 
 func (a App) cancelConfirmation() (App, tea.Cmd) {
 	a.confirm = confirmationModal{}
-	return a, tea.DisableMouse
+	return a, nil
 }
 
 func (a App) acceptConfirmation() (App, tea.Cmd) {
@@ -114,14 +118,14 @@ func (a App) acceptConfirmation() (App, tea.Cmd) {
 	a.confirm = confirmationModal{}
 	switch confirm.kind {
 	case confirmationQuit:
-		return a, tea.Batch(tea.DisableMouse, tea.Quit)
+		return a, tea.Quit
 	case confirmationKillSession:
 		if confirm.target == "" {
-			return a, tea.DisableMouse
+			return a, nil
 		}
-		return a, tea.Batch(tea.DisableMouse, a.killSessionTargetCmd(confirm.host, confirm.target))
+		return a, a.killSessionTargetCmd(confirm.host, confirm.target)
 	default:
-		return a, tea.DisableMouse
+		return a, nil
 	}
 }
 
@@ -129,7 +133,7 @@ func (a App) updateConfirmationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		a.confirm = confirmationModal{}
-		return a, tea.Batch(tea.DisableMouse, tea.Quit)
+		return a, tea.Quit
 	case "y":
 		return a.acceptConfirmation()
 	case "n", "esc":

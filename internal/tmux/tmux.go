@@ -409,6 +409,21 @@ func SessionNameForPath(path string) string {
 	return SessionNameForBase(lastSegment(path))
 }
 
+// ValidSessionName reports whether name is a session name ccmux accepts
+// from the user (`ccmux rename`, the TUI rename form): letters, digits,
+// "_" and "-" — the alphabet SessionNameForPath produces — not starting
+// with "-" (it would read as a flag in `ccmux kill <name>`). No "." —
+// tmux versions differ on whether they keep it or rewrite it to "_", so
+// a dotted rename could leave the session under a name nobody asked
+// for, and the daemon rejects dotted names for the same reason — and no
+// ":" or "/", which a -t target would parse.
+func ValidSessionName(name string) bool {
+	if name == "" || name[0] == '-' {
+		return false
+	}
+	return sanitizeSessionName(name) == name
+}
+
 // SessionNameForBase is SessionNameForPath for a directory name that
 // has already been split off its path (project.Project.Name), applied
 // to the whole string.

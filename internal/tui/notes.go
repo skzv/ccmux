@@ -92,6 +92,7 @@ type notesModel struct {
 	searchInput   textinput.Model
 	searchResults []notes.SearchHit
 	searchQuery   string
+	searchPartial bool // the search timed out; searchResults is what it found by then
 
 	// new-note form. When non-nil the modal owns input; submit emits
 	// newNoteSubmitMsg, esc emits newNoteCancelMsg.
@@ -122,7 +123,7 @@ type notesModel struct {
 // App.modalCapturingText — extend this when adding a new modal to
 // the Notes screen.
 func (m notesModel) capturesInput() bool {
-	return m.searching || m.newNoteForm != nil || m.noteInfo.open
+	return m.searching || m.newNoteForm != nil || m.noteInfo.open || m.pickingProject
 }
 
 // notesFocus tracks which pane receives navigation keys.
@@ -201,7 +202,11 @@ func (m *notesModel) SetProject(p *project.Project) tea.Cmd {
 		m.clearSearch()
 		return nil
 	}
-	if m.project != nil && m.project.Path == p.Path && projectHost(*m.project) == projectHost(*p) {
+	// Same project: nothing to do — unless its listing never landed
+	// (still loading, nothing listed), in which case load it again
+	// rather than leave the screen spinning on a lost result.
+	if m.project != nil && m.project.Path == p.Path && projectHost(*m.project) == projectHost(*p) &&
+		!(m.loading && m.entries == nil) {
 		return nil
 	}
 	m.project = p
@@ -276,6 +281,7 @@ func (m *notesModel) clearSearch() {
 	m.searchInput.SetValue("")
 	m.searchResults = nil
 	m.searchQuery = ""
+	m.searchPartial = false
 }
 
 // previewPaneSize returns (viewportWidth, viewportHeight) for the
@@ -522,6 +528,26 @@ func (m notesModel) renderPreviewContent(wrap int) string {
 }
 
 func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
+	// Async results and spinner ticks first: they carry data, not
+	// input, so no modal below may swallow them. The picker and the
+	// info panel used to return early for every message, dropping a
+	// listing that landed while one was open.
+	switch msg := msg.(type) {
+	case spinner.TickMsg:
+		if !m.loading {
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.loadingSpinner, cmd = m.loadingSpinner.Update(msg)
+		return m, cmd
+	case notesEntriesLoadedMsg:
+		return m.applyEntries(msg)
+	case notesPreviewLoadedMsg:
+		return m.applyPreview(msg), nil
+	case notesSearchResultMsg:
+		return m.applySearchResult(msg)
+	}
+
 	// New-note form takes priority — when open it owns input until
 	// Enter (submit) or Esc (cancel) closes it via newNoteSubmitMsg /
 	// newNoteCancelMsg.
@@ -644,13 +670,6 @@ func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
 		var cmd tea.Cmd
 		m.preview, cmd = m.preview.Update(msg)
 		return m, cmd
-	case spinner.TickMsg:
-		if !m.loading {
-			return m, nil
-		}
-		var cmd tea.Cmd
-		m.loadingSpinner, cmd = m.loadingSpinner.Update(msg)
-		return m, cmd
 	case newNoteSubmitMsg:
 		m.newNoteForm = nil
 		return m, m.createAndOpenNote(msg.Filename, msg.Title)
@@ -689,61 +708,6 @@ func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
 		m.previewSrc = ""
 		m.loading = true
 		return m, tea.Batch(m.loadEntriesCmd(*m.project), m.loadingSpinner.Tick)
-	case notesEntriesLoadedMsg:
-		// Discard stale results — the user may have switched device or
-		// project between the Cmd dispatching and the fetch returning.
-		if m.project == nil || msg.Path != m.project.Path || msg.Host != projectHost(*m.project) {
-			return m, nil
-		}
-		m.loading = false
-		if msg.Err != "" {
-			// Remote device unreachable: show the error, don't fall back
-			// to local notes (which would misrepresent whose notes these
-			// are). Leave the cache untouched so a later retry refetches.
-			m.deviceErr = msg.Err
-			m.entries = nil
-			m.cursor = 0
-			return m, m.refreshPreview()
-		}
-		m.deviceErr = ""
-		m.entries = msg.Entries
-		m.entriesCache[m.cacheKey(m.project)] = msg.Entries
-		m.applyDefaultFolds()
-		m.clampCursor()
-		return m, m.refreshPreview()
-	case notesPreviewLoadedMsg:
-		// Drop a stale fetch: the cursor (and thus previewRel) may have
-		// moved, or the user switched project, since we dispatched.
-		if m.project == nil || msg.Path != m.project.Path || msg.Rel != m.previewRel {
-			return m, nil
-		}
-		if msg.Err != "" {
-			m.previewSrc = m.st.StatusError.Render(msg.Err)
-			m.preview.SetContent(m.previewSrc)
-			m.preview.GotoTop()
-			return m, nil
-		}
-		m.previewSrc = msg.Content
-		pw, _ := m.previewPaneSize()
-		m.preview.SetContent(m.renderPreviewContent(pw))
-		m.preview.GotoTop()
-		return m, nil
-	case notesSearchResultMsg:
-		// Drop results for a project (or device) the user has since
-		// switched away from — they'd list, and Enter would open, the
-		// old project's files.
-		if m.project == nil || msg.Path != m.project.Path || msg.Host != projectHost(*m.project) {
-			return m, nil
-		}
-		if msg.Err != "" {
-			m.deviceErr = msg.Err
-			return m, nil
-		}
-		m.deviceErr = ""
-		m.searchResults = msg.Hits
-		m.searchQuery = msg.Query
-		m.cursor = 0
-		return m, m.refreshPreview()
 	case tea.KeyMsg:
 		// Global Notes keys (don't depend on which pane has focus).
 		switch msg.String() {
@@ -921,6 +885,71 @@ func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
 		return m, cmd
 	}
 	return m, nil
+}
+
+// applyEntries lands a project listing (notesEntriesLoadedMsg).
+func (m notesModel) applyEntries(msg notesEntriesLoadedMsg) (notesModel, tea.Cmd) {
+	// Discard stale results — the user may have switched device or
+	// project between the Cmd dispatching and the fetch returning.
+	if m.project == nil || msg.Path != m.project.Path || msg.Host != projectHost(*m.project) {
+		return m, nil
+	}
+	m.loading = false
+	if msg.Err != "" {
+		// Remote device unreachable: show the error, don't fall back
+		// to local notes (which would misrepresent whose notes these
+		// are). Leave the cache untouched so a later retry refetches.
+		m.deviceErr = msg.Err
+		m.entries = nil
+		m.cursor = 0
+		return m, m.refreshPreview()
+	}
+	m.deviceErr = ""
+	m.entries = msg.Entries
+	m.entriesCache[m.cacheKey(m.project)] = msg.Entries
+	m.applyDefaultFolds()
+	m.clampCursor()
+	return m, m.refreshPreview()
+}
+
+// applyPreview lands a note body (notesPreviewLoadedMsg).
+func (m notesModel) applyPreview(msg notesPreviewLoadedMsg) notesModel {
+	// Drop a stale fetch: the cursor (and thus previewRel) may have
+	// moved, or the user switched project, since we dispatched.
+	if m.project == nil || msg.Path != m.project.Path || msg.Rel != m.previewRel {
+		return m
+	}
+	if msg.Err != "" {
+		m.previewSrc = m.st.StatusError.Render(msg.Err)
+		m.preview.SetContent(m.previewSrc)
+		m.preview.GotoTop()
+		return m
+	}
+	m.previewSrc = msg.Content
+	pw, _ := m.previewPaneSize()
+	m.preview.SetContent(m.renderPreviewContent(pw))
+	m.preview.GotoTop()
+	return m
+}
+
+// applySearchResult lands a search (notesSearchResultMsg).
+func (m notesModel) applySearchResult(msg notesSearchResultMsg) (notesModel, tea.Cmd) {
+	// Drop results for a project (or device) the user has since
+	// switched away from — they'd list, and Enter would open, the
+	// old project's files.
+	if m.project == nil || msg.Path != m.project.Path || msg.Host != projectHost(*m.project) {
+		return m, nil
+	}
+	if msg.Err != "" {
+		m.deviceErr = msg.Err
+		return m, nil
+	}
+	m.deviceErr = ""
+	m.searchResults = msg.Hits
+	m.searchQuery = msg.Query
+	m.searchPartial = msg.Partial
+	m.cursor = 0
+	return m, m.refreshPreview()
 }
 
 // selected returns the entry backing the preview pane: the file under
@@ -1191,21 +1220,34 @@ func parentDir(dir string) string {
 	return ""
 }
 
+// notesSearchTimeout caps a Notes search so a pathological query can't
+// stall the TUI. A var so tests can shrink it.
+var notesSearchTimeout = 3 * time.Second
+
 // runSearch is the tea.Cmd that fires Vault.Search in the background
-// and posts a notesSearchResultMsg with the hits. 3-second hard cap so
-// a pathological query can't stall the TUI.
+// and posts a notesSearchResultMsg with the hits.
 func (m notesModel) runSearch(query string) tea.Cmd {
 	if m.project == nil {
 		return nil
 	}
 	label := projectHost(*m.project)
 	path := m.project.Path
+	timeout := notesSearchTimeout
 	if label == localDeviceLabel {
 		return func() tea.Msg {
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
 			defer cancel()
-			hits, _ := notes.Open(path).Search(ctx, query, 100)
-			return notesSearchResultMsg{Query: query, Hits: hits, Host: label, Path: path}
+			hits, err := notes.Open(path).Search(ctx, query, 100)
+			msg := notesSearchResultMsg{Query: query, Hits: hits, Host: label, Path: path}
+			switch {
+			case errors.Is(err, context.DeadlineExceeded):
+				// Out of time: show what was found, marked partial —
+				// it used to be discarded, reading as "(no matches)".
+				msg.Partial = true
+			case err != nil:
+				msg.Err = err.Error()
+			}
+			return msg
 		}
 	}
 	// Remote search hits the daemon's /v1/notes/search endpoint.
@@ -1218,7 +1260,7 @@ func (m notesModel) runSearch(query string) tea.Cmd {
 	}
 	name := m.project.Name
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 		dhits, err := daemon.RemoteClient(addr).SearchNotes(ctx, name, query)
 		if err != nil {
@@ -1324,6 +1366,9 @@ func (m notesModel) renderList(width, height int, narrow bool) string {
 			m.st.Emphasis.Render(fmt.Sprintf("search: %q", m.searchQuery)),
 			m.st.Muted.Render(fmt.Sprintf("%d hit(s) — esc clears, enter opens", len(m.searchResults))),
 		)
+		if m.searchPartial {
+			lines = append(lines, m.st.StatusWarning.Render("⚠ "+tr("search timed out — partial results")))
+		}
 	}
 	lines = append(lines, "")
 

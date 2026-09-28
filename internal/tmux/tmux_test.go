@@ -345,3 +345,19 @@ func TestSessionAgentsStayScopedToTheirSession(t *testing.T) {
 		t.Fatal(sessions)
 	}
 }
+
+// TestValidSessionName — `ccmux rename` and the TUI rename form accept
+// exactly what the daemon and the tmux wrappers handle identically on
+// every tmux version.
+func TestValidSessionName(t *testing.T) {
+	for _, ok := range []string{"c-foo", "my_app", "c-resume-3dc0131a", "A1", "_x"} {
+		if !ValidSessionName(ok) {
+			t.Errorf("rejected %q", ok)
+		}
+	}
+	for _, bad := range []string{"", "api.v2", "-x", "a:b", "a/b", "a b", "näme"} {
+		if ValidSessionName(bad) {
+			t.Errorf("accepted %q", bad)
+		}
+	}
+}

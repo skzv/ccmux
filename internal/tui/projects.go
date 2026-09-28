@@ -13,7 +13,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/skzv/ccmux/internal/agent"
-	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/project"
 	"github.com/skzv/ccmux/internal/scaffold"
@@ -46,6 +45,10 @@ type projectsModel struct {
 	// agentCommands are setup-pinned executable paths for agents that
 	// may not be on this process's PATH, such as npm CLIs under nvm.
 	agentCommands agent.Commands
+
+	// root is the projects root the App lists — config.toml's, or the
+	// per-run --projects override. New local projects are created here.
+	root string
 
 	// Filter state. When filterActive is true, keystrokes feed the
 	// textinput and the list view shows only projects whose name
@@ -105,6 +108,13 @@ func (m *projectsModel) SetProjects(p []project.Project) {
 // configReloadMsg (after the user edits Settings or config.toml).
 func (m *projectsModel) SetDefaultAgent(a string) {
 	m.defaultAgent = a
+}
+
+// SetProjectsRoot is called by App on startup/config reload with the
+// effective projects root, so `n` creates projects where the list
+// comes from.
+func (m *projectsModel) SetProjectsRoot(root string) {
+	m.root = root
 }
 
 // SetAgentCommands is called by App on startup/config reload so the
@@ -250,6 +260,8 @@ func (m projectsModel) Update(msg tea.Msg) (projectsModel, tea.Cmd) {
 		case newProjectSubmitMsg:
 			// Drop the form, kick off create+session start as a tea.Cmd.
 			m.form = nil
+			msg.Root = m.root
+			msg.Commands = m.agentCommands
 			return m, createProjectCmd(msg)
 		}
 		f, cmd := m.form.Update(msg)
@@ -339,18 +351,20 @@ func (m projectsModel) Update(msg tea.Msg) (projectsModel, tea.Cmd) {
 		}
 	}
 
-	// React to a successful agent switch by updating the in-memory
-	// project list so the detail pane reflects the change before the
-	// next poll tick lands.
-	if sw, ok := msg.(projectAgentSwitchedMsg); ok {
-		for i, p := range m.projects {
-			if p.Path == sw.Path {
-				m.projects[i].Agent = sw.Agent
-				break
-			}
+	return m, nil
+}
+
+// SetProjectAgent reflects a successful agent switch (the `a` key) in
+// the in-memory list so the detail pane shows it before the next
+// refresh lands. The App calls it on projectAgentSwitchedMsg. Only local
+// projects can be switched, hence the host check.
+func (m *projectsModel) SetProjectAgent(path string, id agent.ID) {
+	for i, p := range m.projects {
+		if p.Path == path && projectHost(p) == "local" {
+			m.projects[i].Agent = id
+			return
 		}
 	}
-	return m, nil
 }
 
 // nextAgent returns the next agent in canonical order after `cur`.
@@ -669,7 +683,6 @@ func createProjectCmd(submit newProjectSubmitMsg) tea.Cmd {
 		}
 		// Local case: pass the picker's chosen agent through so the
 		// sidecar gets written and the launch command matches.
-		cfg, _ := config.Load()
 		opts := scaffold.Options{
 			Name: submit.Name,
 			// Place the new project under the configured projects root,
@@ -679,17 +692,21 @@ func createProjectCmd(submit newProjectSubmitMsg) tea.Cmd {
 			// process's working directory (typically $HOME) — so a
 			// project created from the Projects screen would land in ~
 			// instead of ~/Projects.
-			Dir:      localProjectDir(cfg, submit.Name),
+			Dir:      localProjectDir(submit.Root, submit.Name),
 			Agent:    submit.Agent,
-			Commands: cfg.AgentCommands(),
+			Commands: submit.Commands,
 		}
-		session, err := scaffold.StartSession(context.Background(), opts)
+		session, err := startProjectSession(context.Background(), opts)
 		if err != nil {
 			return toastMsg{Text: fmt.Sprintf(tr("new project: %s"), err.Error()), Kind: toastError, Until: time.Now().Add(6 * time.Second)}
 		}
 		return projectSessionReadyMsg{Session: session, Project: submit.Name}
 	}
 }
+
+// startProjectSession is scaffold.StartSession — a seam so tests can see
+// where a new local project would be created without a tmux server.
+var startProjectSession = scaffold.StartSession
 
 // remoteStartedFromProjectSubmit maps a remote new-project submit onto
 // the attach trigger, carrying every SSH addressing field (DialHost,
@@ -720,8 +737,8 @@ func remoteStartedFromProjectSubmit(submit newProjectSubmitMsg, session string) 
 // empty let scaffold.PrepareDir fall back to filepath.Abs(Name),
 // which resolves against the TUI's working directory ($HOME) and
 // dropped new projects in ~ instead of ~/Projects.
-func localProjectDir(cfg config.Config, name string) string {
-	return filepath.Join(project.ResolveRoot(cfg.Projects.Root), name)
+func localProjectDir(root, name string) string {
+	return filepath.Join(project.ResolveRoot(root), name)
 }
 
 // textInputBlink is a small wrapper around textinput.Blink so callers

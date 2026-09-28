@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/project"
+	"github.com/skzv/ccmux/internal/scaffold"
 	"github.com/skzv/ccmux/internal/tui/styles"
 )
 
@@ -589,9 +591,7 @@ func TestProjects_CursorVisibleWhenScrolledPastWindow(t *testing.T) {
 // daemon's createProject), not resolve the bare name against the TUI
 // working directory.
 func TestLocalProjectDir_UnderConfiguredRoot(t *testing.T) {
-	var cfg config.Config
-	cfg.Projects.Root = "/tmp/ccmux-projects-test"
-	got := localProjectDir(cfg, "myproj")
+	got := localProjectDir("/tmp/ccmux-projects-test", "myproj")
 	want := filepath.Join("/tmp/ccmux-projects-test", "myproj")
 	if got != want {
 		t.Errorf("localProjectDir = %q, want %q", got, want)
@@ -606,8 +606,7 @@ func TestLocalProjectDir_EmptyRootDefaultsToHomeProjects(t *testing.T) {
 	if err != nil {
 		t.Skip("no home dir")
 	}
-	var cfg config.Config // Projects.Root == ""
-	got := localProjectDir(cfg, "myproj")
+	got := localProjectDir("", "myproj") // Projects.Root unset
 	want := filepath.Join(home, "Projects", "myproj")
 	if got != want {
 		t.Errorf("localProjectDir(empty root) = %q, want %q", got, want)
@@ -653,9 +652,7 @@ func TestLocalProjectDir_ExpandsTilde(t *testing.T) {
 	if err != nil {
 		t.Skip("no home dir")
 	}
-	var cfg config.Config
-	cfg.Projects.Root = "~/Code"
-	got := localProjectDir(cfg, "myproj")
+	got := localProjectDir("~/Code", "myproj")
 	want := filepath.Join(home, "Code", "myproj")
 	if got != want {
 		t.Errorf("localProjectDir(~/Code) = %q, want %q", got, want)
@@ -695,5 +692,50 @@ func TestConversationsForProject_SymlinkedProject(t *testing.T) {
 	got := App{}.conversationsForProject(link)
 	if len(got) != 1 || got[0].Preview != "resume me" {
 		t.Fatalf("conversationsForProject(%s) = %+v, want the conversation recorded under %s", link, got, cwd)
+	}
+}
+
+// TestNewProject_HonorsProjectsOverride — `ccmux --projects DIR` (or
+// `ccmux DIR`) lists DIR's projects, but `n` created the new project
+// under config.toml's root: createProjectCmd re-read the config from
+// disk, which never carries the per-run override.
+func TestNewProject_HonorsProjectsOverride(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	var got []scaffold.Options
+	orig := startProjectSession
+	startProjectSession = func(_ context.Context, o scaffold.Options) (string, error) {
+		got = append(got, o)
+		return "c-" + o.Name, nil
+	}
+	t.Cleanup(func() { startProjectSession = orig })
+
+	override := t.TempDir()
+	overrides := func(c *config.Config) { c.Projects.Root = override }
+	cfg := config.Defaults()
+	overrides(&cfg)
+	a := New(cfg, "test")
+	a.SetRuntimeOverrides(overrides)
+	a.tour.Close()
+	a.width, a.height = 120, 40
+	a.screen = ScreenProjects
+
+	a, _ = updateApp(t, a, keyRunes("n"))
+	if a.projectsM.form == nil {
+		t.Fatal("setup: n did not open the new-project form")
+	}
+	a.projectsM.form.name.SetValue("fresh")
+	a, cmd := updateApp(t, a, tea.KeyMsg{Type: tea.KeyEnter})
+	for _, m := range drainCmd(cmd) {
+		if _, ok := m.(newProjectSubmitMsg); ok {
+			_, next := updateApp(t, a, m)
+			drainCmd(next)
+		}
+	}
+	if len(got) != 1 {
+		t.Fatalf("project sessions started = %d, want 1", len(got))
+	}
+	if want := filepath.Join(override, "fresh"); got[0].Dir != want {
+		t.Errorf("new project created in %q, want %q under the --projects root", got[0].Dir, want)
 	}
 }

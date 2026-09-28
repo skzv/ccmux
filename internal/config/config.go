@@ -16,12 +16,24 @@ import (
 	"github.com/skzv/ccmux/internal/configfile"
 )
 
+// SchemaVersion is the config.toml format this build writes. Bump it,
+// and add a step to migrate, when the meaning of a stored value
+// changes; a file's schema_version then tells Load how to read it.
+//
+//	0 (key absent) — written by v0.6.1 or earlier.
+//	1 — subscription.tier = "api" is an explicit choice.
+const SchemaVersion = 1
+
 // Config is the root user-configurable state.
 type Config struct {
+	// SchemaVersion is the format the file was written in (see the
+	// SchemaVersion const). Load reads an older file through migrate;
+	// Save always writes the current version.
+	SchemaVersion int                 `toml:"schema_version"`
 	Projects      ProjectsConfig      `toml:"projects"`
 	Theme         string              `toml:"theme"`          // catppuccin-mocha (default), dracula, nord, gruvbox, tokyo-night
 	Lang          string              `toml:"lang,omitempty"` // UI language code; empty = follow LC_ALL, then LANG
-	Editor        string              `toml:"editor"`
+	Editor        string              `toml:"editor"`         // editor command line, e.g. "code --wait"; empty = $VISUAL, then $EDITOR
 	Sleep         SleepConfig         `toml:"sleep"`
 	Daemon        DaemonConfig        `toml:"daemon"`
 	Notes         NotesConfig         `toml:"notes"`
@@ -473,9 +485,12 @@ func (h Host) EffectiveSSHPort() int {
 func Defaults() Config {
 	home, _ := os.UserHomeDir()
 	return Config{
-		Projects: ProjectsConfig{Root: filepath.Join(home, "Projects")},
-		Theme:    "catppuccin-mocha",
-		Editor:   firstNonEmpty(os.Getenv("VISUAL"), os.Getenv("EDITOR"), "nvim"),
+		SchemaVersion: SchemaVersion,
+		Projects:      ProjectsConfig{Root: filepath.Join(home, "Projects")},
+		Theme:         "catppuccin-mocha",
+		// Editor stays unset: the TUI then follows $VISUAL / $EDITOR at
+		// the moment it opens one. Defaulting it to their value froze
+		// the environment of whatever run first saved the config.
 		Sleep: SleepConfig{
 			Mode:                        "safe",
 			DangerousKeepAwakeOnBattery: false,
@@ -552,10 +567,33 @@ func Load() (Config, error) {
 		}
 		return cfg, fmt.Errorf("read config %q: %w", p, err)
 	}
+	// A file without schema_version predates versioning: decode over a
+	// zero version rather than the default's current one.
+	cfg.SchemaVersion = 0
 	if _, err := toml.Decode(string(data), &cfg); err != nil {
 		return cfg, fmt.Errorf("parse config %q: %w", p, err)
 	}
+	migrate(&cfg)
 	return cfg, nil
+}
+
+// migrate reinterprets a config decoded from an older file under the
+// current schema, in place.
+func migrate(cfg *Config) {
+	if cfg.SchemaVersion < 1 {
+		// Every save before v0.6.1 wrote the then-default
+		// `subscription.tier = "api"`, so in an unversioned file "api"
+		// can't be told apart from "never chose". Since v0.6.1 an
+		// explicit "api" wins over the auto-detected Claude plan, which
+		// showed a Max subscriber with an old config as "api". Read it
+		// as unset; the user re-picks api (saved as schema 1) if meant.
+		if cfg.Subscription.Tier == "api" {
+			cfg.Subscription.Tier = ""
+		}
+	}
+	if cfg.SchemaVersion < SchemaVersion {
+		cfg.SchemaVersion = SchemaVersion
+	}
 }
 
 // Save writes the config file, creating parent directories as needed.
@@ -576,6 +614,11 @@ func Save(cfg Config) error {
 	p, err := Path()
 	if err != nil {
 		return err
+	}
+	// Whatever wrote cfg, the file is now in this build's format. (A
+	// newer version, from a newer ccmux, is kept.)
+	if cfg.SchemaVersion < SchemaVersion {
+		cfg.SchemaVersion = SchemaVersion
 	}
 	data, err := encode(cfg)
 	if err != nil {
@@ -711,13 +754,4 @@ func Update(fn func(*Config) error) (Config, error) {
 		return cfg, err
 	}
 	return cfg, nil
-}
-
-func firstNonEmpty(vs ...string) string {
-	for _, v := range vs {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
 }

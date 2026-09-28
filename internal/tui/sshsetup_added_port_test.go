@@ -38,3 +38,31 @@ func TestPersistWizardAdded_SSHPortNotDaemonPort(t *testing.T) {
 		}
 	}
 }
+
+// TestPersistWizardAdded_DefaultSSHPortStaysUnset — the wizard's port
+// is 22 for an ordinary host, and the added rows wrote `ssh_port = 22`
+// where persistWizardCorrection (and a hand-written hosts entry) leave
+// the default unset. Only a non-default port is written.
+func TestPersistWizardAdded_DefaultSSHPortStaysUnset(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if err := config.Save(config.Defaults()); err != nil {
+		t.Fatal(err)
+	}
+	app := New(config.Defaults(), "test")
+	app = persistWizardAdded(app, sshsetup.Target{User: "alice", Host: "sputnik", Port: 22}, []string{"bob"})
+	disk, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, cfg := range []config.Config{app.cfg, disk} {
+		if len(cfg.Hosts) != 1 {
+			t.Fatalf("hosts = %+v, want bob@sputnik", cfg.Hosts)
+		}
+		if got := cfg.Hosts[0].SSHPort; got != 0 {
+			t.Errorf("SSHPort = %d, want 0 (the default, unset)", got)
+		}
+		if got := cfg.Hosts[0].EffectiveSSHPort(); got != 22 {
+			t.Errorf("EffectiveSSHPort = %d, want 22", got)
+		}
+	}
+}

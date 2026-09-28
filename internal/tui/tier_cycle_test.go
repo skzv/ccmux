@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -81,6 +83,40 @@ func TestTierDetectedMsg_ExplicitAPIWins(t *testing.T) {
 	next, _ := a.Update(tierDetectedMsg{Tier: "max20x"})
 	if got := next.(App).cfg.Subscription.Tier; got != "api" {
 		t.Errorf("tier = %q, want the explicit api kept", got)
+	}
+}
+
+// TestLegacyAPITier_ShowsDetectedPlan — upgrade regression: every save
+// before v0.6.1 wrote the default `tier = "api"`, which v0.6.1 took for
+// an explicit choice, so a Max subscriber upgrading with an old
+// config.toml saw "api" instead of the detected plan. Loaded from such
+// a file, the tier is unset and the detected plan shows.
+func TestLegacyAPITier_ShowsDetectedPlan(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	p, err := config.Path()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	legacy := "theme = \"catppuccin-mocha\"\neditor = \"nvim\"\n\n[subscription]\n  tier = \"api\"\n"
+	if err := os.WriteFile(p, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := New(cfg, "test")
+	app.tour.Close()
+	model, _ := app.Update(tierDetectedMsg{Tier: "max20x"})
+	app = model.(App)
+	if got := app.cfg.Subscription.TierFor("claude"); got != "max20x" {
+		t.Errorf("App tier = %q, want the detected max20x (legacy api is not a choice)", got)
+	}
+	if got := app.settings.cfg.Subscription.TierFor("claude"); got != "max20x" {
+		t.Errorf("Settings row shows %q, want the detected max20x", got)
 	}
 }
 

@@ -695,6 +695,14 @@ func (m *sshWizardModel) View(w, h int) string {
 	if cardW < 44 {
 		cardW = 44
 	}
+	// ...but never wider than the terminal (as in the tour): the
+	// 44-col floor made the card plus its border overflow a 40-col
+	// phone screen, and Bubble Tea chopped the right edge — key hints
+	// included — off. Width excludes the border, so the card fits in
+	// w-2.
+	if cardW > w-2 {
+		cardW = maxInt(1, w-2)
+	}
 	title := m.st.Title.Foreground(m.st.P.Mauve).Bold(true)
 
 	var lines []string

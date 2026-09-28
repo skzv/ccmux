@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"errors"
+	"reflect"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -65,8 +67,8 @@ func TestConfirmation_QuitKeyboardConfirmAndCancel(t *testing.T) {
 	if a.confirm.focus != confirmationFocusCancel {
 		t.Fatalf("initial focus = %v, want cancel", a.confirm.focus)
 	}
-	if cmd == nil {
-		t.Fatal("opening confirmation returned nil cmd; want mouse-enable cmd")
+	if commandContainsQuit(cmd) {
+		t.Fatal("opening the quit confirmation quit ccmux")
 	}
 	out := a.View()
 	assertPresent(t, out, "Quit ccmux?", "Managed tmux sessions will keep running.", "Cancel", "Quit")
@@ -117,8 +119,8 @@ func TestConfirmation_KillKeyboardCancelConfirmCapturedTargetAndNoSelection(t *t
 	if a.confirm.target != "c-beta" {
 		t.Fatalf("captured target = %q, want c-beta", a.confirm.target)
 	}
-	if cmd == nil {
-		t.Fatal("opening kill confirmation returned nil cmd; want mouse-enable cmd")
+	if commandContainsQuit(cmd) {
+		t.Fatal("opening the kill confirmation quit ccmux")
 	}
 	assertPresent(t, a.View(), "Kill session?", "c-beta", "Cancel", "Kill")
 
@@ -152,16 +154,7 @@ func TestConfirmation_KillKeyboardCancelConfirmCapturedTargetAndNoSelection(t *t
 	if cmd == nil {
 		t.Fatal("kill confirm returned nil cmd")
 	}
-	msg := cmd()
-	batch, ok := msg.(tea.BatchMsg)
-	if !ok {
-		t.Fatalf("kill confirm cmd = %T, want tea.BatchMsg", msg)
-	}
-	for _, subcmd := range batch {
-		if subcmd != nil {
-			_ = subcmd()
-		}
-	}
+	drainCmd(cmd)
 	if killed != "c-beta" {
 		t.Fatalf("killed target = %q, want captured c-beta", killed)
 	}
@@ -242,5 +235,84 @@ func TestConfirmation_MouseActions(t *testing.T) {
 	}
 	if !commandContainsQuit(cmd) {
 		t.Fatal("mouse confirm did not return quit command")
+	}
+}
+
+// isMouseMsg reports whether msg is the one Bubble Tea's
+// tea.EnableMouseCellMotion / tea.DisableMouse commands produce. Those
+// message types are unexported, so match on the dynamic type.
+func isMouseMsg(msg tea.Msg, mouseCmd tea.Cmd) bool {
+	return msg != nil && reflect.TypeOf(msg) == reflect.TypeOf(mouseCmd())
+}
+
+func msgsContainMouse(msgs []tea.Msg, mouseCmd tea.Cmd) bool {
+	for _, m := range msgs {
+		if isMouseMsg(m, mouseCmd) {
+			return true
+		}
+	}
+	return false
+}
+
+// TestConfirmation_LeavesMouseModeAlone — mouse reporting is enabled
+// for the whole program (tea.WithMouseCellMotion in Run), so a dialog
+// must not toggle it: closing any confirmation sent tea.DisableMouse,
+// and the mouse wheel stopped scrolling Notes / Agents previews for
+// the rest of the run.
+func TestConfirmation_LeavesMouseModeAlone(t *testing.T) {
+	recordSessionRouting(t)
+	a := newConfirmationTestApp()
+	a.sessionsM.SetSessions([]daemon.SessionState{{Name: "c-alpha", Host: "local"}})
+	var msgs []tea.Msg
+	press := func(k tea.KeyMsg) {
+		t.Helper()
+		var cmd tea.Cmd
+		a, cmd = sendKey(t, a, k)
+		msgs = append(msgs, drainCmd(cmd)...)
+	}
+	press(keyRunes("q"))
+	press(keyRunes("n")) // cancel quit
+	press(keyRunes("x"))
+	press(tea.KeyMsg{Type: tea.KeyEsc}) // cancel kill
+	press(keyRunes("x"))
+	press(keyRunes("y")) // confirm kill
+	if msgsContainMouse(msgs, tea.DisableMouse) {
+		t.Error("a confirmation dialog turned mouse reporting off")
+	}
+	if msgsContainMouse(msgs, tea.EnableMouseCellMotion) {
+		t.Error("a confirmation dialog toggled mouse reporting (it is program-wide)")
+	}
+}
+
+// TestMouseMode_ReenabledAfterExec — Bubble Tea v1 releases the
+// terminal around tea.ExecProcess (mouse reporting off) and does not
+// turn mouse reporting back on when it restores it, so every attach /
+// detach and every $EDITOR round trip left the wheel dead. Both return
+// paths must re-enable it.
+func TestMouseMode_ReenabledAfterExec(t *testing.T) {
+	stubRefreshSeams(t, nil)
+	t.Setenv("HOME", t.TempDir())
+	a := newConfirmationTestApp()
+	a.cfg.Projects.Root = t.TempDir()
+
+	for name, msg := range map[string]tea.Msg{
+		"clean detach":     attachExitedMsg{},
+		"failed attach":    attachExitedMsg{Err: errors.New("session not found")},
+		"ssh auth failure": attachExitedMsg{Err: errors.New("exit status 255: Permission denied (publickey)"), RemoteSSHTarget: &attachRemoteTarget{Host: "mini", Port: 22}},
+	} {
+		_, cmd := updateApp(t, a, msg)
+		if !msgsContainMouse(drainCmd(cmd), tea.EnableMouseCellMotion) {
+			t.Errorf("%s: mouse reporting not re-enabled after the attach returned", name)
+		}
+	}
+
+	for name, err := range map[string]error{"editor ok": nil, "editor failed": errors.New("exit status 1")} {
+		msgs := drainCmd(func() tea.Msg { return editorExited(err, notesReloadMsg{}) })
+		if !msgsContainMouse(msgs, tea.EnableMouseCellMotion) {
+			t.Errorf("%s: mouse reporting not re-enabled after $EDITOR returned", name)
+		}
+		if _, ok := findMsg[notesReloadMsg](msgs); ok == (err != nil) {
+			t.Errorf("%s: reload message = %v, want it only on success", name, ok)
+		}
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/project"
@@ -43,6 +44,12 @@ var (
 // was lost.
 const sessionsTickStaleAfter = 15 * time.Second
 
+// initRefreshGen is the generation of Init's sessions and projects
+// refreshes. New reserves it: Init has a value receiver, so bumping the
+// counters there would change a copy and the first real refresh would
+// reuse the number.
+const initRefreshGen = 1
+
 // Seams for tests: the local-machine probe (daemon socket + tmux
 // fallback) and the tailnet scan both reach real system state.
 var (
@@ -74,8 +81,18 @@ func realProbeLocalSessions() localSessionsProbe {
 		for i := range ss {
 			ss[i].Host = "local"
 		}
-		h, _ := local.Health(ctx)
+		// Health gets its own budget. It used to run on the context
+		// Sessions had just used up, so a slow but live daemon timed
+		// out here: the chip said offline and the row's name flipped
+		// from the hostname to "local".
+		hctx, hcancel := context.WithTimeout(context.Background(), hostProbeTimeout)
+		defer hcancel()
+		h, herr := local.Health(hctx)
 		localName := shortHostname(h.Hostname)
+		if herr != nil || localName == "" {
+			hn, _ := os.Hostname()
+			localName = shortHostname(hn)
+		}
 		if localName == "" {
 			localName = "local"
 		}
@@ -84,11 +101,11 @@ func realProbeLocalSessions() localSessionsProbe {
 			Local:   true,
 			Source:  "local",
 			Address: local.Addr(),
-			OK:      h.OK,
-			// The daemon answered /v1/health, so the chip can
-			// honestly say so.
-			DaemonOK:  h.OK,
-			Sessions:  h.Sessions,
+			// The daemon just listed the sessions, so it is up
+			// whatever the follow-up health call said.
+			OK:        true,
+			DaemonOK:  true,
+			Sessions:  len(ss),
 			SleepMode: h.SleepMode,
 			Version:   h.Version,
 			LastProbe: time.Now(),
@@ -413,11 +430,18 @@ func fetchRemoteProjects(addr, hostLabel string) []project.Project {
 	}
 	out := make([]project.Project, 0, len(infos))
 	for _, p := range infos {
-		out = append(out, project.Project{
+		proj := project.Project{
 			Name: p.Name, Host: hostLabel, Path: p.Path,
 			HasGit: p.HasGit, HasCM: p.HasCM, HasAgents: p.HasAgents, HasDocs: p.HasDocs,
 			Modified: p.Modified,
-		})
+		}
+		// The remote's .ccmux/agent sidecar, as its daemon reports it.
+		// Dropping it showed every remote project as Claude. Unknown or
+		// empty stays unset (read as Claude, like a missing sidecar).
+		if id, ok := agent.ParseID(p.Agent); ok {
+			proj.Agent = id
+		}
+		out = append(out, proj)
 	}
 	return out
 }

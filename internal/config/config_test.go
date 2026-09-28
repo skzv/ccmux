@@ -191,20 +191,27 @@ func TestSave_CreatesParentDirs(t *testing.T) {
 	}
 }
 
-func TestFirstNonEmpty(t *testing.T) {
-	cases := []struct {
-		in   []string
-		want string
-	}{
-		{[]string{"", "", "x"}, "x"},
-		{[]string{"first", "second"}, "first"},
-		{[]string{"", ""}, ""},
-		{nil, ""},
+// TestDefaults_EditorFollowsEnvironment — Defaults used to copy
+// $VISUAL / $EDITOR into Editor, so the first save froze that run's
+// environment into config.toml and a later $EDITOR change was ignored.
+// Unset means "ask the environment when opening an editor".
+func TestDefaults_EditorFollowsEnvironment(t *testing.T) {
+	withFakeHome(t)
+	t.Setenv("VISUAL", "")
+	t.Setenv("EDITOR", "code --wait")
+	if got := Defaults().Editor; got != "" {
+		t.Errorf("Defaults().Editor = %q, want unset", got)
 	}
-	for _, tc := range cases {
-		if got := firstNonEmpty(tc.in...); got != tc.want {
-			t.Errorf("firstNonEmpty(%v) = %q, want %q", tc.in, got, tc.want)
-		}
+	if err := Save(Defaults()); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("EDITOR", "hx")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Editor != "" {
+		t.Errorf("saved config pinned editor %q from the environment", cfg.Editor)
 	}
 }
 
