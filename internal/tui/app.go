@@ -2824,34 +2824,46 @@ func (a App) resumeConversationCmd(c conversations.Conversation) tea.Cmd {
 		cmdline := joinShellArgs(argv) + " || zsh"
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
+		// Resumed before and still running: attach to that session (as
+		// `ccmux resume` does) rather than failing with tmux's
+		// "duplicate session". It already carries its agent tag.
+		existing := conversationResumedMsg{
+			Session:  sessionName,
+			Project:  c.Project,
+			Agent:    string(c.Agent),
+			Existing: true,
+		}
+		if has, _ := resumeTmuxHas(ctx, sessionName); has {
+			return existing
+		}
 		// A new session needs the conversation's folder: tmux would
 		// quietly start one whose folder is gone in $HOME, where the
-		// agent can't find the conversation. (A session an earlier
-		// resume left running is still attached to below.)
-		if has, _ := resumeTmuxHas(ctx, sessionName); !has {
-			if err := c.ValidateResumeFolder(); err != nil {
-				return conversationResumedMsg{Err: err}
-			}
-		}
-		if err := resumeTmuxNew(ctx, sessionName, c.Project, cmdline); err != nil {
-			// Resumed before and still running: attach to that
-			// session (as `ccmux resume` does) rather than failing
-			// with tmux's "duplicate session". It already carries
-			// its agent tag, and on a tagging error we must not kill
-			// a session this call didn't create.
-			if has, _ := resumeTmuxHas(ctx, sessionName); has {
-				return conversationResumedMsg{
-					Session:  sessionName,
-					Project:  c.Project,
-					Agent:    string(c.Agent),
-					Existing: true,
-				}
-			}
-			return conversationResumedMsg{Err: fmt.Errorf("tmux new-session: %w", err)}
-		}
-		if err := resumeTmuxSetAgent(ctx, sessionName, string(c.Agent)); err != nil {
-			_ = resumeTmuxKill(ctx, sessionName)
+		// agent can't find the conversation.
+		if err := c.ValidateResumeFolder(); err != nil {
 			return conversationResumedMsg{Err: err}
+		}
+		// The agent tag rides on the tmux call that creates the session
+		// (tmux.NewWithAgent). Tagged by a second call, the session sat
+		// untagged in between, and a daemon poll tick there classified
+		// it with its project's agent — a resumed Codex conversation in
+		// a Claude project read as a crashed Claude.
+		if err := resumeTmuxNew(ctx, sessionName, c.Project, cmdline, string(c.Agent)); err != nil {
+			if has, _ := resumeTmuxHas(ctx, sessionName); !has {
+				return conversationResumedMsg{Err: fmt.Errorf("tmux new-session: %w", err)}
+			}
+			// A concurrent resume created it first: attach to it, and
+			// never kill a session this call didn't create.
+			if strings.Contains(err.Error(), "duplicate session") {
+				return existing
+			}
+			// new-session ran but the set-option half of the same
+			// invocation failed. Tag it now; if that fails too, don't
+			// leave an untagged session behind for the next resume to
+			// attach to.
+			if terr := resumeTmuxSetAgent(ctx, sessionName, string(c.Agent)); terr != nil {
+				_ = resumeTmuxKill(ctx, sessionName)
+				return conversationResumedMsg{Err: fmt.Errorf("tag tmux session %s with its agent: %w (create: %v)", sessionName, terr, err)}
+			}
 		}
 		return conversationResumedMsg{
 			Session: sessionName,
@@ -2865,7 +2877,7 @@ func (a App) resumeConversationCmd(c conversations.Conversation) tea.Cmd {
 // tests can drive the create / already-exists paths without a tmux
 // server.
 var (
-	resumeTmuxNew      = tmux.New
+	resumeTmuxNew      = tmux.NewWithAgent
 	resumeTmuxHas      = tmux.Has
 	resumeTmuxSetAgent = tmux.SetSessionAgent
 	resumeTmuxKill     = tmux.Kill
