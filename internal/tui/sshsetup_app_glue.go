@@ -241,16 +241,35 @@ func remoteAttachTargetFromErr(msg attachExitedMsg) *sshsetup.Target {
 	if msg.RemoteSSHTarget.TailscaleSSH {
 		return nil
 	}
-	// ssh / mosh both surface auth failures as exit 255 with
-	// "Permission denied" on stderr, which execAttach captures into
-	// msg.Stderr. Other exit-255 cases (e.g. host key mismatch)
-	// produce different strings and route to a generic toast.
-	s := strings.ToLower(msg.Err.Error() + " " + msg.Stderr)
-	if !strings.Contains(s, "permission denied") &&
-		!strings.Contains(s, "publickey") &&
-		!strings.Contains(s, "exit status 255") {
+	if !looksLikeSSHAuthFailure(msg.Err.Error() + " " + msg.Stderr) {
 		return nil
 	}
 	rt := msg.RemoteSSHTarget
 	return &sshsetup.Target{User: rt.User, Host: rt.Host, Port: rt.Port}
+}
+
+// looksLikeSSHAuthFailure reports whether an ssh / mosh failure (its
+// exit error plus the stderr execAttach captured) was the server
+// refusing our credentials — the one failure a key install fixes.
+//
+// Exit status 255 alone is not evidence: ssh exits 255 for every
+// failure of its own (connection refused, no route, DNS, host key
+// mismatch), and routing those to the SSH setup wizard hid the real
+// error behind a full-screen password flow that could not help. They
+// get the error toast instead. "Permission denied (" is ssh's auth
+// line ("Permission denied (publickey,password).") — a bare
+// "(Permission denied)" is a file error such as tmux's socket.
+func looksLikeSSHAuthFailure(output string) bool {
+	s := strings.ToLower(output)
+	for _, marker := range []string{
+		"permission denied (",
+		"publickey",
+		"too many authentication failures",
+		"no supported authentication methods",
+	} {
+		if strings.Contains(s, marker) {
+			return true
+		}
+	}
+	return false
 }

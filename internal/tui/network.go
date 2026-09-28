@@ -21,6 +21,7 @@ package tui
 import (
 	"fmt"
 	"os/user"
+	"strconv"
 	"strings"
 	"time"
 
@@ -182,14 +183,10 @@ func (m networkModel) SSHCmd() tea.Cmd {
 	if sel == nil || sel.Local || sel.Mobile {
 		return nil
 	}
-	dial := sel.DialHost
-	if dial == "" {
-		dial = dialAddrFor(*sel)
-	}
-	if dial == "" {
+	target := sel.sshShellTarget()
+	if target == "" {
 		return nil
 	}
-	target := sshLoginTarget(sel.User, dial)
 	cmd := sshInteractiveCmd(target, sel.SSHPort)
 	if dbg := debugLogger(); dbg != nil {
 		dbg.Printf("network ssh: %s port=%d", target, sel.SSHPort)
@@ -198,7 +195,29 @@ func (m networkModel) SSHCmd() tea.Cmd {
 	// An interactive shell: its exit status is the remote shell's (a
 	// failed last command, then `exit`), so only ssh's own 255 counts
 	// as a failure — it used to toast "tmux: exit status 1".
-	return execAttach(cmd, "ssh "+target, rt, true)
+	return execAttach(cmd, sel.sshShellCommandLine(), rt, true)
+}
+
+// sshShellTarget is the destination Network-tab Enter ssh's into:
+// `user@dial` when the host has a login user, else the dial host.
+// "" when there is nothing to dial.
+func (h hostStatus) sshShellTarget() string {
+	dial := h.DialHostOrAddr()
+	if dial == "" {
+		return ""
+	}
+	return sshLoginTarget(h.User, dial)
+}
+
+// sshShellCommandLine is the ssh command Enter runs, as the Selected
+// pane shows it and a failure toast names it: the real target, user
+// and port included (the hint used to drop the `user@`).
+func (h hostStatus) sshShellCommandLine() string {
+	parts := []string{"ssh", "-t"}
+	if h.SSHPort != 0 && h.SSHPort != 22 {
+		parts = append(parts, "-p", strconv.Itoa(h.SSHPort))
+	}
+	return strings.Join(append(parts, h.sshShellTarget()), " ")
 }
 
 // sshInteractiveCmd builds the interactive-shell process for SSHCmd. A
@@ -402,7 +421,7 @@ func (m networkModel) View(width, height int) string {
 		case sel.Mobile:
 			rows = append(rows, st.Muted.Render(tr("Mobile device — connect via the Moshi iOS app, not ssh.")))
 		default:
-			rows = append(rows, st.Key.Render("enter")+"  ssh -t "+sel.DialHostOrAddr())
+			rows = append(rows, st.Key.Render("enter")+"  "+sel.sshShellCommandLine())
 		}
 	}
 

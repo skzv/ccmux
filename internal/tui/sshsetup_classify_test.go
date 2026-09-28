@@ -31,12 +31,51 @@ func TestRemoteAttachTargetFromErr_ClassifiesAuthFailures(t *testing.T) {
 			wantNil: false,
 		},
 		{
+			name: "too-many-auth-failures",
+			msg: attachExitedMsg{
+				Err:             errors.New("exit status 255"),
+				Stderr:          "Received disconnect from 10.0.0.2 port 22:2: Too many authentication failures\r\n",
+				RemoteSSHTarget: &attachRemoteTarget{User: "alice", Host: "sputnik", Port: 22},
+			},
+			wantNil: false,
+		},
+		// ssh exits 255 for every failure of its own; only an auth
+		// refusal is something the SSH setup wizard can fix. These used
+		// to open the full-screen wizard over the real error.
+		{
 			name: "exit-255-bare",
 			msg: attachExitedMsg{
 				Err:             errors.New("ssh: exit status 255"),
 				RemoteSSHTarget: &attachRemoteTarget{User: "alice", Host: "sputnik", Port: 22},
 			},
-			wantNil: false,
+			wantNil: true,
+		},
+		{
+			name: "connection-refused",
+			msg: attachExitedMsg{
+				Err:             errors.New("exit status 255"),
+				Stderr:          "ssh: connect to host 127.0.0.9 port 22: Connection refused\r\n",
+				RemoteSSHTarget: &attachRemoteTarget{User: "me", Host: "127.0.0.9", Port: 22},
+			},
+			wantNil: true,
+		},
+		{
+			name: "host-key-changed",
+			msg: attachExitedMsg{
+				Err:             errors.New("exit status 255"),
+				Stderr:          "@@@ WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! @@@\nHost key verification failed.\n",
+				RemoteSSHTarget: &attachRemoteTarget{User: "me", Host: "mini", Port: 22},
+			},
+			wantNil: true,
+		},
+		{
+			name: "remote-tmux-socket-permission",
+			msg: attachExitedMsg{
+				Err:             errors.New("exit status 1"),
+				Stderr:          "error connecting to /tmp/tmux-501/default (Permission denied)\n",
+				RemoteSSHTarget: &attachRemoteTarget{User: "me", Host: "mini", Port: 22},
+			},
+			wantNil: true,
 		},
 		{
 			name: "non-auth-error",
