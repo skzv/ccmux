@@ -7,15 +7,15 @@ import (
 )
 
 func TestParsePanes(t *testing.T) {
-	out := "%3\t0\t1\t80\t12\t10\t⠋ Refactor\tpoll loop\n" + // a tab inside the title
-		"%1\t0\t0\t80\t11\t11\thost.local\n" +
+	out := "%3\t0\t1\t80\t12\t10\t2.1.281\t⠋ Refactor\tpoll loop\n" + // a tab inside the title
+		"%1\t0\t0\t80\t11\t11\tzsh\thost.local\n" +
 		"garbage line\n" +
-		"x9\t1\t0\t80\t24\t00\tnot a pane id\n" +
-		"%7\t1\t0\t100\t30\t00\t\n"
+		"x9\t1\t0\t80\t24\t00\tzsh\tnot a pane id\n" +
+		"%7\t1\t0\t100\t30\t00\t\t\n"
 	got := parsePanes([]byte(out))
 	want := []Pane{
-		{ID: "%3", Window: 0, Index: 1, Width: 80, Height: 12, Title: "⠋ Refactor\tpoll loop"},
-		{ID: "%1", Window: 0, Index: 0, Width: 80, Height: 11, Active: true, Title: "host.local"},
+		{ID: "%3", Window: 0, Index: 1, Width: 80, Height: 12, Command: "2.1.281", Title: "⠋ Refactor\tpoll loop"},
+		{ID: "%1", Window: 0, Index: 0, Width: 80, Height: 11, Active: true, Command: "zsh", Title: "host.local"},
 		{ID: "%7", Window: 1, Index: 0, Width: 100, Height: 30},
 	}
 	if len(got) != len(want) {

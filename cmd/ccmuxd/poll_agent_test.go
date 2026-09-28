@@ -63,7 +63,12 @@ func TestProjectName(t *testing.T) {
 	}
 }
 
-// TestSessionAgent_PlainSessionsAreShells pins sessionAgent's rule.
+// TestSessionAgent_PlainSessionsAreShells pins sessionAgent's rule: an
+// explicit agent tag, else the sidecar for an untagged ccmux-named
+// session, else a shell — until a poll tick sees an agent in the
+// session's foreground. Where a session runs no longer matters: a plain
+// tmux session in a project directory used to be judged as that
+// project's agent.
 func TestSessionAgent_PlainSessionsAreShells(t *testing.T) {
 	root, proj, sided, plain := projectsSandbox(t)
 	s := newPollTestServer(t)
@@ -77,8 +82,9 @@ func TestSessionAgent_PlainSessionsAreShells(t *testing.T) {
 		{"tagged shell", tmux.Session{Name: "c-shell-1", Path: proj, Agent: "shell"}, shellAgentID},
 		{"tagged agent", tmux.Session{Name: "notes", Path: plain, Agent: "codex"}, agent.IDCodex},
 		{"ccmux-named, outside projects", tmux.Session{Name: "c-scratch", Path: plain}, agent.IDClaude},
-		{"in a project dir", tmux.Session{Name: "work", Path: proj}, agent.IDClaude},
-		{"outside the root with a sidecar", tmux.Session{Name: "side", Path: sided}, agent.IDCodex},
+		{"ccmux-named, with a sidecar", tmux.Session{Name: "c-side", Path: sided}, agent.IDCodex},
+		{"in a project dir", tmux.Session{Name: "work", Path: proj}, shellAgentID},
+		{"outside the root with a sidecar", tmux.Session{Name: "side", Path: sided}, shellAgentID},
 		{"user's own session elsewhere", tmux.Session{Name: "logs", Path: plain}, shellAgentID},
 		{"user's own session, no path", tmux.Session{Name: "0"}, shellAgentID},
 	} {
@@ -89,34 +95,41 @@ func TestSessionAgent_PlainSessionsAreShells(t *testing.T) {
 }
 
 // TestPollOnce_PlainTmuxSessionIsAShell — tmux sessions the user made
-// outside ccmux (no tag, no ccmux name, not in a project) were judged
-// by Claude's rules: a session printing a log line every few seconds
-// flapped active/idle forever with a push each time, and a plain zsh
-// prompt showed as a crashed agent (error). They are shells now; ccmux
-// sessions and sessions in project directories keep being classified.
+// outside ccmux (no tag, no ccmux name) were judged by Claude's rules
+// whenever they ran in a project directory: a session printing a log
+// line every few seconds flapped active/idle forever with a push each
+// time (30 of them: 120 pushes in 20s, "sender saturated"), and a plain
+// zsh prompt showed as a crashed agent (error). With no agent in their
+// foreground they are shells, wherever they run; an untagged ccmux
+// session keeps its project's agent.
 func TestPollOnce_PlainTmuxSessionIsAShell(t *testing.T) {
 	root, proj, _, plain := projectsSandbox(t)
 	s := newPollTestServer(t)
 	s.cfg.Projects.Root = root
 	pushes := countPushes(t, s)
 	bells := countBells(s)
-	logs := &fakePane{Pane: tmux.Pane{ID: "%1", Width: 80, Height: 24}, body: "12:00:00 GET /health 200"}
-	zsh := &fakePane{Pane: tmux.Pane{ID: "%2", Width: 80, Height: 24}, body: "user@host ~ % "}
-	crashed := &fakePane{Pane: tmux.Pane{ID: "%3", Width: 80, Height: 24}, body: crashedPane}
-	inProj := &fakePane{Pane: tmux.Pane{ID: "%4", Width: 80, Height: 24}, body: crashedPane}
+	logs := &fakePane{Pane: tmux.Pane{ID: "%1", Width: 80, Height: 24, Command: "tail"}, body: "12:00:00 GET /health 200"}
+	projLogs := &fakePane{Pane: tmux.Pane{ID: "%5", Width: 80, Height: 24, Command: "tail"}, body: "12:00:00 GET /health 200"}
+	zsh := &fakePane{Pane: tmux.Pane{ID: "%2", Width: 80, Height: 24, Command: "zsh"}, body: "user@host ~ % "}
+	crashed := &fakePane{Pane: tmux.Pane{ID: "%3", Width: 80, Height: 24, Command: "zsh"}, body: crashedPane}
+	inProj := &fakePane{Pane: tmux.Pane{ID: "%4", Width: 80, Height: 24, Command: "zsh"}, body: "user@host ~/Projects/proj % "}
 	old := time.Now().Add(-time.Hour)
 	f := newFakeTmux()
 	f.addSession(tmux.Session{Name: "logs", Path: plain, Created: old}, logs)
+	f.addSession(tmux.Session{Name: "proj-logs", Path: proj, Created: old}, projLogs)
 	f.addSession(tmux.Session{Name: "scratch", Path: plain, Created: old}, zsh)
 	f.addSession(tmux.Session{Name: "c-scratch", Path: plain, Created: old}, crashed)
 	f.addSession(tmux.Session{Name: "work", Path: proj, Created: old}, inProj)
 	f.wire(s)
 
 	for i := 1; i <= 4; i++ { // a log line, then quiet, four times over
-		f.update(func() { logs.body += "\n12:00:0" + strconv.Itoa(i) + " GET /health 200" })
+		f.update(func() {
+			logs.body += "\n12:00:0" + strconv.Itoa(i) + " GET /health 200"
+			projLogs.body += "\n12:00:0" + strconv.Itoa(i) + " GET /health 200"
+		})
 		pollNTimes(s, 3)
 	}
-	for _, name := range []string{"logs", "scratch"} {
+	for _, name := range []string{"logs", "proj-logs", "scratch", "work"} {
 		if tr := s.seen[name]; tr.agentID != shellAgentID || tr.state != agent.StateIdle {
 			t.Errorf("%s: agent=%q state=%s, want a shell (idle)", name, tr.agentID, tr.state)
 		}
@@ -124,12 +137,96 @@ func TestPollOnce_PlainTmuxSessionIsAShell(t *testing.T) {
 	if got := pushes(); got != 0 || *bells != 0 {
 		t.Errorf("plain sessions notified: pushes=%d bells=%d, want none", got, *bells)
 	}
-	// Back-compat: a ccmux-named session and one in a project directory
-	// are still judged as the project's agent (Claude by default).
-	for _, name := range []string{"c-scratch", "work"} {
-		if tr := s.seen[name]; tr.agentID != agent.IDClaude || tr.state != agent.StateError {
-			t.Errorf("%s: agent=%q state=%s, want claude/error", name, tr.agentID, tr.state)
-		}
+	// Back-compat: an untagged ccmux-named session is still judged as its
+	// project's agent (Claude by default): its agent runs under `sh -c`,
+	// which is what its foreground shows.
+	if tr := s.seen["c-scratch"]; tr.agentID != agent.IDClaude || tr.state != agent.StateError {
+		t.Errorf("c-scratch: agent=%q state=%s, want claude/error", tr.agentID, tr.state)
+	}
+}
+
+// TestPollOnce_AgentRunByHandIsClassified — `claude` run by hand in a
+// plain tmux session, or in a ccmux shell (`ccmux shell --agent shell`,
+// tagged "shell"), was invisible: the session was a shell, so a whole
+// turn stayed idle with no notification. While an agent runs in the
+// session's foreground, the session is classified as that agent; when it
+// exits, it is a shell again.
+func TestPollOnce_AgentRunByHandIsClassified(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		session tmux.Session
+		command string // the agent's process as tmux reports it
+		title   string // what the agent sets while waiting
+	}{
+		{"plain tmux session, native claude", tmux.Session{Name: "scratch", Path: "/tmp"}, "claude", "✳ Claude Code"},
+		{"ccmux shell, native installer", tmux.Session{Name: "c-shell-1", Path: "/tmp", Agent: "shell"}, "2.1.281", "✳ Claude Code"},
+		{"plain tmux session, npm claude", tmux.Session{Name: "npm", Path: "/tmp"}, "node", "✳ Claude Code"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newPollTestServer(t)
+			s.startedAt = time.Now().Add(-time.Hour)
+			pushes := countPushes(t, s)
+			bells := countBells(s)
+			idle, working := readFixture(t, "claude_v2_idle.txt"), readFixture(t, "claude_v2_working.txt")
+			p := &fakePane{Pane: tmux.Pane{ID: "%1", Width: 120, Height: 40, Command: "zsh", Title: "host.local"}, body: "user@host /tmp % "}
+			f := newFakeTmux()
+			tc.session.Created = time.Now().Add(-time.Hour)
+			f.addSession(tc.session, p)
+			f.wire(s)
+			name := tc.session.Name
+			pollNTimes(s, 2)
+			if tr := s.seen[name]; tr.agentID != shellAgentID || tr.state != agent.StateIdle {
+				t.Fatalf("at the shell prompt: agent=%q state=%s, want shell/idle", tr.agentID, tr.state)
+			}
+
+			// The user runs claude: it starts up at its input box.
+			f.update(func() { p.Command, p.body, p.Title = tc.command, idle, tc.title })
+			pollNTimes(s, 4)
+			tr := s.seen[name]
+			if tr.agentID != agent.IDClaude || tr.state != agent.StateNeedsInput {
+				t.Fatalf("claude started: agent=%q state=%s, want claude/needs_input", tr.agentID, tr.state)
+			}
+			if got := pushes(); got != 0 || *bells != 0 || tr.promptCount != 0 {
+				t.Fatalf("claude starting up notified: pushes=%d bells=%d promptCount=%d", got, *bells, tr.promptCount)
+			}
+
+			// A turn.
+			f.update(func() { p.body, p.Title = working, "⠋ Fix flaky poll test" })
+			pollNTimes(s, 2)
+			f.update(func() {
+				p.body, p.Title = answered(idle, "fix the flaky poll test", "Fixed."), "✳ Fix flaky poll test"
+			})
+			pollNTimes(s, 3)
+			if got := pushes(); got != 1 || *bells != 1 || tr.promptCount != 1 {
+				t.Errorf("a turn of a hand-run claude: pushes=%d bells=%d promptCount=%d, want 1/1/1", got, *bells, tr.promptCount)
+			}
+
+			// It exits: a shell again, with nothing to announce.
+			f.update(func() {
+				p.Command, p.body = "zsh", answered(idle, "fix the flaky poll test", "Fixed.")+"\nuser@host /tmp % "
+			})
+			pollNTimes(s, 3)
+			if tr.agentID != shellAgentID || tr.state != agent.StateIdle {
+				t.Errorf("claude exited: agent=%q state=%s, want shell/idle", tr.agentID, tr.state)
+			}
+			if got := pushes(); got != 1 || *bells != 1 {
+				t.Errorf("claude exiting notified: pushes=%d bells=%d, want 1/1", got, *bells)
+			}
+		})
+	}
+}
+
+// TestPollOnce_NodeWithoutClaudeIsAShell — `node` runs many programs;
+// only one showing Claude Code's screen is taken for Claude.
+func TestPollOnce_NodeWithoutClaudeIsAShell(t *testing.T) {
+	s := newPollTestServer(t)
+	p := &fakePane{Pane: tmux.Pane{ID: "%1", Width: 80, Height: 24, Command: "node"}, body: "Welcome to Node.js v22.22.3.\n> "}
+	f := newFakeTmux()
+	f.addSession(tmux.Session{Name: "repl", Path: "/tmp", Created: time.Now().Add(-time.Hour)}, p)
+	f.wire(s)
+	pollNTimes(s, 2)
+	if tr := s.seen["repl"]; tr.agentID != shellAgentID || tr.state != agent.StateIdle {
+		t.Errorf("a node REPL: agent=%q state=%s, want shell/idle", tr.agentID, tr.state)
 	}
 }
 

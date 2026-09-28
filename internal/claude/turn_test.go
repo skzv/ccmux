@@ -100,6 +100,26 @@ func TestReadTurn_TypingLeavesOutputAlone(t *testing.T) {
 	}
 }
 
+func TestLooksLikeClaude(t *testing.T) {
+	idle := paneFixture(t, "claude_v2_idle.txt")
+	for _, tc := range []struct {
+		name, pane, title string
+		want              bool
+	}{
+		{"v2 input box", idle[strings.Index(idle, "────"):], "", true},
+		{"idle title", "anything", "✳ Claude Code", true},
+		{"banner", " ▐▛███▛█   Claude Code v2.1.281\nloading…", "", true},
+		{"working, spinner title and box", paneFixture(t, "claude_v2_working.txt"), "⠐ Fix flaky poll test", true},
+		{"a node REPL", "Welcome to Node.js v22.22.3.\n> ", "", false},
+		{"Gemini CLI's rounded box", "╭────────────╮\n│ >   Type your message │\n╰────────────╯", "◇ Ready", false},
+		{"a braille spinner alone", "building…", "⠋ vite", false},
+	} {
+		if got := LooksLikeClaude(tc.pane, tc.title); got != tc.want {
+			t.Errorf("%s: LooksLikeClaude = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
 // FuzzReadTurn — ReadTurn runs on every Claude session's capture each
 // poll tick, so no capture may crash it, and its answer must stay
 // coherent: Busy and Output only with an input area, and Output never

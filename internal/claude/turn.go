@@ -64,6 +64,22 @@ var footerInterruptRE = regexp.MustCompile(`\besc to interrupt\b`)
 // frame (`╭──────╮`), the v1 counterpart of the v2 box's opening rule.
 var v1FrameTopRE = regexp.MustCompile(`^[ \t]*╭(?:─{3,}|─*╮)`)
 
+// LooksLikeClaude reports whether a pane whose foreground process is a
+// generic interpreter (`node` runs Claude Code installed from npm, and
+// many other tools) shows Claude Code: its `✳` idle title, its v2 input
+// box at the bottom of the pane, or its `Claude Code v…` banner. The v1
+// rounded frame doesn't count — Gemini CLI, also a node program, draws
+// the same shape.
+func LooksLikeClaude(pane, title string) bool {
+	if strings.HasPrefix(strings.TrimSpace(title), "✳") {
+		return true
+	}
+	if looksLikeClaudeV2Prompt(lastNonEmptyLines(pane, promptRegionLines)) {
+		return true
+	}
+	return strings.Contains(pane, "Claude Code v")
+}
+
 // ReadTurn reads a Claude Code pane for its Turn.
 func ReadTurn(pane string) Turn {
 	lines := strings.Split(pane, "\n")

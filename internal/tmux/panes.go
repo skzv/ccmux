@@ -21,6 +21,18 @@ type Pane struct {
 	// Active marks the session's current pane: the active pane of its
 	// active window, the one a bare `=name:` target resolves to.
 	Active bool
+	// Command is #{pane_current_command}: the name of the process in the
+	// pane's foreground — the job an interactive shell is running, or
+	// the shell itself at its prompt. It is the process name the OS
+	// reports for the foreground process group, not what was typed: an
+	// interpreted script shows as its interpreter (`node`, `bash`), a
+	// binary started through a symlink as the binary's own file name on
+	// macOS (Claude Code's native installer runs `2.1.281`) and as the
+	// name it was invoked by on Linux, and macOS cuts it to 15
+	// characters. A program a non-interactive `sh -c "a || b"` runs
+	// shows as that shell: it has no job control, so its children share
+	// its process group.
+	Command string
 	// Title is #{pane_title}, the title the program in the pane last
 	// set with OSC 2 (tmux keeps it after that program exits).
 	Title string
@@ -29,15 +41,15 @@ type Pane struct {
 // paneListFormat is ListPanes' -F format. pane_title is LAST so a tab
 // in a title can't shift the other columns: parsePanes splits with the
 // field count and lets the final field absorb the rest.
-const paneListFormat = "#{pane_id}\t#{window_index}\t#{pane_index}\t#{pane_width}\t#{pane_height}\t#{window_active}#{pane_active}\t#{pane_title}"
+const paneListFormat = "#{pane_id}\t#{window_index}\t#{pane_index}\t#{pane_width}\t#{pane_height}\t#{window_active}#{pane_active}\t#{pane_current_command}\t#{pane_title}"
 
 // ListPanes returns every pane of every window in the named session
 // (exact name match), in window then pane order.
 //
 // One list-panes call carries everything the daemon's poll loop needs
-// besides the pane body — which pane to read, its size and its title —
-// so resolving the agent's pane costs no more shell-outs than the
-// display-message it replaces.
+// besides the pane body — which pane to read, its size, what runs in
+// its foreground and its title — so resolving the agent's pane costs no
+// more shell-outs than the display-message it replaces.
 func ListPanes(ctx context.Context, session string) ([]Pane, error) {
 	out, err := command(ctx, "tmux", "list-panes", "-s", "-t", exactSession(session), "-F", paneListFormat).Output()
 	if err != nil {
@@ -51,18 +63,19 @@ func ListPanes(ctx context.Context, session string) ([]Pane, error) {
 func parsePanes(out []byte) []Pane {
 	var panes []Pane
 	for _, line := range strings.Split(string(out), "\n") {
-		parts := strings.SplitN(line, "\t", 7)
-		if len(parts) < 7 || !validPaneID(parts[0]) {
+		parts := strings.SplitN(line, "\t", 8)
+		if len(parts) < 8 || !validPaneID(parts[0]) {
 			continue
 		}
 		p := Pane{
-			ID:     parts[0],
-			Window: atoi(parts[1]),
-			Index:  atoi(parts[2]),
-			Width:  atoi(parts[3]),
-			Height: atoi(parts[4]),
-			Active: parts[5] == "11",
-			Title:  parts[6],
+			ID:      parts[0],
+			Window:  atoi(parts[1]),
+			Index:   atoi(parts[2]),
+			Width:   atoi(parts[3]),
+			Height:  atoi(parts[4]),
+			Active:  parts[5] == "11",
+			Command: parts[6],
+			Title:   parts[7],
 		}
 		panes = append(panes, p)
 	}

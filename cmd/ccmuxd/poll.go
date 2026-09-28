@@ -25,6 +25,7 @@ type pollSnap struct {
 	lastCh   time.Time
 	prevSt   agent.State
 	agentID  agent.ID
+	follow   bool
 	baseline bool
 	pane     paneMemory
 }
@@ -42,6 +43,11 @@ type pollTrack struct {
 	// agentTagged: tracked.agentID came from the session's @ccmux_agent
 	// tag rather than being resolved (see noteSessionLocked).
 	agentTagged bool
+	// follow: the session has no agent of its own (a shell, or one the
+	// user made outside ccmux), so tracked.agentID is whatever agent runs
+	// in its foreground this tick — shellAgentID when none does. See
+	// sessionAgent.
+	follow bool
 	// listed is the session's list-sessions row as of the last tick
 	// (attached, windows, created — for sessionState).
 	listed tmux.Session
@@ -232,6 +238,7 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 			lastCh:   t.lastChange,
 			prevSt:   t.state,
 			agentID:  t.agentID,
+			follow:   t.follow,
 			baseline: t.baseline,
 			pane:     t.pane,
 		})
@@ -250,6 +257,8 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 		mem      paneMemory
 		newState agent.State
 		ev       evidence
+		agentID  agent.ID // what the session was classified as
+		switched bool     // a different agent (or none) runs in the foreground now
 	}
 	results := make([]result, 0, len(snaps))
 	staleAfter := spinnerStaleAfter(idleNeeds)
@@ -274,10 +283,21 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 			mem.titleChange = now
 		}
 		mem.title = obs.title
+		id := sn.agentID
+		if sn.follow {
+			id = shellAgentID
+			if fg, ok := agent.InForeground(obs.command, pane, obs.title); ok {
+				id = fg
+			}
+		}
+		switched := id != sn.agentID && !first
+		if switched {
+			mem.output, mem.hasInput = "", false // nothing to compare the new agent's output with
+		}
 		newSt := agent.StateIdle // a plain shell has no agent state to detect
 		var ev evidence
-		if sn.agentID != shellAgentID {
-			a := agent.ByID(sn.agentID)
+		if id != shellAgentID {
+			a := agent.ByID(id)
 			view := agent.ReadTurn(a, pane)
 			life := mem.titleChange
 			if view.Busy {
@@ -301,7 +321,7 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 				mem.output, mem.hasInput = view.Output, view.HasInput
 			}
 		}
-		results = append(results, result{name: sn.ts.Name, pane: pane, lastCh: lastCh, mem: mem, newState: newSt, ev: ev})
+		results = append(results, result{name: sn.ts.Name, pane: pane, lastCh: lastCh, mem: mem, newState: newSt, ev: ev, agentID: id, switched: switched})
 	}
 
 	// Phase 3.
@@ -322,6 +342,7 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 		}
 		ts, _ := lookupTmuxSession(snaps, r.name)
 		t.pane = r.mem
+		t.agentID = r.agentID
 		if t.baseline {
 			// First look at a pre-existing session: record where it
 			// stands, with no bell, push or prompt count. It keeps its
@@ -346,6 +367,12 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 		}
 		t.last = r.pane
 		t.lastChange = r.lastCh
+		if r.switched {
+			// An agent started in the session's foreground, or exited
+			// from it. Its startup is not a turn, and nothing the previous
+			// one did carries over.
+			t.turn = turn{startup: true}
+		}
 		decision := t.attend(t.state, r.newState, r.ev, t.seen, ts.Attached)
 		t.seen = decision.NewSeen
 		if decision.RingBell {
@@ -356,10 +383,14 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 		if decision.IncPromptCount {
 			t.promptCount++
 		}
-		if decision.EmitStateEvent {
+		if decision.EmitStateEvent || r.switched {
+			kind := decision.StateEventKind
+			if kind == "" {
+				kind = "state_change" // the agent changed, the state didn't
+			}
 			stateEvents = append(stateEvents, daemon.SessionEvent{
 				At:      time.Now(),
-				Kind:    decision.StateEventKind,
+				Kind:    kind,
 				Session: t.sessionState(r.name),
 			})
 		}
@@ -409,6 +440,10 @@ type observation struct {
 	body   string
 	title  string // the pane's OSC-set title (#{pane_title})
 	paneID string // "" when read through the session's active pane
+	// command is the pane's foreground process name
+	// (#{pane_current_command}; see tmux.Pane.Command), "" when read
+	// through the session's active pane.
+	command string
 	// width and height are the pane's size; 0 when read through the
 	// active pane.
 	width, height int
@@ -430,7 +465,7 @@ func (s *server) observe(ctx context.Context, name, paneID string) (observation,
 		if panes, err := s.panes(ctx, name); err == nil {
 			if p, ok := agentPane(panes, paneID); ok {
 				if body, err := s.capturePane(ctx, p.ID, captureLines); err == nil {
-					return observation{body: body, title: p.Title, paneID: p.ID, width: p.Width, height: p.Height}, nil
+					return observation{body: body, title: p.Title, paneID: p.ID, width: p.Width, height: p.Height, command: p.Command}, nil
 				}
 			}
 		}
@@ -912,46 +947,71 @@ func (s *server) noteSessionLocked(t *tracked, ts tmux.Session) {
 	}
 	t.projectPath = ts.Path
 	t.listed = ts
-	// The agent is resolved once and kept for the tracked session's
-	// lifetime unless the session is tagged: the sidecar names the agent
-	// a project's NEXT session starts with, and rewriting it (the
-	// Projects screen's `a`) used to reclassify the sessions already
-	// running there by another agent's rules — a Claude session shown as
-	// a Codex one waiting for input. A tag names what runs in this very
-	// session, so it is read every tick and may change.
-	if id, ok := taggedAgent(ts); ok {
-		t.agentID, t.agentTagged = id, true
-	} else if t.agentID == "" || t.agentTagged {
-		t.agentID, t.agentTagged = s.agentFor(ts, t.project), false
+	// A tag names what runs in this very session, so it is read every
+	// tick and may change. A sidecar agent is resolved once and kept for
+	// the tracked session's lifetime: the sidecar names the agent a
+	// project's NEXT session starts with, and rewriting it (the Projects
+	// screen's `a`) used to reclassify the sessions already running there
+	// by another agent's rules — a Claude session shown as a Codex one
+	// waiting for input. A session that follows its foreground has its
+	// agent set by each tick (pollOnce).
+	id, fixed := s.fixedAgent(ts)
+	_, tagged := taggedAgent(ts)
+	switch {
+	case !fixed:
+		if !t.follow {
+			t.agentID = shellAgentID // until a tick sees what runs there
+		}
+		t.follow = true
+	case tagged:
+		t.agentID, t.follow = id, false
+	case t.agentID == "" || t.agentTagged || t.follow:
+		t.agentID, t.follow = id, false
 	}
+	t.agentTagged = tagged
 }
 
-// sessionAgent resolves what runs in a session:
-//
-//   - Its explicit @ccmux_agent tag: "shell" for a bare shell, or the
-//     agent a resumed conversation or a bare agent session runs.
-//   - Otherwise, for a session ccmux created (named with the "c-"
-//     prefix) or one in a project directory (see sessionProject), the
-//     project's .ccmux/agent sidecar — Claude when there is none, the
-//     back-compat default for projects that predate the sidecar.
-//   - Anything else is a tmux session the user made outside ccmux, in
-//     a directory that isn't a project: a plain shell, never classified.
-//     ccmux can't know what runs there, and judging it by Claude's rules
-//     turned a log tail into an active/idle flapper that pushed on every
-//     line, and a zsh prompt into a "crashed" error.
+// sessionAgent resolves what runs in a session, as far as its tmux
+// metadata tells (see fixedAgent): shellAgentID for a session that
+// follows its foreground, which only a poll tick can see into.
 func (s *server) sessionAgent(ts tmux.Session) agent.ID {
-	return s.agentFor(ts, s.sessionProject(ts.Path))
+	id, _ := s.fixedAgent(ts)
+	return id
 }
 
-// agentFor is sessionAgent with the session's project already known.
-func (s *server) agentFor(ts tmux.Session, project string) agent.ID {
+// fixedAgent resolves the agent a session was started for, and fixed
+// reports whether it has one:
+//
+//   - Its explicit @ccmux_agent tag naming an agent (a project session,
+//     a resumed conversation, a bare agent session): authoritative.
+//   - No tag, and named with the "c-" prefix: a session an older ccmux
+//     created before it tagged them — the project's .ccmux/agent
+//     sidecar, Claude when there is none (the back-compat default for
+//     projects that predate the sidecar).
+//
+// Anything else — a session tagged "shell" (`ccmux shell`, a bare
+// session), or one the user made outside ccmux wherever it runs — has
+// no agent of its own: it follows its foreground (fixed false, id
+// shellAgentID). A poll tick classifies it by the agent running in its
+// pane's foreground (agent.InForeground over #{pane_current_command})
+// while one does, and treats it as a shell otherwise. That is what
+// someone running `claude` by hand in a plain tmux session or a ccmux
+// shell gets notified for; and a log tail or a zsh prompt — even in a
+// project directory — is never judged by an agent's rules (that turned
+// a log tail into an active/idle flapper that pushed on every line, and
+// a zsh prompt into a "crashed" error).
+//
+// ccmux's own sessions keep their tag or sidecar because the agent they
+// launch runs under `$SHELL -c "agent || fallback"`: a non-interactive
+// shell without job control, so their foreground process is that shell.
+func (s *server) fixedAgent(ts tmux.Session) (id agent.ID, fixed bool) {
 	if id, ok := taggedAgent(ts); ok {
-		return id
+		return id, id != shellAgentID
 	}
-	if strings.HasPrefix(ts.Name, ccmuxSessionPrefix) || project != "" {
-		return s.projectAgent(ts.Path)
+	if strings.HasPrefix(ts.Name, ccmuxSessionPrefix) {
+		return s.projectAgent(ts.Path), true
 	}
-	return shellAgentID
+	return shellAgentID, false
 }
 
 // taggedAgent is a session's explicit @ccmux_agent tag, if it has one.
