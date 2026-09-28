@@ -254,7 +254,10 @@ func noServerRunning(stderr string) bool {
 // Session values. Split out so tests can exercise the parser directly
 // without needing a tmux server.
 func parseList(out []byte) []Session {
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	// Trim only the line terminators: TrimSpace also ate the trailing
+	// tab of a last row whose session_path is empty, which then had too
+	// few fields and was dropped from the list.
+	lines := strings.Split(strings.TrimRight(string(out), "\r\n"), "\n")
 	sessions := make([]Session, 0, len(lines))
 	for _, line := range lines {
 		if line == "" {

@@ -148,8 +148,7 @@ func runShellRemote(ctx context.Context, name, path, host, agentFlag string) err
 	if !found {
 		return fmt.Errorf("no host named %q in ~/.config/ccmux/config.toml; configure it with `ccmux host add` or attach via the TUI's auto-discovered list", host)
 	}
-	addr := fmt.Sprintf("%s:%d", hostCfg.Address, defaultPort(hostCfg.Port))
-	cli := daemon.RemoteClient(addr)
+	cli := daemon.RemoteClient(hostDaemonAddr(cfg, hostCfg))
 	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	res, err := cli.NewBareSession(cctx, daemon.NewBareSessionRequest{
@@ -243,13 +242,6 @@ func shellAttachCmd(name string) *exec.Cmd {
 // matter.
 func execTmuxAttach(name string) error {
 	return runForeground(shellAttachCmd(name))
-}
-
-func defaultPort(p int) int {
-	if p == 0 {
-		return 7474
-	}
-	return p
 }
 
 // shellSSHArgs builds the `ssh` argv (minus the leading "ssh") for

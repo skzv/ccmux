@@ -500,3 +500,18 @@ func TestKillRenameRefuseSessionIDs(t *testing.T) {
 		t.Errorf("Rename($1, x) = %v, want ErrSessionIDTarget", err)
 	}
 }
+
+// TestParseList_LastRowWithEmptyPath — list-sessions output was
+// TrimSpace'd as a whole, which stripped the tab in front of an empty
+// session_path on the last row, so that session vanished from the list.
+func TestParseList_LastRowWithEmptyPath(t *testing.T) {
+	out := []byte("c-a\t1700000000\t1700000000\t0\t1\t/tmp/a\n" +
+		"c-b\t1700000000\t1700000000\t1\t2\t\n")
+	got := parseList(out)
+	if len(got) != 2 {
+		t.Fatalf("parseList = %+v, want both sessions", got)
+	}
+	if got[1].Name != "c-b" || got[1].Path != "" || !got[1].Attached || got[1].Windows != 2 {
+		t.Errorf("last row = %+v, want c-b attached with 2 windows and no path", got[1])
+	}
+}
