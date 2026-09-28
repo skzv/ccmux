@@ -101,6 +101,35 @@ func TestNewNoteForm_TranslatedLabelsKeepRowsOnOneLine(t *testing.T) {
 	}
 }
 
+// TestNewNoteForm_LongValueScrollsToCursor — shrinking the inputs to
+// the field left the prefilled filename drawn from its start and cut
+// off ("notes/note-2026-09-…") with the cursor, at its end, off-screen.
+// The input scrolls so the cursor stays in view, also while typing.
+func TestNewNoteForm_LongValueScrollsToCursor(t *testing.T) {
+	withLang(t, "de")
+	now := time.Date(2026, 9, 27, 14, 5, 0, 0, time.UTC)
+	f := newNewNoteForm(styles.Default(), now)
+	const width = 36 // a 40-column terminal
+	f.FitTo(width)
+	row := func() string {
+		for _, line := range strings.Split(ansi.Strip(f.View(width)), "\n") {
+			if strings.Contains(line, tr("filename")) {
+				return line
+			}
+		}
+		t.Fatalf("no filename row:\n%s", ansi.Strip(f.View(width)))
+		return ""
+	}
+	if r := row(); !strings.Contains(r, "1405.md") || strings.Contains(r, "…") {
+		t.Errorf("filename row doesn't show the value's end (where the cursor is): %q", r)
+	}
+	f, _ = f.Update(keyRunes("x"))
+	f.FitTo(width)
+	if r := row(); !strings.Contains(r, ".mdx") {
+		t.Errorf("typed text not visible in the filename row: %q", r)
+	}
+}
+
 // TestNewProjectForm_TranslatedLabelsKeepRowsOnOneLine — same fixed
 // label column in the new-project form.
 func TestNewProjectForm_TranslatedLabelsKeepRowsOnOneLine(t *testing.T) {

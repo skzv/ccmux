@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -41,6 +42,20 @@ func labelColumn(minW, maxW int, labels ...string) int {
 		w = maxW
 	}
 	return w
+}
+
+// fitInput sets a text input's visible width and re-scrolls it so the
+// cursor stays in view. The input only recomputes its scroll window as
+// it's edited: narrowing Width alone left a long value (the new-note
+// form's prefilled filename) drawn from its start and cut off, with the
+// cursor off-screen at its end.
+func fitInput(in *textinput.Model, width int) {
+	width = maxInt(1, width)
+	if in.Width == width {
+		return
+	}
+	in.Width = width
+	in.SetCursor(in.Position())
 }
 
 // columnLabel pads label to a labelColumn width, shortening it first

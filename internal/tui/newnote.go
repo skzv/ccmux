@@ -47,14 +47,14 @@ func newNewNoteForm(st styles.Styles, now time.Time) newNoteFormModel {
 	fn := textinput.New()
 	fn.SetValue(defaultNewNoteFilename(now))
 	fn.CharLimit = 200
-	fn.Width = 60
+	fn.Width = newNoteInputWidth
 	fn.Prompt = ""
 	fn.Focus()
 
 	tt := textinput.New()
 	tt.Placeholder = tr("optional H1 title")
 	tt.CharLimit = 120
-	tt.Width = 60
+	tt.Width = newNoteInputWidth
 	tt.Prompt = ""
 
 	return newNoteFormModel{
@@ -112,22 +112,38 @@ func (m *newNoteFormModel) applyFocus() {
 	}
 }
 
+// newNoteInputWidth is the inputs' width on a wide form.
+const newNoteInputWidth = 60
+
+// fieldLayout lays the form's rows out one line each, as in the
+// new-session form: the label column fits the translated labels and the
+// inputs get what is left (a fixed 60-cell input after the label used
+// to wrap the filename on a narrow screen).
+func (m newNoteFormModel) fieldLayout(width int) (labels []string, labelW, fieldW int) {
+	textW := width - 4 // the pane's border + padding
+	labels = []string{tr("filename"), tr("title")}
+	labelW = labelColumn(10, textW/2, labels...)
+	return labels, labelW, maxInt(4, textW-labelW-2)
+}
+
+// FitTo sizes the inputs for a width-wide form (see fitInput). The
+// Notes screen calls it before each render, so the size sticks and
+// typing scrolls within the field.
+func (m *newNoteFormModel) FitTo(width int) {
+	_, _, fieldW := m.fieldLayout(width)
+	fitInput(&m.filename, minInt(newNoteInputWidth, fieldW-1))
+	fitInput(&m.title, minInt(newNoteInputWidth, fieldW-1))
+}
+
 func (m newNoteFormModel) View(width int) string {
 	st := m.st
 	title := st.Emphasis.Render(tr("New note"))
 	hint := st.Subtitle.Render(tr("Creates the file under the project and opens it in $EDITOR."))
 
-	// One line per row, as in the new-session form: the label column
-	// fits the translated labels, and the inputs shrink to what is left
-	// (a 60-cell input after a German label wrapped the filename).
-	textW := width - 4 // the pane's border + padding
-	labels := []string{tr("filename"), tr("title")}
-	labelW := labelColumn(10, textW/2, labels...)
+	labels, labelW, fieldW := m.fieldLayout(width)
 	filenameLabel := st.Muted.Render(columnLabel(labels[0], labelW))
 	titleLabel := st.Muted.Render(columnLabel(labels[1], labelW))
-	fieldW := maxInt(4, textW-labelW-2)
-	m.filename.Width = maxInt(1, minInt(m.filename.Width, fieldW-1))
-	m.title.Width = maxInt(1, minInt(m.title.Width, fieldW-1))
+	m.FitTo(width)
 	filenameField := truncate(m.filename.View(), fieldW)
 	titleField := truncate(m.title.View(), fieldW)
 

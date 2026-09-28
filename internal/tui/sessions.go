@@ -481,6 +481,9 @@ func (m sessionsModel) View(width, height int, narrow bool) string {
 	// new-project modal: dimmed list behind, centered form on top.
 	if m.form != nil {
 		formW := minInt(80, width-4)
+		// Through the pointer, so the fitted input widths persist into
+		// the form's Update (see FitTo).
+		m.form.FitTo(formW)
 		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, m.form.View(formW))
 	}
 	// NOTE: the wide Home screen renders the preview pane itself (see

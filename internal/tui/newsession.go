@@ -84,7 +84,7 @@ func newNewSessionForm(st styles.Styles, hosts []hostStatus, defaultDir, default
 	n := textinput.New()
 	n.Placeholder = "auto (c-shell-<runid>)"
 	n.CharLimit = 64
-	n.Width = 40
+	n.Width = newSessionNameWidth
 	n.Prompt = ""
 	n.Focus()
 
@@ -94,7 +94,7 @@ func newNewSessionForm(st styles.Styles, hosts []hostStatus, defaultDir, default
 	// fallback.
 	w.Placeholder = defaultDirPlaceholder(defaultDir)
 	w.CharLimit = 256
-	w.Width = 60
+	w.Width = newSessionWorkdirWidth
 	w.Prompt = ""
 
 	commands := agent.Commands{}
@@ -257,6 +257,31 @@ func (m newSessionFormModel) currentAgent() sessionAgentChoice {
 	return m.agents[m.agentIdx]
 }
 
+// Widths of the name and working-dir inputs on a wide form.
+const (
+	newSessionNameWidth    = 40
+	newSessionWorkdirWidth = 60
+)
+
+// fieldLayout is the form's label column and field width on a
+// width-wide form: the column fits the translated labels (capped at
+// half the row) and the fields get the rest.
+func (m newSessionFormModel) fieldLayout(width int) (labels []string, labelW, fieldW int) {
+	textW := width - 4 // the pane's border + padding
+	labels = []string{tr("name"), tr("working dir"), tr("device"), tr("agent")}
+	labelW = labelColumn(12, textW/2, labels...)
+	return labels, labelW, maxInt(4, textW-labelW-2)
+}
+
+// FitTo sizes the text inputs for a width-wide form (see fitInput). The
+// Sessions screen calls it before each render, so the size sticks and
+// typing scrolls within the field.
+func (m *newSessionFormModel) FitTo(width int) {
+	_, _, fieldW := m.fieldLayout(width)
+	fitInput(&m.name, minInt(newSessionNameWidth, fieldW-1))
+	fitInput(&m.workdir, minInt(newSessionWorkdirWidth, fieldW-1))
+}
+
 func (m newSessionFormModel) View(width int) string {
 	st := m.st
 	title := st.Emphasis.Render(tr("New session"))
@@ -266,17 +291,13 @@ func (m newSessionFormModel) View(width int) string {
 	// marker; at phone widths the rows used to wrap back under the
 	// label column and push the form off the screen. The label column
 	// fits the translated labels (capped at half the row).
-	textW := width - 4 // the pane's border + padding
-	labels := []string{tr("name"), tr("working dir"), tr("device"), tr("agent")}
-	labelW := labelColumn(12, textW/2, labels...)
+	labels, labelW, fieldW := m.fieldLayout(width)
 	nameLabel := st.Muted.Render(columnLabel(labels[0], labelW))
 	workLabel := st.Muted.Render(columnLabel(labels[1], labelW))
 	hostLabel := st.Muted.Render(columnLabel(labels[2], labelW))
 	agentLabel := st.Muted.Render(columnLabel(labels[3], labelW))
-	fieldW := maxInt(4, textW-labelW-2)
-	narrow := textW < 60
-	m.name.Width = maxInt(1, minInt(m.name.Width, fieldW-1))
-	m.workdir.Width = maxInt(1, minInt(m.workdir.Width, fieldW-1))
+	narrow := width-4 < 60
+	m.FitTo(width)
 
 	nameField := truncate(m.name.View(), fieldW)
 	workField := truncate(m.workdir.View(), fieldW)

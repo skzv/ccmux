@@ -1414,6 +1414,9 @@ func (m notesModel) View(width, height int) string {
 	}
 	if m.newNoteForm != nil {
 		modalW := minInt(80, width-4)
+		// Through the pointer, so the fitted input width persists into
+		// the form's Update (see FitTo).
+		m.newNoteForm.FitTo(modalW)
 		modal := m.newNoteForm.View(modalW)
 		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, modal)
 	}
