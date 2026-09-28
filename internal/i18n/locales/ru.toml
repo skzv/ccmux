@@ -542,3 +542,5 @@
 "model not changed: %w" = "модель не изменена: %w"
 "%w (and restoring the ccmux pin failed: %v)" = "%w (и восстановить закреплённую в ccmux модель не удалось: %v)"
 "field is read-only: " = "поле только для чтения: "
+"loading projects…" = "загрузка проектов…"
+"No projects found — create one on the Projects tab." = "Проекты не найдены — создайте проект на вкладке «Проекты»."

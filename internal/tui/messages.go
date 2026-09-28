@@ -346,6 +346,10 @@ type openEditorMsg struct {
 // file was created/edited externally.
 type notesReloadMsg struct{}
 
+// notesProjectsWantedMsg is the Notes project picker asking the App for
+// the project list: it was opened before any list had arrived.
+type notesProjectsWantedMsg struct{}
+
 // agentsReloadMsg asks the Agents tab to re-read every agent's config
 // after one was edited in $EDITOR.
 type agentsReloadMsg struct{}

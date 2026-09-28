@@ -542,3 +542,5 @@
 "model not changed: %w" = "Modell nicht geändert: %w"
 "%w (and restoring the ccmux pin failed: %v)" = "%w (und das Wiederherstellen der ccmux-Festlegung ist fehlgeschlagen: %v)"
 "field is read-only: " = "Feld ist schreibgeschützt: "
+"loading projects…" = "Projekte werden geladen…"
+"No projects found — create one on the Projects tab." = "Keine Projekte gefunden — legen Sie eines im Tab „Projekte“ an."

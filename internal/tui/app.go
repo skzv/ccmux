@@ -871,7 +871,17 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, previewCmd
 
+	case notesProjectsWantedMsg:
+		if len(a.projects) > 0 {
+			a.notes.SetProjects(a.projects)
+			return a, nil
+		}
+		return a, a.refreshProjectsCmd()
+
 	case projectsLoadedMsg:
+		if msg.Err != nil {
+			a.notes.ProjectsLoadFailed()
+		}
 		if msg.Err == nil {
 			// Like sessions: never let an older refresh that finished
 			// late replace a newer list. Gen 0 is unnumbered.

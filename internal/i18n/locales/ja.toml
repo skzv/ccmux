@@ -542,3 +542,5 @@
 "model not changed: %w" = "モデルは変更されていません: %w"
 "%w (and restoring the ccmux pin failed: %v)" = "%w (ccmux の固定モデルの復元にも失敗しました: %v)"
 "field is read-only: " = "読み取り専用の項目: "
+"loading projects…" = "プロジェクトを読み込み中…"
+"No projects found — create one on the Projects tab." = "プロジェクトがありません — 「プロジェクト」タブで作成してください。"

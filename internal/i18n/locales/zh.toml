@@ -550,3 +550,5 @@
 "model not changed: %w" = "模型未更改：%w"
 "%w (and restoring the ccmux pin failed: %v)" = "%w（恢复 ccmux 固定的模型也失败了：%v）"
 "field is read-only: " = "字段只读："
+"loading projects…" = "正在加载项目…"
+"No projects found — create one on the Projects tab." = "未找到项目——请在“项目”标签页中创建。"

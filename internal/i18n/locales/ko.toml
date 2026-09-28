@@ -542,3 +542,5 @@
 "model not changed: %w" = "모델이 변경되지 않음: %w"
 "%w (and restoring the ccmux pin failed: %v)" = "%w (ccmux 고정 모델 복원도 실패함: %v)"
 "field is read-only: " = "읽기 전용 필드: "
+"loading projects…" = "프로젝트를 불러오는 중…"
+"No projects found — create one on the Projects tab." = "프로젝트가 없습니다 — 프로젝트 탭에서 만드세요."

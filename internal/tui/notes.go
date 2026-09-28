@@ -80,9 +80,11 @@ type notesModel struct {
 	termWidth  int
 	termHeight int
 
-	// project picker
-	pickingProject bool
-	projCursor     int
+	// project picker. projectsLoading marks a picker opened before the
+	// project list arrived (it asked the App for one).
+	pickingProject  bool
+	projCursor      int
+	projectsLoading bool
 
 	// search state. `/` opens a query box; typing populates it; Enter
 	// runs Vault.Search and the result rows take over the list. While
@@ -385,11 +387,17 @@ func writeNewFile(path string, data []byte) error {
 	return f.Close()
 }
 
+// ProjectsLoadFailed ends a picker's wait for the project list (see
+// notesProjectsWantedMsg) when the load failed: it shows the empty
+// state instead of "loading" for good.
+func (m *notesModel) ProjectsLoadFailed() { m.projectsLoading = false }
+
 // SetProjects pushes the full discovered-projects list to the screen so
 // the project picker (`p` key) can offer all of them, not just the one
 // selected on the Projects tab.
 func (m *notesModel) SetProjects(ps []project.Project) {
 	m.projects = ps
+	m.projectsLoading = false
 	if m.projCursor >= len(ps) {
 		m.projCursor = 0
 	}
@@ -781,20 +789,28 @@ func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
 			// the easier muscle-memory key (mirrors many file
 			// managers), `p` stays for discoverability and HelpBar
 			// listing.
-			if len(m.projects) > 0 {
-				m.pickingProject = true
-				// Position cursor on the current project if known.
-				m.projCursor = 0
-				if m.project != nil {
-					for i, p := range m.projects {
-						if p.Path == m.project.Path {
-							m.projCursor = i
-							break
-						}
+			m.pickingProject = true
+			// Position cursor on the current project if known.
+			m.projCursor = 0
+			if m.project != nil {
+				for i, p := range m.projects {
+					if p.Path == m.project.Path {
+						m.projCursor = i
+						break
 					}
 				}
-				return m, nil
 			}
+			if len(m.projects) == 0 {
+				// Projects haven't loaded yet (a fresh launch with a
+				// slow host in the refresh) or the list was empty:
+				// ask for them now. The picker shows it's loading and
+				// fills in when the list lands (SetProjects). `p` used
+				// to do nothing here, although the empty Notes screen
+				// says to press it.
+				m.projectsLoading = true
+				return m, func() tea.Msg { return notesProjectsWantedMsg{} }
+			}
+			return m, nil
 		case "tab":
 			// Toggle which pane receives navigation keys. List focus
 			// → preview focus → list focus. While the preview is
@@ -1372,6 +1388,12 @@ func (m notesModel) HelpBarProps(width int) components.HelpBarProps {
 }
 
 func (m notesModel) View(width, height int) string {
+	// The picker comes first: it is how a Notes screen with no project
+	// gets one. Drawn after the no-project placeholder, it was open but
+	// invisible there, silently swallowing every key but esc.
+	if m.pickingProject {
+		return m.renderProjectPicker(width, height)
+	}
 	if m.project == nil {
 		bodyLines := []string{
 			m.st.Emphasis.Render(tr("Notes")),
@@ -1397,9 +1419,6 @@ func (m notesModel) View(width, height int) string {
 	}
 	if m.noteInfo.open {
 		return m.renderNoteInfoOverlay(width, height)
-	}
-	if m.pickingProject {
-		return m.renderProjectPicker(width, height)
 	}
 	// Notes uses a tighter narrow threshold than the rest of the
 	// TUI: at 100+ cols the 1/3 + 2/3 split is still readable
@@ -1697,6 +1716,13 @@ func (m notesModel) renderProjectPicker(width, height int) string {
 	for i := start; i < end; i++ {
 		p := m.projects[i]
 		lines = append(lines, components.RenderListRow(m.st, p.Name, i == m.projCursor, minInt(70, width-4)-2))
+	}
+	if len(m.projects) == 0 {
+		if m.projectsLoading {
+			lines = append(lines, m.st.Muted.Render(tr("loading projects…")))
+		} else {
+			lines = append(lines, m.st.Muted.Render(tr("No projects found — create one on the Projects tab.")))
+		}
 	}
 	if end < len(m.projects) {
 		lines = append(lines, m.st.Muted.Render(fmt.Sprintf("  … %d more (scroll with j/k)", len(m.projects)-end)))
