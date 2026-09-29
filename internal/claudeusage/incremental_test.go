@@ -122,13 +122,15 @@ func checkIncremental(t *testing.T, c *jsonl.Cache[*fileRecords], fsys fs.FS, pa
 
 // FuzzIncrementalMatchesOneShot splits a generated transcript into
 // append chunks — cut anywhere, mid-line included — with occasional
-// truncations and replacements, and checks after every step that the
+// truncations, replacements and same-size in-place rewrites, and checks
+// after every step that the
 // cached, incremental parse yields exactly the events a one-shot scan
 // of the same bytes does.
 func FuzzIncrementalMatchesOneShot(f *testing.F) {
 	f.Add([]byte{0, 10, 3, 11, 3, 11, 2, 12, 3, 13, 6, 20, 18, 21, 3, 22, 7, 23, 4, 24}, []byte{40, 7, 90, 255, 3, 120})
 	f.Add([]byte{3, 200, 3, 1, 0, 150, 5, 2, 12, 3, 13, 0, 14, 9, 19, 5, 1, 1, 3, 1}, []byte{1, 1, 1, 254, 60, 60})
 	f.Add([]byte{16, 1, 10, 2, 11, 3, 15, 4, 17, 5, 8, 6, 9, 7}, []byte{200, 200})
+	f.Add([]byte{0, 10, 3, 11, 4, 12, 3, 13, 0, 14, 3, 15, 19, 16, 3, 17}, []byte{250, 253, 30, 253})
 	f.Fuzz(func(t *testing.T, program, splits []byte) {
 		if len(program) > 256 || len(splits) > 32 {
 			return // keeps an exec cheap: every step re-scans the file
@@ -157,6 +159,12 @@ func FuzzIncrementalMatchesOneShot(f *testing.F) {
 			case b == 254: // atomically replace with the same bytes
 				file = &fstest.MapFile{Data: []byte(content[:written])}
 				fsys[path] = file
+			case b == 253: // rewrite in place: same size, the first half's digits changed
+				for i := range file.Data[:len(file.Data)/2] {
+					if c := file.Data[i]; c >= '0' && c <= '9' {
+						file.Data[i] = '0' + (c-'0'+1)%10
+					}
+				}
 			default:
 				n := min(1+int(b)*3, len(content)-written)
 				file.Data = append(file.Data, content[written:written+n]...)
@@ -291,6 +299,56 @@ func TestWalk_IncrementalMatchesFreshWalk(t *testing.T) {
 	check("5h after 5 days", SessionBlock, true)
 	now = now.Add(2 * time.Hour)
 	checkAll("two hours later")
+}
+
+// TestWalk_SameSizeRewriteMatchesFreshWalk — a transcript rewritten in
+// place with an early response's token count changed, same length, so
+// the file keeps its size: the cache checked only the bytes just before
+// its offset, which hadn't changed, and went on reporting the old count
+// until the process restarted. A fresh walk reads the new one; so must
+// the cached walk.
+func TestWalk_SameSizeRewriteMatchesFreshWalk(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	transcripts = jsonl.NewCache(cacheRetention, maxScanLineBytes, newFileRecords)
+	now := time.Now()
+	dir := filepath.Join(home, ".claude", "projects", "-w-alpha")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "a.jsonl")
+	stamp := func(ago time.Duration) string { return now.Add(-ago).UTC().Format(time.RFC3339) }
+	body := func(firstTokens int) string {
+		return fmt.Sprintf(`{"type":"user","timestamp":%q,"cwd":"/w/alpha","message":{"content":"go"}}`+"\n", stamp(time.Hour)) +
+			fmt.Sprintf(`{"type":"assistant","timestamp":%q,"requestId":"r1","message":{"id":"m1","model":"claude-sonnet-4-6","usage":{"input_tokens":%d,"output_tokens":1}}}`+"\n", stamp(59*time.Minute), firstTokens) +
+			fmt.Sprintf(`{"type":"assistant","timestamp":%q,"requestId":"r2","message":{"id":"m2","model":"claude-sonnet-4-6","usage":{"input_tokens":7,"output_tokens":1}}}`+"\n", stamp(58*time.Minute))
+	}
+	writeFileT(t, path, body(100))
+	before, err := walk(now, SessionBlock, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.Total.Input != 107 {
+		t.Fatalf("setup: input tokens %d, want 107", before.Total.Input)
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	writeFileT(t, path, body(900)) // same inode, same size
+	later := fi.ModTime().Add(time.Second)
+	if err := os.Chtimes(path, later, later); err != nil {
+		t.Fatal(err)
+	}
+	warm, err := walk(now, SessionBlock, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh := walkFresh(t, now, SessionBlock, false)
+	if !reflect.DeepEqual(warm, fresh) || warm.Total.Input != 907 {
+		t.Fatalf("after a same-size rewrite: cached input %d, fresh %d (want 907)\n cached %+v\n fresh  %+v", warm.Total.Input, fresh.Total.Input, warm, fresh)
+	}
 }
 
 // TestWalk_ConcurrentWalksWhileAppending — the TUI refresh and

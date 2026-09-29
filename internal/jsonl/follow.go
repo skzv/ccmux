@@ -41,7 +41,8 @@ func (c *Cursor) Offset() int64 { return c.off }
 //
 // A same-size in-place rewrite that also keeps the modification time
 // goes unnoticed until the file changes again; transcripts are
-// append-only, so that doesn't happen in practice.
+// append-only, so that doesn't happen in practice. One that moves the
+// modification time is caught by the next Follow (see FollowFS).
 func (c *Cursor) Unchanged(fi fs.FileInfo) bool {
 	if !c.valid || fi == nil || !fi.Mode().IsRegular() {
 		return false
@@ -59,12 +60,20 @@ func (c *Cursor) Unchanged(fi fs.FileInfo) bool {
 // as Scanner does.
 //
 // When the file is no longer the one the cursor was reading — replaced
-// (a different inode), truncated below the offset, or rewritten so the
-// bytes just before the offset differ — restart is called first and
-// the file is read from the beginning: the caller must drop everything
-// it derived from earlier lines. The same happens when the file can't
-// be opened, since there is then nothing to derive anything from; the
-// error is returned.
+// (a different inode), truncated below the offset, rewritten so the
+// bytes just before the offset differ, or modified without growing (its
+// modification time moved since the last complete Follow but its size
+// didn't: an append always grows the file, so that is an in-place
+// rewrite) — restart is called first and the file is read from the
+// beginning: the caller must drop everything it derived from earlier
+// lines. The same happens when the file can't be opened, since there is
+// then nothing to derive anything from; the error is returned.
+//
+// What is still missed: an in-place edit before the offset that comes
+// together with an append (the file grew, so it looks like one) and
+// leaves the sigLen bytes just before the offset as they were. Nothing
+// short of re-reading the whole file would catch that; transcripts are
+// append-only, so it doesn't happen in practice.
 //
 // Follow never reads a file the caller didn't ask about and never
 // holds any lock; callers serialize access to one Cursor themselves.
@@ -84,6 +93,8 @@ type randomAccessFile interface {
 // means the OS). fsys's files must implement io.ReaderAt and io.Seeker.
 // It exists so tests can drive a Cursor over an in-memory tree.
 func (c *Cursor) FollowFS(fsys fs.FS, path string, maxLen int, restart func(), line, partial func([]byte)) error {
+	// The file as the last complete Follow left it, for rewritten below.
+	was, wasSize, wasMtime := c.valid, c.size, c.mtime
 	c.valid = false
 	f, err := openRandomAccess(fsys, path)
 	if err != nil {
@@ -99,7 +110,11 @@ func (c *Cursor) FollowFS(fsys fs.FS, path string, maxLen int, restart func(), l
 		return err
 	}
 	dev, ino := fileID(fi)
-	if c.off > 0 && (dev != c.dev || ino != c.ino || fi.Size() < c.off || !c.sigMatches(f)) {
+	// Modified but not grown: not an append, so bytes already read may
+	// have changed anywhere — not only in the sigLen bytes sigMatches
+	// checks. A same-size rewrite of an early line got past it.
+	rewritten := was && !fi.ModTime().Equal(wasMtime) && fi.Size() <= wasSize
+	if c.off > 0 && (dev != c.dev || ino != c.ino || fi.Size() < c.off || rewritten || !c.sigMatches(f)) {
 		c.rewind(restart)
 	}
 	if c.off > 0 {

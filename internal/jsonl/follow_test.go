@@ -171,6 +171,118 @@ func TestCursor_RestartsWhenFileIsNotAContinuation(t *testing.T) {
 	}
 }
 
+// TestCursor_SameSizeRewriteRestarts — an early line changed in place,
+// same inode, same size, so nothing appended: only the sigLen bytes
+// before the offset were checked, and they hadn't changed, so the file
+// was taken for up to date and the old line kept until a restart. Its
+// modification time moved without the file growing — no append does
+// that — so the next Follow reads it again from the start.
+func TestCursor_SameSizeRewriteRestarts(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "t.jsonl")
+	tail := strings.Repeat("unchanged tail line\n", 5) // > sigLen after the edit
+	writeFile(t, path, "tokens=100\n"+tail)
+	var f follower
+	if err := f.follow(t, path, 100); err != nil {
+		t.Fatal(err)
+	}
+	fi := stat(t, path)
+	fh, err := os.OpenFile(path, os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fh.WriteAt([]byte("tokens=900"), 0); err != nil {
+		t.Fatal(err)
+	}
+	fh.Close()
+	later := fi.ModTime().Add(time.Second) // however coarse the filesystem's clock
+	if err := os.Chtimes(path, later, later); err != nil {
+		t.Fatal(err)
+	}
+	if got := stat(t, path); got.Size() != fi.Size() {
+		t.Fatalf("setup: size %d → %d, want a same-size rewrite", fi.Size(), got.Size())
+	}
+	if err := f.follow(t, path, 100); err != nil {
+		t.Fatal(err)
+	}
+	if f.restarts != 1 || !strings.HasPrefix(f.got(), "tokens=900|") {
+		t.Fatalf("restarts %d lines %q, want 1 and the rewritten first line", f.restarts, f.got())
+	}
+
+	// Appends still read on from the offset.
+	appendFile(t, path, "appended\n")
+	f.lines = nil
+	if err := f.follow(t, path, 100); err != nil {
+		t.Fatal(err)
+	}
+	if f.restarts != 1 || f.got() != "appended" {
+		t.Fatalf("after an append: restarts %d lines %q, want 1 and just the new line", f.restarts, f.got())
+	}
+}
+
+// TestCursor_AppendDuringReadIsNotARewrite — an append that lands
+// between a Follow's stat and its read is consumed by that Follow, past
+// the size its stat reported. The next Follow finds a new modification
+// time and a size equal to the offset; that is the append already read,
+// not a rewrite, and must not cost a reparse.
+func TestCursor_AppendDuringReadIsNotARewrite(t *testing.T) {
+	t0 := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	file := &fstest.MapFile{Data: []byte("a\nb\n"), ModTime: t0.Add(time.Second)}
+	fsys := fstest.MapFS{"t.jsonl": file}
+	var c Cursor
+	restarts, lines := 0, 0
+	follow := func(fsys fs.FS) {
+		t.Helper()
+		if err := c.FollowFS(fsys, "t.jsonl", 100, func() { restarts++ }, func([]byte) { lines++ }, func([]byte) {}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The stat saw "a\n" at t0; "b\n" was appended before the read.
+	follow(staleStatFS{fsys, 2, t0})
+	if lines != 2 || c.Offset() != 4 {
+		t.Fatalf("setup: %d lines, offset %d; want both lines read", lines, c.Offset())
+	}
+	follow(fsys)
+	if restarts != 0 || lines != 2 {
+		t.Fatalf("restarts %d lines %d, want no restart and nothing new", restarts, lines)
+	}
+}
+
+// staleStatFS serves fsys's files with a Stat that reports size and mtime
+// as they were before the last append.
+type staleStatFS struct {
+	fstest.MapFS
+	size int64
+	mod  time.Time
+}
+
+func (s staleStatFS) Open(name string) (fs.File, error) {
+	f, err := s.MapFS.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	return staleFile{f.(randomAccessFile), s.size, s.mod}, nil
+}
+
+type staleFile struct {
+	randomAccessFile
+	size int64
+	mod  time.Time
+}
+
+func (f staleFile) Stat() (fs.FileInfo, error) {
+	fi, err := f.randomAccessFile.Stat()
+	return staleInfo{fi, f.size, f.mod}, err
+}
+
+type staleInfo struct {
+	fs.FileInfo
+	size int64
+	mod  time.Time
+}
+
+func (i staleInfo) Size() int64        { return i.size }
+func (i staleInfo) ModTime() time.Time { return i.mod }
+
 // TestCursor_MissingFileRestarts — a file that vanished yields nothing
 // and an error; what was parsed from it is dropped.
 func TestCursor_MissingFileRestarts(t *testing.T) {
