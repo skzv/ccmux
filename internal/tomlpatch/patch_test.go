@@ -3,6 +3,7 @@ package tomlpatch
 import (
 	"bytes"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -297,6 +298,251 @@ address = "air.ts.net"   # laptop
 			t.Errorf("got\n%s\nwant\n%s", got, want)
 		}
 	})
+}
+
+// threeHosts is a hand-written host list, each entry documented.
+const threeHosts = `theme = "nord"
+
+# first host
+[[host]]
+name = "a"
+address = "a.ts.net"
+
+# second host (keep this comment)
+[[host]]
+name = "b"
+address = "b.ts.net"
+
+# third host
+[[host]]
+name = "c"
+address = "c.ts.net"
+
+[setup]
+completed = true
+`
+
+// withDefaults drops the host named drop and gives every remaining one
+// the keys a config save fills in — so no element is left unchanged.
+func withDefaults(drop string) func(map[string]any) {
+	return func(m map[string]any) {
+		var out []map[string]any
+		for _, h := range m["host"].([]map[string]any) {
+			if h["name"] == drop {
+				continue
+			}
+			h["user"], h["port"], h["ssh_port"], h["mosh"] = "", int64(0), int64(0), false
+			out = append(out, h)
+		}
+		m["host"] = out
+	}
+}
+
+// TestPatch_ArrayOfTables_RemoveWhileAddingKeys — removing a host in a
+// save that also fills in every host's missing keys used to pair the
+// hosts by position (none was unchanged), rewriting b into c: b's
+// comment ended up above c, and c's dangled above [setup]. Elements now
+// match by identity, and a removed one takes its comment with it.
+func TestPatch_ArrayOfTables_RemoveWhileAddingKeys(t *testing.T) {
+	const added = "mosh = false\nport = 0\nssh_port = 0\nuser = \"\"\n" // a re-encoded map: alphabetical
+	t.Run("middle", func(t *testing.T) {
+		want := `theme = "nord"
+
+# first host
+[[host]]
+name = "a"
+address = "a.ts.net"
+` + added + `
+# third host
+[[host]]
+name = "c"
+address = "c.ts.net"
+` + added + `
+[setup]
+completed = true
+`
+		if got := mustPatch(t, threeHosts, retarget(t, threeHosts, withDefaults("b"))); got != want {
+			t.Errorf("got\n%s\nwant\n%s", got, want)
+		}
+	})
+	t.Run("first, CRLF", func(t *testing.T) {
+		orig := strings.ReplaceAll(threeHosts, "\n", "\r\n")
+		want := strings.ReplaceAll(`theme = "nord"
+
+# second host (keep this comment)
+[[host]]
+name = "b"
+address = "b.ts.net"
+`+added+`
+# third host
+[[host]]
+name = "c"
+address = "c.ts.net"
+`+added+`
+[setup]
+completed = true
+`, "\n", "\r\n")
+		if got := mustPatch(t, orig, retarget(t, orig, withDefaults("a"))); got != want {
+			t.Errorf("got %q\nwant %q", got, want)
+		}
+	})
+}
+
+// TestPatch_ArrayOfTables_RemovedElementTakesItsComment — with no key
+// added, the removed element still used to leave its comment behind,
+// above the next element's own.
+func TestPatch_ArrayOfTables_RemovedElementTakesItsComment(t *testing.T) {
+	drop := func(name string) func(map[string]any) {
+		return func(m map[string]any) {
+			var out []map[string]any
+			for _, h := range m["host"].([]map[string]any) {
+				if h["name"] != name {
+					out = append(out, h)
+				}
+			}
+			m["host"] = out
+		}
+	}
+	for _, c := range []struct{ name, orig, drop, want string }{{
+		name: "first, at the top of the file",
+		orig: "# first host\n[[host]]\nname = \"a\"\n\n# second host\n[[host]]\nname = \"b\"\n",
+		drop: "a",
+		want: "# second host\n[[host]]\nname = \"b\"\n",
+	}, {
+		name: "last: no dangling comment or trailing blank line",
+		orig: "x = 1\n\n# first host\n[[host]]\nname = \"a\"\n\n# second host\n[[host]]\nname = \"b\"\n",
+		drop: "b",
+		want: "x = 1\n\n# first host\n[[host]]\nname = \"a\"\n",
+	}, {
+		name: "last, before a footer comment set apart by a blank line",
+		orig: "x = 1\n\n# first host\n[[host]]\nname = \"a\"\n# second host\n[[host]]\nname = \"b\"\n# b's own note\n\n# end of file\n",
+		drop: "b",
+		want: "x = 1\n\n# first host\n[[host]]\nname = \"a\"\n\n# end of file\n",
+	}, {
+		name: "the only one: its comment doesn't move onto the next table",
+		orig: "x = 1\n\n# the only host\n[[host]]\nname = \"a\"\n\n# agent settings\n[agents]\ndefault = \"codex\"\n",
+		drop: "a",
+		want: "x = 1\n\n# agent settings\n[agents]\ndefault = \"codex\"\n",
+	}} {
+		t.Run(c.name, func(t *testing.T) {
+			target := retarget(t, c.orig, func(m map[string]any) {
+				drop(c.drop)(m)
+				if len(m["host"].([]map[string]any)) == 0 {
+					delete(m, "host")
+				}
+			})
+			if got := mustPatch(t, c.orig, target); got != c.want {
+				t.Errorf("got\n%s\nwant\n%s", got, c.want)
+			}
+		})
+	}
+}
+
+// A comment above the first element documents the whole list when no
+// other element has a comment of its own (TestPatch_ArrayOfTables'
+// "remove the first"); new elements go under it too.
+func TestPatch_ArrayOfTables_ListCommentStays(t *testing.T) {
+	orig := "# my machines\n[[host]]\nname = \"mini\"\n\n[[host]]\nname = \"air\"\n"
+	target := retarget(t, orig, func(m map[string]any) {
+		m["host"] = []map[string]any{{"name": "pi"}}
+	})
+	want := "# my machines\n[[host]]\nname = \"pi\"\n"
+	if got := mustPatch(t, orig, target); got != want {
+		t.Errorf("replacing every element: got %q, want %q", got, want)
+	}
+	target = retarget(t, orig, func(m map[string]any) {
+		m["host"] = append([]map[string]any{{"name": "pi"}}, m["host"].([]map[string]any)...)
+	})
+	want = "# my machines\n[[host]]\nname = \"pi\"\n\n[[host]]\nname = \"mini\"\n\n[[host]]\nname = \"air\"\n"
+	if got := mustPatch(t, orig, target); got != want {
+		t.Errorf("adding in front: got %q, want %q", got, want)
+	}
+}
+
+func TestPatch_ArrayOfTables_EditedElementKeepsItsComment(t *testing.T) {
+	orig := "# the mini\n[[host]]\nname = \"mini\"\naddress = \"1.1.1.1\" # static\n\n# the air\n[[host]]\nname = \"air\"\naddress = \"2.2.2.2\"\n"
+	t.Run("renamed: address still identifies it", func(t *testing.T) {
+		target := retarget(t, orig, func(m map[string]any) {
+			m["host"].([]map[string]any)[0]["name"] = "mini2"
+		})
+		want := strings.Replace(orig, `"mini"`, `"mini2"`, 1)
+		if got := mustPatch(t, orig, target); got != want {
+			t.Errorf("got\n%s\nwant\n%s", got, want)
+		}
+	})
+	t.Run("replaced: a different host takes none of its comments", func(t *testing.T) {
+		target := retarget(t, orig, func(m map[string]any) {
+			m["host"].([]map[string]any)[0] = map[string]any{"name": "pi", "address": "3.3.3.3"}
+		})
+		want := "[[host]]\naddress = \"3.3.3.3\"\nname = \"pi\"\n\n# the air\n[[host]]\nname = \"air\"\naddress = \"2.2.2.2\"\n"
+		if got := mustPatch(t, orig, target); got != want {
+			t.Errorf("got\n%s\nwant\n%s", got, want)
+		}
+	})
+	t.Run("lone element: edited in place", func(t *testing.T) {
+		orig := "[[x]] # the one\nn = 1 # count\n"
+		target := retarget(t, orig, func(m map[string]any) { m["x"].([]map[string]any)[0]["n"] = int64(2) })
+		if got, want := mustPatch(t, orig, target), "[[x]] # the one\nn = 2 # count\n"; got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+}
+
+// TestPatch_DeletedTableTakesItsComment — the comment directly above a
+// deleted table goes with it; one set apart by a blank line, or one
+// opening the file, stays.
+func TestPatch_DeletedTableTakesItsComment(t *testing.T) {
+	for _, c := range []struct{ orig, want string }{
+		{"a = 1\n\n# per-agent tiers\n[tiers]\ncodex = \"plus\"\n\n[b]\ny = 2\n", "a = 1\n\n[b]\ny = 2\n"},
+		{"a = 1\n\n# about tiers\n\n[tiers]\ncodex = \"plus\"\n\n[b]\ny = 2\n", "a = 1\n\n# about tiers\n\n[b]\ny = 2\n"},
+		{"# my config\n[tiers]\ncodex = \"plus\"\n\n[b]\ny = 2\n", "# my config\n[b]\ny = 2\n"},
+	} {
+		target := retarget(t, c.orig, func(m map[string]any) { delete(m, "tiers") })
+		if got := mustPatch(t, c.orig, target); got != c.want {
+			t.Errorf("got %q, want %q", got, c.want)
+		}
+	}
+}
+
+func TestAlignTables(t *testing.T) {
+	h := func(kv ...any) map[string]any {
+		m := map[string]any{}
+		for i := 0; i < len(kv); i += 2 {
+			m[kv[i].(string)] = kv[i+1]
+		}
+		return m
+	}
+	cases := []struct {
+		name   string
+		ol, nl []map[string]any
+		want   [][2]int
+	}{
+		{"removed, keys added to the rest",
+			[]map[string]any{h("name", "a"), h("name", "b"), h("name", "c")},
+			[]map[string]any{h("name", "a", "port", int64(0)), h("name", "c", "port", int64(0))},
+			[][2]int{{0, 0}, {2, 1}}},
+		{"identity wins over look-alikes",
+			[]map[string]any{h("name", "a", "user", "me", "mosh", true), h("name", "b", "user", "me", "mosh", true)},
+			[]map[string]any{h("name", "b", "user", "me", "mosh", true)},
+			[][2]int{{1, 0}}},
+		{"no shared name: most-alike",
+			[]map[string]any{h("k", "x", "v", int64(1)), h("k", "x", "v", int64(2))},
+			[]map[string]any{h("k", "x", "v", int64(2), "new", true)},
+			[][2]int{{1, 0}}},
+		{"no identity, same count: edited in place",
+			[]map[string]any{h("v", int64(1))},
+			[]map[string]any{h("v", int64(2))},
+			[][2]int{{0, 0}}},
+		{"identity, nothing in common: all replaced",
+			[]map[string]any{h("name", "a"), h("name", "b")},
+			[]map[string]any{h("name", "c"), h("name", "d")},
+			nil},
+	}
+	for _, c := range cases {
+		if got := alignTables(c.ol, c.nl); !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
+	}
 }
 
 func TestPatch_KeepsCRLF(t *testing.T) {

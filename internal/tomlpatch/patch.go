@@ -8,8 +8,11 @@
 // changed: it decodes both the original and the freshly encoded target,
 // diffs them by key path, and applies the differences to the original
 // bytes at the positions go-toml's parser reports — replacing a changed
-// value in place, deleting a removed key's line, and adding new keys at
+// value in place, deleting a removed key's line (or a removed table,
+// with the comment written directly above it), and adding new keys at
 // the end of their table (creating the [table] header when missing).
+// The elements of an [[array]] are matched by identity, not position,
+// so each keeps its own comments when others are added or removed.
 //
 // The result always decodes to exactly what the target decodes to:
 // Patch re-decodes its own output and compares before returning, and
@@ -22,6 +25,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -283,61 +287,28 @@ func (p *patcher) patchTable(t *table, path []string, ov, nv map[string]any) err
 	return p.insertSections(t, path, sections)
 }
 
-// patchArray edits the [[path]] elements of an array of tables. It
-// keeps elements that are unchanged, patches changed ones in place
-// (so comments inside them survive), and deletes or inserts the rest,
-// aligning old and new by their longest common subsequence.
+// patchArray edits the [[path]] elements of an array of tables. Each
+// new element that is an old one (see alignTables) is patched in place,
+// so the comments in and above it stay with it; old elements with no
+// counterpart are deleted, comment included, and new ones inserted.
 func (p *patcher) patchArray(elems []*table, path []string, ol, nl []map[string]any) error {
 	m, n := len(ol), len(nl)
-	// lcs[i][j] = LCS length of ol[i:] and nl[j:].
-	lcs := make([][]int, m+1)
-	for i := range lcs {
-		lcs[i] = make([]int, n+1)
-	}
-	for i := m - 1; i >= 0; i-- {
-		for j := n - 1; j >= 0; j-- {
-			if Equal(ol[i], nl[j]) {
-				lcs[i][j] = lcs[i+1][j+1] + 1
-			} else {
-				lcs[i][j] = max(lcs[i+1][j], lcs[i][j+1])
-			}
-		}
-	}
-	type pair struct{ i, j int }
-	var matches []pair
-	for i, j := 0, 0; i < m && j < n; {
-		switch {
-		case Equal(ol[i], nl[j]):
-			matches = append(matches, pair{i, j})
-			i++
-			j++
-		case lcs[i+1][j] >= lcs[i][j+1]:
-			i++
-		default:
-			j++
-		}
-	}
-	matches = append(matches, pair{m, n}) // sentinel closing the last gap
+	// The array outlives the patch (nl is never empty): a comment that
+	// documents it stays even if its first element goes.
+	elems[0].sec.arrayKept = true
+	pairs := append(alignTables(ol, nl), [2]int{m, n}) // sentinel closing the last gap
 
 	kept := -1 // last surviving element before the current gap
 	oi, nj := 0, 0
-	for _, mt := range matches {
-		olds := mt.i - oi
-		news := mt.j - nj
-		paired := min(olds, news)
-		for x := 0; x < paired; x++ {
-			if err := p.patchTable(elems[oi+x], path, ol[oi+x], nl[nj+x]); err != nil {
-				return err
-			}
-			kept = oi + x
+	for _, pr := range pairs {
+		mi, mj := pr[0], pr[1]
+		for x := oi; x < mi; x++ {
+			p.deleteTable(elems[x])
 		}
-		for x := paired; x < olds; x++ {
-			p.deleteTable(elems[oi+x])
-		}
-		if paired < news {
+		if nj < mj {
 			var sb strings.Builder
-			for x := paired; x < news; x++ {
-				if err := p.renderSection(&sb, path, nl[nj+x], true); err != nil {
+			for x := nj; x < mj; x++ {
+				if err := p.renderSection(&sb, path, nl[x], true); err != nil {
 					return err
 				}
 			}
@@ -348,21 +319,193 @@ func (p *patcher) patchArray(elems []*table, path []string, ol, nl []map[string]
 					return err
 				}
 				p.add(pos, pos, prioSection, p.nl+sb.String())
-			case mt.i < m:
+			case mi < m:
 				// New elements before every surviving one: insert above
-				// the next element (and the comment documenting it).
-				pos := p.d.attachStart(elems[mt.i].sec)
+				// the next element and its own comment (below a comment
+				// that documents the whole array).
+				s := elems[mi].sec
+				pos := p.d.attachStart(s)
+				if s.role == roleArrayDoc {
+					pos = s.hdrStart
+				}
 				p.add(pos, pos, prioSection, sb.String()+p.nl)
 			default:
-				return errShape
+				// Nothing survives: the new elements take the old ones'
+				// place, set apart from whatever follows them.
+				pos, text := p.delStart(elems[0].sec), sb.String()
+				if secs := p.ownSections(elems[m-1]); secs[len(secs)-1].idx < len(p.d.sections)-1 {
+					text += p.nl
+				}
+				p.add(pos, pos, prioSection, text)
 			}
 		}
-		if mt.i < m {
-			kept = mt.i
+		if mi < m {
+			if err := p.patchTable(elems[mi], path, ol[mi], nl[mj]); err != nil {
+				return err
+			}
+			kept = mi
 		}
-		oi, nj = mt.i+1, mt.j+1
+		oi, nj = mi+1, mj+1
 	}
 	return nil
+}
+
+// alignTables decides which old element of an array of tables each new
+// element is, so a save that changed some elements (and added or
+// removed others) edits each in place rather than rewriting its
+// neighbour into it — which would leave every comment above the wrong
+// element. It returns the matched (old, new) index pairs in order, both
+// indexes increasing.
+//
+// Two elements may match when:
+//   - the array has identity keys (identityKeys: e.g. `name` for
+//     ccmux's [[host]]) and they agree on one of them; or else
+//   - most of the keys they both have hold equal values
+//     (similarityPct >= 50). Keys only one side has don't count
+//     against it, so an element whose only change is keys added (a
+//     save filling in defaults) or removed still matches itself.
+//
+// Among the orderings allowed, it keeps the most elements, then the
+// most similar ones. Without identity keys, an equal number of
+// unmatched old and new elements between two matches are paired in
+// order — most likely each edited in place — as they were before
+// identity matching existed.
+func alignTables(ol, nl []map[string]any) [][2]int {
+	m, n := len(ol), len(nl)
+	ids := identityKeys(ol, nl)
+	// A matched pair is worth more than any difference in similarity,
+	// so the alignment keeps the most elements first.
+	const pairWorth = 4096
+	score := make([][]int, m)
+	for i := range score {
+		score[i] = make([]int, n)
+		for j := range score[i] {
+			if s, ok := matchScore(ol[i], nl[j], ids); ok {
+				score[i][j] = pairWorth + s
+			}
+		}
+	}
+	// best[i][j] is the highest total score aligning ol[i:] with nl[j:].
+	best := make([][]int, m+1)
+	for i := range best {
+		best[i] = make([]int, n+1)
+	}
+	for i := m - 1; i >= 0; i-- {
+		for j := n - 1; j >= 0; j-- {
+			b := max(best[i+1][j], best[i][j+1])
+			if s := score[i][j]; s > 0 {
+				b = max(b, best[i+1][j+1]+s)
+			}
+			best[i][j] = b
+		}
+	}
+	var pairs [][2]int
+	for i, j := 0, 0; i < m && j < n; {
+		switch s := score[i][j]; {
+		case s > 0 && best[i][j] == best[i+1][j+1]+s:
+			pairs = append(pairs, [2]int{i, j})
+			i++
+			j++
+		case best[i][j] == best[i+1][j]:
+			i++
+		default:
+			j++
+		}
+	}
+	if len(ids) > 0 {
+		return pairs
+	}
+	var out [][2]int
+	pi, pj := -1, -1
+	for _, pr := range append(pairs, [2]int{m, n}) {
+		if gap := pr[0] - pi - 1; gap > 0 && gap == pr[1]-pj-1 {
+			for x := 1; x <= gap; x++ {
+				out = append(out, [2]int{pi + x, pj + x})
+			}
+		}
+		if pr[0] < m {
+			out = append(out, pr)
+		}
+		pi, pj = pr[0], pr[1]
+	}
+	return out
+}
+
+// matchScore reports whether old element o and new element n may be
+// the same element, and how alike they are (higher is more alike).
+func matchScore(o, n map[string]any, ids []string) (int, bool) {
+	sim, common := similarityPct(o, n)
+	switch {
+	case len(ids) > 0:
+		if !slices.ContainsFunc(ids, func(k string) bool { return Equal(o[k], n[k]) }) {
+			return 0, false
+		}
+	case common == 0 && len(o)+len(n) > 0, sim < 50:
+		// Nothing in common, or mostly different values.
+		return 0, false
+	}
+	s := 2 * sim
+	if Equal(o, n) {
+		s++ // an untouched element beats one with added keys
+	}
+	return s, true
+}
+
+// similarityPct is the percentage of the keys both o and n have whose
+// values are equal (100 when they share no keys), and how many keys
+// they share.
+func similarityPct(o, n map[string]any) (pct, common int) {
+	same := 0
+	for k, v := range o {
+		if w, ok := n[k]; ok {
+			common++
+			if Equal(v, w) {
+				same++
+			}
+		}
+	}
+	if common == 0 {
+		return 100, 0
+	}
+	return same * 100 / common, common
+}
+
+// identityKeys lists the keys that name an array's elements: held by
+// every element before and after the change, as a string or integer
+// that differs between any two elements on the same side — `name` in
+// ccmux's [[host]] list. With at most one element on each side, nothing
+// tells a naming key from any other, so there are none.
+func identityKeys(ol, nl []map[string]any) []string {
+	if len(ol) < 2 && len(nl) < 2 {
+		return nil
+	}
+	var ids []string
+	for k := range ol[0] {
+		if namesEach(ol, k) && namesEach(nl, k) {
+			ids = append(ids, k)
+		}
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// namesEach reports whether every element of l holds a distinct string
+// or integer at k.
+func namesEach(l []map[string]any, k string) bool {
+	seen := make(map[any]bool, len(l))
+	for _, m := range l {
+		v := m[k]
+		switch v.(type) {
+		case string, int64:
+		default:
+			return false
+		}
+		if seen[v] {
+			return false
+		}
+		seen[v] = true
+	}
+	return true
 }
 
 // insertLines adds new keys to table t as `key = value` lines at the
@@ -539,9 +682,9 @@ func (p *patcher) headerSlot(t *table) (int, error) {
 		}
 	}
 	if len(secs) > 0 {
-		// Every sub-table is being deleted; a deleted header's start is
+		// Every sub-table is being deleted; where a deletion starts is
 		// always an edit boundary.
-		return secs[0].hdrStart, nil
+		return p.delStart(secs[0]), nil
 	}
 	return 0, errShape
 }
@@ -558,7 +701,7 @@ func (p *patcher) sectionSlot(t *table) (pos int, after bool, err error) {
 		}
 	}
 	if len(secs) > 0 {
-		return secs[0].hdrStart, false, nil
+		return p.delStart(secs[0]), false, nil
 	}
 	return 0, false, errShape
 }
@@ -597,20 +740,80 @@ func (p *patcher) deleteLine(k *kv) {
 }
 
 // flushSections turns deleted sections into edits. A deleted section
-// takes its lines up to the comment attached to the next header; when
-// the next section goes too, that comment goes with them.
+// takes the comment attached to its header (see delStart) and its lines
+// up to the comment attached to the next header, which stays with that
+// table — or, for the last section, up to the file's footer comment.
 func (p *patcher) flushSections() {
 	secs := p.d.sections
-	for i, s := range secs {
+	for _, s := range secs {
 		if !s.deleted {
 			continue
 		}
-		end := p.d.bodyEnd(s)
-		if i+1 < len(secs) && secs[i+1].deleted {
-			end = secs[i+1].hdrStart
+		start, end := p.delStart(s), p.d.bodyEnd(s)
+		switch {
+		case s.idx == len(secs)-1 && p.d.footer < len(p.d.src):
+			// Keep the footer and the blank line that sets it apart.
+			end = p.d.contentEnd(start, p.d.footer)
+		case end < len(p.d.src) && p.d.keyLineBefore(start):
+			// The section followed the one above with no blank line; the
+			// blank lines that set it apart from the next now set that
+			// one apart instead.
+			end = p.d.contentEnd(start, end)
 		}
-		p.add(s.hdrStart, end, prioLine, "")
+		p.add(start, end, prioLine, "")
 	}
+	p.trimTail()
+}
+
+// delStart is where deleting section s starts: above its header when
+// the comment block attached to the header goes with it, else at the
+// header. A table's comment goes unless it opens the file (the file's
+// own header comment, as likely as not); an array element's own comment
+// always goes; a comment documenting the whole array goes only with
+// the array's last element.
+func (p *patcher) delStart(s *section) int {
+	a := p.d.attachStart(s)
+	var keep bool
+	switch s.role {
+	case roleTable:
+		keep = a == 0
+	case roleArrayDoc:
+		keep = s.arrayKept || a == 0
+	case roleElem:
+		keep = false
+	}
+	if keep {
+		return s.hdrStart
+	}
+	return a
+}
+
+// trimTail removes the blank lines that would end the file once its
+// last sections are deleted (they separated those sections from the
+// text above) — or that would double the ones setting the footer
+// apart. Text inserted before them or at EOF brings its own separation;
+// anything inserted in between (in place of a deleted section) keeps
+// them.
+func (p *patcher) trimTail() {
+	secs := p.d.sections
+	k := len(secs) - 1
+	if k == 0 || !secs[k].deleted {
+		return
+	}
+	for k > 1 && secs[k-1].deleted {
+		k--
+	}
+	start := p.delStart(secs[k])
+	from := p.d.contentEnd(0, start)
+	if from == start {
+		return
+	}
+	for _, e := range p.edits {
+		if e.start == e.end && e.start > from && e.start < len(p.d.src) {
+			return
+		}
+	}
+	p.add(from, start, prioLine, "")
 }
 
 // apply splices the edits into src. Insertions land at line starts; if

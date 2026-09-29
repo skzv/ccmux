@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -47,11 +48,29 @@ type genComment struct {
 	text    string
 	owners  [][]string
 	inValue bool // inside a multi-line array: lost if that value changes
+	// elem, when set, is the named-array element this comment sits
+	// directly above; checkNamed tracks it instead of owners.
+	elem *genElem
 }
 
 type genLine struct {
 	text string
 	path []string
+}
+
+// genArray is an array of tables whose elements are told apart by a
+// unique `name` — the shape of ccmux's [[host]] list — each element
+// under a comment of its own.
+type genArray struct {
+	key   string
+	elems []*genElem
+}
+
+type genElem struct {
+	name     string
+	attached []string // the comment lines directly above its header, in order
+	inside   []string // comments on or between its own lines
+	lines    []genLine
 }
 
 type gen struct {
@@ -64,8 +83,9 @@ type gen struct {
 	nComment int
 	// open is the run of standalone comments written since the last
 	// non-comment line: a header written next adopts them.
-	open []int
-	cur  []string // path of the section being written
+	open  []int
+	cur   []string // path of the section being written
+	named map[string]*genArray
 }
 
 func (g *gen) comment() string {
@@ -324,6 +344,10 @@ func (g *gen) document() string {
 			if tk == nil {
 				continue
 			}
+			if g.s.p(40) {
+				g.namedArray(*tk)
+				continue
+			}
 			path := []string{tk.name}
 			for e, n := 0, 1+g.s.n(3); e < n; e++ {
 				g.header("[["+tk.text+"]]", path)
@@ -351,6 +375,63 @@ func (g *gen) document() string {
 	return out
 }
 
+// namedArray writes 2–4 [[tk]] elements named n1, n2, …, each under one
+// or two comment lines of its own (sometimes with no blank line after
+// the previous element), with commented key lines inside.
+func (g *gen) namedArray(tk key) {
+	arr := &genArray{key: tk.name}
+	if g.named == nil {
+		g.named = map[string]*genArray{}
+	}
+	g.named[tk.name] = arr
+	for e, n := 0, 2+g.s.n(3); e < n; e++ {
+		el := &genElem{name: fmt.Sprintf("%s %d", tk.name, e+1)}
+		arr.elems = append(arr.elems, el)
+		if g.s.p(50) {
+			g.blank()
+		}
+		// Standalone comments written just before (no blank line) join
+		// the block above the header.
+		for _, i := range g.open {
+			g.comments[i].elem = el
+			el.attached = append(el.attached, g.comments[i].text)
+		}
+		g.open = nil
+		for c, k := 0, 1+g.s.n(2); c < k; c++ {
+			text := g.comment()
+			g.line(text)
+			el.attached = append(el.attached, text)
+		}
+		hdr := "[[" + tk.text + "]]"
+		if g.s.p(25) {
+			c := g.comment()
+			hdr += " " + c
+			el.inside = append(el.inside, c)
+		}
+		g.line(hdr)
+		g.cur = []string{tk.name}
+		g.elemLine(el, "name", fmt.Sprintf("%sname = %q", g.unit, el.name))
+		for _, k := range g.keys(g.s.n(3), map[string]bool{"name": true}) {
+			if g.s.p(15) {
+				c := g.comment()
+				g.line(g.unit + c)
+				el.inside = append(el.inside, c)
+			}
+			g.elemLine(el, k.name, g.unit+k.text+" = "+scalarPool[g.s.n(len(scalarPool))])
+		}
+	}
+}
+
+func (g *gen) elemLine(el *genElem, key, text string) {
+	if g.s.p(30) {
+		c := g.comment()
+		text += "   " + c
+		el.inside = append(el.inside, c)
+	}
+	g.line(text)
+	el.lines = append(el.lines, genLine{text: text, path: []string{key}})
+}
+
 func (g *gen) pick(pool []key, used, rootUsed map[string]bool) *key {
 	k := pool[g.s.n(len(pool))]
 	if used[k.name] || rootUsed[k.name] {
@@ -368,6 +449,9 @@ type mutation struct {
 	set     [][]string // value replaced in place, or key added
 	arrays  [][]string // arrays of tables that changed (alignment decides which element moves)
 	fresh   int
+	named   map[string]*genArray         // the document's named arrays, by key
+	gone    map[*genElem]bool            // named-array elements removed
+	edited  map[*genElem]map[string]bool // keys of surviving elements given a new value
 }
 
 func (mu *mutation) freshKey() string {
@@ -434,6 +518,10 @@ func (mu *mutation) mutate(path []string, m map[string]any) {
 				mu.mutate(sub, v)
 			}
 		case []map[string]any:
+			if arr := mu.named[k]; arr != nil && len(path) == 0 {
+				mu.mutateNamed(sub, m, arr, v)
+				continue
+			}
 			mu.mutateArray(sub, m, k, v)
 		case []any:
 			if l, ok := tableList(v); ok {
@@ -494,6 +582,87 @@ func (mu *mutation) mutateArray(sub []string, m map[string]any, k string, l []ma
 	}
 	m[k] = l
 	mu.arrays = append(mu.arrays, sub)
+}
+
+// mutateNamed changes a named array the way ccmux's saves change the
+// host list: elements removed and added, one key with the same value
+// added to every element (a save filling in defaults), an element
+// edited in place — often several at once. Names never change, and an
+// edit writes a value no other element has, so an element is always
+// recognisable by its name.
+func (mu *mutation) mutateNamed(sub []string, m map[string]any, arr *genArray, l []map[string]any) {
+	if mu.s.n(8) == 0 {
+		delete(m, arr.key)
+		mu.removed = append(mu.removed, sub)
+		for _, el := range arr.elems {
+			mu.gone[el] = true
+		}
+		return
+	}
+	byName := map[any]*genElem{}
+	for _, el := range arr.elems {
+		byName[el.name] = el
+	}
+	var out []map[string]any
+	for _, e := range l {
+		if mu.s.p(30) {
+			mu.gone[byName[e["name"]]] = true
+			continue
+		}
+		out = append(out, e)
+	}
+	for i, n := 0, mu.s.n(3); i < n; i++ {
+		mu.fresh++
+		e := map[string]any{"name": fmt.Sprintf("added%d", mu.fresh)}
+		if mu.s.p(50) {
+			e[mu.freshKey()] = mu.scalar()
+		}
+		out = slices.Insert(out, mu.s.n(len(out)+1), e)
+	}
+	if mu.s.p(50) {
+		k, v := mu.freshKey(), mu.scalar()
+		for _, e := range out {
+			e[k] = v
+		}
+	}
+	if len(out) > 0 && mu.s.p(30) {
+		e := out[mu.s.n(len(out))]
+		var keys []string
+		for _, k := range sortedKeys(e) {
+			if k != "name" {
+				keys = append(keys, k)
+			}
+		}
+		if len(keys) > 0 {
+			k := keys[mu.s.n(len(keys))]
+			mu.fresh++
+			e[k] = fmt.Sprintf("edited %d", mu.fresh)
+			if el := byName[e["name"]]; el != nil {
+				if mu.edited[el] == nil {
+					mu.edited[el] = map[string]bool{}
+				}
+				mu.edited[el][k] = true
+			}
+		}
+	}
+	if len(out) == 0 {
+		delete(m, arr.key)
+		mu.removed = append(mu.removed, sub)
+		return
+	}
+	m[arr.key] = out
+}
+
+// scalar is a value of the kind a config default has.
+func (mu *mutation) scalar() any {
+	switch mu.s.n(3) {
+	case 0:
+		return int64(mu.s.n(100))
+	case 1:
+		return mu.s.p(50)
+	default:
+		return []string{"", "x", "7474"}[mu.s.n(3)]
+	}
 }
 
 func deepCopy(v any) any {
@@ -574,7 +743,7 @@ func checkProperty(t testing.TB, data []byte) (decoderFallback bool) {
 		t.Fatalf("generator wrote invalid TOML: %v\n%s", err, orig)
 	}
 	old = orEmpty(old)
-	mu := &mutation{s: s}
+	mu := &mutation{s: s, named: g.named, gone: map[*genElem]bool{}, edited: map[*genElem]map[string]bool{}}
 	next := deepCopy(old).(map[string]any)
 	mu.mutate(nil, next)
 	target := encodeTarget(t, next)
@@ -606,16 +775,17 @@ func checkProperty(t testing.TB, data []byte) (decoderFallback bool) {
 
 	lost := append(append([][]string{}, mu.removed...), mu.arrays...)
 	for _, c := range g.comments {
-		skip := false
+		skip := c.elem != nil
 		for _, o := range c.owners {
 			if underAny(o, lost) || (c.inValue && relatedAny(o, append(lost, mu.set...))) {
 				skip = true
 			}
 		}
-		if !skip && !strings.Contains(string(out), c.text+"\n") && !strings.Contains(string(out), c.text+"\r\n") && !strings.HasSuffix(string(out), c.text) {
+		if !skip && !hasComment(string(out), c.text) {
 			t.Fatalf("comment %q lost\n--- original\n%s\n--- patched\n%s", c.text, orig, out)
 		}
 	}
+	checkNamed(t, g, mu, orig, string(out))
 	touched := append(lost, mu.set...)
 	for _, l := range g.lines {
 		if relatedAny(l.path, touched) {
@@ -632,6 +802,84 @@ func checkProperty(t testing.TB, data []byte) (decoderFallback bool) {
 		t.Fatalf("second patch not a no-op (err %v)\n--- first\n%s\n--- second\n%s", err, out, again)
 	}
 	return false
+}
+
+// hasComment reports whether comment text ends a line of out ("# c1"
+// must not match inside "# c12").
+func hasComment(out, text string) bool {
+	return strings.Contains(out, text+"\n") || strings.Contains(out, text+"\r\n") || strings.HasSuffix(out, text)
+}
+
+// checkNamed holds the patch to what a named array's comments mean:
+// each surviving element keeps its own comment block directly above its
+// header, with no other element's comment in that run of comment lines,
+// and keeps its inner comments and untouched lines; a removed element
+// takes all its comments with it. (A comment left by a deleted key line
+// elsewhere may end up above the block — that's not an element's.)
+func checkNamed(t testing.TB, g *gen, mu *mutation, orig, out string) {
+	t.Helper()
+	lines := strings.Split(strings.ReplaceAll(out, "\r\n", "\n"), "\n")
+	fail := func(format string, args ...any) {
+		t.Helper()
+		t.Fatalf(format+"\n--- original\n%s\n--- patched\n%s", append(args, orig, out)...)
+	}
+	owner := map[string]*genElem{}
+	for _, arr := range g.named {
+		for _, el := range arr.elems {
+			for _, c := range append(append([]string{}, el.attached...), el.inside...) {
+				owner[c] = el
+			}
+		}
+	}
+	for _, arr := range g.named {
+		for _, el := range arr.elems {
+			if mu.gone[el] {
+				for _, c := range append(append([]string{}, el.attached...), el.inside...) {
+					if hasComment(out, c) {
+						fail("removed element %s left its comment %q", el.name, c)
+					}
+				}
+				continue
+			}
+			nameLine := -1
+			for i, l := range lines {
+				rest, ok := strings.CutPrefix(strings.TrimSpace(l), fmt.Sprintf("name = %q", el.name))
+				if ok && (rest == "" || rest[0] == ' ') {
+					nameLine = i
+					break
+				}
+			}
+			if nameLine < 0 {
+				fail("element %s not found", el.name)
+			}
+			hdr := nameLine - 1
+			for hdr >= 0 && !strings.HasPrefix(strings.TrimSpace(lines[hdr]), "[[") {
+				hdr--
+			}
+			top := hdr
+			for top > 0 && strings.HasPrefix(strings.TrimSpace(lines[top-1]), "#") {
+				top--
+			}
+			var above []string
+			for _, l := range lines[max(top, 0):max(hdr, 0)] {
+				above = append(above, strings.TrimSpace(l))
+			}
+			extra, own := above[:max(len(above)-len(el.attached), 0)], above[max(len(above)-len(el.attached), 0):]
+			if !slices.Equal(own, el.attached) || slices.ContainsFunc(extra, func(c string) bool { return owner[c] != nil }) {
+				fail("element %s has %q above its header, want its own %q", el.name, above, el.attached)
+			}
+			for _, c := range el.inside {
+				if !hasComment(out, c) {
+					fail("element %s lost its comment %q", el.name, c)
+				}
+			}
+			for _, l := range el.lines {
+				if !mu.edited[el][l.path[0]] && !strings.Contains(out, l.text) {
+					fail("element %s: untouched line %q changed", el.name, l.text)
+				}
+			}
+		}
+	}
 }
 
 // secondOpinion decodes out with go-toml and reports whether it holds

@@ -22,6 +22,7 @@ type doc struct {
 	sections []*section // document order; sections[0] is the root (headerless) section
 	comment  map[int]bool
 	unit     string // indentation one nesting level adds, as the file itself writes it
+	footer   int    // start of the comment block that ends the file apart from the last table (len(src) if none)
 }
 
 // section is one [table] or [[array]] header plus the lines up to the
@@ -33,7 +34,28 @@ type section struct {
 	indent   string // whitespace before the header's '['
 	kvs      []*kv  // key/value lines lexically in this section, in order
 	deleted  bool
+	role     blockRole // what the comment block directly above the header documents
+	// arrayKept marks the first element of an array of tables that
+	// outlives this patch (other elements survive or are added).
+	arrayKept bool
 }
+
+// blockRole says what the comment lines directly above a header (no
+// blank line between them and it) document, which decides whether they
+// go when the section is deleted.
+type blockRole int
+
+const (
+	// roleTable: a [table]'s own comment, deleted with it — unless it
+	// opens the file, where it more likely describes the whole file.
+	roleTable blockRole = iota
+	// roleElem: an [[array]] element's own comment, deleted with it.
+	roleElem
+	// roleArrayDoc: the comment above an array's first element when no
+	// other element has one of its own — it documents the array, so it
+	// stays for the elements that remain.
+	roleArrayDoc
+)
 
 // kv is one `key = value` expression.
 type kv struct {
@@ -125,7 +147,77 @@ func index(src []byte) (*doc, error) {
 		return nil, fmt.Errorf("tomlpatch: index: %w", err)
 	}
 	d.unit = d.detectUnit()
+	d.assignRoles(d.root)
+	d.footer = d.findFooter()
 	return d, nil
+}
+
+// assignRoles sets the blockRole of every array element's section in
+// t's subtree (sections default to roleTable). The first element's
+// comment counts as its own only when another element has one too:
+//
+//	# first host        # my machines
+//	[[host]]            [[host]]
+//	...                 ...
+//	# second host       [[host]]
+//	[[host]]            ...
+//
+// On the left each host is documented; on the right the comment is
+// about the list.
+func (d *doc) assignRoles(t *table) {
+	for _, e := range t.entries {
+		if e.tbl != nil {
+			d.assignRoles(e.tbl)
+		}
+		if len(e.arr) == 0 {
+			continue
+		}
+		own := false
+		for _, el := range e.arr[1:] {
+			el.sec.role = roleElem
+			if d.attachStart(el.sec) < el.sec.hdrStart {
+				own = true
+			}
+		}
+		e.arr[0].sec.role = roleArrayDoc
+		if own {
+			e.arr[0].sec.role = roleElem
+		}
+		for _, el := range e.arr {
+			d.assignRoles(el)
+		}
+	}
+}
+
+// findFooter returns where a comment block that closes the file starts:
+// comment lines at the very end (only comments and blank lines below
+// them) with a blank line between them and the last table's content.
+// Such a block stands apart from that table, so deleting the table
+// leaves it. Returns len(src) when the file has no footer.
+func (d *doc) findFooter() int {
+	// Walk up over the trailing comment and blank lines.
+	run := len(d.src)
+	for run > 0 {
+		prev := lineStart(d.src, run-1)
+		if !d.comment[prev] && len(bytes.TrimSpace(d.src[prev:run])) != 0 {
+			break
+		}
+		run = prev
+	}
+	// Comments right under the content belong to it; the footer is the
+	// first comment after a blank line.
+	blank := false
+	for p := run; p < len(d.src); p = lineEnd(d.src, p) {
+		switch {
+		case d.comment[p]:
+			if blank {
+				return p
+			}
+		default:
+			blank = true
+		}
+	}
+	return len(d.src)
 }
 
 // keyParts returns the decoded parts of a (possibly dotted) key plus
@@ -281,7 +373,8 @@ func (d *doc) bodyEnd(s *section) int {
 
 // attachStart walks back from section s's header over the comment
 // lines directly above it (no blank line in between) — the comment
-// that documents a table stays with it.
+// that documents a table stays with it, and goes with it (see
+// patcher.delStart).
 func (d *doc) attachStart(s *section) int {
 	p := s.hdrStart
 	for p > 0 {
@@ -306,6 +399,16 @@ func (d *doc) contentEnd(lo, hi int) int {
 		p = prev
 	}
 	return p
+}
+
+// keyLineBefore reports whether the line ending at p (a line start) is
+// a key, value or header line — neither blank nor a comment.
+func (d *doc) keyLineBefore(p int) bool {
+	if p == 0 {
+		return false
+	}
+	prev := lineStart(d.src, p-1)
+	return !d.comment[prev] && len(bytes.TrimSpace(d.src[prev:p])) != 0
 }
 
 // lineStart returns the offset of the start of the line containing
