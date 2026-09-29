@@ -281,6 +281,8 @@ func TestHostFlag_UnreachableAndUnknown(t *testing.T) {
 		{"rename", "--host", "box", "work", "x"},
 		{"attach", "--host", "box", "work"},
 		{"list", "--host", "box"},
+		// shell printed the client's raw dial error instead.
+		{"shell", "--host", "box", "--name", "scratch"},
 	} {
 		res := e.run("", args...)
 		if res.code == 0 || !strings.Contains(res.stderr, "can't reach ccmuxd on box ("+addr+")") {

@@ -131,33 +131,26 @@ func runShellLocal(ctx context.Context, name, path, agentFlag string) error {
 
 // runShellRemote POSTs to the named peer's ccmuxd over the tailnet,
 // then exec's into `ssh -t <host> -- tmux attach`. The host name is
-// resolved against the user's configured hosts; if it's not there,
-// we error out with a hint pointing at `ccmux host add` or the
-// auto-discovery flow.
+// resolved against the user's configured hosts, and failures read as
+// they do for the other --host commands (lookupHost, remoteErr): an
+// unknown host points at `ccmux host add`, and a daemon that doesn't
+// answer is named with the address that was dialed.
 func runShellRemote(ctx context.Context, name, path, host, agentFlag string) error {
 	cfg, _ := config.Load()
-	var hostCfg config.Host
-	found := false
-	for _, h := range cfg.Hosts {
-		if h.Name == host {
-			hostCfg = h
-			found = true
-			break
-		}
+	rh, err := lookupHost(cfg, host)
+	if err != nil {
+		return err
 	}
-	if !found {
-		return fmt.Errorf("no host named %q in ~/.config/ccmux/config.toml; configure it with `ccmux host add` or attach via the TUI's auto-discovered list", host)
-	}
-	cli := daemon.RemoteClient(hostDaemonAddr(cfg, hostCfg))
+	hostCfg := rh.cfg
 	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	res, err := cli.NewBareSession(cctx, daemon.NewBareSessionRequest{
+	res, err := rh.cli.NewBareSession(cctx, daemon.NewBareSessionRequest{
 		Name:  name,
 		Path:  path,
 		Agent: agentFlag,
 	})
 	if err != nil {
-		return fmt.Errorf("new bare session on %s: %w", host, err)
+		return rh.remoteErr("new bare session", err)
 	}
 	// ssh -t <host> "tmux attach …" with the same PATH prepend the
 	// TUI uses for cross-platform tmux discovery. Duplicating here
