@@ -2,6 +2,7 @@ package codexusage
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -188,6 +189,26 @@ func TestEstimatedCost_AppliesPerModelRates(t *testing.T) {
 	want := 11.25 + 2.25
 	if abs(got-want) > 0.001 {
 		t.Errorf("EstimatedCost = %.4f, want %.4f", got, want)
+	}
+}
+
+// TestEstimatedCost_SameBitsEveryCall — the per-model costs were summed
+// in map order, which changes between calls; float addition isn't
+// associative, so the same aggregate's cost differed in its last digit
+// from one call to the next.
+func TestEstimatedCost_SameBitsEveryCall(t *testing.T) {
+	a := &Aggregate{ByModel: map[string]*Tokens{}}
+	for i, m := range []string{"gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-5-codex", "gpt-5.1", "gpt-4.1", "o3", "o4-mini"} {
+		for v := 0; v < 3; v++ {
+			n := (i*3 + v + 1) * 7919
+			a.ByModel[fmt.Sprintf("%s-%d", m, v)] = &Tokens{Input: n * 3, Cached: n, Output: n / 3}
+		}
+	}
+	first := math.Float64bits(a.EstimatedCost())
+	for i := 0; i < 500; i++ {
+		if got := math.Float64bits(a.EstimatedCost()); got != first {
+			t.Fatalf("call %d: %v, first call %v", i, math.Float64frombits(got), math.Float64frombits(first))
+		}
 	}
 }
 

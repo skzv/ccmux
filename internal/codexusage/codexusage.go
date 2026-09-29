@@ -20,8 +20,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -63,11 +65,13 @@ type Aggregate struct {
 
 // EstimatedCost returns a best-effort USD figure at OpenAI's published
 // rates. Approximate — primarily useful as a relative signal across
-// days, not as a billing source of truth.
+// days, not as a billing source of truth. The models are summed in
+// sorted order so the same aggregate always gives the same bits (float
+// addition isn't associative; a map's order changes between calls).
 func (a *Aggregate) EstimatedCost() float64 {
 	var cost float64
-	for model, t := range a.ByModel {
-		p := priceFor(model)
+	for _, model := range slices.Sorted(maps.Keys(a.ByModel)) {
+		t, p := a.ByModel[model], priceFor(model)
 		// Cached is already inside Input; subtract it so we don't
 		// double-count, then bill it at the cached rate.
 		uncached := t.Input - t.Cached

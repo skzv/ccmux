@@ -8,15 +8,18 @@ package claudeusage
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/skzv/ccmux/internal/jsonl"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/skzv/ccmux/internal/jsonl"
 )
 
 // Tokens is the four-way breakdown each assistant message carries in its
@@ -126,10 +129,15 @@ func (a *Aggregate) ResetAt(window time.Duration) time.Time {
 // EstimatedCost returns a rough USD figure using current published
 // Anthropic API pricing. Approximate — primarily useful as a relative
 // signal across days, not as a billing source of truth.
+//
+// The models are summed in sorted order: float addition isn't
+// associative, and a map's order changes from call to call, so the same
+// aggregate came out as 0.351937 on one call and 0.35193700000000006 on
+// the next.
 func (a *Aggregate) EstimatedCost() float64 {
 	var cost float64
-	for model, t := range a.ByModel {
-		p := priceFor(model)
+	for _, model := range slices.Sorted(maps.Keys(a.ByModel)) {
+		t, p := a.ByModel[model], priceFor(model)
 		write1h := min(t.CacheCreation1h, t.CacheCreation)
 		cost += float64(t.Input)/1e6*p.Input +
 			float64(t.Output)/1e6*p.Output +

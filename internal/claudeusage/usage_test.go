@@ -3,6 +3,7 @@ package claudeusage
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -722,6 +723,30 @@ func TestEstimatedCost(t *testing.T) {
 	got := agg.EstimatedCost()
 	if got < 119.9 || got > 120.1 {
 		t.Errorf("EstimatedCost = %v, want ~120", got)
+	}
+}
+
+// TestEstimatedCost_SameBitsEveryCall — /v1/usage reported
+// estimated_cost as 0.351937 on one call and 0.35193700000000006 on the
+// next for the same transcripts: the per-model costs were summed in map
+// order, which changes between calls, and float addition isn't
+// associative.
+func TestEstimatedCost_SameBitsEveryCall(t *testing.T) {
+	agg := &Aggregate{ByModel: map[string]*Tokens{}}
+	models := []string{"claude-opus-4-7", "claude-opus-4-1", "claude-sonnet-4-6", "claude-sonnet-4-5", "claude-haiku-4-5", "claude-3-5-haiku", "claude-3-7-sonnet", "claude-fable-5"}
+	for i, m := range models {
+		for v := 0; v < 3; v++ {
+			n := (i*3 + v + 1) * 7919
+			agg.ByModel[fmt.Sprintf("%s-%d", m, 20250101+v)] = &Tokens{
+				Input: n, Output: n / 3, CacheCreation: n * 2, CacheCreation1h: n / 5, CacheRead: n * 11,
+			}
+		}
+	}
+	first := math.Float64bits(agg.EstimatedCost())
+	for i := 0; i < 500; i++ {
+		if got := math.Float64bits(agg.EstimatedCost()); got != first {
+			t.Fatalf("call %d: %v, first call %v", i, math.Float64frombits(got), math.Float64frombits(first))
+		}
 	}
 }
 
