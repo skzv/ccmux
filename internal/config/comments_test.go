@@ -335,6 +335,22 @@ func trim(r *rand.Rand, m map[string]any, root bool) {
 	}
 }
 
+// TestSave_LastHostRemovedLeavesNoTrace — removing the only [[host]]
+// used to leave `host = []` behind, and its comment above whatever
+// table came next.
+func TestSave_LastHostRemovedLeavesNoTrace(t *testing.T) {
+	withFakeHome(t)
+	orig := "schema_version = 1\ntheme = \"nord\"\n\n# the mac mini\n[[host]]\nname = \"mini\"\naddress = \"1.1.1.1\"\n\n# agents\n[agents]\ndefault = \"codex\"\n"
+	p := writeConfigFile(t, orig)
+	if _, err := Update(func(c *Config) error { c.Hosts = c.Hosts[:0]; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	want := "schema_version = 1\ntheme = \"nord\"\n\n# agents\n[agents]\ndefault = \"codex\"\n"
+	if got := readFile(t, p); got != want {
+		t.Errorf("got\n%s\nwant\n%s", got, want)
+	}
+}
+
 // TestSave_FallsBackToFullRewrite — when the existing file can't be
 // patched, Save writes the full encoding, exactly as before patching
 // existed: formatting is lost, data never is.

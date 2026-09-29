@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -67,5 +68,114 @@ func TestHostAddRemove_KeepsConfigComments(t *testing.T) {
 	}
 	if string(removed) != annotated {
 		t.Errorf("add + remove didn't restore the file:\n--- got\n%s\n--- want\n%s", removed, annotated)
+	}
+}
+
+// TestHostRemove_KeepsEachHostsOwnComment — removing a host from a
+// hand-written config.toml used to put its comment above the next host
+// and leave that host's comment dangling above [setup] (and pad the
+// file with every default). Now the removed host takes its comment
+// with it, the others keep theirs, and the only line added is the
+// schema version.
+func TestHostRemove_KeepsEachHostsOwnComment(t *testing.T) {
+	const orig = `theme = "nord"
+
+# first host
+[[host]]
+name = "a"
+address = "a.ts.net"
+
+# second host (keep this comment)
+[[host]]
+name = "b"
+address = "b.ts.net"
+
+# third host
+[[host]]
+name = "c"
+address = "c.ts.net"
+
+[setup]
+completed = true
+`
+	cases := []struct {
+		name, nl string
+		remove   []string
+		want     string
+	}{{
+		name:   "middle host",
+		nl:     "\n",
+		remove: []string{"b"},
+		want: `theme = "nord"
+schema_version = 1
+
+# first host
+[[host]]
+name = "a"
+address = "a.ts.net"
+
+# third host
+[[host]]
+name = "c"
+address = "c.ts.net"
+
+[setup]
+completed = true
+`,
+	}, {
+		name:   "first host, CRLF file",
+		nl:     "\r\n",
+		remove: []string{"a"},
+		want: `theme = "nord"
+schema_version = 1
+
+# second host (keep this comment)
+[[host]]
+name = "b"
+address = "b.ts.net"
+
+# third host
+[[host]]
+name = "c"
+address = "c.ts.net"
+
+[setup]
+completed = true
+`,
+	}, {
+		name:   "every host, one by one",
+		nl:     "\n",
+		remove: []string{"b", "c", "a"},
+		want:   "theme = \"nord\"\nschema_version = 1\n\n[setup]\ncompleted = true\n",
+	}}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			withTempCcmuxConfig(t)
+			p, err := config.Path()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(p, []byte(strings.ReplaceAll(orig, "\n", c.nl)), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range c.remove {
+				cmd := newHostCmd()
+				cmd.SetArgs([]string{"remove", name})
+				cmd.SilenceUsage, cmd.SilenceErrors = true, true
+				if err := cmd.Execute(); err != nil {
+					t.Fatalf("host remove %s: %v", name, err)
+				}
+			}
+			got, err := os.ReadFile(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := strings.ReplaceAll(c.want, "\n", c.nl); string(got) != want {
+				t.Errorf("got\n%q\nwant\n%q", got, want)
+			}
+		})
 	}
 }

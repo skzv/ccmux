@@ -672,6 +672,12 @@ func forSave(cfg Config) Config {
 	if cfg.SchemaVersion < SchemaVersion {
 		cfg.SchemaVersion = SchemaVersion
 	}
+	// No hosts is no [[host]] entries. An empty, non-nil list (what
+	// `ccmux host remove` leaves after the last one) would otherwise
+	// encode as a stray `host = []`.
+	if len(cfg.Hosts) == 0 {
+		cfg.Hosts = nil
+	}
 	return cfg
 }
 
