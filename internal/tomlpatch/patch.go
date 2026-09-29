@@ -288,7 +288,7 @@ func (p *patcher) patchTable(t *table, path []string, ov, nv map[string]any) err
 }
 
 // patchArray edits the [[path]] elements of an array of tables. Each
-// new element that is an old one (see alignTables) is patched in place,
+// new element that is an old one (see AlignTables) is patched in place,
 // so the comments in and above it stay with it; old elements with no
 // counterpart are deleted, comment included, and new ones inserted.
 func (p *patcher) patchArray(elems []*table, path []string, ol, nl []map[string]any) error {
@@ -296,7 +296,7 @@ func (p *patcher) patchArray(elems []*table, path []string, ol, nl []map[string]
 	// The array outlives the patch (nl is never empty): a comment that
 	// documents it stays even if its first element goes.
 	elems[0].sec.arrayKept = true
-	pairs := append(alignTables(ol, nl), [2]int{m, n}) // sentinel closing the last gap
+	pairs := append(AlignTables(ol, nl), [2]int{m, n}) // sentinel closing the last gap
 
 	kept := -1 // last surviving element before the current gap
 	oi, nj := 0, 0
@@ -350,12 +350,13 @@ func (p *patcher) patchArray(elems []*table, path []string, ol, nl []map[string]
 	return nil
 }
 
-// alignTables decides which old element of an array of tables each new
+// AlignTables decides which old element of an array of tables each new
 // element is, so a save that changed some elements (and added or
 // removed others) edits each in place rather than rewriting its
 // neighbour into it — which would leave every comment above the wrong
 // element. It returns the matched (old, new) index pairs in order, both
-// indexes increasing.
+// indexes increasing. Patch pairs elements this way; callers that
+// shape a target per element (config's Save) use it to agree with it.
 //
 // Two elements may match when:
 //   - the array has identity keys (identityKeys: e.g. `name` for
@@ -370,7 +371,7 @@ func (p *patcher) patchArray(elems []*table, path []string, ol, nl []map[string]
 // unmatched old and new elements between two matches are paired in
 // order — most likely each edited in place — as they were before
 // identity matching existed.
-func alignTables(ol, nl []map[string]any) [][2]int {
+func AlignTables(ol, nl []map[string]any) [][2]int {
 	m, n := len(ol), len(nl)
 	ids := identityKeys(ol, nl)
 	// A matched pair is worth more than any difference in similarity,
@@ -476,7 +477,7 @@ func similarityPct(o, n map[string]any) (pct, common int) {
 // ccmux's [[host]] list. With at most one element on each side, nothing
 // tells a naming key from any other, so there are none.
 func identityKeys(ol, nl []map[string]any) []string {
-	if len(ol) < 2 && len(nl) < 2 {
+	if len(ol) == 0 || len(nl) == 0 || len(ol) < 2 && len(nl) < 2 {
 		return nil
 	}
 	var ids []string

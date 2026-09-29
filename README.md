@@ -300,7 +300,7 @@ bell = true                          # ring local terminal BEL on needs_input
 
 `projects.root` and `subscription.tier` are also editable inline from the Settings screen — `↑/↓` to move, `Enter` to edit, `e` to open `$EDITOR` for the prose-heavy fields. After editing, run `ccmux update` to reload the daemon with the new config.
 
-Comment the file however you like. When ccmux saves it (a Settings row, `ccmux host add`, `ccmux language`), it only touches the values that changed, so your comments, blank lines and key order stay where you left them. Same for `~/.codex/config.toml` when you flip YOLO or effort in the Codex tab.
+Comment the file however you like. When ccmux saves it (a Settings row, `ccmux host add`, `ccmux language`), it only touches the values that changed, so your comments, blank lines and key order stay where you left them. A setting you left out of the file stays out until you change it; the only line a save adds on its own is `schema_version`, the first time. `ccmux host remove` takes the comment above that `[[host]]` with it. Same for `~/.codex/config.toml` when you flip YOLO or effort in the Codex tab.
 
 > **Language / 语言:** the TUI follows `$LANG`/`$LC_ALL` by default (`zh*` → Simplified Chinese, anything else → English). Set `lang = "en"` or `"zh"` to override — from config.toml or the Settings screen, where the switch applies immediately. Untranslated strings fall back to English.
 

@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"sync"
 
@@ -568,11 +570,23 @@ func Load() (Config, error) {
 		}
 		return cfg, fmt.Errorf("read config %q: %w", p, err)
 	}
+	cfg, err = parse(data)
+	if err != nil {
+		return cfg, fmt.Errorf("parse config %q: %w", p, err)
+	}
+	return cfg, nil
+}
+
+// parse reads a config file's text the way Load does: decoded over
+// Defaults(), so a key the file leaves out keeps its default (a
+// [[host]] entry's missing key is its zero value), then migrated.
+func parse(data []byte) (Config, error) {
+	cfg := Defaults()
 	// A file without schema_version predates versioning: decode over a
 	// zero version rather than the default's current one.
 	cfg.SchemaVersion = 0
 	if _, err := toml.Decode(string(data), &cfg); err != nil {
-		return cfg, fmt.Errorf("parse config %q: %w", p, err)
+		return cfg, err
 	}
 	migrate(&cfg)
 	return cfg, nil
@@ -615,20 +629,18 @@ func migrate(cfg *Config) {
 // The file is patched, not rewritten: the full encoding above is only
 // the target data, and tomlpatch changes just the values that differ
 // in the existing text — so the user's comments, key order, blank
-// lines and quoting survive a Settings change. If the existing file
-// can't be patched safely (see tomlpatch.Patch), the full encoding is
-// written instead, as before.
+// lines and quoting survive a Settings change. Settings the file leaves
+// out stay out while they hold the value Load gives them anyway (see
+// omitDefaults), so a trimmed, hand-written file doesn't fill up with
+// every default on its first save; a new file gets them all. If the
+// existing file can't be patched safely (see tomlpatch.Patch), the full
+// encoding is written instead, as before.
 func Save(cfg Config) error {
 	p, err := Path()
 	if err != nil {
 		return err
 	}
-	// Whatever wrote cfg, the file is now in this build's format. (A
-	// newer version, from a newer ccmux, is kept.)
-	if cfg.SchemaVersion < SchemaVersion {
-		cfg.SchemaVersion = SchemaVersion
-	}
-	data, err := encode(cfg)
+	data, err := encode(forSave(cfg))
 	if err != nil {
 		return err
 	}
@@ -637,9 +649,13 @@ func Save(cfg Config) error {
 		if merged, ok := carryUnknownKeys(data, prev); ok {
 			data = merged
 		}
+		target := data
+		if trimmed, ok := omitDefaults(data, prev); ok {
+			target = trimmed
+		}
 		// Keys the patch has to add go in Config's field order, not the
 		// alphabetical order the carried-over merge re-encodes in.
-		if patched, err := patchTOML(prev, data, structOrder); err == nil {
+		if patched, err := patchTOML(prev, target, structOrder); err == nil {
 			data = patched
 		}
 	}
@@ -647,6 +663,16 @@ func Save(cfg Config) error {
 		return fmt.Errorf("write config %q: %w", p, err)
 	}
 	return nil
+}
+
+// forSave is cfg as Save writes it.
+func forSave(cfg Config) Config {
+	// Whatever wrote cfg, the file is now in this build's format. (A
+	// newer version, from a newer ccmux, is kept.)
+	if cfg.SchemaVersion < SchemaVersion {
+		cfg.SchemaVersion = SchemaVersion
+	}
+	return cfg
 }
 
 // patchTOML is tomlpatch.PatchOrdered; tests swap it to force the
@@ -704,6 +730,122 @@ func carryUnknownKeys(encoded, prev []byte) ([]byte, bool) {
 		return nil, false
 	}
 	return out, true
+}
+
+// omitDefaults returns target (the full encoding Save would write) less
+// every key and table prev doesn't have whose value Load would read
+// anyway if it stayed out: a default, a zero value in a [[host]] entry,
+// an empty [agents.*] table. So the first save of a trimmed,
+// hand-written config.toml adds only what the user changed, instead of
+// every setting ccmux knows. Keys prev has are never dropped (the patch
+// would delete their lines), nor is schema_version: it tells a later
+// ccmux which format the file is in.
+//
+// "Load would read it anyway" is checked, not assumed: each candidate
+// is dropped only if the result still parses to exactly the Config the
+// full target does (see parse). That covers how the decoder layers the
+// file over Defaults() — a missing table keeps its defaults, a missing
+// key in a [[host]] entry is zero, migrate reinterprets old files —
+// without restating it here. ok=false means nothing was left out (or
+// prev or target doesn't parse), and the caller keeps target.
+func omitDefaults(target, prev []byte) ([]byte, bool) {
+	if len(bytes.TrimSpace(prev)) == 0 {
+		return nil, false // nothing to preserve: write it all out, as for a new file
+	}
+	var old, tgt map[string]any
+	if _, err := toml.Decode(string(prev), &old); err != nil {
+		return nil, false
+	}
+	if _, err := toml.Decode(string(target), &tgt); err != nil {
+		return nil, false
+	}
+	want, err := parse(target)
+	if err != nil {
+		return nil, false
+	}
+	loadsSame := func() bool {
+		b, err := encode(tgt)
+		if err != nil {
+			return false
+		}
+		got, err := parse(b)
+		return err == nil && reflect.DeepEqual(got, want)
+	}
+	omitted := false
+	// prune walks table m of the target; old is the table prev has in
+	// its place (nil if none). An array of tables' elements are paired
+	// with prev's the way the patch will pair them, so each [[host]]
+	// keeps only the keys it had plus what differs from zero.
+	var prune func(m, old map[string]any, root bool)
+	prune = func(m, old map[string]any, root bool) {
+		for _, k := range sortedKeys(m) {
+			if root && k == "schema_version" {
+				continue
+			}
+			v := m[k]
+			ov, had := old[k]
+			if !had {
+				delete(m, k)
+				if loadsSame() {
+					omitted = true
+					continue
+				}
+				m[k] = v
+			}
+			if t, ok := v.(map[string]any); ok {
+				om, _ := ov.(map[string]any)
+				prune(t, om, false)
+				continue
+			}
+			nl := tableList(v)
+			ol := tableList(ov)
+			match := make([]map[string]any, len(nl))
+			for _, pr := range tomlpatch.AlignTables(ol, nl) {
+				match[pr[1]] = ol[pr[0]]
+			}
+			for j, e := range nl {
+				prune(e, match[j], false)
+			}
+		}
+	}
+	prune(tgt, old, true)
+	if !omitted {
+		return nil, false
+	}
+	out, err := encode(tgt)
+	if err != nil {
+		return nil, false
+	}
+	return out, true
+}
+
+// tableList returns the elements of v when it's an array of tables
+// (written as [[x]] sections or inline), else nil.
+func tableList(v any) []map[string]any {
+	switch x := v.(type) {
+	case []map[string]any:
+		return x
+	case []any:
+		out := make([]map[string]any, 0, len(x))
+		for _, e := range x {
+			m, ok := e.(map[string]any)
+			if !ok {
+				return nil
+			}
+			out = append(out, m)
+		}
+		return out
+	}
+	return nil
+}
+
+func sortedKeys(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func lookupPath(m map[string]any, key toml.Key) (any, bool) {

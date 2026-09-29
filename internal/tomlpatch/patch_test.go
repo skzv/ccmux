@@ -537,9 +537,11 @@ func TestAlignTables(t *testing.T) {
 			[]map[string]any{h("name", "a"), h("name", "b")},
 			[]map[string]any{h("name", "c"), h("name", "d")},
 			nil},
+		{"nothing before", nil, []map[string]any{h("name", "a"), h("name", "b")}, nil},
+		{"nothing after", []map[string]any{h("name", "a"), h("name", "b")}, nil, nil},
 	}
 	for _, c := range cases {
-		if got := alignTables(c.ol, c.nl); !reflect.DeepEqual(got, c.want) {
+		if got := AlignTables(c.ol, c.nl); !reflect.DeepEqual(got, c.want) {
 			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
 		}
 	}
