@@ -843,7 +843,7 @@ func planMessageLimit(tier string) int {
 // `inner` is the content area available (already accounting for any
 // surrounding pane border/padding).
 func renderSessionLine(st styles.Styles, s daemon.SessionState, inner int) string {
-	hostDot := st.HostColor(s.Host).Render("●")
+	hostDot := st.HostColor(sessionHostLabel(s)).Render("●")
 	state := stateGlyph(st, s.State)
 
 	attachedBadge := ""
@@ -873,7 +873,7 @@ func renderSessionLine(st styles.Styles, s daemon.SessionState, inner int) strin
 	// the row is narrow — the leading colored dot already encodes
 	// host identity for tight layouts.
 	hostTag := ""
-	if h := s.Host; h != "" && h != "local" && inner > 50 {
+	if h := s.Host; !isLocalSessionHost(sessionHostLabel(s)) && inner > 50 {
 		hostTag = "  " + st.Muted.Render("@"+h)
 	}
 

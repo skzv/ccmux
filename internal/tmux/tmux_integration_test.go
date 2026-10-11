@@ -300,8 +300,24 @@ func TestIntegration_ListNoServerVersusUnreachable(t *testing.T) {
 	if err := exec.CommandContext(ctx, "tmux", "kill-server").Run(); err != nil {
 		t.Fatal(err)
 	}
-	if tss, err := List(ctx); err != nil || len(tss) != 0 {
-		t.Errorf("after kill-server: List = %v, %v; want empty, no error", tss, err)
+	// kill-server acknowledges the command before the server has finished
+	// exiting. A client racing that shutdown can report "server exited
+	// unexpectedly" (seen on Linux CI). Retry only that transient result;
+	// List must still distinguish an unreachable server from an absent one.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		tss, err := List(ctx)
+		if err == nil && len(tss) == 0 {
+			break
+		}
+		if err == nil || !strings.Contains(err.Error(), "server exited unexpectedly") || time.Now().After(deadline) {
+			t.Fatalf("after kill-server: List = %v, %v; want empty, no error", tss, err)
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
 }
 

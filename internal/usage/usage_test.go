@@ -25,6 +25,7 @@ func TestAgentSummary_TotalTokens(t *testing.T) {
 // covered by codexusage's own tests against fixture files.
 func TestWalkCodex_NoTranscripts(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("CODEX_HOME", "")
 	got, err := WalkCodex(5 * time.Hour)
 	if err != nil {
 		t.Fatalf("WalkCodex on empty HOME: %v", err)

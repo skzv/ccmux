@@ -148,7 +148,7 @@ func (m *sessionsModel) SetSessions(ss []daemon.SessionState) tea.Cmd {
 	found := false
 	if selected != nil {
 		for i, s := range ss {
-			if sameSession(s.Host, s.Name, selected.Host, selected.Name) {
+			if sameSession(sessionHostLabel(s), s.Name, sessionHostLabel(*selected), selected.Name) {
 				m.cursor = i
 				found = true
 				break
@@ -175,7 +175,7 @@ func (m *sessionsModel) previewFollowSelection() tea.Cmd {
 		m.clearPreview()
 		return nil
 	}
-	if m.previewSession != "" && sameSession(m.previewHost, m.previewSession, sel.Host, sel.Name) {
+	if m.previewSession != "" && sameSession(m.previewHost, m.previewSession, sessionHostLabel(*sel), sel.Name) {
 		return nil
 	}
 	m.clearPreview()
@@ -198,7 +198,7 @@ func (m *sessionsModel) clearPreview() {
 // cursor used to jump to whichever row slid into its slot.
 func (m *sessionsModel) RenameSession(host, oldName, newName string) {
 	for i, s := range m.sessions {
-		if sameSession(s.Host, s.Name, host, oldName) {
+		if sameSession(sessionHostLabel(s), s.Name, host, oldName) {
 			m.sessions[i].Name = newName
 		}
 	}
@@ -333,7 +333,7 @@ func (m sessionsModel) Update(msg tea.Msg) (sessionsModel, tea.Cmd) {
 		case keyMatches(km, m.km.Rename):
 			if sel := m.Selected(); sel != nil {
 				f := newRenameForm(m.st, sel.Name)
-				f.host = sel.Host
+				f.host = sessionHostLabel(*sel)
 				m.renameForm = &f
 				return m, textinput.Blink
 			}
@@ -381,7 +381,7 @@ func (m sessionsModel) Update(msg tea.Msg) (sessionsModel, tea.Cmd) {
 // than flashing wrong content.
 func (m sessionsModel) applyPreviewLoaded(msg previewLoadedMsg) sessionsModel {
 	sel := m.Selected()
-	if sel == nil || !sameSession(msg.Host, msg.Session, sel.Host, sel.Name) {
+	if sel == nil || !sameSession(msg.Host, msg.Session, sessionHostLabel(*sel), sel.Name) {
 		return m
 	}
 	m.previewLoading = false
@@ -393,7 +393,7 @@ func (m sessionsModel) applyPreviewLoaded(msg previewLoadedMsg) sessionsModel {
 		m.preview = msg.Content
 	}
 	m.previewSession = msg.Session
-	m.previewHost = sel.Host
+	m.previewHost = sessionHostLabel(*sel)
 	return m
 }
 
@@ -429,9 +429,9 @@ func realCapturePreviewCmd(s daemon.SessionState) tea.Cmd {
 		const lines = 30
 		// Local host: capture directly via tmux. The "local" / "" check
 		// matches daemon.SessionState.Host's convention (empty = local).
-		if s.Host == "" || s.Host == "local" {
+		if isLocalSessionHost(sessionHostLabel(s)) {
 			out, err := tmux.CapturePane(ctx, s.Name, lines)
-			return previewLoadedMsg{Session: s.Name, Host: s.Host, Content: out, Err: err}
+			return previewLoadedMsg{Session: s.Name, Host: sessionHostLabel(s), Content: out, Err: err}
 		}
 		// Remote: the daemon at the peer's address has a Preview method
 		// (same path the mobile clients and ccmux-mcp use). The host
@@ -441,7 +441,7 @@ func realCapturePreviewCmd(s daemon.SessionState) tea.Cmd {
 		// unsupported — most users want the preview for "the agent on
 		// my mini," which IS local from the mini's TUI, so this is
 		// a small gap. Tracked in docs/01_Specs/01_Feature_Catalog.md.
-		return previewLoadedMsg{Session: s.Name, Host: s.Host, Err: errRemotePreviewNotWired}
+		return previewLoadedMsg{Session: s.Name, Host: sessionHostLabel(s), Err: errRemotePreviewNotWired}
 	}
 }
 
@@ -546,7 +546,7 @@ func (m sessionsModel) renderPreview(width, height int) string {
 	// The cached capture belongs to another session (the cursor moved,
 	// or the previewed session was killed and the list moved on): never
 	// show it under this session's name — wait for the fresh capture.
-	stale := m.previewSession == "" || !sameSession(m.previewHost, m.previewSession, sel.Host, sel.Name)
+	stale := m.previewSession == "" || !sameSession(m.previewHost, m.previewSession, sessionHostLabel(*sel), sel.Name)
 	switch {
 	case stale:
 		return render(m.st.Muted.Render(tr("capturing…")))
@@ -621,6 +621,8 @@ func (m sessionsModel) renderList(width, height int) string {
 	list := components.List(m.st, components.ListProps[daemon.SessionState]{
 		Items: m.sessions[start:end],
 		Render: func(s daemon.SessionState) components.ListItem {
+			s.HostKey = sessionHostLabel(s)
+			s.Host = hostLabel(s.HostKey, m.hosts)
 			return components.ListItem{Primary: renderSessionLine(m.st, s, rowInner)}
 		},
 		Cursor: m.cursor - start,
@@ -673,7 +675,7 @@ func (m sessionsModel) renderDetail(width int, narrow bool) string {
 	if sel.Attached {
 		attached = lipgloss.NewStyle().Foreground(m.st.P.Mauve).Bold(true).Render("⊙ " + tr("yes"))
 	}
-	subtitle := fmt.Sprintf("%s %s", tr("on"), sel.Host)
+	subtitle := fmt.Sprintf("%s %s", tr("on"), hostLabel(sessionHostLabel(*sel), m.hosts))
 	if sel.Project != "" {
 		subtitle += " · " + sel.Project
 	}
@@ -710,7 +712,7 @@ func (m sessionsModel) renderDetailNarrow(sel daemon.SessionState, width int) st
 	row := func(i int, value string) string { return padLabel(labels[i], labelW) + value }
 	lines := []string{
 		m.st.Emphasis.Render(sel.Name),
-		m.st.Muted.Render(tr("on") + " " + sel.Host),
+		m.st.Muted.Render(tr("on") + " " + hostLabel(sessionHostLabel(sel), m.hosts)),
 		"",
 		row(0, stateGlyph(m.st, sel.State)+" "+sel.State),
 		row(1, sel.Project),

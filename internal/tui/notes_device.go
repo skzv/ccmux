@@ -13,8 +13,7 @@ import (
 
 // Cross-device notes. The Notes screen can browse notes on the local
 // machine or on any reachable ccmuxd peer. The active device is tracked
-// as a project-host *label* ("local" or a remote host name) so it lives
-// in the same namespace as project.Host (see projectHost). Where the
+// as a routing key in the same namespace as projectHost. Where the
 // notes are actually fetched from is driven by the *selected project's*
 // host, which the device toggle keeps in sync — so resolving an address
 // always goes through the project, never a separate cached device.
@@ -42,14 +41,13 @@ func (m *notesModel) SetHosts(h []hostStatus) {
 // matching what refreshProjectsCmd stamps onto local projects.
 const localDeviceLabel = "local"
 
-// deviceLabel returns the project-host label for a host row: "local" for
-// this machine, the host Name otherwise. Keeps device identity in the
-// same namespace as project.Host so the two can be matched directly.
+// deviceLabel returns the routing key for a host row in the same
+// namespace as projectHost, so the two can be matched directly.
 func deviceLabel(hs hostStatus) string {
 	if hs.Local {
 		return localDeviceLabel
 	}
-	return hs.Name
+	return hs.key()
 }
 
 // deviceQueryable reports whether a host row backs a daemon we can ask
@@ -178,7 +176,7 @@ func (m notesModel) deviceHeaderLine() string {
 	if label == "" {
 		label = localDeviceLabel
 	}
-	chip := m.st.HostColor(label).Render("● " + label)
+	chip := m.st.HostColor(label).Render("● " + hostLabel(label, m.hosts))
 	if len(m.selectableDeviceLabels()) > 1 {
 		chip += "  " + m.st.Muted.Render(tr("H: switch device"))
 	}

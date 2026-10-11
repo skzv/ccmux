@@ -789,7 +789,6 @@ func (s *server) listSessions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	out := make([]daemon.SessionState, 0, len(tss))
 	for _, ts := range tss {
 		t, ok := s.seen[ts.Name]
@@ -824,6 +823,7 @@ func (s *server) listSessions(w http.ResponseWriter, r *http.Request) {
 			Seen:  t.seen,
 		})
 	}
+	s.mu.Unlock()
 	writeJSON(w, out)
 }
 

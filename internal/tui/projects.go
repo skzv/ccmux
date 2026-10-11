@@ -573,7 +573,7 @@ func (m projectsModel) renderList(width, height int, narrow bool) string {
 			if i > start {
 				rows = append(rows, "")
 			}
-			rows = append(rows, m.st.Subtitle.Render(fmt.Sprintf(tr("on %s"), host)))
+			rows = append(rows, m.st.Subtitle.Render(fmt.Sprintf(tr("on %s"), hostLabel(host, m.hosts))))
 			currentHost = host
 		}
 		selected := i == m.cursor
@@ -628,7 +628,7 @@ func (m projectsModel) renderDetail(width, height int) string {
 		detected = strings.TrimLeft(detected, " ")
 	}
 	lines := []string{
-		m.st.Emphasis.Render(p.Name) + "   " + m.st.HostColor(host).Render("● "+host),
+		m.st.Emphasis.Render(p.Name) + "   " + m.st.HostColor(host).Render("● "+hostLabel(host, m.hosts)),
 		m.st.Muted.Render(summarizePath(p.Path)),
 		"",
 		padLabel(tr("session"), 10) + m.st.Emphasis.Render(projectSessionName(p, m.sessions)),
@@ -642,9 +642,12 @@ func (m projectsModel) renderDetail(width, height int) string {
 }
 
 // projectHost returns the canonical host label for `p` — "local" when
-// the project lives on this machine, the remote host name otherwise.
+// the project lives on this machine, the remote routing key otherwise.
 // Centralized so the renderer and the attach router can't drift.
 func projectHost(p project.Project) string {
+	if p.HostKey != "" {
+		return p.HostKey
+	}
 	if p.Host == "" {
 		return "local"
 	}

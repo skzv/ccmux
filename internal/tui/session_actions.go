@@ -11,7 +11,7 @@ import (
 )
 
 // Host-aware session mutations for the Sessions screen (`x` kill, `R`
-// rename). A row carries a (Host, Name) pair and the same tmux name can
+// rename). A row carries a (host key, Name) pair and the same tmux name can
 // exist on several machines — `c-ccmux` on the laptop AND on the mini
 // is the normal case — so every mutation must be routed by host. The
 // old path dropped the host and always ran tmux locally: picking the
@@ -28,7 +28,7 @@ func isLocalSessionHost(host string) bool {
 	return host == "" || host == "local"
 }
 
-// remoteDaemonAddr resolves a remote session row's host label to the
+// remoteDaemonAddr resolves a remote session row's host key to the
 // "host:port" of that machine's ccmuxd, from the live hosts list the
 // refresh built (configured hosts and discovered peers both carry the
 // daemon address in Address). ok is false when the host is unknown or
@@ -61,7 +61,7 @@ func (a App) killSessionTargetCmd(host, name string) tea.Cmd {
 	}
 	addr, ok := a.remoteDaemonAddr(host)
 	if !ok {
-		return noReachableDaemonToast(host)
+		return noReachableDaemonToast(hostLabel(host, a.hosts))
 	}
 	return killRemoteSessionCmd(addr, host, name)
 }
@@ -74,7 +74,7 @@ func (a App) renameSessionTargetCmd(host, oldName, newName string) tea.Cmd {
 	}
 	addr, ok := a.remoteDaemonAddr(host)
 	if !ok {
-		return noReachableDaemonToast(host)
+		return noReachableDaemonToast(hostLabel(host, a.hosts))
 	}
 	return renameRemoteSessionCmd(addr, host, oldName, newName)
 }

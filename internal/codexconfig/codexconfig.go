@@ -31,6 +31,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
+	"github.com/skzv/ccmux/internal/codexpath"
 	"github.com/skzv/ccmux/internal/configfile"
 	"github.com/skzv/ccmux/internal/tomlpatch"
 )
@@ -39,14 +40,15 @@ import (
 // Honors $CODEX_HOME (the env var Codex itself respects), otherwise
 // defaults to ~/.codex.
 func Paths() (Locations, error) {
-	root := os.Getenv("CODEX_HOME")
-	if root == "" {
-		home, err := os.UserHomeDir()
+	var home string
+	if os.Getenv("CODEX_HOME") == "" {
+		var err error
+		home, err = os.UserHomeDir()
 		if err != nil {
 			return Locations{}, err
 		}
-		root = filepath.Join(home, ".codex")
 	}
+	root := codexpath.Root(home)
 	return Locations{
 		Root:       root,
 		Config:     filepath.Join(root, "config.toml"),

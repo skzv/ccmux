@@ -54,7 +54,7 @@ func (projectInfoOverlay) View(st styles.Styles, p project.Project, sessions []d
 		Width(contentW)
 
 	lines := []string{
-		st.Emphasis.Render(p.Name) + "   " + st.HostColor(host).Render("● "+host),
+		st.Emphasis.Render(p.Name) + "   " + st.HostColor(host).Render("● "+projectDisplayHost(p)),
 		st.Muted.Render(p.Path),
 		"",
 	}
@@ -145,9 +145,12 @@ func countSessionsForProject(p project.Project, sessions []daemon.SessionState) 
 	return n
 }
 
-// sessionHostLabel is a session row's host as projectHost names a
-// project's: "local" for this machine.
+// sessionHostLabel returns the same routing identity as projectHost:
+// "local" for this machine, HostKey for discovered peers, or a configured name.
 func sessionHostLabel(s daemon.SessionState) string {
+	if s.HostKey != "" {
+		return s.HostKey
+	}
 	if s.Host == "" {
 		return "local"
 	}

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/skzv/ccmux/internal/codexpath"
 	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/daemon"
 )
@@ -19,6 +20,7 @@ import (
 // regresses, every other e2e test risks trampling user state.
 func TestHarness_Hermetic(t *testing.T) {
 	realHome := os.Getenv("HOME")
+	t.Setenv("CODEX_HOME", t.TempDir())
 
 	e := newEnv(t)
 
@@ -27,6 +29,9 @@ func TestHarness_Hermetic(t *testing.T) {
 	}
 	if e.Home == realHome {
 		t.Fatalf("sandbox HOME equals real HOME %q — not isolated", realHome)
+	}
+	if got := codexpath.Root(e.Home); got != filepath.Join(e.Home, ".codex") {
+		t.Fatalf("Codex root %q escaped sandbox %q", got, e.Home)
 	}
 
 	cfgPath, err := config.Path()

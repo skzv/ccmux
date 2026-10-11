@@ -281,7 +281,7 @@ func probeDiscoveredHosts(tailnetPort int, seen map[string]bool) ([]hostStatus, 
 			// sessions right now," not "host is down," so we shouldn't
 			// make the dot red.
 			st := hostStatus{
-				Name: d.Name, Address: d.Address,
+				Name: d.Name, Address: d.Address, Key: discoveredHostKey(d.Address),
 				Source:     "discovered",
 				Discovered: true, DialHost: d.DialHost,
 				// Discovered via a successful ccmuxd health probe, so
@@ -296,6 +296,7 @@ func probeDiscoveredHosts(tailnetPort int, seen map[string]bool) ([]hostStatus, 
 				st.Sessions = len(ss)
 				for j := range ss {
 					ss[j].Host = d.Name
+					ss[j].HostKey = st.key()
 				}
 				per[i] = ss
 			} else {
@@ -319,6 +320,7 @@ func probeDiscoveredHosts(tailnetPort int, seen map[string]bool) ([]hostStatus, 
 		seen[addr] = true
 		hs = append(hs, hostStatus{
 			Name:         shortPeerName(p.DisplayName()),
+			Key:          discoveredHostKey(addr),
 			Source:       "discovered",
 			Address:      addr,
 			Discovered:   true,
@@ -339,6 +341,7 @@ func probeDiscoveredHosts(tailnetPort int, seen map[string]bool) ([]hostStatus, 
 		seen[key] = true
 		hs = append(hs, hostStatus{
 			Name:       shortPeerName(p.DisplayName()),
+			Key:        key,
 			Source:     "mobile",
 			Address:    p.Addr,
 			Discovered: true,
@@ -488,6 +491,9 @@ func collectProjects(root string, hosts []config.Host, tailnetPort int) projects
 			go func() {
 				defer inner.Done()
 				discProjects[i] = fetchRemoteProjects(d.Address, d.Name)
+				for j := range discProjects[i] {
+					discProjects[i][j].HostKey = discoveredHostKey(d.Address)
+				}
 			}()
 		}
 		inner.Wait()

@@ -43,6 +43,7 @@ func TestAll_CanonicalOrder(t *testing.T) {
 // agent to the const block but forgetting ByID/ParseID (or vice-versa)
 // fails loudly instead of panicking at runtime.
 func TestAll_EveryAgentIsComplete(t *testing.T) {
+	t.Setenv("CODEX_HOME", "")
 	// This contract checks default locations. Muse correctly honors absolute
 	// XDG overrides, including the ones GitHub runners export.
 	t.Setenv("XDG_CONFIG_HOME", "")
@@ -174,6 +175,7 @@ func TestDefault(t *testing.T) {
 // (ID, DisplayName, Binary, …) so a typo in any one of them fails the
 // test instead of shipping silently to users.
 func TestAgent_Identity_Stable(t *testing.T) {
+	t.Setenv("CODEX_HOME", "")
 	cases := []struct {
 		a        Agent
 		id       ID

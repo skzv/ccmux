@@ -28,6 +28,11 @@ The package exports six things callers reach for:
 | `agent.AllInstalled(ctx)` | Subset of All() whose Binary() resolves on $PATH. |
 | `agent.Default()` | Locked at Claude — the back-compat default for every legacy project. |
 
+Codex paths share the `internal/codexpath` resolver: `CODEX_HOME` when set,
+otherwise `~/.codex`. Configuration reads that root; conversation listing,
+usage aggregation, and transcript deletion use its `sessions/` directory.
+Deletion still rejects paths outside the selected transcript root.
+
 ## Per-project agent: `<project>/.ccmux/agent`
 
 Each project carries a one-line sidecar identifying its agent. Read at
