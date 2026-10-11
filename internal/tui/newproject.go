@@ -135,7 +135,7 @@ func hostChoicesFrom(hosts []hostStatus) []hostChoice {
 			continue
 		}
 		out = append(out, hostChoice{
-			Label:    shortHostname(h.Name),
+			Label:    hostLabel(h.key(), hosts),
 			Address:  h.Address,
 			DialHost: h.DialHost,
 			User:     h.User,

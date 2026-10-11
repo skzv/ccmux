@@ -984,7 +984,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Err != nil {
 			a.toasts.Set(toastError, tr("rename failed: ")+msg.Err.Error(), 5*time.Second)
 		} else {
-			a.toasts.Set(toastSuccess, fmt.Sprintf(tr("renamed %s → %s"), sessionDisplayName(msg.Host, msg.OldName), msg.NewName), 3*time.Second)
+			a.toasts.Set(toastSuccess, fmt.Sprintf(tr("renamed %s → %s"), sessionDisplayName(hostLabel(msg.Host, a.hosts), msg.OldName), msg.NewName), 3*time.Second)
 			// Keep the cursor on the renamed row: the refresh below
 			// finds the selection by name, which just changed.
 			a.sessionsM.RenameSession(msg.Host, msg.OldName, msg.NewName)
@@ -1084,7 +1084,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Err != nil {
 			a.toasts.Set(toastError, tr("kill failed: ")+msg.Err.Error(), 5*time.Second)
 		} else {
-			a.toasts.Set(toastSuccess, fmt.Sprintf(tr("killed %s"), sessionDisplayName(msg.Host, msg.Name)), 3*time.Second)
+			a.toasts.Set(toastSuccess, fmt.Sprintf(tr("killed %s"), sessionDisplayName(hostLabel(msg.Host, a.hosts), msg.Name)), 3*time.Second)
 		}
 		return a, a.refreshSessionsCmd()
 
@@ -1590,7 +1590,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a.openQuitConfirmation()
 		case keyMatches(msg, a.keys.Kill) && a.screen == ScreenSessions:
 			if sel := a.sessionsM.Selected(); sel != nil {
-				return a.openKillSessionConfirmation(sel.Host, sel.Name)
+				return a.openKillSessionConfirmation(sessionHostLabel(*sel), sel.Name)
 			}
 			return a, nil
 		case keyMatches(msg, a.keys.Quit):
@@ -2421,7 +2421,7 @@ func (a App) attachSelectedSession() (App, tea.Cmd) {
 	// Local sessions resolved by the helper that handles the
 	// nested-tmux case. Only rows refresh marked local count: a peer
 	// that shares this machine's hostname is still a remote host.
-	if isLocalSessionHost(sel.Host) {
+	if isLocalSessionHost(sessionHostLabel(*sel)) {
 		label := sel.Project
 		if label == "" {
 			label = sel.Name
@@ -2432,7 +2432,7 @@ func (a App) attachSelectedSession() (App, tea.Cmd) {
 
 	// Explicit cfg.Hosts entries carry full SSH/Mosh details.
 	for i := range a.cfg.Hosts {
-		if a.cfg.Hosts[i].Name == sel.Host {
+		if a.cfg.Hosts[i].Name == sessionHostLabel(*sel) {
 			h := &a.cfg.Hosts[i]
 			target := h.Address
 			if h.User != "" {
@@ -2475,7 +2475,7 @@ func (a App) attachSelectedSession() (App, tea.Cmd) {
 	// because most users put `eval $(brew shellenv)` in their zshrc,
 	// not their zprofile.)
 	for _, hs := range a.hosts {
-		if hs.Name == sel.Host && hs.Discovered {
+		if hs.key() == sessionHostLabel(*sel) && hs.Discovered {
 			dial := hs.DialHost
 			if dial == "" {
 				dial = dialAddrFor(hs)
@@ -2748,7 +2748,7 @@ func (a App) attachOrCreateRemote(p project.Project, host string) tea.Cmd {
 	hs := a.lookupRemoteHost(host)
 	if hs == nil {
 		return func() tea.Msg {
-			return toastMsg{Text: fmt.Sprintf(tr("no reachable daemon for host: %s"), host), Kind: toastError, Until: time.Now().Add(5 * time.Second)}
+			return toastMsg{Text: fmt.Sprintf(tr("no reachable daemon for host: %s"), hostLabel(host, a.hosts)), Kind: toastError, Until: time.Now().Add(5 * time.Second)}
 		}
 	}
 	// Snapshot the dial/address (and the SSH addressing fields the
@@ -2788,14 +2788,14 @@ func (a App) attachOrCreateRemote(p project.Project, host string) tea.Cmd {
 	)
 }
 
-// lookupRemoteHost returns the remote hostStatus row matching `name`
-// (set by refresh). Used to convert a session's or project's Host label
-// back into the daemon address + ssh dial host pair. The Local row is
+// lookupRemoteHost returns the remote hostStatus row matching the routing
+// key set by refresh. It resolves session/project identity to the daemon
+// address + ssh dial host pair. The Local row is
 // skipped: its name is this machine's hostname, which a tailnet peer
 // can share, and the peer's rows must still resolve to the peer.
-func (a App) lookupRemoteHost(name string) *hostStatus {
+func (a App) lookupRemoteHost(key string) *hostStatus {
 	for i := range a.hosts {
-		if !a.hosts[i].Local && a.hosts[i].Name == name {
+		if !a.hosts[i].Local && a.hosts[i].key() == key {
 			return &a.hosts[i]
 		}
 	}

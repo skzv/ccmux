@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/skzv/ccmux/internal/conversations"
+	"github.com/skzv/ccmux/internal/daemon"
 )
 
 // claudeProjectDir returns the encoded ~/.claude/projects subdirectory
@@ -207,6 +209,83 @@ func TestConversations_Delete(t *testing.T) {
 	for _, c := range e.listConversationsJSON() {
 		if c.ID == id {
 			t.Errorf("deleted conversation %q still listed", id)
+		}
+	}
+}
+
+// Exercise the custom-root contract through real CLI, daemon and TUI
+// processes. A default-root decoy catches accidental fallback and deletion.
+func TestConversations_CodexHome(t *testing.T) {
+	e := newEnv(t)
+	cfg := e.defaultConfig()
+	cfg.Tour.Shown = true
+	cfg.Update.AutoCheck = false
+	e.writeConfig(cfg)
+	proj := filepath.Join(e.Root, "custom-codex-project")
+	mkdirAll(t, proj)
+	stamp := time.Now().Add(-time.Minute).UTC().Format(time.RFC3339)
+	const id = "11111111-2222-3333-4444-555555555555"
+	const decoyID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	path := e.writeCodexTranscript(id, proj, "custom root conversation", stamp)
+	codexHome := filepath.Join(e.Home, "custom-codex-home")
+	rel, err := filepath.Rel(filepath.Join(e.Home, ".codex"), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	customPath := filepath.Join(codexHome, rel)
+	usageLine := fmt.Sprintf(`{"timestamp":%q,"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"output_tokens":20}}}}`, stamp)
+	writeFile(t, customPath, readFile(t, path)+usageLine+"\n")
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	decoy := e.writeCodexTranscript(decoyID, proj, "default root decoy", stamp)
+	e.writeClaudeTranscript("claude00-1111-2222-3333-444444444444", proj, "claude conversation", stamp)
+	t.Setenv("CODEX_HOME", codexHome)
+
+	list := e.listConversationsJSON()
+	found := false
+	for _, c := range list {
+		if c.ID == id {
+			found = c.Path == customPath
+		}
+		if c.ID == decoyID {
+			t.Fatal("CLI listed the default-root decoy despite CODEX_HOME")
+		}
+	}
+	if !found {
+		t.Fatalf("CLI did not list the custom transcript: %+v", list)
+	}
+
+	e.startDaemon()
+	out, stderr, err := e.ccmux("usage", "--json")
+	if err != nil {
+		t.Fatalf("ccmux usage: %v\nstderr: %s", err, stderr)
+	}
+	var usage daemon.AgentUsage
+	if err := json.Unmarshal([]byte(out), &usage); err != nil {
+		t.Fatal(err)
+	}
+	if !usage.Codex.HasData || usage.Codex.InputTokens != 100 || usage.Codex.OutputTokens != 20 {
+		t.Fatalf("daemon/CLI usage ignored CODEX_HOME: %+v", usage.Codex)
+	}
+
+	d := newTUIDriver(t, e, 40, 140)
+	d.WaitFor("Sessions")
+	d.Send("3")
+	d.WaitFor("claude conversation")
+	d.Send(KeyTab)
+	d.WaitFor("custom root conversation")
+	d.Quit()
+
+	if _, stderr, err := e.ccmux("delete-conversation", id, "--force"); err != nil {
+		t.Fatalf("delete custom transcript: %v\nstderr: %s", err, stderr)
+	}
+	if exists(customPath) || !exists(decoy) {
+		t.Fatal("deletion did not remove only the custom-root transcript")
+	}
+	for _, c := range e.listConversationsJSON() {
+		if c.ID == id || c.ID == decoyID {
+			t.Fatalf("CLI listed an unexpected Codex conversation after deletion: %+v", c)
 		}
 	}
 }

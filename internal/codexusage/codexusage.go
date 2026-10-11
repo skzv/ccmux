@@ -27,6 +27,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/skzv/ccmux/internal/codexpath"
 )
 
 // Tokens is the breakdown each token_count event carries. Cached is
@@ -130,7 +132,7 @@ func Walk(window time.Duration) (*Aggregate, error) {
 	if err != nil {
 		return nil, err
 	}
-	root := filepath.Join(home, ".codex", "sessions")
+	root := codexpath.Sessions(home)
 	return walkRoot(root, window, time.Now())
 }
 

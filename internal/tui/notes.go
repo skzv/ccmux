@@ -117,7 +117,7 @@ type notesModel struct {
 
 	// Cross-device state. hosts is the latest host-health list (pushed
 	// from the App via SetHosts); deviceName is the active device's
-	// project-host label ("local" or a remote host name); deviceErr
+	// routing key ("local", a configured name, or a discovered endpoint); deviceErr
 	// holds the last remote fetch error so the screen can show "device
 	// unreachable" rather than silently empty. See notes_device.go.
 	hosts      []hostStatus
@@ -423,9 +423,9 @@ func (m notesModel) loadEntriesCmd(p project.Project) tea.Cmd {
 	// the (non-existent) remote path off the local disk.
 	addr, ok := m.remoteAddr(label)
 	if !ok {
-		host := label
+		host := hostLabel(label, m.hosts)
 		return func() tea.Msg {
-			return notesEntriesLoadedMsg{Host: host, Path: path, Err: "device " + host + " is unreachable"}
+			return notesEntriesLoadedMsg{Host: label, Path: path, Err: "device " + host + " is unreachable"}
 		}
 	}
 	return remoteNotesCmd(addr, label, path, p.Name)
@@ -483,7 +483,7 @@ func (m *notesModel) refreshPreview() tea.Cmd {
 		m.preview.GotoTop()
 		addr, ok := m.remoteAddr(label)
 		if !ok {
-			m.previewSrc = m.st.StatusError.Render(fmt.Sprintf(tr("device %s is unreachable"), label))
+			m.previewSrc = m.st.StatusError.Render(fmt.Sprintf(tr("device %s is unreachable"), hostLabel(label, m.hosts)))
 			m.preview.SetContent(m.previewSrc)
 			return nil
 		}
@@ -757,7 +757,7 @@ func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
 			if m.activeIsRemote() {
 				return m, func() tea.Msg {
 					return toastMsg{
-						Text:  fmt.Sprintf(tr("remote notes are read-only — create on %s directly"), m.deviceName),
+						Text:  fmt.Sprintf(tr("remote notes are read-only — create on %s directly"), hostLabel(m.deviceName, m.hosts)),
 						Kind:  toastInfo,
 						Until: time.Now().Add(4 * time.Second),
 					}
@@ -1346,9 +1346,9 @@ func (m notesModel) runSearch(query string) tea.Cmd {
 	// Remote search hits the daemon's /v1/notes/search endpoint.
 	addr, ok := m.remoteAddr(label)
 	if !ok {
-		host := label
+		host := hostLabel(label, m.hosts)
 		return func() tea.Msg {
-			return notesSearchResultMsg{Query: query, Err: "device " + host + " is unreachable", Host: host, Path: path}
+			return notesSearchResultMsg{Query: query, Err: "device " + host + " is unreachable", Host: label, Path: path}
 		}
 	}
 	name := m.project.Name
@@ -1406,7 +1406,7 @@ func (m notesModel) View(width, height int) string {
 		if len(m.selectableDeviceLabels()) > 1 {
 			bodyLines = append(bodyLines,
 				"",
-				tr("Viewing device: ")+m.st.HostColor(m.deviceName).Render(m.deviceName)+
+				tr("Viewing device: ")+m.st.HostColor(m.deviceName).Render(hostLabel(m.deviceName, m.hosts))+
 					fmt.Sprintf(tr("  — press %s to switch device."), m.st.Key.Render("H")),
 			)
 		}

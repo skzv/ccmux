@@ -33,11 +33,13 @@ const agentSidecarRelPath = ".ccmux/agent"
 // Project is one bookmark-able working directory.
 type Project struct {
 	Name string // basename of the directory
+	// HostKey is the client's routing identity when Host is only a
+	// display label (auto-discovered peers can share a hostname).
+	HostKey string `json:"-"`
 	// Host marks which machine this project lives on. Empty / "local"
 	// for the current device; otherwise the short Tailscale name of
-	// the remote ccmuxd we fetched it from. The TUI uses this to
-	// route attach actions (local: scaffold + tmux locally; remote:
-	// POST /v1/sessions to the peer and ssh-attach).
+	// the remote ccmuxd we fetched it from. HostKey takes precedence
+	// for routing when set; Host remains the display label.
 	Host      string
 	Path      string    // absolute path on the project's host
 	HasGit    bool      // .git exists

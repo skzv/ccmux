@@ -409,9 +409,6 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 				Kind:    "state_change",
 				Session: t.sessionState(r.name),
 			})
-			if r.newState == agent.StateActive {
-				anyActive = true
-			}
 			continue
 		}
 		t.last = r.pane
@@ -469,9 +466,6 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 				prev, next agent.State
 			}{r.name, prev, r.newState})
 		}
-		if r.newState == agent.StateActive {
-			anyActive = true
-		}
 	}
 	for name, t := range s.seen {
 		if !live[name] && !t.touched.After(listedAt) {
@@ -485,7 +479,12 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 				Kind:    "killed",
 				Session: t.sessionState(name), // as last seen
 			})
+			continue
 		}
+		// Failed captures retain their last known state. They must also
+		// retain sleep prevention until a successful observation settles
+		// them or the session disappears from tmux's list.
+		anyActive = anyActive || t.state == agent.StateActive
 	}
 	s.mu.Unlock()
 

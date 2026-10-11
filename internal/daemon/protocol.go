@@ -10,6 +10,9 @@ import "time"
 // data (windows, attached, path) and daemon-derived data (state, idle,
 // metrics).
 type SessionState struct {
+	// HostKey is a client-side routing identity assigned when merging
+	// peers. Host remains the display label; peers cannot supply this key.
+	HostKey     string    `json:"-"`
 	Name        string    `json:"name"`
 	Host        string    `json:"host"`         // "local" or a configured remote host name
 	Project     string    `json:"project"`      // project basename if known

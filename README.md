@@ -188,6 +188,8 @@ Notes follow you across devices: press `H` to toggle which machine you're viewin
 
 One screen for "is my agent installed and signed in?" Per-agent CLI version, config root, login status, and a command palette to re-run setup or open the config directory.
 
+Codex configuration, conversation history, and usage honor `CODEX_HOME`, falling back to `~/.codex` when unset.
+
 ---
 
 ## ⚙️ Setup is a flow, not a README.
@@ -244,6 +246,8 @@ ccmux                                      # dashboard already lists the Mini
 ```
 
 Every refresh, ccmux runs `tailscale status --json`, probes each online non-mobile peer for a `ccmuxd /v1/health`, and merges the responders into the host list. Install ccmux on a new device, start its daemon, and it shows up on every other device on your tailnet within seconds.
+
+Peers with the same name stay separate. Device pickers and session confirmations include their addresses when names collide, so each action targets the selected machine.
 
 The Devices panel on the Dashboard shows every device on your tailnet:
 

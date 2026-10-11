@@ -36,12 +36,12 @@ const (
 type confirmationModal struct {
 	kind   confirmationKind
 	target string
-	// host is the kill target's host label: "" when the session lives
-	// on this machine, otherwise the remote host whose daemon receives
-	// the kill (and which the modal names, so the user can tell the
-	// laptop's c-ccmux from the mini's).
-	host  string
-	focus confirmationFocus
+	// host is the kill target's routing key, empty for this machine.
+	// hostLabel is its human-readable name, disambiguated with an
+	// address when needed and snapshotted when the modal opens.
+	host      string
+	hostLabel string
+	focus     confirmationFocus
 	// self marks a kill of the tmux session ccmux itself runs in: the
 	// dialog warns that ccmux goes down with it.
 	self bool
@@ -78,7 +78,11 @@ func (m confirmationModal) body(target string) string {
 		return tr("Exit ccmux. Managed tmux sessions will keep running.")
 	case confirmationKillSession:
 		if m.host != "" {
-			return fmt.Sprintf(tr("Kill tmux session %q on %s. This cannot be undone."), target, m.host)
+			label := m.hostLabel
+			if label == "" {
+				label = m.host
+			}
+			return fmt.Sprintf(tr("Kill tmux session %q on %s. This cannot be undone."), target, label)
 		}
 		return fmt.Sprintf(tr("Kill tmux session %q. This cannot be undone."), target)
 	default:
@@ -115,7 +119,7 @@ func (a App) openQuitConfirmation() (App, tea.Cmd) {
 }
 
 // openKillSessionConfirmation opens the kill modal for the session
-// `name` on host label `host`. Local labels ("" and "local") collapse
+// `name` on host key `host`. Local keys ("" and "local") collapse
 // to "" so the modal and the kill route agree on what "local" means;
 // every other host is named in the modal.
 func (a App) openKillSessionConfirmation(host, name string) (App, tea.Cmd) {
@@ -123,6 +127,7 @@ func (a App) openKillSessionConfirmation(host, name string) (App, tea.Cmd) {
 		host = ""
 	}
 	a.confirm = newKillSessionConfirmation(host, name)
+	a.confirm.hostLabel = hostLabel(host, a.hosts)
 	a.confirm.self = host == "" && name == currentTmuxSession()
 	return a, nil
 }

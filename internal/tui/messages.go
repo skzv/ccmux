@@ -50,6 +50,9 @@ type openSSHWizardMsg struct {
 // hostStatus is one row in the host-health pings table.
 type hostStatus struct {
 	Name string
+	// Key is independent of the display name for discovered peers.
+	// Empty retains the configured host's unique name as its key.
+	Key string
 	// Local marks the row representing this machine. The Devices
 	// panel renders it with a small "(this device)" tag so the user
 	// can tell at a glance which row is which.
