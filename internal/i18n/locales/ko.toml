@@ -532,6 +532,7 @@
 "%s already exists — esc, then open it from the list" = "%s이(가) 이미 있습니다 — esc를 누르고 목록에서 여세요"
 "~ (daemon's $HOME if blank)" = "~ (비워 두면 데몬의 $HOME)"
 "%s (from sessions.default_dir; edit to override)" = "%s (sessions.default_dir 값, 수정하여 변경)"
+"blank: that device's sessions.default_dir, else its $HOME" = "비워 두면: 그 기기의 sessions.default_dir, 없으면 그 기기의 $HOME"
 "ccmux is a terminal UI for long-lived coding-agent sessions (Claude Code, Codex, Cursor, and more) on top of tmux, Mosh, and Tailscale." = "ccmux는 오래 실행되는 코딩 에이전트 세션(Claude Code, Codex, Cursor 등)을 tmux, Mosh, Tailscale 위에서 다루는 터미널 UI입니다."
 "This %d-step tour shows you the essentials. It runs once on first launch and re-opens any time with `T`." = "이 %d단계 투어는 핵심만 보여 줍니다. 처음 실행할 때 한 번 나타나며 언제든 `T`로 다시 열 수 있습니다."
 "iOS push notifications via Moshi" = "Moshi를 통한 iOS 푸시 알림"

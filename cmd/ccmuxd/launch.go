@@ -115,22 +115,10 @@ func shellLaunchCmd() string {
 	return shell
 }
 
-// resolveBarePath picks the working directory for a bare session.
-// Order: explicit req.Path → daemon's configured DefaultDir → $HOME.
-// Exported as a helper so the unit tests can pin the priority.
-func resolveBarePath(reqPath, configDefault string) string {
-	for _, candidate := range []string{reqPath, configDefault} {
-		if c := strings.TrimSpace(candidate); c != "" {
-			return expandTilde(c)
-		}
-	}
-	home, _ := os.UserHomeDir()
-	return home
-}
-
-// expandTilde rewrites a leading "~/" to the daemon's $HOME. Bare-
-// path strings come straight from config.toml and the wire; users
-// expect "~/foo" to mean the daemon's home, not the client's. Other
+// expandTilde rewrites a leading "~/" to the daemon's $HOME. Path
+// strings come straight from the wire; users expect "~/foo" to mean
+// the daemon's home, not the client's. Bare sessions get the same
+// expansion through config.ResolveBareSessionDir. Other
 // shell expansions ($VAR, *, …) are deliberately NOT handled —
 // that's a recipe for surprises in a daemon process.
 func expandTilde(p string) string {

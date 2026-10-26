@@ -694,17 +694,23 @@ func newServer(cfg config.Config) *server {
 	}
 }
 
-// freshCommands re-reads ~/.config/ccmux/config.toml so a launch picks
-// up any setting the user changed since the daemon started — most
-// notably `[claude] default_model`. The whole config read is cheap
-// (one tiny TOML file) and only happens at session-create time, not
-// in the poll loop. Falls back to the startup-cached cfg on read
-// errors so a temporarily-corrupt config file can't break new-session.
-func (s *server) freshCommands() agent.Commands {
+// freshConfig re-reads ~/.config/ccmux/config.toml so a launch picks
+// up any setting the user changed since the daemon started: `[claude]
+// default_model`, sessions.default_dir, agents.default. The whole
+// config read is cheap (one tiny TOML file) and only happens at
+// session-create time, not in the poll loop. Falls back to the
+// startup-cached cfg on read errors so a temporarily-corrupt config
+// file can't break new-session.
+func (s *server) freshConfig() config.Config {
 	if cfg, err := config.Load(); err == nil {
-		return cfg.AgentCommands()
+		return cfg
 	}
-	return s.cfg.AgentCommands()
+	return s.cfg
+}
+
+// freshCommands is freshConfig's agent commands.
+func (s *server) freshCommands() agent.Commands {
+	return s.freshConfig().AgentCommands()
 }
 
 // routes registers every tailnet-safe endpoint. Anything that an
@@ -1102,7 +1108,9 @@ func (s *server) confirmStarted(ctx context.Context, w http.ResponseWriter, name
 // Path defaults to the daemon's configured sessions.default_dir,
 // falling back to $HOME on the daemon's machine. We never resolve
 // to the client's home — the whole point is "shell on the remote
-// machine in that machine's home".
+// machine in that machine's home". The defaults come from config.toml
+// as it is now, not as it was when the daemon started: an edited
+// default_dir used to need a daemon restart to take effect.
 //
 // Idempotent: if `Name` already exists as a tmux session, return it
 // (with the directory it really runs in) without re-creating — unless
@@ -1128,7 +1136,8 @@ func (s *server) createBareSession(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	path := resolveBarePath(req.Path, s.cfg.Sessions.DefaultDir)
+	cfg := s.freshConfig()
+	path := config.ResolveBareSessionDir(req.Path, cfg.Sessions.DefaultDir)
 	if !requireDir(w, path, "path on this host") {
 		return
 	}
@@ -1166,13 +1175,13 @@ func (s *server) createBareSession(w http.ResponseWriter, r *http.Request) {
 	// Order: explicit request agent → daemon's
 	// sessions.default_agent → $SHELL. Bare sessions don't carry
 	// --continue because they're not tied to a project transcript.
-	launch := bareSessionLaunchCmd(req.Agent, s.cfg.Agents.Default, s.freshCommands())
+	launch := bareSessionLaunchCmd(req.Agent, cfg.Agents.Default, cfg.AgentCommands())
 	// Tag what actually runs there, in the same tmux call that
 	// creates the session. A bare session has no project sidecar,
 	// so untagged the poll loop assumed Claude — a plain shell
 	// prompt then read as "Claude crashed" (error) — and a tick
 	// landing between two separate calls did exactly that.
-	tag := bareSessionAgentTag(req.Agent, s.cfg.Agents.Default)
+	tag := bareSessionAgentTag(req.Agent, cfg.Agents.Default)
 	if err := tmux.NewWithAgent(ctx, name, path, launch, tag); err != nil {
 		http.Error(w, "tmux new-session: "+err.Error(), http.StatusInternalServerError)
 		return

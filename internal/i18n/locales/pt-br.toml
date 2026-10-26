@@ -532,6 +532,7 @@
 "%s already exists — esc, then open it from the list" = "%s já existe — esc e abra pela lista"
 "~ (daemon's $HOME if blank)" = "~ ($HOME do daemon se vazio)"
 "%s (from sessions.default_dir; edit to override)" = "%s (de sessions.default_dir; edite para substituir)"
+"blank: that device's sessions.default_dir, else its $HOME" = "vazio: sessions.default_dir desse dispositivo, senão o $HOME dele"
 "ccmux is a terminal UI for long-lived coding-agent sessions (Claude Code, Codex, Cursor, and more) on top of tmux, Mosh, and Tailscale." = "ccmux é uma interface de terminal para sessões duradouras de agentes de código (Claude Code, Codex, Cursor e outros) sobre tmux, Mosh e Tailscale."
 "This %d-step tour shows you the essentials. It runs once on first launch and re-opens any time with `T`." = "Este tour de %d passos mostra o essencial. Ele aparece uma vez na primeira execução e pode ser reaberto a qualquer momento com `T`."
 "iOS push notifications via Moshi" = "notificações push no iOS via Moshi"

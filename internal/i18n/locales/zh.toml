@@ -540,6 +540,7 @@
 "%s already exists — esc, then open it from the list" = "%s 已存在——按 esc，然后在列表中打开它"
 "~ (daemon's $HOME if blank)" = "~（留空则为守护进程的 $HOME）"
 "%s (from sessions.default_dir; edit to override)" = "%s（来自 sessions.default_dir；可编辑覆盖）"
+"blank: that device's sessions.default_dir, else its $HOME" = "留空：该设备的 sessions.default_dir，否则为其 $HOME"
 "ccmux is a terminal UI for long-lived coding-agent sessions (Claude Code, Codex, Cursor, and more) on top of tmux, Mosh, and Tailscale." = "ccmux 是一个终端界面，基于 tmux、Mosh 和 Tailscale，用来管理长时间运行的编程智能体会话（Claude Code、Codex、Cursor 等）。"
 "This %d-step tour shows you the essentials. It runs once on first launch and re-opens any time with `T`." = "这个 %d 步的导览会带你了解核心功能。它只在首次启动时运行一次，随时按 `T` 重新打开。"
 "iOS push notifications via Moshi" = "通过 Moshi 推送 iOS 通知"

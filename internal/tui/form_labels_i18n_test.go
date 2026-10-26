@@ -67,16 +67,24 @@ func TestNewSessionForm_TranslatedLabelsKeepRowsOnOneLine(t *testing.T) {
 }
 
 // TestNewSessionForm_PlaceholderTranslated — the working-dir
-// placeholder was English in every language.
+// placeholder was English in every language. The remote-device
+// variant gets the same treatment.
 func TestNewSessionForm_PlaceholderTranslated(t *testing.T) {
 	withLang(t, "de")
 	for _, dir := range []string{"", "~/work"} {
-		got := defaultDirPlaceholder(dir)
+		got := defaultDirPlaceholder(dir, true)
 		if strings.Contains(got, "if blank") || strings.Contains(got, "edit to override") {
 			t.Errorf("placeholder for %q is still English: %q", dir, got)
 		}
 		if dir != "" && !strings.HasPrefix(got, dir) {
 			t.Errorf("placeholder %q lost the configured dir %q", got, dir)
+		}
+		remote := defaultDirPlaceholder(dir, false)
+		if strings.Contains(remote, "that device") {
+			t.Errorf("remote placeholder for %q is still English: %q", dir, remote)
+		}
+		if !strings.Contains(remote, "sessions.default_dir") || !strings.Contains(remote, "$HOME") {
+			t.Errorf("remote placeholder %q must keep sessions.default_dir and $HOME verbatim", remote)
 		}
 	}
 }

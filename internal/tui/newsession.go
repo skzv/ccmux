@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -90,9 +89,8 @@ func newNewSessionForm(st styles.Styles, hosts []hostStatus, defaultDir, default
 
 	w := textinput.New()
 	// Don't pre-fill — leave it empty so submit defaults to the
-	// daemon-side resolved path. Placeholder communicates the
-	// fallback.
-	w.Placeholder = defaultDirPlaceholder(defaultDir)
+	// resolved path. The placeholder (syncWorkdirPlaceholder below)
+	// communicates the fallback.
 	w.CharLimit = 256
 	w.Width = newSessionWorkdirWidth
 	w.Prompt = ""
@@ -102,7 +100,7 @@ func newNewSessionForm(st styles.Styles, hosts []hostStatus, defaultDir, default
 		commands = commandsOpt[0]
 	}
 	agents := agentChoicesForBareSession(commands)
-	return newSessionFormModel{
+	m := newSessionFormModel{
 		st:          st,
 		name:        n,
 		workdir:     w,
@@ -113,6 +111,8 @@ func newNewSessionForm(st styles.Styles, hosts []hostStatus, defaultDir, default
 		agents:      agents,
 		agentIdx:    indexOfDefaultAgent(agents, defaultAgent),
 	}
+	m.syncWorkdirPlaceholder()
+	return m
 }
 
 // indexOfDefaultAgent picks the picker's initial cursor row from the
@@ -146,12 +146,23 @@ func indexOfDefaultAgent(agents []sessionAgentChoice, configDefault string) int 
 
 // defaultDirPlaceholder is the muted placeholder text for the
 // workdir field. Centralized so the empty-default and explicit-
-// default cases render symmetrically.
-func defaultDirPlaceholder(defaultDir string) string {
+// default cases render symmetrically. A remote device resolves a blank
+// path with its own daemon's config, so this machine's default_dir
+// would be the wrong promise there.
+func defaultDirPlaceholder(defaultDir string, local bool) string {
+	if !local {
+		return tr("blank: that device's sessions.default_dir, else its $HOME")
+	}
 	if strings.TrimSpace(defaultDir) == "" {
 		return tr("~ (daemon's $HOME if blank)")
 	}
 	return fmt.Sprintf(tr("%s (from sessions.default_dir; edit to override)"), defaultDir)
+}
+
+// syncWorkdirPlaceholder points the workdir placeholder at the picked
+// device's fallback. Called on open and whenever the device changes.
+func (m *newSessionFormModel) syncWorkdirPlaceholder() {
+	m.workdir.Placeholder = defaultDirPlaceholder(m.defaultPath, m.currentHost().Local)
 }
 
 // nsFocusCount is the row count for the form's focus cycling:
@@ -175,6 +186,7 @@ func (m newSessionFormModel) Update(msg tea.Msg) (newSessionFormModel, tea.Cmd) 
 			switch {
 			case m.focus == 2 && len(m.hosts) > 0:
 				m.hostIdx = (m.hostIdx - 1 + len(m.hosts)) % len(m.hosts)
+				m.syncWorkdirPlaceholder()
 				return m, nil
 			case m.focus == 3 && len(m.agents) > 0:
 				m.agentIdx = (m.agentIdx - 1 + len(m.agents)) % len(m.agents)
@@ -184,6 +196,7 @@ func (m newSessionFormModel) Update(msg tea.Msg) (newSessionFormModel, tea.Cmd) 
 			switch {
 			case m.focus == 2 && len(m.hosts) > 0:
 				m.hostIdx = (m.hostIdx + 1) % len(m.hosts)
+				m.syncWorkdirPlaceholder()
 				return m, nil
 			case m.focus == 3 && len(m.agents) > 0:
 				m.agentIdx = (m.agentIdx + 1) % len(m.agents)
@@ -368,27 +381,12 @@ func spawnBareSessionCmd(submit newBareSessionSubmitMsg) tea.Cmd {
 				Until: time.Now().Add(5 * time.Second),
 			}
 		}
-		// Resolve workdir client-side using the same
-		// rules the daemon would: explicit → $HOME (no config
-		// fallback here because this code path doesn't read the
-		// daemon's config; the form's placeholder already showed
-		// the user what the config default is, and they typed
-		// something or accepted the default).
-		path := strings.TrimSpace(submit.Path)
-		if path == "" {
-			if home, err := os.UserHomeDir(); err == nil {
-				path = home
-			}
-		}
-		if strings.HasPrefix(path, "~/") {
-			if home, err := os.UserHomeDir(); err == nil {
-				path = filepath.Join(home, path[2:])
-			}
-		} else if path == "~" {
-			if home, err := os.UserHomeDir(); err == nil {
-				path = home
-			}
-		}
+		// Resolve the workdir by the daemon's rules, from config.toml
+		// as it is now: explicit → sessions.default_dir → $HOME. A
+		// blank field used to go straight to $HOME, ignoring the
+		// default_dir the placeholder had just promised (#234).
+		cfg, _ := config.Load()
+		path := config.ResolveBareSessionDir(submit.Path, cfg.Sessions.DefaultDir)
 		if _, err := os.Stat(path); err != nil {
 			return toastMsg{
 				Text:  tr("new session: path not found: ") + path,
@@ -400,7 +398,6 @@ func spawnBareSessionCmd(submit newBareSessionSubmitMsg) tea.Cmd {
 		if name == "" {
 			name = tmux.AutoSessionName("c-shell")
 		}
-		cfg, _ := config.Load()
 		launch := launchCmdForBareSessionWithCommands(submit.Agent, cfg.AgentCommands())
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
