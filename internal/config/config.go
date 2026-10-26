@@ -122,9 +122,10 @@ type FCMConfig struct {
 // new-bare-session form, so keeping it global is the right level.
 type SessionsConfig struct {
 	// DefaultDir is the working directory new bare sessions open
-	// in. Empty resolves to $HOME on the daemon host. The TUI's
-	// new-session form pre-fills this value; the user can override
-	// per-session.
+	// in when no path is given. Empty resolves to $HOME on the host
+	// the session runs on. The TUI's new-session form shows this value
+	// as the working-dir placeholder; typing a path overrides it for
+	// that session. See ResolveBareSessionDir.
 	DefaultDir string `toml:"default_dir"`
 
 	// AttachMode controls what happens to OTHER clients when ccmux
@@ -152,6 +153,22 @@ type SessionsConfig struct {
 // mode through one predicate instead of string-comparing inline.
 func (s SessionsConfig) DetachOthersOnAttach() bool {
 	return strings.EqualFold(strings.TrimSpace(s.AttachMode), "exclusive")
+}
+
+// ResolveBareSessionDir picks the working directory for a bare session:
+// reqPath when set, else defaultDir (sessions.default_dir), else $HOME.
+// A leading `~` expands to this process's home, so on the daemon it
+// means the daemon host's home, not the client's. ccmuxd and the TUI's
+// local spawn both resolve through here; when the TUI resolved a blank
+// path on its own it went straight to $HOME and skipped default_dir.
+func ResolveBareSessionDir(reqPath, defaultDir string) string {
+	for _, candidate := range []string{reqPath, defaultDir} {
+		if c := strings.TrimSpace(candidate); c != "" {
+			return agent.ExpandHome(c)
+		}
+	}
+	home, _ := os.UserHomeDir()
+	return home
 }
 
 // ConversationsConfig controls the past-conversations list shown in
