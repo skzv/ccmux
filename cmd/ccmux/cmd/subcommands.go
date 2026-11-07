@@ -327,11 +327,12 @@ func agentIDList() string {
 // fallback and `ccmux project`'s session listing — a hang guard.
 const listTmuxTimeout = 15 * time.Second
 
-// newListCmd: `ccmux list [--json]` — list sessions.
+// newListCmd: `ccmux list [--json] [--host h] [--filter q]` — list sessions.
 func newListCmd() *cobra.Command {
 	var (
 		asJSON bool
 		host   string
+		filter string
 	)
 	c := &cobra.Command{
 		Use:   "list",
@@ -343,7 +344,11 @@ When ccmuxd isn't running (or doesn't answer), the list comes straight
 from tmux instead, and STATE is "unknown": only the daemon classifies.
 
 With --host, the sessions are that configured host's, as its ccmuxd
-lists them (HOST shows the host's name).`,
+lists them (HOST shows the host's name).
+
+With --filter, only sessions whose name, project, host, or agent
+contains the text (ignoring case) are listed — the same match as "/"
+on the TUI's Sessions screen.`,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
@@ -387,6 +392,7 @@ lists them (HOST shows the host's name).`,
 					})
 				}
 			}
+			sessions = daemon.FilterSessions(sessions, filter)
 			if asJSON {
 				// Always an array: a nil slice encodes as `null`, which
 				// breaks `ccmux list --json | jq '.[]'` on an idle box.
@@ -407,6 +413,7 @@ lists them (HOST shows the host's name).`,
 	}
 	c.Flags().BoolVar(&asJSON, "json", false, "output JSON instead of a table")
 	c.Flags().StringVar(&host, "host", "", hostFlagUsage)
+	c.Flags().StringVarP(&filter, "filter", "f", "", "only list sessions whose name, project, host, or agent contains this text (case-insensitive)")
 	return c
 }
 

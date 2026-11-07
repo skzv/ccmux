@@ -49,6 +49,7 @@ func helpForScreen(s Screen, km Keymap) []HelpItem {
 	case ScreenSessions:
 		return []HelpItem{
 			{"↑↓ / j k", tr("navigate session list")},
+			{"/", tr("filter sessions by name, project, host or agent (esc to clear, enter to attach to top match)")},
 			{"enter", tr("attach (Ctrl-b then d to detach back to ccmux)")},
 			{helpKey(km.NewItem), tr("new session")},
 			{helpKey(km.Preview), tr("toggle a live preview of the selected session")},

@@ -1537,6 +1537,23 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, cmd
 		}
 
+		// Sessions filter mode: the textinput owns the keystrokes, so a
+		// query containing a digit, q, x or R types instead of switching
+		// screens, quitting, killing or renaming. Enter commits the
+		// filter and attaches to the highlighted match; esc clears it.
+		if a.screen == ScreenSessions && a.sessionsM.FilterActive() {
+			if keyMatches(msg, a.keys.Enter) {
+				a.sessionsM.commitFilter()
+				return a.attachSelectedSession()
+			}
+			if msg.String() == "esc" {
+				return a, a.sessionsM.exitFilter()
+			}
+			var cmd tea.Cmd
+			a.sessionsM, cmd = a.sessionsM.Update(msg)
+			return a, cmd
+		}
+
 		// Notes search mode: the search textinput owns every keystroke so
 		// global bindings like "r" (refresh) don't swallow characters mid-query.
 		if a.screen == ScreenNotes && a.notes.searching {

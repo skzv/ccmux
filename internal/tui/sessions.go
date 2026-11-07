@@ -41,7 +41,17 @@ type sessionsModel struct {
 	st       styles.Styles
 	km       Keymap
 	sessions []daemon.SessionState
-	cursor   int
+	// cursor indexes visibleSessions(), not sessions: with a filter
+	// engaged, row N on screen is visibleSessions()[N].
+	cursor int
+
+	// `/` filter. While filterActive, keystrokes feed the textinput and
+	// the list narrows to sessions matching it (daemon.SessionMatchesQuery:
+	// name, project, host, agent). Enter commits the filter and attaches
+	// to the highlighted match; esc clears it. A committed filter keeps
+	// narrowing the list until esc.
+	filter       textinput.Model
+	filterActive bool
 
 	// `n` opens a modal form for spawning a bare (project-less)
 	// session on any device. nil when the modal isn't showing.
@@ -119,7 +129,75 @@ type previewLoadedMsg struct {
 type previewTickMsg struct{ gen int }
 
 func newSessions(st styles.Styles, km Keymap) sessionsModel {
-	return sessionsModel{st: st, km: km}
+	ti := textinput.New()
+	ti.Placeholder = tr("type to filter…")
+	ti.Prompt = "/ "
+	ti.CharLimit = 64
+	ti.Width = 40
+	return sessionsModel{st: st, km: km, filter: ti}
+}
+
+// visibleSessions is the list the user actually sees: every session
+// when no filter is engaged, otherwise only the matches. Centralized so
+// the renderer, the cursor bounds, and Selected() can't drift — Enter
+// on a filtered list must attach to the row on screen, not to the row
+// at the same index in the unfiltered list.
+func (m sessionsModel) visibleSessions() []daemon.SessionState {
+	return daemon.FilterSessions(m.sessions, m.filter.Value())
+}
+
+// FilterActive reports whether the filter input has focus. App routes
+// every keystroke here while it does, so digits, q, x and friends type
+// into the query instead of switching screens / quitting / killing.
+func (m sessionsModel) FilterActive() bool { return m.filterActive }
+
+// enterFilter focuses the filter input. Idempotent.
+func (m *sessionsModel) enterFilter() {
+	m.filterActive = true
+	m.filter.Focus()
+}
+
+// exitFilter drops focus and clears the query, restoring the full list
+// with the cursor still on the session that was selected.
+func (m *sessionsModel) exitFilter() tea.Cmd {
+	sel := m.Selected()
+	m.filterActive = false
+	m.filter.Blur()
+	m.filter.SetValue("")
+	m.cursor = 0
+	if sel != nil {
+		m.selectSession(*sel)
+	}
+	return m.previewFollowSelection()
+}
+
+// commitFilter blurs the input but keeps the query, so the list stays
+// narrowed after Enter. `/` re-focuses it; esc clears it.
+func (m *sessionsModel) commitFilter() {
+	m.filterActive = false
+	m.filter.Blur()
+}
+
+// selectSession moves the cursor onto s in the visible list. Reports
+// whether s is visible.
+func (m *sessionsModel) selectSession(s daemon.SessionState) bool {
+	for i, v := range m.visibleSessions() {
+		if sameSession(sessionHostLabel(v), v.Name, sessionHostLabel(s), s.Name) {
+			m.cursor = i
+			return true
+		}
+	}
+	return false
+}
+
+// clampCursor keeps the cursor inside the visible list after it shrank.
+func (m *sessionsModel) clampCursor() {
+	if n := len(m.visibleSessions()); m.cursor >= n {
+		m.cursor = max0(n - 1)
+	}
+	if m.cursor < 0 {
+		m.cursor = 0
+	}
 }
 
 func (m *sessionsModel) SetSessions(ss []daemon.SessionState) tea.Cmd {
@@ -133,11 +211,7 @@ func (m *sessionsModel) SetSessions(ss []daemon.SessionState) tea.Cmd {
 	// on several machines (`c-ccmux` on the laptop and on the mini), and
 	// a name-only match jumped the cursor to the other host's row on
 	// every poll — so Enter attached to the wrong machine.
-	var selected *daemon.SessionState
-	if m.cursor >= 0 && m.cursor < len(m.sessions) {
-		s := m.sessions[m.cursor]
-		selected = &s
-	}
+	selected := m.Selected()
 	// Re-sort by attention priority so a session waiting on the user
 	// (needs_input / done-but-unreviewed / error) surfaces above
 	// still-working rows. Stable secondary key on Name keeps the order
@@ -145,18 +219,8 @@ func (m *sessionsModel) SetSessions(ss []daemon.SessionState) tea.Cmd {
 	// renders don't flicker the same set of names.
 	sortByAttention(ss)
 	m.sessions = ss
-	found := false
-	if selected != nil {
-		for i, s := range ss {
-			if sameSession(sessionHostLabel(s), s.Name, sessionHostLabel(*selected), selected.Name) {
-				m.cursor = i
-				found = true
-				break
-			}
-		}
-	}
-	if !found && m.cursor >= len(ss) {
-		m.cursor = max0(len(ss) - 1)
+	if selected == nil || !m.selectSession(*selected) {
+		m.clampCursor()
 	}
 	return m.previewFollowSelection()
 }
@@ -226,15 +290,17 @@ func sessionHostKey(h string) string {
 // App.modalCapturingText while Sessions is the active screen — extend
 // this when adding a new modal to the Sessions screen.
 func (m sessionsModel) capturesInput() bool {
-	return m.form != nil || m.renameForm != nil
+	return m.form != nil || m.renameForm != nil || m.filterActive
 }
 
-// Selected returns the currently-highlighted session, or nil.
+// Selected returns the currently-highlighted session in the visible
+// (filtered) list, or nil when nothing is visible.
 func (m sessionsModel) Selected() *daemon.SessionState {
-	if m.cursor < 0 || m.cursor >= len(m.sessions) {
+	vis := m.visibleSessions()
+	if m.cursor < 0 || m.cursor >= len(vis) {
 		return nil
 	}
-	s := m.sessions[m.cursor]
+	s := vis[m.cursor]
 	return &s
 }
 
@@ -324,7 +390,39 @@ func (m sessionsModel) Update(msg tea.Msg) (sessionsModel, tea.Cmd) {
 	}
 
 	if km, ok := msg.(tea.KeyMsg); ok {
+		// Filter mode: only the arrow keys move the cursor (j/k are
+		// letters the user may be typing); every other key edits the
+		// query. App handles Enter (commit + attach) and esc (clear)
+		// before this branch sees them.
+		if m.filterActive {
+			switch km.Type {
+			case tea.KeyUp:
+				if m.cursor > 0 {
+					m.cursor--
+					return m, m.maybeRefreshPreview()
+				}
+				return m, nil
+			case tea.KeyDown:
+				if m.cursor < len(m.visibleSessions())-1 {
+					m.cursor++
+					return m, m.maybeRefreshPreview()
+				}
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.filter, cmd = m.filter.Update(msg)
+			m.clampCursor()
+			return m, tea.Batch(cmd, m.previewFollowSelection())
+		}
+
 		switch {
+		case km.String() == "/":
+			m.enterFilter()
+			return m, textinput.Blink
+		case km.String() == "esc" && m.filter.Value() != "":
+			// A committed filter keeps narrowing the list after Enter;
+			// esc is how the empty-state hint says to get out of it.
+			return m, m.exitFilter()
 		case keyMatches(km, m.km.NewItem):
 			// Open the new-session form.
 			f := newNewSessionForm(m.st, m.hosts, m.defaultDir, m.defaultAgent, m.agentCommands)
@@ -366,7 +464,7 @@ func (m sessionsModel) Update(msg tea.Msg) (sessionsModel, tea.Cmd) {
 				return m, m.maybeRefreshPreview()
 			}
 		case keyMatches(km, m.km.Down):
-			if m.cursor < len(m.sessions)-1 {
+			if m.cursor < len(m.visibleSessions())-1 {
 				m.cursor++
 				return m, m.maybeRefreshPreview()
 			}
@@ -594,6 +692,26 @@ func (m sessionsModel) renderList(width, height int) string {
 	// fits in (width - 6) cells.
 	inner := width - 4
 	header := m.st.Emphasis.Render(tr("Sessions")) + "  " + m.sessionsCount()
+	vis := m.visibleSessions()
+	filtering := m.filterActive || m.filter.Value() != ""
+	if filtering && len(m.sessions) > 0 {
+		// This input survives Settings language changes; translate at
+		// render time. The live match count tells the user whether to
+		// keep typing or press Enter.
+		m.filter.Placeholder = tr("type to filter…")
+		m.filter.Width = maxInt(8, inner-12)
+		header += "\n" + m.filter.View() + "  " + m.st.Muted.Render(fmt.Sprintf("(%d/%d)", len(vis), len(m.sessions)))
+	}
+	if filtering && len(m.sessions) > 0 && len(vis) == 0 {
+		body := lipgloss.JoinVertical(lipgloss.Left,
+			header,
+			"",
+			m.st.Muted.Render(fmt.Sprintf(tr("No sessions match %s."), m.filter.Value())),
+			"",
+			m.st.Muted.Render(tr("Press esc to clear the filter.")),
+		)
+		return m.st.PaneFocused.Width(width - 2).Height(height - 2).Render(body)
+	}
 	if len(m.sessions) == 0 {
 		body := lipgloss.JoinVertical(lipgloss.Left,
 			header,
@@ -612,14 +730,16 @@ func (m sessionsModel) renderList(width, height int) string {
 	// holds height-2 lines inside its border: the header, a spacer, and
 	// the rows — the spacer goes first when even that doesn't fit.
 	head := []string{header, ""}
-	budget := height - 2 - len(head)
+	headH := lipgloss.Height(header) + 1
+	budget := height - 2 - headH
 	if budget < 1 {
 		head = head[:1]
-		budget = maxInt(1, height-2-len(head))
+		headH--
+		budget = maxInt(1, height-2-headH)
 	}
-	start, end := windowAroundCursor(m.cursor, len(m.sessions), budget)
+	start, end := windowAroundCursor(m.cursor, len(vis), budget)
 	list := components.List(m.st, components.ListProps[daemon.SessionState]{
-		Items: m.sessions[start:end],
+		Items: vis[start:end],
 		Render: func(s daemon.SessionState) components.ListItem {
 			s.HostKey = sessionHostLabel(s)
 			s.Host = hostLabel(s.HostKey, m.hosts)
@@ -642,6 +762,11 @@ const sessionsMinVisibleRows = 3
 func (m sessionsModel) listMinHeight() int {
 	if len(m.sessions) == 0 {
 		return 7 // border + header, spacer, "No sessions yet.", spacer, hint
+	}
+	if m.filterActive || m.filter.Value() != "" {
+		// The filter prompt adds a line under the header; a no-match
+		// filter shows its two-line hint in place of the rows.
+		return 5 + maxInt(2, minInt(len(m.visibleSessions()), sessionsMinVisibleRows))
 	}
 	return 4 + minInt(len(m.sessions), sessionsMinVisibleRows)
 }

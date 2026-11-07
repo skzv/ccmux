@@ -326,6 +326,38 @@ func TestListHost(t *testing.T) {
 	}
 }
 
+// TestListFilter — `ccmux list --filter` keeps only the sessions whose
+// name / project / host / agent contains the query, case-insensitively,
+// in both the table and the --json output.
+func TestListFilter(t *testing.T) {
+	f := &fakeRemoteHost{sessions: []daemon.SessionState{
+		{Name: "c-api", Project: "api", Path: "/srv/api", State: "idle"},
+		{Name: "c-web", Project: "web", Path: "/srv/web", State: "idle", Agent: "codex"},
+		{Name: "scratch", Path: "/srv/api/scratch", State: "idle"},
+	}}
+	e := remoteEnv(t, f)
+
+	res := e.run("", "list", "--host", "box", "--filter", "API")
+	if res.code != 0 {
+		t.Fatalf("list --filter exit %d\nstderr: %s", res.code, res.stderr)
+	}
+	// Path is not matched, so "scratch" (under /srv/api) is filtered out.
+	if !strings.Contains(res.stdout, "c-api") || strings.Contains(res.stdout, "c-web") || strings.Contains(res.stdout, "scratch") {
+		t.Errorf("list --filter API output:\n%s", res.stdout)
+	}
+
+	res = e.run("", "list", "--host", "box", "--json", "-f", "codex")
+	var got []daemon.SessionState
+	if err := json.Unmarshal([]byte(res.stdout), &got); err != nil || len(got) != 1 || got[0].Name != "c-web" {
+		t.Errorf("list --json -f codex = %s (%v), want only c-web", res.stdout, err)
+	}
+
+	res = e.run("", "list", "--host", "box", "--json", "--filter", "nothing-matches")
+	if strings.TrimSpace(res.stdout) != "[]" {
+		t.Errorf("no-match list --json = %q, want []", res.stdout)
+	}
+}
+
 // fakeSSH logs each invocation's argv, one line, args joined by "|".
 const fakeSSH = `printf '%s|' "$@" >> "$FAKE_SSH_LOG"
 printf '\n' >> "$FAKE_SSH_LOG"
