@@ -346,13 +346,25 @@ func TestIntegration_StartDirWithHashIsKeptVerbatim(t *testing.T) {
 	if path != dir {
 		t.Errorf("session_path = %q, want %q", path, dir)
 	}
-	out, err := exec.CommandContext(ctx, "tmux", "display-message", "-p", "-t", exactPane("c-hash"), "#{pane_current_path}").Output()
-	if err != nil {
-		t.Fatal(err)
-	}
 	// pane_current_path is the resolved cwd (/private/var/… on macOS).
 	want, _ := filepath.EvalSymlinks(dir)
-	if got := strings.TrimSpace(string(out)); got != want {
+	// tmux reads it from the pane's process, which is forked first and
+	// changes directory after. Asked right after new-session returns, it
+	// can still report the directory the server was started in (seen on
+	// Linux CI), so wait for the pane to settle rather than asking once.
+	var got string
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		out, err := exec.CommandContext(ctx, "tmux", "display-message", "-p", "-t", exactPane("c-hash"), "#{pane_current_path}").Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got = strings.TrimSpace(string(out)); got == want || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if got != want {
 		t.Errorf("pane runs in %q, want %q", got, want)
 	}
 }
