@@ -15,6 +15,7 @@ Legend: `[P1]` Phase 1, `[P2]` Phase 2, `[P3]` Phase 3, `[L]` Long-term.
 | Create a new session by picking a project from a fuzzy-filtered list             | P1    | Bubbles list + textinput.                                 |
 | Kill a session with confirmation                                                 | P1    | `x` keybind, `y/n` confirm modal.                         |
 | Rename a session inline                                                          | P1    | `r` keybind.                                              |
+| `/` on Sessions screen filters the list by name, project, host, or agent         | P1    | Esc clears, enter attaches. CLI: `ccmux list --filter`.   |
 | Session metadata: project path, start time, last activity, prompt count          | P1    | Shown in detail pane on the right.                        |
 | Live preview pane: tails the selected session's pane content                     | P2    | tmux `capture-pane -p`, refresh every 500ms when focused. |
 | Session snapshots: save Claude transcript + tmux scrollback to a labeled archive | P3    | Stored under `~/.local/share/ccmux/snapshots/`.           |

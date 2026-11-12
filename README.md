@@ -319,6 +319,7 @@ Comment the file however you like. When ccmux saves it (a Settings row, `ccmux h
 
 - Live dashboard of every agent session across every project, with state (active / idle / **needs_input**) and per-row agent tags
 - One-key attach, kill, rename — applies a styled tmux status bar so you always know where you are
+- `/` filters the session list by name, project, host, or agent — Enter attaches to the highlighted match, `esc` clears. Same match from the CLI: `ccmux list --filter <text>`
 - Two projects with the same folder name (`~/Projects/api` and `~/work/api`) get separate sessions. Whichever started first keeps `c-api`, the other gets `c-api-<tag>`, and ccmux matches each one to its project by directory
 - Per-session "keep awake" pin — the daemon holds a sleep-prevention lock while any pinned or active session is alive
 - **Three sleep-prevention modes** — `safe`, `dangerous`, `very_dangerous` (sudo-gated; system-wide override that survives lid-close)
@@ -439,6 +440,7 @@ When a session transitions to `needs_input`, ccmuxd injects a terminal BEL. Any 
 Useful keys on the Sessions screen:
 
 - `Enter` — attach
+- `/` — filter by name, project, host, or agent (Enter attaches to the match, `esc` clears)
 - `x` — kill the highlighted session
 - `R` — rename
 - `?` — full keymap
