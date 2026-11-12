@@ -346,9 +346,9 @@ from tmux instead, and STATE is "unknown": only the daemon classifies.
 With --host, the sessions are that configured host's, as its ccmuxd
 lists them (HOST shows the host's name).
 
-With --filter, only sessions whose name, project, host, or agent
-contains the text (ignoring case) are listed — the same match as "/"
-on the TUI's Sessions screen.`,
+With --filter, only sessions whose name or project contains the text,
+or whose host or agent starts with it, are listed (ignoring case) — the
+same match as "/" on the TUI's Sessions screen.`,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
@@ -413,7 +413,7 @@ on the TUI's Sessions screen.`,
 	}
 	c.Flags().BoolVar(&asJSON, "json", false, "output JSON instead of a table")
 	c.Flags().StringVar(&host, "host", "", hostFlagUsage)
-	c.Flags().StringVarP(&filter, "filter", "f", "", "only list sessions whose name, project, host, or agent contains this text (case-insensitive)")
+	c.Flags().StringVarP(&filter, "filter", "f", "", "only list sessions whose name or project contains, or host or agent starts with, this text (case-insensitive)")
 	return c
 }
 

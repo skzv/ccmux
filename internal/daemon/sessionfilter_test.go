@@ -23,7 +23,11 @@ func TestSessionMatchesQuery(t *testing.T) {
 		{"WEBSITE", true},   // case-insensitive
 		{" website ", true}, // surrounding whitespace ignored
 		{"mini", true},      // host
+		{"MIN", true},       // host prefix, case-insensitive
+		{"ini", false},      // host matches by prefix, not substring
 		{"codex", true},     // agent
+		{"cod", true},       // agent prefix
+		{"dex", false},      // agent matches by prefix, not substring
 		{"Projects", false}, // path is not matched
 		{"claude", false},
 	}
@@ -31,6 +35,27 @@ func TestSessionMatchesQuery(t *testing.T) {
 		if got := SessionMatchesQuery(s, tc.query); got != tc.want {
 			t.Errorf("SessionMatchesQuery(%q) = %v, want %v", tc.query, got, tc.want)
 		}
+	}
+}
+
+// Every local session has host "local" and the default agent is
+// "claude". Fragments of those words must not match the whole list.
+func TestSessionMatchesQuery_SharedHostAndAgentDoNotMatchBySubstring(t *testing.T) {
+	s := SessionState{Name: "c-api", Host: "local", Project: "api", Agent: "claude"}
+	for _, q := range []string{"cal", "oca", "al", "de", "aud", "laude"} {
+		if SessionMatchesQuery(s, q) {
+			t.Errorf("SessionMatchesQuery(%q) = true, want false (substring of host/agent)", q)
+		}
+	}
+	for _, q := range []string{"local", "loc", "claude", "cl", "api"} {
+		if !SessionMatchesQuery(s, q) {
+			t.Errorf("SessionMatchesQuery(%q) = false, want true", q)
+		}
+	}
+	cal := SessionState{Name: "c-calendar", Host: "local", Project: "calendar", Agent: "claude"}
+	got := FilterSessions([]SessionState{s, cal}, "cal")
+	if len(got) != 1 || got[0].Name != "c-calendar" {
+		t.Errorf("FilterSessions(cal) = %v, want only c-calendar", got)
 	}
 }
 

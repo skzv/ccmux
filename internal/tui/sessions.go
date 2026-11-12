@@ -49,7 +49,8 @@ type sessionsModel struct {
 	// the list narrows to sessions matching it (daemon.SessionMatchesQuery:
 	// name, project, host, agent). Enter commits the filter and attaches
 	// to the highlighted match; esc clears it. A committed filter keeps
-	// narrowing the list until esc.
+	// narrowing the list until esc. Never engaged while the list is
+	// empty: the empty state has no room for the prompt.
 	filter       textinput.Model
 	filterActive bool
 
@@ -161,14 +162,19 @@ func (m *sessionsModel) enterFilter() {
 // with the cursor still on the session that was selected.
 func (m *sessionsModel) exitFilter() tea.Cmd {
 	sel := m.Selected()
-	m.filterActive = false
-	m.filter.Blur()
-	m.filter.SetValue("")
+	m.clearFilter()
 	m.cursor = 0
 	if sel != nil {
 		m.selectSession(*sel)
 	}
 	return m.previewFollowSelection()
+}
+
+// clearFilter drops focus and the query without touching the cursor.
+func (m *sessionsModel) clearFilter() {
+	m.filterActive = false
+	m.filter.Blur()
+	m.filter.SetValue("")
 }
 
 // commitFilter blurs the input but keeps the query, so the list stays
@@ -219,6 +225,12 @@ func (m *sessionsModel) SetSessions(ss []daemon.SessionState) tea.Cmd {
 	// renders don't flicker the same set of names.
 	sortByAttention(ss)
 	m.sessions = ss
+	if len(ss) == 0 {
+		// The empty state doesn't draw the filter prompt. A filter left
+		// focused here would swallow every key (2, q, n, ?) into an
+		// input the user can't see.
+		m.clearFilter()
+	}
 	if selected == nil || !m.selectSession(*selected) {
 		m.clampCursor()
 	}
@@ -261,9 +273,19 @@ func (m *sessionsModel) clearPreview() {
 // up by (host, name), and under the old name it no longer exists — the
 // cursor used to jump to whichever row slid into its slot.
 func (m *sessionsModel) RenameSession(host, oldName, newName string) {
+	sel := m.Selected()
+	wasSelected := sel != nil && sameSession(sessionHostLabel(*sel), sel.Name, host, oldName)
 	for i, s := range m.sessions {
 		if sameSession(sessionHostLabel(s), s.Name, host, oldName) {
 			m.sessions[i].Name = newName
+			if wasSelected && !daemon.SessionMatchesQuery(m.sessions[i], m.filter.Value()) {
+				// The new name no longer matches the filter. Left
+				// engaged, the row would vanish and the cursor would
+				// land on a neighbour — the next x / R / Enter then hits
+				// the wrong session. Drop the filter and stay on the row.
+				m.clearFilter()
+				m.selectSession(m.sessions[i])
+			}
 		}
 	}
 	if m.previewSession != "" && sameSession(m.previewHost, m.previewSession, host, oldName) {
@@ -410,13 +432,25 @@ func (m sessionsModel) Update(msg tea.Msg) (sessionsModel, tea.Cmd) {
 				return m, nil
 			}
 			var cmd tea.Cmd
+			before := m.filter.Value()
 			m.filter, cmd = m.filter.Update(msg)
+			if m.filter.Value() != before {
+				// A new query starts at its top match, so "/name" then
+				// Enter attaches to the first row on screen rather than
+				// to whatever slid under the old cursor index.
+				m.cursor = 0
+			}
 			m.clampCursor()
 			return m, tea.Batch(cmd, m.previewFollowSelection())
 		}
 
 		switch {
 		case km.String() == "/":
+			if len(m.sessions) == 0 {
+				// Nothing to filter, and the empty state has no prompt
+				// line: focusing the input here would trap the keyboard.
+				return m, nil
+			}
 			m.enterFilter()
 			return m, textinput.Blink
 		case km.String() == "esc" && m.filter.Value() != "":
@@ -699,16 +733,19 @@ func (m sessionsModel) renderList(width, height int) string {
 		// render time. The live match count tells the user whether to
 		// keep typing or press Enter.
 		m.filter.Placeholder = tr("type to filter…")
-		m.filter.Width = maxInt(8, inner-12)
-		header += "\n" + m.filter.View() + "  " + m.st.Muted.Render(fmt.Sprintf("(%d/%d)", len(vis), len(m.sessions)))
+		// One line, always: the input gets what's left of the row after
+		// its prompt, its cursor cell, the gap, and the count.
+		count := fmt.Sprintf("(%d/%d)", len(vis), len(m.sessions))
+		input := fitFilterInput(m.filter, maxInt(1, inner-lipgloss.Width(m.filter.Prompt)-1-2-len(count)))
+		header += "\n" + input.View() + "  " + m.st.Muted.Render(count)
 	}
 	if filtering && len(m.sessions) > 0 && len(vis) == 0 {
 		body := lipgloss.JoinVertical(lipgloss.Left,
 			header,
 			"",
-			m.st.Muted.Render(fmt.Sprintf(tr("No sessions match %s."), m.filter.Value())),
+			m.st.Muted.Render(truncate(fmt.Sprintf(tr("No sessions match %s."), m.filter.Value()), inner)),
 			"",
-			m.st.Muted.Render(tr("Press esc to clear the filter.")),
+			m.st.Muted.Render(truncate(tr("Press esc to clear the filter."), inner)),
 		)
 		return m.st.PaneFocused.Width(width - 2).Height(height - 2).Render(body)
 	}
@@ -764,11 +801,29 @@ func (m sessionsModel) listMinHeight() int {
 		return 7 // border + header, spacer, "No sessions yet.", spacer, hint
 	}
 	if m.filterActive || m.filter.Value() != "" {
-		// The filter prompt adds a line under the header; a no-match
-		// filter shows its two-line hint in place of the rows.
-		return 5 + maxInt(2, minInt(len(m.visibleSessions()), sessionsMinVisibleRows))
+		// The filter prompt adds a line under the header.
+		n := len(m.visibleSessions())
+		if n == 0 {
+			return 8 // border + header, prompt, spacer, "No sessions match…", spacer, hint
+		}
+		return 5 + minInt(n, sessionsMinVisibleRows)
 	}
 	return 4 + minInt(len(m.sessions), sessionsMinVisibleRows)
+}
+
+// fitFilterInput returns ti scrolled to fit width columns of text.
+// textinput only recomputes its horizontal scroll window when the value
+// or cursor changes, against the Width it had then — and this screen
+// learns its width at render time. Re-entering the value under the new
+// Width rebuilds the window, so a query longer than the pane scrolls
+// instead of pushing the match count onto a second line.
+func fitFilterInput(ti textinput.Model, width int) textinput.Model {
+	val, pos := ti.Value(), ti.Position()
+	ti.Width = width
+	ti.SetValue("")
+	ti.SetValue(val)
+	ti.SetCursor(pos)
+	return ti
 }
 
 // renderDetail draws the Sessions detail pane for the selected row.
