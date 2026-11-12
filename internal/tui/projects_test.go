@@ -314,6 +314,75 @@ func TestProjects_FilterNoMatchesRendersEmptyState(t *testing.T) {
 
 // names is a small helper for table-driven assertions: turn a slice
 // of projects into a comma-separated name list for error messages.
+// With no projects (or before the first scan) the pane has no prompt
+// line, so "/" must not focus the filter: every later key would go into
+// an input nobody sees.
+func TestProjects_FilterIgnoredWhenNoProjects(t *testing.T) {
+	for _, loaded := range []bool{false, true} {
+		a := newFilterApp(t, nil)
+		a.projectsM.loaded = loaded
+		a = typeKeys(t, a, "/")
+		if a.projectsM.FilterActive() {
+			t.Fatalf("loaded=%v: FilterActive() = true after / on an empty list, want false", loaded)
+		}
+		if a.modalCapturingText() {
+			t.Errorf("loaded=%v: modalCapturingText() = true on an empty list, want global keys live", loaded)
+		}
+		a = typeKeys(t, a, "1")
+		if a.screen != ScreenSessions {
+			t.Errorf("loaded=%v: screen = %v after /1 on an empty list, want ScreenSessions", loaded, a.screen)
+		}
+	}
+}
+
+// The list emptying while the filter is engaged drops the filter, for
+// the same reason.
+func TestProjects_FilterDroppedWhenListEmpties(t *testing.T) {
+	a := typeKeys(t, newFilterApp(t, sampleProjects()), "/cc")
+	a.projectsM.SetProjects(nil)
+	if a.projectsM.FilterActive() || a.projectsM.filter.Value() != "" {
+		t.Errorf("after the list emptied: active=%v value=%q, want cleared",
+			a.projectsM.FilterActive(), a.projectsM.filter.Value())
+	}
+	// A committed filter goes too: it would come back as a hidden
+	// narrowing the moment a project reappears.
+	a = typeKeys(t, newFilterApp(t, sampleProjects()), "/cc")
+	a.projectsM.commitFilter()
+	a.projectsM.SetProjects(nil)
+	if v := a.projectsM.filter.Value(); v != "" {
+		t.Errorf("committed filter value = %q after the list emptied, want empty", v)
+	}
+}
+
+// Typing a query selects its top match, wherever the cursor was — the
+// help line promises "enter to attach to top match".
+func TestProjects_FilterTypingSelectsTopMatch(t *testing.T) {
+	a := newFilterApp(t, sampleProjects())
+	for i := 0; i < 4; i++ {
+		a = pressKey(t, a, tea.KeyDown) // notes-vault, the last row
+	}
+	a = typeKeys(t, a, "/ccmux")
+	if got := a.projectsM.Selected(); got == nil || got.Name != "ccmux" {
+		t.Errorf("Selected() after /ccmux = %v, want top match ccmux", got)
+	}
+	// Arrows still pick another match; editing the query goes back to
+	// the top one.
+	a = pressKey(t, a, tea.KeyDown)
+	if got := a.projectsM.Selected(); got == nil || got.Name != "ccmux-website" {
+		t.Fatalf("Selected() after Down = %v, want ccmux-website", got)
+	}
+	a = pressKey(t, a, tea.KeyBackspace)
+	if got := a.projectsM.Selected(); got == nil || got.Name != "ccmux" {
+		t.Errorf("Selected() after editing the query = %v, want ccmux", got)
+	}
+	// Moving the text cursor leaves the query, and so the selection, alone.
+	a = pressKey(t, a, tea.KeyDown)
+	a = pressKey(t, a, tea.KeyLeft)
+	if got := a.projectsM.Selected(); got == nil || got.Name != "ccmux-website" {
+		t.Errorf("Selected() after Left = %v, want ccmux-website kept", got)
+	}
+}
+
 func names(ps []project.Project) string {
 	out := make([]string, len(ps))
 	for i, p := range ps {

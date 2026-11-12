@@ -93,6 +93,12 @@ func (m *projectsModel) SetProjects(p []project.Project) {
 	sel := m.Selected()
 	m.projects = p
 	m.loaded = true
+	if len(p) == 0 {
+		// The empty state doesn't draw the filter prompt. A filter left
+		// focused here would swallow every key (1-7, q, n, ?) into an
+		// input the user can't see.
+		m.exitFilter()
+	}
 	if sel != nil {
 		host := projectHost(*sel)
 		for i, v := range m.visibleProjects() {
@@ -309,13 +315,26 @@ func (m projectsModel) Update(msg tea.Msg) (projectsModel, tea.Cmd) {
 				return m, nil
 			}
 			var cmd tea.Cmd
+			before := m.filter.Value()
 			m.filter, cmd = m.filter.Update(msg)
+			if m.filter.Value() != before {
+				// A new query starts at its top match, so "/name" then
+				// Enter opens the first row on screen rather than
+				// whatever slid under the old cursor index.
+				m.cursor = 0
+			}
 			m.clampCursor()
 			return m, cmd
 		}
 
 		switch {
 		case km.String() == "/":
+			if len(m.projects) == 0 {
+				// Nothing to filter, and the empty and loading states
+				// have no prompt line: focusing the input here would
+				// trap the keyboard.
+				return m, nil
+			}
 			m.enterFilter()
 			return m, textinput.Blink
 		case km.String() == "esc":
