@@ -4,7 +4,7 @@ Bug fixes, clearer docs, translations, and small usability improvements are welc
 
 - [Report an issue](https://github.com/skzv/ccmux/issues/new) with your ccmux version, operating system, steps to reproduce, and expected behavior. Remove secrets from logs and configuration snippets.
 - [Submit a pull request](https://github.com/skzv/ccmux/compare). Describe the problem, resulting behavior, and relevant checks. For a substantial feature, open an issue first to discuss scope.
-- [Improve website copy or documentation translations](https://github.com/skzv/ccmux-website/blob/main/CONTRIBUTING.md) in the website repository.
+- [Suggest a fix to the website or its translations](https://github.com/skzv/ccmux/issues/new) with the page URL, the language, and the wording you'd use. The website's source is private, so these come in as issues here.
 
 ## TUI translations
 
