@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/skzv/ccmux/internal/agent"
+	"github.com/skzv/ccmux/internal/agenthome"
 	"github.com/skzv/ccmux/internal/conversations"
 	"github.com/skzv/ccmux/internal/tui/components"
 	"github.com/skzv/ccmux/internal/tui/styles"
@@ -760,9 +761,9 @@ func (m conversationsModel) renderLoading(width, height int) string {
 	// directories the walkers actually open; future agents land here
 	// by extension.
 	roots := map[agent.ID]string{
-		agent.IDClaude:      "~/.claude/projects",
-		agent.IDCodex:       "~/.codex/sessions",
-		agent.IDCursor:      "~/.cursor/projects",
+		agent.IDClaude:      transcriptRootHint(agenthome.ClaudeEnv, agenthome.ClaudeProjects, "~/.claude/projects"),
+		agent.IDCodex:       transcriptRootHint(agenthome.CodexEnv, agenthome.CodexSessions, "~/.codex/sessions"),
+		agent.IDCursor:      transcriptRootHint(agenthome.CursorEnv, agenthome.CursorProjects, "~/.cursor/projects"),
 		agent.IDAntigravity: "~/.gemini/antigravity-cli/conversations",
 		agent.IDGemini:      "~/.gemini/tmp",
 		agent.IDPi:          "~/.pi/agent/sessions",
@@ -1016,6 +1017,18 @@ func displayPath(p string) string {
 		return p
 	}
 	return "~" + rest
+}
+
+// transcriptRootHint is the loading legend's path for an agent whose
+// home an environment variable can move: the familiar ~ spelling when
+// the variable is unset, and the directory the walker really opens
+// (internal/agenthome's resolution, ~-collapsed) when it is set.
+func transcriptRootHint(env string, root func(home string) string, fallback string) string {
+	home := homeDirForDisplay()
+	if _, ok := agenthome.Override(env, home); !ok {
+		return fallback
+	}
+	return displayPath(root(home))
 }
 
 // homeDirForDisplay is a thin os.UserHomeDir wrapper; tests stub via a

@@ -39,9 +39,14 @@ whether ccmux launched them. Sources:
 
   Claude       ~/.claude/projects/<encoded-cwd>/<uuid>.jsonl
   Codex        ~/.codex/sessions/<yyyy>/<mm>/<dd>/rollout-*.jsonl
+  Cursor       ~/.cursor/projects/<encoded-cwd>/agent-transcripts/<uuid>/<uuid>.jsonl
   Antigravity  ~/.gemini/antigravity-cli/conversations/<uuid>.pb
   Muse Code    $XDG_DATA_HOME/muse/sessions/<yyyy>/<mm>/<dd>/<uuid>/session.jsonl
                (defaults to ~/.local/share/muse/sessions)
+
+$CLAUDE_CONFIG_DIR, $CODEX_HOME and $CURSOR_HOME replace ~/.claude,
+~/.codex and ~/.cursor when set, here and for resume and
+delete-conversation alike.
 
 Antigravity transcripts are opaque protobuf, so the preview column is
 empty for those rows. ID and last-activity are always populated.
