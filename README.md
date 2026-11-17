@@ -188,7 +188,7 @@ Notes follow you across devices: press `H` to toggle which machine you're viewin
 
 One screen for "is my agent installed and signed in?" Per-agent CLI version, config root, login status, and a command palette to re-run setup or open the config directory.
 
-Codex configuration, conversation history, and usage honor `CODEX_HOME`, falling back to `~/.codex` when unset.
+If you've moved Claude Code with `CLAUDE_CONFIG_DIR` or Codex with `CODEX_HOME`, ccmux follows: conversation history, resume, delete, usage and the config tabs all read from there, and fall back to `~/.claude` and `~/.codex` when they're unset. `CURSOR_HOME` does the same for `~/.cursor`, though Cursor has no documented variable for that directory, so it only tells ccmux where yours lives. A leading `~` is expanded; a relative path is ignored.
 
 launchd and systemd don't read your shell profile, so `ccmux daemon install` copies `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `CURSOR_HOME` and `ANTIGRAVITY_HOME` from your shell into the background service when they're set. Set one after installing? Run `ccmux daemon install` once more so the daemon sees it too.
 

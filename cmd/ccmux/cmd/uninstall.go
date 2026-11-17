@@ -13,6 +13,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/skzv/ccmux/internal/agenthome"
 	"github.com/skzv/ccmux/internal/daemonservice"
 	"github.com/skzv/ccmux/internal/setupwizard"
 	"github.com/skzv/ccmux/internal/tmux"
@@ -159,13 +160,13 @@ func buildUninstallPlan(keepConfig, keepChrome bool) (*uninstallPlan, error) {
 	if _, registered, err := setupwizard.MCPStatus(); err == nil && registered {
 		p.unregisterMCP = true
 		p.steps = append(p.steps, "unregister the ccmux MCP server from Claude Code ("+
-			setupwizard.MCPUserConfigPath()+"; backup in ~/.claude/backups/)")
+			setupwizard.MCPUserConfigPath()+"; backup in "+tildify(filepath.Join(agenthome.Claude(home), "backups"))+"/)")
 	}
 	p.steps = append([]string{"stop running ccmuxd (SIGTERM)"}, p.steps...)
 
 	p.leftAlone = []string{
 		filepath.Join(home, "Projects") + " (your project directories — never deleted by ccmux)",
-		filepath.Join(home, ".claude") + " (Claude Code's own state, plus moshi-hook's settings.json entries)",
+		agenthome.Claude(home) + " (Claude Code's own state, plus moshi-hook's settings.json entries)",
 		"~/.zshrc shims for cc / mkproj / upgrade-proj — remove by hand if you added them",
 		"`brew uninstall moshi-hook` if you want to uninstall the agent-hook daemon",
 	}

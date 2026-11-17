@@ -1,9 +1,9 @@
 package agent
 
 import (
-	"path/filepath"
 	"time"
 
+	"github.com/skzv/ccmux/internal/agenthome"
 	"github.com/skzv/ccmux/internal/claude"
 )
 
@@ -31,8 +31,10 @@ func (Claude) LaunchCmd(continueFlag bool) string {
 	return "claude"
 }
 
-func (Claude) ConfigRoot(home string) string      { return filepath.Join(home, ".claude") }
-func (Claude) TranscriptsRoot(home string) string { return filepath.Join(home, ".claude", "projects") }
+// ConfigRoot and TranscriptsRoot honour $CLAUDE_CONFIG_DIR, which moves
+// Claude Code's whole config directory, transcripts included.
+func (Claude) ConfigRoot(home string) string      { return agenthome.Claude(home) }
+func (Claude) TranscriptsRoot(home string) string { return agenthome.ClaudeProjects(home) }
 
 // InitialPrompt is what ccmux types into a fresh Claude session as the
 // first message. The wording asks /init to be run cleanly (no

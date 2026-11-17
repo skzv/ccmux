@@ -1,12 +1,14 @@
 package agent
 
 import (
-	"path/filepath"
 	"time"
+
+	"github.com/skzv/ccmux/internal/agenthome"
 )
 
 // Cursor is the Cursor Agent CLI. Binary: `cursor-agent`. Config root:
-// ~/.cursor. Cursor Agent writes JSONL transcripts beneath
+// ~/.cursor ($CURSOR_HOME when set; see internal/agenthome). Cursor
+// Agent writes JSONL transcripts beneath
 // ~/.cursor/projects/<encoded-cwd>/agent-transcripts/. Aggregate
 // analytics live at ~/.cursor/ai-tracking/ai-code-tracking.db and
 // are read by internal/cursorusage for the Agents Cursor sub-tab.
@@ -23,8 +25,8 @@ func (Cursor) LaunchCmd(continueFlag bool) string {
 	return "cursor-agent"
 }
 
-func (Cursor) ConfigRoot(home string) string      { return filepath.Join(home, ".cursor") }
-func (Cursor) TranscriptsRoot(home string) string { return filepath.Join(home, ".cursor", "projects") }
+func (Cursor) ConfigRoot(home string) string      { return agenthome.Cursor(home) }
+func (Cursor) TranscriptsRoot(home string) string { return agenthome.CursorProjects(home) }
 
 // InitialPrompt mirrors the AGENTS.md-centered bootstrap used by Codex
 // and Antigravity. Cursor CLI reads AGENTS.md and .cursor/rules, so the

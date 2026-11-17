@@ -86,9 +86,22 @@ func TestOpen_EmptyTables(t *testing.T) {
 // Cursor sub-tab. If Cursor relocates the file we want to find out
 // here, not in production.
 func TestDefaultDBPath(t *testing.T) {
+	t.Setenv("CURSOR_HOME", "")
 	got := DefaultDBPath("/home/user")
 	want := filepath.Join("/home/user", ".cursor", "ai-tracking", "ai-code-tracking.db")
 	if got != want {
+		t.Errorf("DefaultDBPath = %q, want %q", got, want)
+	}
+}
+
+// TestDefaultDBPath_CursorHome — the Cursor tab's config half honoured
+// $CURSOR_HOME while its usage half read ~/.cursor/ai-tracking
+// regardless. Both now resolve the same directory.
+func TestDefaultDBPath_CursorHome(t *testing.T) {
+	custom := t.TempDir()
+	t.Setenv("CURSOR_HOME", custom)
+	got := DefaultDBPath(t.TempDir())
+	if want := filepath.Join(custom, "ai-tracking", "ai-code-tracking.db"); got != want {
 		t.Errorf("DefaultDBPath = %q, want %q", got, want)
 	}
 }

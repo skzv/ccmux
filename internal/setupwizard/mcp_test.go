@@ -128,6 +128,18 @@ func TestClaudeUserConfigPath_HonorsConfigDir(t *testing.T) {
 	}
 }
 
+// TestClaudeUserConfigPath_ExpandsTilde — the MCP registration reads
+// CLAUDE_CONFIG_DIR through the same resolver as the transcript and
+// settings readers, so an unexpanded ~ names the same directory here
+// (it used to become a relative path starting with a literal "~").
+func TestClaudeUserConfigPath_ExpandsTilde(t *testing.T) {
+	home := withFakeClaudeHome(t)
+	t.Setenv("CLAUDE_CONFIG_DIR", "~/.claude-work")
+	if p, _ := claudeUserConfigPath(); p != filepath.Join(home, ".claude-work", ".claude.json") {
+		t.Errorf("path with CLAUDE_CONFIG_DIR=~/.claude-work = %s, want %s", p, filepath.Join(home, ".claude-work", ".claude.json"))
+	}
+}
+
 // TestContainsArg_ExactMatch — the idempotence detector. The wizard
 // reads existing args to label "read-only" vs "--allow-mutate" and
 // must not be fooled by partial matches.

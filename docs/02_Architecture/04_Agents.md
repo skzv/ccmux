@@ -28,10 +28,32 @@ The package exports six things callers reach for:
 | `agent.AllInstalled(ctx)` | Subset of All() whose Binary() resolves on $PATH. |
 | `agent.Default()` | Locked at Claude — the back-compat default for every legacy project. |
 
-Codex paths share the `internal/codexpath` resolver: `CODEX_HOME` when set,
-otherwise `~/.codex`. Configuration reads that root; conversation listing,
-usage aggregation, and transcript deletion use its `sessions/` directory.
-Deletion still rejects paths outside the selected transcript root.
+Agent homes that an environment variable can move resolve through one
+package, `internal/agenthome`, and every reader and writer goes through
+it — the agent's `ConfigRoot`/`TranscriptsRoot`, its config tab, the
+conversation listing, reading and deletion, the usage walkers, and the
+daemon's `/v1/conversations` and `/v1/usage` (so `ccmux-mcp` too):
+
+| Agent | Variable | Default | Transcripts |
+|---|---|---|---|
+| Claude Code | `CLAUDE_CONFIG_DIR` | `~/.claude` | `projects/` |
+| Codex | `CODEX_HOME` | `~/.codex` | `sessions/` |
+| Cursor | `CURSOR_HOME` | `~/.cursor` | `projects/` (and `ai-tracking/` for the Cursor tab) |
+
+Claude Code and Codex document their variables. Cursor documents none
+for `~/.cursor` (its CLI's `CURSOR_CONFIG_DIR` moves only
+`cli-config.json`), so `CURSOR_HOME` is ccmux's own name for "Cursor's
+directory lives here". A leading `~` expands against `$HOME`, trailing
+slashes and `.` segments are cleaned away, and a value that is still
+relative is ignored — it would resolve against whatever directory ccmux
+runs in. With a variable set, the default directory is not a transcript
+root at all: nothing there is listed, and deletion refuses it.
+Deletion checks containment twice, lexically against the resolved root
+and again after resolving symlinks on both the root and the
+transcript's directory, so a symlinked project directory can't carry a
+delete outside it. `ccmux daemon install` copies these variables into
+the service definition (see `internal/daemonservice`), so the daemon
+reads the same directories as the TUI and CLI.
 
 ## Per-project agent: `<project>/.ccmux/agent`
 
