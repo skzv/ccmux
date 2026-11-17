@@ -50,4 +50,4 @@
 - [x] 9.1 Run `go test ./...` and `make lint`; confirm green.
 - [x] 9.2 Run `openspec validate redesign-tui-network --type change --strict --no-interactive`.
 - [x] 9.3 Run `openspec instructions apply --change redesign-tui-network --json` and confirm `state != "blocked"`.
-- [ ] 9.4 After merge: `openspec archive redesign-tui-network --yes`.
+- [x] 9.4 After merge: `openspec archive redesign-tui-network --yes`.
