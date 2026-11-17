@@ -63,7 +63,7 @@ When you flip `daemon.listen_tailnet = true` in `~/.config/ccmux/config.toml`, `
 - Anything on your tailnet (your phone, laptop, work machine if added) can.
 - Tailscale's ACLs are your authorization layer if you want finer control (per-device rules).
 
-The full bind logic lives in `cmd/ccmuxd/main.go` → `tailscaleAddr(port)`.
+The full bind logic lives in `cmd/ccmuxd/tailnet_listener.go` → `tailscaleAddr(port)`.
 
 ### 3. Remote hosts in `hosts.toml` use tailnet names
 
@@ -153,4 +153,4 @@ Most people will never touch this. It's worth knowing it exists.
 - [Tailscale documentation](https://tailscale.com/kb/) — install, MagicDNS, ACLs
 - [Moshi's Tailscale notes](https://getmoshi.app/docs/tailscale) — confirmation that Moshi treats tailnet hosts as ordinary SSH/Mosh targets, no special integration required
 - [WireGuard whitepaper](https://www.wireguard.com/papers/wireguard.pdf) — the cryptographic protocol underneath Tailscale
-- `cmd/ccmuxd/main.go` → `tailscaleAddr(port)` — the only place ccmux's code paths reference Tailscale
+- `cmd/ccmuxd/tailnet_listener.go` → `tailscaleAddr(port)` — the only place ccmux's code paths reference Tailscale

@@ -7,7 +7,7 @@ app) that want to list, attach to, and act on agent sessions without
 shelling in.
 
 This document is the contract. It is generated from — and kept in sync
-with — `cmd/ccmuxd/main.go` (routes), `cmd/ccmuxd/pairing.go`, and
+with — `cmd/ccmuxd/routes.go` (routes), `cmd/ccmuxd/pairing.go`, and
 `internal/daemon/protocol.go` (the request/response types). If you're
 integrating against it and something here disagrees with the running
 daemon, the daemon wins — please file an issue.

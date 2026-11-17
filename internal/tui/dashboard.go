@@ -161,7 +161,7 @@ func (m dashboardModel) HelpBarProps(width int) components.HelpBarProps {
 // produces the `(3 · 1 active · 1 idle · 1 waiting)` inline count
 // breakdown) so the tile no longer earns its vertical real estate.
 // The hero panel and the sessions list are rendered separately by
-// homeView() in app.go.
+// homeView() in app_view.go.
 func (m dashboardModel) StatsView(width int) string {
 	devices := m.devicesPanel(width)
 	usage := m.usagePanel(width)
