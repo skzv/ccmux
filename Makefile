@@ -146,14 +146,16 @@ test-vhs-cleanup: build
 
 # Integration / e2e suite — builds the binaries and runs every
 # //go:build integration test. Requires tmux to be installed.
-# Packages covered: internal/e2e (subprocess CUJs) and cmd/ccmuxd
-# (poll-loop white-box tests).
+# Packages covered: internal/e2e (subprocess CUJs), cmd/ccmuxd
+# (poll-loop white-box tests), internal/tmux (target parsing against a
+# real server) and internal/clipboard (copy-mode bindings driven by
+# real attached clients).
 test-e2e: check-go build
 	@tmp="$$(mktemp -d /tmp/ccmux-e2e.XXXXXX)"; \
 	gomodcache="$$(go env GOMODCACHE)"; \
 	gocache="$$(go env GOCACHE)"; \
 	trap 'env -u TMUX HOME="$$tmp" TMUX_TMPDIR="$$tmp" tmux kill-server >/dev/null 2>&1 || true; rm -rf "$$tmp"' EXIT INT TERM; \
-	env -u TMUX HOME="$$tmp" TMUX_TMPDIR="$$tmp" GOMODCACHE="$$gomodcache" GOCACHE="$$gocache" go test -tags integration -timeout 180s ./internal/e2e/ ./cmd/ccmuxd/ ./internal/tmux/
+	env -u TMUX HOME="$$tmp" TMUX_TMPDIR="$$tmp" GOMODCACHE="$$gomodcache" GOCACHE="$$gocache" go test -tags integration -timeout 180s ./internal/e2e/ ./cmd/ccmuxd/ ./internal/tmux/ ./internal/clipboard/
 
 # Native Go fuzzer pass — one round-trip over every FuzzXxx target.
 #

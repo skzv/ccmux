@@ -62,7 +62,7 @@ func TestPipeSelection_LocalClient_PipesToNative(t *testing.T) {
 		tool,
 	)
 	in := strings.NewReader("hello clipboard")
-	if err := PipeSelection(context.Background(), in, deps); err != nil {
+	if err := PipeSelection(context.Background(), in, "", deps); err != nil {
 		t.Fatalf("PipeSelection: %v", err)
 	}
 	if got := readBack(); got != "hello clipboard" {
@@ -87,7 +87,7 @@ func TestPipeSelection_RemoteClientOnly_DoesNotPipe(t *testing.T) {
 		tool,
 	)
 	in := strings.NewReader("should not reach pbcopy")
-	if err := PipeSelection(context.Background(), in, deps); err != nil {
+	if err := PipeSelection(context.Background(), in, "", deps); err != nil {
 		t.Fatalf("PipeSelection: %v", err)
 	}
 	if got := readBack(); got != "" {
@@ -109,7 +109,7 @@ func TestPipeSelection_MixedClients_LocalWins(t *testing.T) {
 		tool,
 	)
 	in := strings.NewReader("mixed")
-	if err := PipeSelection(context.Background(), in, deps); err != nil {
+	if err := PipeSelection(context.Background(), in, "", deps); err != nil {
 		t.Fatalf("PipeSelection: %v", err)
 	}
 	if got := readBack(); got != "mixed" {
@@ -129,7 +129,7 @@ func TestPipeSelection_NoClients_DoesNotPipe(t *testing.T) {
 		tool,
 	)
 	in := strings.NewReader("nope")
-	if err := PipeSelection(context.Background(), in, deps); err != nil {
+	if err := PipeSelection(context.Background(), in, "", deps); err != nil {
 		t.Fatalf("PipeSelection: %v", err)
 	}
 	if got := readBack(); got != "" {
@@ -151,7 +151,7 @@ func TestPipeSelection_TmuxQueryFails_FallsBackToSafe(t *testing.T) {
 		tool,
 	)
 	in := strings.NewReader("nope")
-	if err := PipeSelection(context.Background(), in, deps); err != nil {
+	if err := PipeSelection(context.Background(), in, "", deps); err != nil {
 		t.Fatalf("PipeSelection: %v", err)
 	}
 	if got := readBack(); got != "" {
@@ -171,7 +171,7 @@ func TestPipeSelection_NoNativeTool_GracefulNoop(t *testing.T) {
 		nil, // no tool available
 	)
 	in := strings.NewReader("anything")
-	if err := PipeSelection(context.Background(), in, deps); err != nil {
+	if err := PipeSelection(context.Background(), in, "", deps); err != nil {
 		t.Errorf("PipeSelection should not error when no native tool is available: %v", err)
 	}
 }
@@ -191,17 +191,104 @@ func TestPipeSelection_EmptySelection_NoOp(t *testing.T) {
 		IsClientSSH:         func(int) bool { return false },
 		NativeClipboardTool: func() []string { return tool },
 	}
-	if err := PipeSelection(context.Background(), strings.NewReader(""), deps); err != nil {
+	if err := PipeSelection(context.Background(), strings.NewReader(""), "", deps); err != nil {
 		t.Fatalf("PipeSelection on empty input: %v", err)
 	}
 	if got := readBack(); got != "" {
 		t.Errorf("empty selection should not invoke native tool, got %q", got)
 	}
-	// We don't strictly require ListTmuxClients to be skipped, but
-	// nothing has called it: stdin was drained first and was empty.
-	// This assertion documents the early-exit intent.
-	if called > 1 {
+	// stdin is drained before tmux is asked anything, so an empty
+	// selection never reaches the tmux server.
+	if called != 0 {
 		t.Errorf("ListTmuxClients called %d times for empty input — should short-circuit", called)
+	}
+}
+
+// TestPipeSelection_RoutesByCopyingClient — the binding names the
+// client that made the selection (--client '#{client_tty}'), and with
+// a Mac and a phone attached at once only that client decides. Before
+// the flag, a phone's copy went into the Mac's pbcopy because "a local
+// client is attached" was all the pipe could see.
+//
+// When the flag is unusable — absent, empty (tmux < 3.0 expands client
+// formats in copy-pipe to ""), the literal format (a tmux that didn't
+// expand it), or a tty that isn't one of this server's clients — the
+// copier is unknown and the old any-local-client rule applies.
+func TestPipeSelection_RoutesByCopyingClient(t *testing.T) {
+	mac := TmuxClient{PID: 100, TTY: "/dev/ttys001"}
+	phone := TmuxClient{PID: 200, TTY: "/dev/pts/7"}
+	remote := map[int]bool{200: true}
+	cases := []struct {
+		name    string
+		clients []TmuxClient
+		copier  string
+		want    bool // native clipboard written
+	}{
+		{"phone copies while mac attached", []TmuxClient{mac, phone}, phone.TTY, false},
+		{"mac copies while phone attached", []TmuxClient{mac, phone}, mac.TTY, true},
+		{"mac copies alone", []TmuxClient{mac}, mac.TTY, true},
+		{"phone copies alone", []TmuxClient{phone}, phone.TTY, false},
+		{"copier tty padded with whitespace", []TmuxClient{mac, phone}, " " + phone.TTY + "\n", false},
+		{"no flag falls back to any local", []TmuxClient{mac, phone}, "", true},
+		{"no flag, only remote attached", []TmuxClient{phone}, "", false},
+		{"unexpanded format falls back", []TmuxClient{mac, phone}, "#{client_tty}", true},
+		{"non-client tty is refused, falls back to any local", []TmuxClient{mac, phone}, "/dev/ttys999", true},
+		{"non-client tty is refused, only remote attached", []TmuxClient{phone}, "/dev/ttys001", false},
+		{"no clients at all", nil, mac.TTY, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tool, readBack := pipeToTempFile(t)
+			deps := fakeDeps(t, tc.clients, nil, remote, tool)
+			if err := PipeSelection(context.Background(), strings.NewReader("sel"), tc.copier, deps); err != nil {
+				t.Fatalf("PipeSelection: %v", err)
+			}
+			if got := readBack() == "sel"; got != tc.want {
+				t.Errorf("native clipboard written = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestPipeSelection_CopierWithFailedQuery — a named copier is only
+// trusted once tmux confirms it is attached. With the query failing
+// there is nothing to confirm it against, so nothing is piped.
+func TestPipeSelection_CopierWithFailedQuery(t *testing.T) {
+	tool, readBack := pipeToTempFile(t)
+	deps := fakeDeps(t, nil, errors.New("tmux: no server"), map[int]bool{}, tool)
+	if err := PipeSelection(context.Background(), strings.NewReader("sel"), "/dev/ttys001", deps); err != nil {
+		t.Fatalf("PipeSelection: %v", err)
+	}
+	if got := readBack(); got != "" {
+		t.Errorf("native tool invoked %q for an unverifiable copier", got)
+	}
+}
+
+// TestCopyingClient — the --client value is matched against tmux's
+// own list, exactly; nothing that isn't an attached client's tty
+// resolves.
+func TestCopyingClient(t *testing.T) {
+	clients := []TmuxClient{{PID: 1, TTY: "/dev/ttys001"}, {PID: 2}, {PID: 3, TTY: "/dev/pts/3"}}
+	cases := []struct {
+		copier  string
+		wantPID int // 0 = unresolved
+	}{
+		{"/dev/ttys001", 1},
+		{"/dev/pts/3", 3},
+		{"  /dev/pts/3  ", 3},
+		{"", 0},
+		{"   ", 0},
+		{"#{client_tty}", 0},
+		{"/dev/ttys00", 0},
+		{"/dev/ttys0011", 0},
+		{"../../dev/ttys001", 0},
+		{"/etc/passwd", 0},
+	}
+	for _, tc := range cases {
+		c, ok := copyingClient(tc.copier, clients)
+		if got := map[bool]int{true: c.PID}[ok]; got != tc.wantPID {
+			t.Errorf("copyingClient(%q) = pid %d (ok=%v), want %d", tc.copier, c.PID, ok, tc.wantPID)
+		}
 	}
 }
 
@@ -218,7 +305,7 @@ func TestPipeSelection_BinarySafe(t *testing.T) {
 		tool,
 	)
 	tricky := "a\x00b\x1bc\x07d\ne\xff\xfe"
-	if err := PipeSelection(context.Background(), strings.NewReader(tricky), deps); err != nil {
+	if err := PipeSelection(context.Background(), strings.NewReader(tricky), "", deps); err != nil {
 		t.Fatalf("PipeSelection: %v", err)
 	}
 	if got := readBack(); got != tricky {
@@ -237,7 +324,7 @@ func TestPipeSelection_StdinReadError_Surfaces(t *testing.T) {
 		[]string{"true"}, // tool argv that doesn't matter; we error before invoking
 	)
 	r := io.MultiReader(strings.NewReader("partial"), &errReader{})
-	err := PipeSelection(context.Background(), r, deps)
+	err := PipeSelection(context.Background(), r, "", deps)
 	if err == nil {
 		t.Error("expected error when stdin read fails, got nil")
 	}
@@ -286,6 +373,12 @@ func TestParseTmuxClientList(t *testing.T) {
 		{"blank-line-in-middle", "111\n\n222\n", []TmuxClient{{PID: 111}, {PID: 222}}},
 		{"garbage-skipped", "111\nnot-a-pid\n222\n", []TmuxClient{{PID: 111}, {PID: 222}}},
 		{"whitespace-tolerated", "  333\n  444  \n", []TmuxClient{{PID: 333}, {PID: 444}}},
+		// listClientsFormat: "#{client_pid} #{client_tty}".
+		{"pid-and-tty", "12345 /dev/ttys003\n67890 /dev/pts/4\n",
+			[]TmuxClient{{PID: 12345, TTY: "/dev/ttys003"}, {PID: 67890, TTY: "/dev/pts/4"}}},
+		{"client-without-tty", "12345 \n", []TmuxClient{{PID: 12345}}},
+		{"garbage-pid-with-tty-skipped", "x /dev/ttys003\n5 /dev/ttys004\n",
+			[]TmuxClient{{PID: 5, TTY: "/dev/ttys004"}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

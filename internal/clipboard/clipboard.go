@@ -76,7 +76,7 @@ func EnableTmuxClipboard(ctx context.Context) error {
 //     like a screaming highlighter. Match the ccmux mauve so the
 //     selection reads as part of the chrome instead of a warning.
 //
-//   - `bind -T copy-mode-vi MouseDragEnd1Pane send -X copy-pipe-no-clear "ccmux clipboard-pipe"` —
+//   - `bind -T copy-mode-vi MouseDragEnd1Pane send -X copy-pipe-no-clear "<PipeCommand>"` —
 //     global keytable binding. Tmux's default fires
 //     `copy-pipe-and-cancel` on mouse-release, which immediately exits
 //     copy-mode and blanks the visual selection. Users coming from
@@ -86,11 +86,11 @@ func EnableTmuxClipboard(ctx context.Context) error {
 //     fires because `set-clipboard on` is what wires that, not the
 //     binding's flavor.
 //
-//     The trailing `"ccmux clipboard-pipe"` is the runtime-dispatch
-//     hook (see pipe.go). It receives the selection on stdin and
-//     decides per-invocation whether to pipe it through pbcopy /
-//     wl-copy / xclip — based on whether any *local* tmux client is
-//     currently attached. Remote clients (SSH/Mosh) rely on OSC 52
+//     The trailing PipeCommand is the runtime-dispatch hook (see
+//     pipe.go). It receives the selection on stdin and decides
+//     per-invocation whether to pipe it through pbcopy / wl-copy /
+//     xclip — based on whether the tmux client that made the
+//     selection is *local*. Remote clients (SSH/Mosh) rely on OSC 52
 //     which already travels back through their SSH pipe; running
 //     pbcopy on the daemon machine for them would silently poison
 //     the wrong clipboard. Dispatching at copy time rather than at
@@ -104,17 +104,31 @@ func TmuxClipboardCommands() [][]string {
 		// (not imported from tmuxchrome) to keep this package leaf-free
 		// and avoid a cycle if tmuxchrome ever wants to call into here.
 		{"tmux", "set", "-g", "mode-style", "bg=#cba6f7,fg=#1e1e2e"},
+		// bind-key replaces whatever the key had, so applying this over
+		// an older ccmux's binding upgrades it in place.
 		{"tmux", "bind-key", "-T", "copy-mode-vi", "MouseDragEnd1Pane",
-			"send-keys", "-X", "copy-pipe-no-clear", "ccmux clipboard-pipe"},
+			"send-keys", "-X", "copy-pipe-no-clear", PipeCommand},
 		// Same binding for the emacs copy-mode table. tmux uses
 		// `mode-keys emacs` unless $EDITOR/$VISUAL contains "vi" —
 		// which includes the daemon's launchd environment — so binding
 		// only copy-mode-vi left most users on tmux's default
 		// copy-pipe-and-cancel with no local-clipboard fallback.
 		{"tmux", "bind-key", "-T", "copy-mode", "MouseDragEnd1Pane",
-			"send-keys", "-X", "copy-pipe-no-clear", "ccmux clipboard-pipe"},
+			"send-keys", "-X", "copy-pipe-no-clear", PipeCommand},
 	}
 }
+
+// PipeCommand is the shell command the copy-mode mouse bindings pipe
+// each selection into. tmux expands #{client_tty} in a copy-pipe
+// command to the tty of the client that made the selection (tmux 3.0
+// and later; internal/clipboard's integration test drives two real
+// clients to pin it), so `ccmux clipboard-pipe` can tell a copy made
+// on the Mac apart from one made on a phone attached to the same
+// session. tmux runs it with /bin/sh -c; the single quotes keep an
+// unexpanded `#{…}` (a tmux that doesn't expand formats here) from
+// reading as a shell comment, and PipeSelection then falls back to
+// looking at every attached client.
+const PipeCommand = "ccmux clipboard-pipe --client '#{client_tty}'"
 
 // TmuxClipboardState returns the current value of `set-clipboard` for
 // the running tmux server. Returns "off"/"on"/"external", or an error
@@ -276,14 +290,14 @@ set -g mode-style bg=#cba6f7,fg=#1e1e2e
 #
 # The trailing 'ccmux clipboard-pipe' is the local-clipboard fallback
 # for terminals that don't honor OSC 52 (Terminal.app, most notably).
-# It inspects the currently-attached tmux clients at copy time and
-# routes the selection to pbcopy / wl-copy / xclip ONLY when at least
-# one local (non-SSH) client is attached, so remote attaches don't
-# end up with their selection landing on the daemon machine's
-# clipboard. Safe to drop the trailing argument if you only ever use
-# this tmux from one machine — the OSC 52 path still works on its own.
-bind-key -T copy-mode-vi MouseDragEnd1Pane send-keys -X copy-pipe-no-clear "ccmux clipboard-pipe"
-bind-key -T copy-mode MouseDragEnd1Pane send-keys -X copy-pipe-no-clear "ccmux clipboard-pipe"
+# tmux fills in #{client_tty} with the tty of the client that made the
+# selection, and the selection goes to pbcopy / wl-copy / xclip ONLY
+# when that client is local (not SSH/Mosh) — so a copy made on your
+# phone doesn't land on this machine's clipboard while your laptop is
+# attached too. Safe to drop the trailing argument if you only ever
+# use this tmux from one machine — the OSC 52 path works on its own.
+bind-key -T copy-mode-vi MouseDragEnd1Pane send-keys -X copy-pipe-no-clear "ccmux clipboard-pipe --client '#{client_tty}'"
+bind-key -T copy-mode MouseDragEnd1Pane send-keys -X copy-pipe-no-clear "ccmux clipboard-pipe --client '#{client_tty}'"
 
 # Keyboard yank still cancels copy-mode so you can resume typing
 # without an extra Escape.
