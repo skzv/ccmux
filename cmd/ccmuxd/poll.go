@@ -169,8 +169,11 @@ func (s *server) pollLoop(ctx context.Context) {
 //   - Phase 1 (lock): seed missing tracked entries, snapshot per-session
 //     state for the classifier.
 //   - Phase 2 (no lock): shell out to list each session's panes and
-//     capture the agent's (observe), and classify. This is the slow
-//     part — used to run under the lock and stall every IPC handler.
+//     capture the agent's (observe); take one process snapshot to see
+//     which agents have exited (noteAgentExits); re-read the titles of
+//     spinners that look frozen (recheckTitles); and classify. This is
+//     the slow part — used to run under the lock and stall every IPC
+//     handler.
 //   - Phase 3 (lock): fold the captures back into tracked state, decide
 //     bell + events + push transitions, garbage-collect dead sessions.
 //   - Phase 4 (no lock): fire bell shell-out, publish events, dispatch
