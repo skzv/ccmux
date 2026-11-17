@@ -36,7 +36,7 @@ func TestBareSessionLaunchCmd_RequestWins(t *testing.T) {
 }
 
 // TestBareSessionLaunchCmd_ConfigDefault — when the request omits
-// Agent, the daemon's sessions.default_agent is honored. Each agent
+// Agent, the daemon's [agents] default is honored. Each agent
 // id must resolve to its own LaunchCmd, not a hardcoded claude.
 func TestBareSessionLaunchCmd_ConfigDefault(t *testing.T) {
 	for _, a := range agent.All() {

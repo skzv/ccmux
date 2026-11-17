@@ -70,7 +70,7 @@ type sessionsModel struct {
 	// Pushed by App on config load / reload.
 	defaultDir string
 
-	// Resolved sessions.default_agent — selects the form's agent
+	// Resolved [agents] default — selects the form's agent
 	// picker default at open time. Pushed by App on config load /
 	// reload; empty falls back to the first installed agent.
 	defaultAgent string

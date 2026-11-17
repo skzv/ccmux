@@ -30,7 +30,7 @@ import (
 // Sessions-tab `n` always landed the user in a bare shell, even with
 // agents installed — the multi-agent refactor abstracted everywhere
 // else but left this form launching $SHELL. Default selection comes
-// from sessions.default_agent in config.toml; users who want the old
+// from [agents] default in config.toml; users who want the old
 // shell-only behaviour set that to "shell".
 //
 // Tab cycles fields; ←/→ cycles the device and agent pickers; Enter

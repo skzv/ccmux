@@ -1172,8 +1172,8 @@ func (s *server) createBareSession(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	// Order: explicit request agent → daemon's
-	// sessions.default_agent → $SHELL. Bare sessions don't carry
+	// Order: explicit request agent → daemon's [agents] default
+	// (cfg.Agents.Default) → $SHELL. Bare sessions don't carry
 	// --continue because they're not tied to a project transcript.
 	launch := bareSessionLaunchCmd(req.Agent, cfg.Agents.Default, cfg.AgentCommands())
 	// Tag what actually runs there, in the same tmux call that
