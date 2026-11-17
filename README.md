@@ -395,7 +395,7 @@ Comment the file however you like. When ccmux saves it (a Settings row, `ccmux h
 - Vim-style (`h/j/k/l`) and arrow keys both work
 - Auto-switches to a curated narrow-terminal layout under 120 cols (phone mode) — reference detail is dropped so the essentials fit a phone screen
 - Mouse support on by default (hold **Option (⌥)** while dragging to bypass tmux mouse reporting in iTerm2 / Terminal.app)
-- **Cross-device clipboard via OSC 52** — selecting text inside a remote tmux pane lands on your _local_ clipboard. Works in iTerm2, Ghostty, WezTerm, Alacritty, kitty. Terminal.app does NOT support OSC 52 writes. `ccmux doctor` tells you exactly which side is missing.
+- **Cross-device clipboard via OSC 52** — selecting text inside a remote tmux pane lands on your _local_ clipboard. Works in iTerm2, Ghostty, WezTerm, Alacritty, kitty. Terminal.app does NOT support OSC 52 writes, so on the machine running tmux ccmux also hands your selection to pbcopy / wl-copy / xclip, but only when you made it there: with the Mac and your phone both attached, a phone copy never gets piped into the Mac's clipboard. `ccmux doctor` tells you exactly which side is missing.
 - **No telemetry. Ever.**
 
 </details>
