@@ -511,7 +511,14 @@ turn of its own. The evidence, per poll tick:
   last `max(10s, 3 × idle threshold)`, or the pane body shows a turn
   running (next point). A title found on the daemon's first look at a
   session, or one that stopped changing, may be a crashed agent's
-  leftover (tmux keeps it) and is ignored.
+  leftover (tmux keeps it) and is ignored. A spinner whose frames come
+  round once per poll interval shows the same glyph on every tick, so
+  when a title the daemon no longer believes still opens with the glyph
+  it showed last tick, and the pane may be working (its body changed
+  this tick, or the spinner was believed on the last one), the daemon
+  reads that title again about 400ms later in the same tick — for at
+  most 8 panes a tick, with one wait for all of them. A glyph that moved
+  in between is a live spinner; a dead agent's doesn't move.
 - **A body that shows a turn running**: Claude Code's `✻ Cogitating… (12s
   · esc to interrupt)` status line over its input box, or any agent's
   `working` body rule (a working footer).

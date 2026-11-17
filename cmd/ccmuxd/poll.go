@@ -82,6 +82,9 @@ type paneMemory struct {
 	// liveTitle).
 	title       string
 	titleChange time.Time
+	// spinnerLive: the title was believed as a working spinner last tick
+	// (see recheckDue).
+	spinnerLive bool
 	// output is the tail of what the agent printed above its input area
 	// last tick, and hasInput whether that input area was on screen (see
 	// agent.TurnView) — for agents that keep the two apart.
@@ -290,6 +293,7 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 		looks = append(looks, newLook(sn, obs))
 	}
 	s.noteAgentExits(ctx, looks)
+	s.recheckTitles(ctx, looks, staleAfter)
 	results := make([]result, 0, len(looks))
 	for i := range looks {
 		results = append(results, looks[i].classify(staleAfter, idleNeeds))
@@ -488,7 +492,8 @@ type look struct {
 	at time.Time
 	// first: the daemon's first look at the session. redraw: a body
 	// change this tick is a resize or pane switch (see paneMemory.track).
-	first, redraw bool
+	// titleChanged: the title differs from last tick's.
+	first, redraw, titleChanged bool
 	// lastCh is when the body last changed, redraws aside.
 	lastCh time.Time
 	// id is the agent the session is classified as, and switched whether
@@ -514,7 +519,7 @@ func newLook(sn pollSnap, obs observation) look {
 	// A title counts as changed only between two of our own reads:
 	// the one found on a first look may be a dead agent's leftover.
 	if !l.first && obs.title != l.mem.title {
-		l.mem.titleChange = l.at
+		l.mem.titleChange, l.titleChanged = l.at, true
 	}
 	l.mem.title = obs.title
 	l.id = sn.agentID
@@ -595,6 +600,7 @@ func (l *look) classify(staleAfter, idleNeeds time.Duration) result {
 			mem.output, mem.hasInput = view.Output, view.HasInput
 		}
 	}
+	mem.spinnerLive = ev.spinning
 	return result{
 		name: l.sn.ts.Name, pane: pane, lastCh: lastCh, mem: mem, newState: newSt, ev: ev,
 		agentID: l.id, switched: l.switched, exited: l.exited, restarted: l.restarted,

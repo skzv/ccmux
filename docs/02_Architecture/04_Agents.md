@@ -126,7 +126,10 @@ The pane classified is the agent's own — the session's oldest pane, kept
 while it exists — not whichever pane is active, so a shell window opened
 next to the agent doesn't hide it. A working-spinner OSC title counts only
 while the daemon sees signs of life (tmux keeps the title of a program
-that exited), and a pane resize is a redraw, not activity. Likewise
+that exited) — and since a spinner cycling in step with the poll reads
+the same on every tick, a title that looks frozen while its pane may be
+working is read a second time within the tick (`recheckTitles` in
+`cmd/ccmuxd/title_recheck.go`). A pane resize is a redraw, not activity. Likewise
 Claude's input box counts as a prompt only while it is the live bottom of
 the pane — nothing under it but Claude's own footer (indented lines, or
 the `❯` row selected in its background-task list): a Claude killed

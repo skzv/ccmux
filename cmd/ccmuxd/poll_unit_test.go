@@ -34,6 +34,9 @@ func newPollTestServer(t *testing.T) *server {
 			return agent.IDClaude
 		},
 		bell: func(context.Context, string) error { return nil },
+		// Keeps a tick that re-reads a spinner title (recheckTitles)
+		// within the tests' 50ms idle threshold.
+		titleRecheckDelay: 10 * time.Millisecond,
 	}
 	return s
 }

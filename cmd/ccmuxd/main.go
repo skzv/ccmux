@@ -587,6 +587,10 @@ type server struct {
 	// exited to the launch chain's fallback shell (see noteAgentExits in
 	// agent_exit.go). nil leaves agent exits to the screen rules.
 	procs func(ctx context.Context) (*proctree.Table, error)
+	// titleRecheckDelay is how long after a pane's read a spinner title
+	// that looks frozen is read again (see recheckTitles); zero means
+	// defaultTitleRecheckDelay.
+	titleRecheckDelay time.Duration
 
 	// Session-handler seams, defaulted to tmux.Has / tmux.Kill /
 	// tmux.Rename so the create/kill/rename handlers' bookkeeping is
