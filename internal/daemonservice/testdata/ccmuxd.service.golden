@@ -1,0 +1,12 @@
+[Unit]
+Description=ccmux daemon (Claude Code session supervisor)
+After=default.target
+
+[Service]
+ExecStart=/usr/local/bin/ccmuxd
+Restart=on-failure
+RestartSec=3
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+
+[Install]
+WantedBy=default.target
