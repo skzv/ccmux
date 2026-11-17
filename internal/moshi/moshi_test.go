@@ -180,6 +180,7 @@ func TestInstallCmds_ContainsBrewTapAndInstall(t *testing.T) {
 func TestClaudeSettingsMentionsMoshi(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	claudeDir := filepath.Join(home, ".claude")
 	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -211,6 +212,23 @@ func TestClaudeSettingsMentionsMoshi(t *testing.T) {
 	}
 	if !claudeSettingsMentionsMoshi() {
 		t.Fatal("settings.local.json with moshi-hook → should be true")
+	}
+}
+
+// TestClaudeSettingsMentionsMoshi_ClaudeConfigDir — moshi-hook writes
+// its hooks into the settings.json Claude Code actually reads, which
+// is under $CLAUDE_CONFIG_DIR when that is set. Looking only in
+// ~/.claude missed them: Status.HooksInstalled stayed false, so doctor
+// reported no hooks and the daemon's bell suppression didn't apply.
+func TestClaudeSettingsMentionsMoshi_ClaudeConfigDir(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	claudeDir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", claudeDir)
+	if err := os.WriteFile(filepath.Join(claudeDir, "settings.json"), []byte(`{"hooks":{"x":[{"hooks":[{"command":"moshi-hook fire"}]}]}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !claudeSettingsMentionsMoshi() {
+		t.Fatal("moshi-hook in $CLAUDE_CONFIG_DIR/settings.json → should be true")
 	}
 }
 

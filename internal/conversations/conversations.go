@@ -14,6 +14,10 @@
 //	Antigravity:  ~/.gemini/antigravity-cli/conversations/<uuid>.pb
 //	Gemini:       ~/.gemini/tmp/<project>/chats/*.json / *.jsonl
 //
+// ~/.claude, ~/.codex and ~/.cursor stand for $CLAUDE_CONFIG_DIR,
+// $CODEX_HOME and $CURSOR_HOME when those are set: listing, reading
+// and deletion all resolve them through internal/agenthome.
+//
 // Claude, Codex, and Cursor use JSONL. Known fragments for the same logical
 // conversation are merged in memory: Claude parent/subagent files by
 // parent UUID, Codex rollouts by rollout UUID. We parse the first user
@@ -724,7 +728,7 @@ func claudeSessionDirs(home, id string, paths []string) ([]string, error) {
 	if !claudeUUID.MatchString(id) {
 		return nil, nil
 	}
-	root := filepath.Join(home, ".claude", "projects")
+	root := agenthome.ClaudeProjects(home)
 	seen := map[string]bool{}
 	var dirs []string
 	for _, path := range paths {
@@ -758,6 +762,13 @@ func claudeSessionDirs(home, id string, paths []string) ([]string, error) {
 // carrying the agent's file extension. Returns a descriptive error
 // otherwise. filepath.Clean resolves any `..` so a path can't escape
 // the root via traversal.
+//
+// The root is the one the listing walked: for Claude, Codex and Cursor
+// it comes from internal/agenthome, so it follows $CLAUDE_CONFIG_DIR,
+// $CODEX_HOME and $CURSOR_HOME. With an override set, the default
+// ~/.claude/projects (etc.) is not a transcript root and nothing under
+// it can be deleted. guardResolvedParent then re-checks containment
+// against the symlink-resolved root.
 func guardTranscriptPath(home string, agentID agent.ID, path string) error {
 	type transcriptRoot struct {
 		root string
@@ -766,11 +777,11 @@ func guardTranscriptPath(home string, agentID agent.ID, path string) error {
 	var allowed []transcriptRoot
 	switch agentID {
 	case agent.IDClaude:
-		allowed = []transcriptRoot{{root: filepath.Join(home, ".claude", "projects"), ext: ".jsonl"}}
+		allowed = []transcriptRoot{{root: agenthome.ClaudeProjects(home), ext: ".jsonl"}}
 	case agent.IDCodex:
 		allowed = []transcriptRoot{{root: agenthome.CodexSessions(home), ext: ".jsonl"}}
 	case agent.IDCursor:
-		allowed = []transcriptRoot{{root: filepath.Join(home, ".cursor", "projects"), ext: ".jsonl"}}
+		allowed = []transcriptRoot{{root: agenthome.CursorProjects(home), ext: ".jsonl"}}
 	case agent.IDPi:
 		allowed = []transcriptRoot{{root: filepath.Join(home, ".pi", "agent", "sessions"), ext: ".jsonl"}}
 	case agent.IDAntigravity:
@@ -929,16 +940,17 @@ func All(opts Options) ([]Conversation, error) {
 }
 
 // ListClaude walks ~/.claude/projects/<encoded-cwd>/<uuid>.jsonl and
-// nested ~/.claude/projects/<encoded-cwd>/<uuid>/subagents/*.jsonl.
-// The returned row is the logical parent conversation: scattered
-// fragments with the same parent UUID are merged in memory. Project
-// label is derived from the encoded-cwd directory; preview is the
-// first user prompt.
+// nested ~/.claude/projects/<encoded-cwd>/<uuid>/subagents/*.jsonl
+// (under $CLAUDE_CONFIG_DIR/projects/ instead when that is set; see
+// internal/agenthome). The returned row is the logical parent
+// conversation: scattered fragments with the same parent UUID are
+// merged in memory. Project label is derived from the encoded-cwd
+// directory; preview is the first user prompt.
 //
 // Missing tree returns (nil, nil) — a fresh install where the user
 // hasn't run Claude yet shouldn't surface as an error.
 func ListClaude(home string) ([]Conversation, error) {
-	root := filepath.Join(home, ".claude", "projects")
+	root := agenthome.ClaudeProjects(home)
 	dirs, err := os.ReadDir(root)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -1410,14 +1422,15 @@ func (e codexEvent) MessageContent() (string, string) {
 	}
 }
 
-// ListCursor walks ~/.cursor/projects/<encoded-cwd>/agent-transcripts/<uuid>/<uuid>.jsonl.
+// ListCursor walks ~/.cursor/projects/<encoded-cwd>/agent-transcripts/<uuid>/<uuid>.jsonl
+// ($CURSOR_HOME/projects/… when that is set; see internal/agenthome).
 // Cursor's JSONL carries role + message content. The project directory
 // is recovered from Cursor's encoded project directory name by probing
 // the filesystem (resolveCursorProject); when nothing on disk matches,
 // Project holds a best-effort label and ValidateResume refuses to
 // resume there.
 func ListCursor(home string) ([]Conversation, error) {
-	root := filepath.Join(home, ".cursor", "projects")
+	root := agenthome.CursorProjects(home)
 	resolved := map[string]string{} // encoded dir name → project
 	cursorProject := func(encoded string) string {
 		if p, ok := resolved[encoded]; ok {

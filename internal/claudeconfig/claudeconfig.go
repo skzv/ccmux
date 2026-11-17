@@ -23,20 +23,19 @@ import (
 	"strings"
 	"time"
 
+	"github.com/skzv/ccmux/internal/agenthome"
 	"github.com/skzv/ccmux/internal/configfile"
 )
 
 // Paths returns the canonical file locations Claude Code uses on this
 // host. Honors the $CLAUDE_CONFIG_DIR env var when set, otherwise
-// defaults to ~/.claude.
+// defaults to ~/.claude; see internal/agenthome. An unresolvable home
+// is an error only when the override doesn't already settle the root.
 func Paths() (Locations, error) {
-	root := os.Getenv("CLAUDE_CONFIG_DIR")
-	if root == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return Locations{}, err
-		}
-		root = filepath.Join(home, ".claude")
+	home, err := os.UserHomeDir()
+	root := agenthome.Claude(home)
+	if err != nil && !filepath.IsAbs(root) {
+		return Locations{}, err
 	}
 	return Locations{
 		Root:           root,

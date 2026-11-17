@@ -141,14 +141,17 @@ func ServicePathOrEmpty() string {
 // written world-readable (0644).
 var passthroughEnvNames = []string{
 	// Claude Code's config root (default ~/.claude); resolved by
-	// internal/claudeconfig and the setup wizard's MCP registration.
+	// internal/agenthome for its config, the setup wizard's MCP
+	// registration, and the projects/ transcripts the daemon's usage
+	// walker and conversation listing read.
 	"CLAUDE_CONFIG_DIR",
 	// Codex's home (default ~/.codex); resolved by internal/agenthome
 	// for its config, and for the sessions/ transcripts the daemon's
 	// usage walker and conversation listing read.
 	"CODEX_HOME",
 	// Cursor's config root (default ~/.cursor); resolved by
-	// internal/cursorconfig.
+	// internal/agenthome for its config, ai-tracking database and
+	// projects/ transcripts.
 	"CURSOR_HOME",
 	// The Antigravity CLI's root (default ~/.gemini/antigravity-cli);
 	// resolved by internal/antigravityconfig.

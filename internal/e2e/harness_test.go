@@ -216,9 +216,12 @@ func newEnv(t *testing.T) *Env {
 	// live-client TMUX variable overrides TMUX_TMPDIR and would point
 	// tmux commands at the developer's production server.
 	t.Setenv("HOME", home)
-	// Codex discovery and deletion honor this override independently of
-	// HOME; keep inherited developer transcripts outside every fixture.
+	// Claude, Codex and Cursor discovery and deletion honor these
+	// overrides independently of HOME; keep inherited developer
+	// transcripts outside every fixture.
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	t.Setenv("CODEX_HOME", "")
+	t.Setenv("CURSOR_HOME", "")
 	t.Setenv("TMUX_TMPDIR", home)
 	t.Setenv("TMUX", "")
 	// Resolve `claude`/`codex` to sleeping stubs and `ccmux`/`ccmuxd`

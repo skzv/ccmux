@@ -1,5 +1,6 @@
 // Package claudeusage aggregates token usage and message counts from
-// Claude Code's transcript JSONL files under ~/.claude/projects/. No API
+// Claude Code's transcript JSONL files under ~/.claude/projects/
+// ($CLAUDE_CONFIG_DIR/projects/ when that is set). No API
 // calls, no auth — pure local parse. We use this to power the dashboard
 // usage panel, per-project breakdowns, and the subscription 5-hour
 // session-block indicator (Pro / Max plan reset model; see Walk).
@@ -19,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/skzv/ccmux/internal/agenthome"
 	"github.com/skzv/ccmux/internal/jsonl"
 )
 
@@ -309,7 +311,7 @@ func walk(now time.Time, d time.Duration, block bool) (*Aggregate, error) {
 	if err != nil {
 		return nil, err
 	}
-	root := filepath.Join(home, ".claude", "projects")
+	root := agenthome.ClaudeProjects(home)
 	agg := &Aggregate{
 		Window:      d,
 		WindowStart: now.Add(-d),

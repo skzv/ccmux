@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/skzv/ccmux/internal/agenthome"
 	"github.com/skzv/ccmux/internal/keychain"
 )
 
@@ -40,8 +41,9 @@ type Status struct {
 	// Paired is true if `moshi-hook status` reports successful pairing.
 	Paired bool
 
-	// HooksInstalled is true if ~/.claude/settings.json contains the
-	// moshi-hook hook entries (i.e. `moshi-hook install` has been run).
+	// HooksInstalled is true if ~/.claude/settings.json (under
+	// $CLAUDE_CONFIG_DIR when set) contains the moshi-hook hook entries
+	// (i.e. `moshi-hook install` has been run).
 	HooksInstalled bool
 
 	// ServiceRunning is true if `brew services` reports moshi-hook as
@@ -284,16 +286,17 @@ func run(ctx context.Context, timeout time.Duration, name string, args ...string
 }
 
 // claudeSettingsMentionsMoshi looks for the moshi-hook entries that
-// `moshi-hook install` writes into ~/.claude/settings.json. The presence
-// of any "moshi-hook" substring in the file is sufficient — we don't try
-// to parse Claude Code's settings schema here.
+// `moshi-hook install` writes into ~/.claude/settings.json (under
+// $CLAUDE_CONFIG_DIR when that is set). The presence of any
+// "moshi-hook" substring in the file is sufficient — we don't try to
+// parse Claude Code's settings schema here.
 func claudeSettingsMentionsMoshi() bool {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return false
 	}
 	for _, name := range []string{"settings.json", "settings.local.json"} {
-		p := filepath.Join(home, ".claude", name)
+		p := filepath.Join(agenthome.Claude(home), name)
 		b, err := os.ReadFile(p)
 		if err != nil {
 			continue

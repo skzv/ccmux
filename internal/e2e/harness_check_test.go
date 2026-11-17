@@ -20,7 +20,9 @@ import (
 // regresses, every other e2e test risks trampling user state.
 func TestHarness_Hermetic(t *testing.T) {
 	realHome := os.Getenv("HOME")
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
 	t.Setenv("CODEX_HOME", t.TempDir())
+	t.Setenv("CURSOR_HOME", t.TempDir())
 
 	e := newEnv(t)
 
@@ -32,6 +34,12 @@ func TestHarness_Hermetic(t *testing.T) {
 	}
 	if got := agenthome.Codex(e.Home); got != filepath.Join(e.Home, ".codex") {
 		t.Fatalf("Codex root %q escaped sandbox %q", got, e.Home)
+	}
+	if got := agenthome.Claude(e.Home); got != filepath.Join(e.Home, ".claude") {
+		t.Fatalf("Claude root %q escaped sandbox %q", got, e.Home)
+	}
+	if got := agenthome.Cursor(e.Home); got != filepath.Join(e.Home, ".cursor") {
+		t.Fatalf("Cursor root %q escaped sandbox %q", got, e.Home)
 	}
 
 	cfgPath, err := config.Path()

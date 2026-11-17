@@ -24,6 +24,8 @@ import (
 	"time"
 
 	_ "modernc.org/sqlite"
+
+	"github.com/skzv/ccmux/internal/agenthome"
 )
 
 // ErrNotInstalled signals that the Cursor ai-tracking database does
@@ -160,7 +162,8 @@ func lastActivity(db *sql.DB) (time.Time, error) {
 }
 
 // DefaultDBPath returns the canonical Cursor ai-tracking database
-// path under the user's home directory.
+// path under the user's home directory ($CURSOR_HOME when set; see
+// internal/agenthome).
 func DefaultDBPath(home string) string {
-	return filepath.Join(home, ".cursor", "ai-tracking", "ai-code-tracking.db")
+	return filepath.Join(agenthome.Cursor(home), "ai-tracking", "ai-code-tracking.db")
 }

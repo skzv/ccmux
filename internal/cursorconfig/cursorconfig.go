@@ -18,19 +18,20 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/skzv/ccmux/internal/agenthome"
 )
 
 // Paths returns the canonical file locations Cursor uses on this host.
-// Honors $CURSOR_HOME for tests / relocations, otherwise defaults to
-// ~/.cursor.
+// Honors $CURSOR_HOME (ccmux's own override for where ~/.cursor lives),
+// otherwise defaults to ~/.cursor; see internal/agenthome. An
+// unresolvable home is an error only when the override doesn't
+// already settle the root.
 func Paths() (Locations, error) {
-	root := os.Getenv("CURSOR_HOME")
-	if root == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return Locations{}, err
-		}
-		root = filepath.Join(home, ".cursor")
+	home, err := os.UserHomeDir()
+	root := agenthome.Cursor(home)
+	if err != nil && !filepath.IsAbs(root) {
+		return Locations{}, err
 	}
 	return Locations{
 		Root:      root,

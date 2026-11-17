@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/skzv/ccmux/internal/agenthome"
 	"github.com/skzv/ccmux/internal/claudeconfig"
 	"github.com/skzv/ccmux/internal/configfile"
 )
@@ -52,14 +53,16 @@ var runClaudeMCP = func(ctx context.Context, args ...string) ([]byte, error) {
 
 // claudeUserConfigPath returns Claude Code's user config file:
 // $CLAUDE_CONFIG_DIR/.claude.json when that override is set, else
-// ~/.claude.json.
+// ~/.claude.json (beside ~/.claude, not in it). The override is read
+// through internal/agenthome so it means the same directory here as
+// everywhere else.
 func claudeUserConfigPath() (string, error) {
-	if dir := os.Getenv("CLAUDE_CONFIG_DIR"); dir != "" {
+	home, homeErr := os.UserHomeDir()
+	if dir, ok := agenthome.Override(agenthome.ClaudeEnv, home); ok {
 		return filepath.Join(dir, ".claude.json"), nil
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
+	if homeErr != nil {
+		return "", homeErr
 	}
 	return filepath.Join(home, ".claude.json"), nil
 }
