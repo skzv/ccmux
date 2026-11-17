@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/skzv/ccmux/internal/codexpath"
+	"github.com/skzv/ccmux/internal/agenthome"
 	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/daemon"
 )
@@ -30,7 +30,7 @@ func TestHarness_Hermetic(t *testing.T) {
 	if e.Home == realHome {
 		t.Fatalf("sandbox HOME equals real HOME %q — not isolated", realHome)
 	}
-	if got := codexpath.Root(e.Home); got != filepath.Join(e.Home, ".codex") {
+	if got := agenthome.Codex(e.Home); got != filepath.Join(e.Home, ".codex") {
 		t.Fatalf("Codex root %q escaped sandbox %q", got, e.Home)
 	}
 

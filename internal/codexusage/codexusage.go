@@ -28,7 +28,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/skzv/ccmux/internal/codexpath"
+	"github.com/skzv/ccmux/internal/agenthome"
 )
 
 // Tokens is the breakdown each token_count event carries. Cached is
@@ -132,7 +132,7 @@ func Walk(window time.Duration) (*Aggregate, error) {
 	if err != nil {
 		return nil, err
 	}
-	root := codexpath.Sessions(home)
+	root := agenthome.CodexSessions(home)
 	return walkRoot(root, window, time.Now())
 }
 

@@ -3,7 +3,7 @@ package agent
 import (
 	"time"
 
-	"github.com/skzv/ccmux/internal/codexpath"
+	"github.com/skzv/ccmux/internal/agenthome"
 )
 
 // Codex is the OpenAI Codex CLI agent. Binary: `codex`. Config root:
@@ -31,8 +31,8 @@ func (Codex) LaunchCmd(continueFlag bool) string {
 	return launchCmdWithBinary(Codex{}, "codex", continueFlag, Commands{})
 }
 
-func (Codex) ConfigRoot(home string) string      { return codexpath.Root(home) }
-func (Codex) TranscriptsRoot(home string) string { return codexpath.Sessions(home) }
+func (Codex) ConfigRoot(home string) string      { return agenthome.Codex(home) }
+func (Codex) TranscriptsRoot(home string) string { return agenthome.CodexSessions(home) }
 
 // InitialPrompt is the bootstrap message ccmux types into a fresh
 // Codex session. Codex doesn't have a /init equivalent that writes a

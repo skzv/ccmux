@@ -31,24 +31,21 @@ import (
 
 	"github.com/BurntSushi/toml"
 
-	"github.com/skzv/ccmux/internal/codexpath"
+	"github.com/skzv/ccmux/internal/agenthome"
 	"github.com/skzv/ccmux/internal/configfile"
 	"github.com/skzv/ccmux/internal/tomlpatch"
 )
 
 // Paths returns the canonical file locations Codex uses on this host.
 // Honors $CODEX_HOME (the env var Codex itself respects), otherwise
-// defaults to ~/.codex.
+// defaults to ~/.codex; see internal/agenthome. An unresolvable home
+// is an error only when the override doesn't already settle the root.
 func Paths() (Locations, error) {
-	var home string
-	if os.Getenv("CODEX_HOME") == "" {
-		var err error
-		home, err = os.UserHomeDir()
-		if err != nil {
-			return Locations{}, err
-		}
+	home, err := os.UserHomeDir()
+	root := agenthome.Codex(home)
+	if err != nil && !filepath.IsAbs(root) {
+		return Locations{}, err
 	}
-	root := codexpath.Root(home)
 	return Locations{
 		Root:       root,
 		Config:     filepath.Join(root, "config.toml"),

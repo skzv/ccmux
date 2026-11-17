@@ -143,7 +143,7 @@ var passthroughEnvNames = []string{
 	// Claude Code's config root (default ~/.claude); resolved by
 	// internal/claudeconfig and the setup wizard's MCP registration.
 	"CLAUDE_CONFIG_DIR",
-	// Codex's home (default ~/.codex); resolved by internal/codexpath
+	// Codex's home (default ~/.codex); resolved by internal/agenthome
 	// for its config, and for the sessions/ transcripts the daemon's
 	// usage walker and conversation listing read.
 	"CODEX_HOME",

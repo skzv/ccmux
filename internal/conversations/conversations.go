@@ -45,7 +45,7 @@ import (
 	"time"
 
 	"github.com/skzv/ccmux/internal/agent"
-	"github.com/skzv/ccmux/internal/codexpath"
+	"github.com/skzv/ccmux/internal/agenthome"
 	"github.com/skzv/ccmux/internal/codexusage"
 	"github.com/skzv/ccmux/internal/gemini"
 	"github.com/skzv/ccmux/internal/jsonl"
@@ -768,7 +768,7 @@ func guardTranscriptPath(home string, agentID agent.ID, path string) error {
 	case agent.IDClaude:
 		allowed = []transcriptRoot{{root: filepath.Join(home, ".claude", "projects"), ext: ".jsonl"}}
 	case agent.IDCodex:
-		allowed = []transcriptRoot{{root: codexpath.Sessions(home), ext: ".jsonl"}}
+		allowed = []transcriptRoot{{root: agenthome.CodexSessions(home), ext: ".jsonl"}}
 	case agent.IDCursor:
 		allowed = []transcriptRoot{{root: filepath.Join(home, ".cursor", "projects"), ext: ".jsonl"}}
 	case agent.IDPi:
@@ -1236,7 +1236,7 @@ func decodeClaudeProject(encoded string) string {
 // the UUID + timestamp for the Conversation row, plus the first user
 // message for Preview.
 func ListCodex(home string) ([]Conversation, error) {
-	root := codexpath.Sessions(home)
+	root := agenthome.CodexSessions(home)
 	var out []Conversation
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
