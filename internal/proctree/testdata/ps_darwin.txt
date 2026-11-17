@@ -1,0 +1,17 @@
+    1     0 Ss   launchd
+  612     1 Ss   tmux
+ 4101   612 Ss   zsh
+ 4102  4101 S+   2.1.281
+ 4150  4102 S    node
+ 4200   612 Ss   zsh
+ 4201  4200 S+   zsh
+ 4202  4201 S    gitstatusd-darwi
+ 4300   612 Ss+  zsh
+ 4500   612 Ss   zsh
+ 4501  4500 S+   node
+ 4502  4501 S+   codex
+ 4503  4502 S    node_repl
+ 4600   612 Ss   zsh
+ 4601  4600 Z+   codex
+ 4602  4600 S+   zsh
+ 4800     1 S    Google Chrome He

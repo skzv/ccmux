@@ -1,0 +1,22 @@
+      1       0 Ss   systemd
+    900       1 Ss   tmux: server
+   1001     900 Ss   bash
+   1002    1001 Sl+  node
+   1003    1002 Sl   node
+   2001     900 Ss   bash
+   2002    2001 S+   zsh
+   2003    2002 S    gitstatusd-linu
+   2100     900 Ss   bash
+   2101    2100 Z    codex <defunct>
+   2102    2100 S+   bash
+   2200     900 Ss+  -bash
+   2300     900 Ss   dash
+   2301    2300 Sl+  cursor-agent
+   2400     900 Ss   sh
+   2401    2400 S+   python3.12
+   2500     900 Ss   bash
+   2501    2500 S+   fish
+   2502    2501 S+   nu
+garbage
+   x1   900 S    nope
+  2600

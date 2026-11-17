@@ -24,6 +24,8 @@ type fakeTmux struct {
 	session  map[string]tmux.Session
 	order    []string
 	reads    []string // pane ids capturePane was asked for, in order
+	// listed counts list-panes calls per session.
+	listed map[string]int
 	// sent records every send-keys as "<pane id>=<keys>" — the pane the
 	// keys landed in, whether targeted by id or through a session's
 	// active pane.
@@ -40,6 +42,10 @@ type fakeTmux struct {
 type fakePane struct {
 	tmux.Pane
 	body string
+	// titleAfterRead, when set, is the title the pane shows from just
+	// after its next read by list-panes: a spinner that moved on between
+	// two reads of the same tick. It applies once.
+	titleAfterRead string
 }
 
 func newFakeTmux() *fakeTmux {
@@ -138,9 +144,16 @@ func (f *fakeTmux) wire(s *server) {
 		if !ok {
 			return nil, errNoFakeSession
 		}
+		if f.listed == nil {
+			f.listed = map[string]int{}
+		}
+		f.listed[name]++
 		out := make([]tmux.Pane, 0, len(ps))
 		for _, p := range ps {
 			out = append(out, p.Pane)
+			if p.titleAfterRead != "" {
+				p.Title, p.titleAfterRead = p.titleAfterRead, ""
+			}
 		}
 		return out, nil
 	}
@@ -243,6 +256,13 @@ func (f *fakeTmux) spinnerMarks() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]string(nil), f.marks...)
+}
+
+// listCalls is how many times the session's panes have been listed.
+func (f *fakeTmux) listCalls(name string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.listed[name]
 }
 
 func (f *fakeTmux) sentKeys() []string {

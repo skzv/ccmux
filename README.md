@@ -436,6 +436,7 @@ The Dashboard shows all sessions, color-coded by state:
 - **active** — the agent is generating output right now.
 - **idle** — finished, no prompt visible.
 - **needs_input** — the agent's input box is up and the pane has been quiet for ≥ 3 seconds. **This is the one to watch.**
+- **error** — the agent exited (crashed or quit) and the pane dropped back to a shell. No bell, no push.
 
 When a session transitions to `needs_input`, ccmuxd injects a terminal BEL. Any iOS terminal client that maps BEL→notification raises a push.
 

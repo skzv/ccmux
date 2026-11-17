@@ -180,6 +180,7 @@ FUZZ_TARGETS := \
 	./internal/claude:FuzzReadTurn \
 	./internal/agent:FuzzClaudeRulesAgreeWithFallback \
 	./internal/tmux:FuzzSessionNameForPath \
+	./internal/proctree:FuzzParse \
 	./internal/tui:FuzzRenderSessionLine_DegenerateInputs \
 	./internal/tui:FuzzDialTarget \
 	./internal/jsonl:FuzzScanner \

@@ -33,6 +33,12 @@ type Pane struct {
 	// shows as that shell: it has no job control, so its children share
 	// its process group.
 	Command string
+	// PID is #{pane_pid}: the pane's first process — for a session ccmux
+	// launched, the `$SHELL -c "agent || fallback"` its agent runs under;
+	// for a plain shell pane, that shell. 0 when tmux didn't report it.
+	// Its process tree tells an agent still running from one that exited
+	// to the fallback shell, which Command can't (see internal/proctree).
+	PID int
 	// Title is #{pane_title}, the title the program in the pane last
 	// set with OSC 2 (tmux keeps it after that program exits).
 	Title string
@@ -41,7 +47,7 @@ type Pane struct {
 // paneListFormat is ListPanes' -F format. pane_title is LAST so a tab
 // in a title can't shift the other columns: parsePanes splits with the
 // field count and lets the final field absorb the rest.
-const paneListFormat = "#{pane_id}\t#{window_index}\t#{pane_index}\t#{pane_width}\t#{pane_height}\t#{window_active}#{pane_active}\t#{pane_current_command}\t#{pane_title}"
+const paneListFormat = "#{pane_id}\t#{window_index}\t#{pane_index}\t#{pane_width}\t#{pane_height}\t#{window_active}#{pane_active}\t#{pane_current_command}\t#{pane_pid}\t#{pane_title}"
 
 // ListPanes returns every pane of every window in the named session
 // (exact name match), in window then pane order.
@@ -60,6 +66,11 @@ func ListPanes(ctx context.Context, session string) ([]Pane, error) {
 
 // parsePanes turns `list-panes -F paneListFormat` output into Panes,
 // skipping lines that don't parse.
+//
+// A line without the pane_pid column — the format before it was added,
+// the command followed directly by the title — still parses, with PID
+// 0: pane_pid is always digits, so the column is taken for one only
+// when it is all digits and a tab follows it.
 func parsePanes(out []byte) []Pane {
 	var panes []Pane
 	for _, line := range strings.Split(string(out), "\n") {
@@ -77,9 +88,25 @@ func parsePanes(out []byte) []Pane {
 			Command: parts[6],
 			Title:   parts[7],
 		}
+		if pid, title, ok := strings.Cut(parts[7], "\t"); ok && digits(pid) {
+			p.PID, p.Title = atoi(pid), title
+		}
 		panes = append(panes, p)
 	}
 	return panes
+}
+
+// digits reports whether s is a non-empty run of ASCII digits.
+func digits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // OldestPane returns the pane with the lowest id: the one the session
