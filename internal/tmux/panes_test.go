@@ -6,6 +6,30 @@ import (
 	"testing"
 )
 
+// TestParsePanes_PID — the current format carries #{pane_pid} between
+// the command and the title; the title still absorbs any tab in it.
+func TestParsePanes_PID(t *testing.T) {
+	out := "%3\t0\t1\t80\t12\t10\tzsh\t4242\t⠋ Refactor\tpoll loop\n" +
+		"%1\t0\t0\t80\t11\t11\tzsh\t17\t\n" +
+		"%4\t1\t0\t80\t24\t00\tnode\t99\t123\tdigits first\n"
+	got := parsePanes([]byte(out))
+	want := []Pane{
+		{ID: "%3", Window: 0, Index: 1, Width: 80, Height: 12, Command: "zsh", PID: 4242, Title: "⠋ Refactor\tpoll loop"},
+		{ID: "%1", Window: 0, Index: 0, Width: 80, Height: 11, Active: true, Command: "zsh", PID: 17},
+		{ID: "%4", Window: 1, Index: 0, Width: 80, Height: 24, Command: "node", PID: 99, Title: "123\tdigits first"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("parsePanes = %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("pane %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
+// TestParsePanes — lines in the format before #{pane_pid} was added
+// still parse, with no pid.
 func TestParsePanes(t *testing.T) {
 	out := "%3\t0\t1\t80\t12\t10\t2.1.281\t⠋ Refactor\tpoll loop\n" + // a tab inside the title
 		"%1\t0\t0\t80\t11\t11\tzsh\thost.local\n" +

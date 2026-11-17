@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -147,5 +149,33 @@ func TestIntegration_PaneCurrentCommand(t *testing.T) {
 	t.Logf("a `claude || fallback` launch chain shows as %q", got)
 	if got == "claude" {
 		t.Errorf("a launch chain showed as %q, want the shell running it", got)
+	}
+}
+
+// TestIntegration_PanePID — ListPanes reports each pane's first
+// process: the shell a launch chain runs under (whose children are the
+// agent), or the program itself when tmux's shell exec'd it.
+func TestIntegration_PanePID(t *testing.T) {
+	ctx := isolatedServer(t)
+	if err := New(ctx, "pid", os.TempDir(), "sleep 300"); err != nil {
+		t.Fatal(err)
+	}
+	panes, err := ListPanes(ctx, "pid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(panes) != 1 || panes[0].PID <= 0 {
+		t.Fatalf("panes = %+v, want one with a pid", panes)
+	}
+	out, err := exec.CommandContext(ctx, "ps", "-o", "comm=", "-p", strconv.Itoa(panes[0].PID)).Output()
+	if err != nil {
+		t.Fatalf("ps -p %d: %v", panes[0].PID, err)
+	}
+	// The shell tmux runs the command with execs it (zsh, bash, a recent
+	// dash), or runs it as its child (an older sh).
+	switch name := filepath.Base(strings.TrimPrefix(strings.TrimSpace(string(out)), "-")); name {
+	case "sleep", "sh", "dash", "bash", "zsh":
+	default:
+		t.Errorf("pane pid %d is %q, want the pane's sleep or the shell running it", panes[0].PID, name)
 	}
 }
