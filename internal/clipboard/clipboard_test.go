@@ -268,6 +268,44 @@ func TestPipeCommand_NamesTheCopyingClient(t *testing.T) {
 	}
 }
 
+// TestClassifyCopyBindings — doctor tells a current binding from an
+// older ccmux's (upgrade pending) and from one that isn't ccmux's.
+// Lines are tmux 3.7's `list-keys` output, column padding included.
+func TestClassifyCopyBindings(t *testing.T) {
+	const (
+		viNew   = `bind-key    -T copy-mode-vi MouseDragEnd1Pane     send-keys -X copy-pipe-no-clear "ccmux clipboard-pipe --client '#{client_tty}'"`
+		emNew   = `bind-key    -T copy-mode    MouseDragEnd1Pane     send-keys -X copy-pipe-no-clear "ccmux clipboard-pipe --client '#{client_tty}'"`
+		viOld   = `bind-key    -T copy-mode-vi MouseDragEnd1Pane     send-keys -X copy-pipe-no-clear "ccmux clipboard-pipe"`
+		emOld   = `bind-key    -T copy-mode    MouseDragEnd1Pane     send-keys -X copy-pipe-no-clear "ccmux clipboard-pipe"`
+		viTmux  = `bind-key    -T copy-mode-vi MouseDragEnd1Pane     send-keys -X copy-pipe-and-cancel`
+		emOwn   = `bind-key    -T copy-mode    MouseDragEnd1Pane     send-keys -X copy-pipe-and-cancel pbcopy`
+		rootOld = `bind-key    -T root         MouseDragEnd1Pane     run-shell "ccmux clipboard-pipe"`
+		other   = `bind-key -r -T prefix       Up                    select-pane -U`
+	)
+	join := func(lines ...string) string { return strings.Join(lines, "\n") + "\n" }
+	cases := []struct {
+		name string
+		in   string
+		want BindingState
+	}{
+		{"both tables current", join(other, emNew, viNew), BindingCurrent},
+		{"both tables from an older ccmux", join(emOld, viOld), BindingLegacy},
+		{"one table still old", join(emOld, viNew), BindingLegacy},
+		{"one table current, other is the user's", join(emOwn, viNew), BindingCurrent},
+		{"tmux defaults", join(other, viTmux), BindingMissing},
+		{"the user's own pipe", join(emOwn), BindingMissing},
+		{"ccmux text outside copy mode doesn't count", join(rootOld), BindingMissing},
+		{"empty", "", BindingMissing},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ClassifyCopyBindings(tc.in); got != tc.want {
+				t.Errorf("ClassifyCopyBindings = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestSuggestTmuxConf_MatchesAppliedConfig — the snippet ccmux pastes
 // into the user's ~/.tmux.conf and the live tmux commands ccmuxd
 // invokes on startup must agree on the load-bearing directives, or a

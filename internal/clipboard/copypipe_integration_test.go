@@ -285,13 +285,22 @@ func (r *copyRig) copyBindings() []string {
 // snippet must produce the very same bindings when sourced.
 func TestIntegration_ClipboardBindingsUpgradeInPlace(t *testing.T) {
 	r := newCopyRig(t)
+	if bs, err := TmuxCopyBindingState(r.ctx); err != nil || bs != BindingMissing {
+		t.Errorf("fresh server: binding state %v (err %v), want missing", bs, err)
+	}
 	for _, table := range []string{"copy-mode-vi", "copy-mode"} {
 		r.tmux("bind-key", "-T", table, "MouseDragEnd1Pane", "send-keys", "-X", "copy-pipe-no-clear", "ccmux clipboard-pipe")
+	}
+	if bs, err := TmuxCopyBindingState(r.ctx); err != nil || bs != BindingLegacy {
+		t.Errorf("older ccmux's binding: state %v (err %v), want legacy", bs, err)
 	}
 	for i := 0; i < 2; i++ { // the daemon may apply them more than once
 		if err := EnableTmuxClipboard(r.ctx); err != nil {
 			t.Fatalf("EnableTmuxClipboard: %v", err)
 		}
+	}
+	if bs, err := TmuxCopyBindingState(r.ctx); err != nil || bs != BindingCurrent {
+		t.Errorf("after EnableTmuxClipboard: state %v (err %v), want current", bs, err)
 	}
 	applied := r.copyBindings()
 	if len(applied) != 2 {

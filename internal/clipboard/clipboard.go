@@ -130,6 +130,79 @@ func TmuxClipboardCommands() [][]string {
 // looking at every attached client.
 const PipeCommand = "ccmux clipboard-pipe --client '#{client_tty}'"
 
+// legacyPipeCommand is what ccmux bound before PipeCommand named the
+// copying client. Every ccmux binding contains it.
+const legacyPipeCommand = "ccmux clipboard-pipe"
+
+// BindingState is how the copy-mode mouse bindings on the running tmux
+// server compare with the ones ccmux applies.
+type BindingState int
+
+const (
+	// BindingMissing: neither copy-mode table pipes a mouse copy into
+	// ccmux — tmux's default, the user's own binding, or a server
+	// ccmuxd hasn't set up yet.
+	BindingMissing BindingState = iota
+	// BindingLegacy: an older ccmux's binding, which doesn't name the
+	// client that made the selection. ccmuxd replaces it the next time
+	// it applies its setup (a daemon restart, or the next tmux server).
+	BindingLegacy
+	// BindingCurrent: PipeCommand, naming the copying client.
+	BindingCurrent
+)
+
+func (s BindingState) String() string {
+	switch s {
+	case BindingLegacy:
+		return "legacy"
+	case BindingCurrent:
+		return "current"
+	}
+	return "missing"
+}
+
+// ClassifyCopyBindings reads `tmux list-keys` output and reports the
+// state of the MouseDragEnd1Pane bindings in the copy-mode and
+// copy-mode-vi tables. Any legacy binding makes the whole state
+// legacy: that table still routes copies the old way.
+func ClassifyCopyBindings(listKeys string) BindingState {
+	state := BindingMissing
+	for _, line := range strings.Split(listKeys, "\n") {
+		if !isCopyDragBinding(line) || !strings.Contains(line, legacyPipeCommand) {
+			continue
+		}
+		if !strings.Contains(line, "--client") {
+			return BindingLegacy
+		}
+		state = BindingCurrent
+	}
+	return state
+}
+
+// isCopyDragBinding reports whether a `tmux list-keys` line binds
+// MouseDragEnd1Pane in a copy-mode table. Lines read
+// `bind-key [-r] -T <table> <key> <command…>`.
+func isCopyDragBinding(line string) bool {
+	f := strings.Fields(line)
+	for i := 0; i+2 < len(f); i++ {
+		if f[i] == "-T" {
+			return (f[i+1] == "copy-mode" || f[i+1] == "copy-mode-vi") && f[i+2] == "MouseDragEnd1Pane"
+		}
+	}
+	return false
+}
+
+// TmuxCopyBindingState classifies the running tmux server's copy-mode
+// mouse bindings (see ClassifyCopyBindings). Errors when tmux isn't
+// running.
+func TmuxCopyBindingState(ctx context.Context) (BindingState, error) {
+	out, err := exec.CommandContext(ctx, "tmux", "list-keys").Output()
+	if err != nil {
+		return BindingMissing, fmt.Errorf("tmux list-keys: %w", err)
+	}
+	return ClassifyCopyBindings(string(out)), nil
+}
+
 // TmuxClipboardState returns the current value of `set-clipboard` for
 // the running tmux server. Returns "off"/"on"/"external", or an error
 // if tmux isn't running.
