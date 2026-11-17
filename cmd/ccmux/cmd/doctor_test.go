@@ -5,8 +5,44 @@ import (
 	"testing"
 
 	"github.com/skzv/ccmux/internal/agent"
+	"github.com/skzv/ccmux/internal/clipboard"
 	"github.com/skzv/ccmux/internal/sshsetup"
 )
+
+// TestClipboardBindingDoctorLine — doctor says whether the tmux
+// mouse-copy binding names the copying client, and when it's an older
+// ccmux's, that an upgrade is pending and how to apply it.
+func TestClipboardBindingDoctorLine(t *testing.T) {
+	cases := []struct {
+		state      clipboard.BindingState
+		mark       string
+		wants      []string
+		wantDetail bool
+	}{
+		{clipboard.BindingCurrent, "✓", []string{"device that made it"}, false},
+		{clipboard.BindingLegacy, "⚠", []string{"older ccmux", "upgrade pending", "ccmux daemon restart"}, true},
+		{clipboard.BindingMissing, "·", []string{"isn't ccmux's"}, false},
+	}
+	for _, tc := range cases {
+		line, detail := clipboardBindingDoctorLine(tc.state)
+		if !strings.HasPrefix(line, "  "+tc.mark+" ") {
+			t.Errorf("%v: line %q should start with marker %q", tc.state, line, tc.mark)
+		}
+		for _, w := range tc.wants {
+			if !strings.Contains(line, w) {
+				t.Errorf("%v: line %q missing %q", tc.state, line, w)
+			}
+		}
+		if (detail != "") != tc.wantDetail {
+			t.Errorf("%v: detail = %q, want detail: %v", tc.state, detail, tc.wantDetail)
+		}
+	}
+	// The legacy hint tells a user with the old snippet in their
+	// tmux.conf exactly what to add.
+	if _, detail := clipboardBindingDoctorLine(clipboard.BindingLegacy); !strings.Contains(detail, "--client '#{client_tty}'") {
+		t.Errorf("legacy detail should spell out the flag to add, got %q", detail)
+	}
+}
 
 // TestAgentInstallHint_CoversAllShippedAgents — every agent in
 // agent.All() must produce a non-empty install hint. Doctor surfaces

@@ -878,10 +878,34 @@ func checkClipboardForDoctor() {
 	switch {
 	case err != nil:
 		fmt.Println("  · tmux not running yet; ccmuxd will enable set-clipboard on first session")
+		return
 	case state == "on" || state == "external":
 		fmt.Printf("  ✓ tmux set-clipboard=%s\n", state)
 	default:
 		fmt.Printf("  ⚠ tmux set-clipboard=%s — selections won't escape tmux; run `tmux set -s set-clipboard on`\n", state)
+	}
+	if bs, err := clipboard.TmuxCopyBindingState(context.Background()); err == nil {
+		line, detail := clipboardBindingDoctorLine(bs)
+		fmt.Println(line)
+		printDoctorDetail(detail)
+	}
+}
+
+// clipboardBindingDoctorLine is doctor's line (and optional detail)
+// for the tmux mouse-copy binding. A binding from an older ccmux is an
+// upgrade the daemon hasn't applied yet: it doesn't name the copying
+// client, so a copy made on a phone can land on this machine's
+// clipboard while a local client is attached too.
+func clipboardBindingDoctorLine(bs clipboard.BindingState) (line, detail string) {
+	switch bs {
+	case clipboard.BindingCurrent:
+		return "  ✓ tmux mouse-copy binding sends each copy to the device that made it", ""
+	case clipboard.BindingLegacy:
+		return "  ⚠ tmux mouse-copy binding is from an older ccmux — upgrade pending: run `ccmux daemon restart`",
+			"until then a copy made on one device can land on this machine's clipboard\n" +
+				"if ~/.tmux.conf has ccmux's clipboard lines, add --client '#{client_tty}' after `ccmux clipboard-pipe`"
+	default:
+		return "  · tmux mouse-copy binding isn't ccmux's — ccmuxd sets it when it sees a session; until then copies reach this machine's clipboard only via OSC 52", ""
 	}
 }
 

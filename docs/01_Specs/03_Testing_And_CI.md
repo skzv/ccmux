@@ -474,6 +474,7 @@ all against a real, isolated tmux server.
 | Unix-socket IPC | `daemon.LocalClient` | sessions/projects/health match observed tmux state |
 | Tailnet HTTP API | `daemon.RemoteClient` | HTTP responses are schema-identical to the Unix-socket responses |
 | Sleep lock | `ccmuxd` + `sleeplock.Manager` | the inhibit lock is requested while sessions are active, released when idle |
+| Copy lands on the device that made it | mouse-drag in a pane → the `ccmux clipboard-pipe --client '#{client_tty}'` binding `ccmuxd` applies | with a local and an SSH client attached, only the local client's copy reaches this machine's clipboard; an older binding is upgraded in place and `ccmux doctor` reports it (`internal/e2e/clipboard_test.go`; `internal/clipboard`'s integration test pins tmux's per-client expansion) |
 
 ### Config & onboarding
 

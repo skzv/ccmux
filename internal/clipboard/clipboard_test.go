@@ -227,14 +227,82 @@ func TestTmuxClipboardCommands_AppliesAllThreeFixes(t *testing.T) {
 	// copy-pipe-no-clear treats its trailing optional arg as the
 	// shell command. Putting it anywhere else makes tmux read it as
 	// a flag and the dispatch silently breaks.
-	if got := cmds[2][len(cmds[2])-1]; got != "ccmux clipboard-pipe" {
-		t.Errorf("last arg = %q, want %q", got, "ccmux clipboard-pipe")
+	if got := cmds[2][len(cmds[2])-1]; got != PipeCommand {
+		t.Errorf("last arg = %q, want %q", got, PipeCommand)
 	}
 	// 4. The same binding in the emacs table — tmux's default
 	// mode-keys unless $EDITOR mentions vi, so without it most users
 	// never get the local-clipboard fallback.
 	if got := join(cmds[3]); got != strings.Replace(mouseBinding, "copy-mode-vi", "copy-mode", 1) {
 		t.Errorf("cmds[3] should mirror the vi binding in the copy-mode table, got: %q", got)
+	}
+}
+
+// TestPipeCommand_NamesTheCopyingClient — the binding hands
+// `ccmux clipboard-pipe` the tty of the client that made the
+// selection, so a phone's copy isn't routed by whether a Mac happens
+// to be attached. tmux runs the command through /bin/sh: the format
+// must sit in single quotes so an unexpanded `#{client_tty}` arrives
+// as a literal argument (which the pipe ignores) instead of starting
+// a shell comment that swallows the flag's value.
+func TestPipeCommand_NamesTheCopyingClient(t *testing.T) {
+	if want := "ccmux clipboard-pipe --client '#{client_tty}'"; PipeCommand != want {
+		t.Errorf("PipeCommand = %q, want %q", PipeCommand, want)
+	}
+	for _, argv := range TmuxClipboardCommands() {
+		if !strings.Contains(strings.Join(argv, " "), "MouseDragEnd1Pane") {
+			continue
+		}
+		if got := argv[len(argv)-1]; got != PipeCommand {
+			t.Errorf("%v pipes into %q, want PipeCommand", argv[:4], got)
+		}
+	}
+	// The snippet users paste must bind the same command in both copy
+	// tables, double-quoted for tmux's config parser.
+	conf := SuggestTmuxConf()
+	for _, table := range []string{"copy-mode-vi", "copy-mode"} {
+		line := "bind-key -T " + table + " MouseDragEnd1Pane send-keys -X copy-pipe-no-clear \"" + PipeCommand + "\""
+		if !strings.Contains(conf, line+"\n") {
+			t.Errorf("SuggestTmuxConf lacks %q", line)
+		}
+	}
+}
+
+// TestClassifyCopyBindings — doctor tells a current binding from an
+// older ccmux's (upgrade pending) and from one that isn't ccmux's.
+// Lines are tmux 3.7's `list-keys` output, column padding included.
+func TestClassifyCopyBindings(t *testing.T) {
+	const (
+		viNew   = `bind-key    -T copy-mode-vi MouseDragEnd1Pane     send-keys -X copy-pipe-no-clear "ccmux clipboard-pipe --client '#{client_tty}'"`
+		emNew   = `bind-key    -T copy-mode    MouseDragEnd1Pane     send-keys -X copy-pipe-no-clear "ccmux clipboard-pipe --client '#{client_tty}'"`
+		viOld   = `bind-key    -T copy-mode-vi MouseDragEnd1Pane     send-keys -X copy-pipe-no-clear "ccmux clipboard-pipe"`
+		emOld   = `bind-key    -T copy-mode    MouseDragEnd1Pane     send-keys -X copy-pipe-no-clear "ccmux clipboard-pipe"`
+		viTmux  = `bind-key    -T copy-mode-vi MouseDragEnd1Pane     send-keys -X copy-pipe-and-cancel`
+		emOwn   = `bind-key    -T copy-mode    MouseDragEnd1Pane     send-keys -X copy-pipe-and-cancel pbcopy`
+		rootOld = `bind-key    -T root         MouseDragEnd1Pane     run-shell "ccmux clipboard-pipe"`
+		other   = `bind-key -r -T prefix       Up                    select-pane -U`
+	)
+	join := func(lines ...string) string { return strings.Join(lines, "\n") + "\n" }
+	cases := []struct {
+		name string
+		in   string
+		want BindingState
+	}{
+		{"both tables current", join(other, emNew, viNew), BindingCurrent},
+		{"both tables from an older ccmux", join(emOld, viOld), BindingLegacy},
+		{"one table still old", join(emOld, viNew), BindingLegacy},
+		{"one table current, other is the user's", join(emOwn, viNew), BindingCurrent},
+		{"tmux defaults", join(other, viTmux), BindingMissing},
+		{"the user's own pipe", join(emOwn), BindingMissing},
+		{"ccmux text outside copy mode doesn't count", join(rootOld), BindingMissing},
+		{"empty", "", BindingMissing},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ClassifyCopyBindings(tc.in); got != tc.want {
+				t.Errorf("ClassifyCopyBindings = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 

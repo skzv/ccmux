@@ -14,60 +14,57 @@ import (
 )
 
 // PipeSelection routes a tmux selection to the local OS clipboard when
-// — and only when — at least one *local* tmux client is currently
-// attached. Remote clients (SSH/Mosh) keep relying on the OSC 52 path
-// that ccmuxd already wires via `set-clipboard on`; this function
-// never targets a remote machine's clipboard.
+// — and only when — the selection was made on a *local* tmux client.
+// Remote clients (SSH/Mosh) keep relying on the OSC 52 path that
+// ccmuxd already wires via `set-clipboard on`; this function never
+// targets a remote machine's clipboard.
 //
 // The motivating case: Terminal.app on macOS silently drops OSC 52
 // writes, so a user sitting at the daemon machine has no copy path
 // without this. But the same daemon may also serve a remote client
 // over Tailscale/Mosh; for that client, OSC 52 *is* the right path
 // because it travels back over the SSH pipe to whatever device the
-// human is actually looking at. Running pbcopy unconditionally would
-// silently poison the daemon machine's clipboard for the remote case.
+// human is actually looking at. Running pbcopy for a phone's copy
+// would silently poison the daemon machine's clipboard.
 //
-// Resolution: at copy time (each invocation is one mouse-drag-end),
-// ask tmux for its current clients, inspect each client's process env
-// for SSH_CONNECTION, and only pipe to pbcopy/wl-copy/xclip when at
-// least one attached client is local. If we can't decide (tmux query
-// failed, no clients, env unreadable), default to NOT piping — the
-// OSC 52 path is the safer side of the trade-off because it never
-// poisons the wrong clipboard.
+// copier is the `--client` value the tmux binding passes: the tty of
+// the client that made the selection (#{client_tty}, see PipeCommand).
+// When it names an attached client of this tmux server, that client
+// alone decides: local → pipe, remote → don't. Otherwise — no flag (a
+// binding from an older ccmux, or the user's own), an empty value
+// (tmux before 3.0 expands client formats in copy-pipe to ""), the
+// literal `#{client_tty}` (a tmux that didn't expand it), or a tty
+// that isn't one of this server's clients — the copier is unknown and
+// the old rule applies: pipe when at least one attached client is
+// local. The value is only ever compared with tmux's own client list,
+// never opened, so argv can't point this at an arbitrary file.
+//
+// If we can't decide (tmux query failed, no clients), default to NOT
+// piping — the OSC 52 path is the safer side of the trade-off because
+// it never poisons the wrong clipboard.
 //
 // `deps` carries all OS / tmux interactions so tests can pin the full
 // matrix without spinning up a tmux server or forking processes. The
 // zero value works in production (Deps{}.fill() resolves all hooks).
-func PipeSelection(ctx context.Context, in io.Reader, deps Deps) error {
+func PipeSelection(ctx context.Context, in io.Reader, copier string, deps Deps) error {
 	deps = deps.fill()
 
-	clients, queryErr := deps.ListTmuxClients(ctx)
-	// Drain stdin into memory first so we can decide where to forward
-	// it without losing bytes if the query took a moment. Selections
-	// are small (mouse drags rarely exceed a few KB); the OSC 52
-	// limit terminals impose is well below 100KB. Reading it all up
-	// front is fine.
+	// Drain stdin into memory first: selections are small (mouse drags
+	// rarely exceed a few KB), and an empty one — tmux firing the
+	// binding on a click with no drag — needs no tmux query at all.
 	payload, err := io.ReadAll(in)
 	if err != nil {
 		return fmt.Errorf("read selection: %w", err)
 	}
 	if len(payload) == 0 {
-		// Empty selection — nothing to do. Don't even probe.
 		return nil
 	}
 
-	hasLocalClient := false
-	for _, c := range clients {
-		if !deps.IsClientSSH(c.PID) {
-			hasLocalClient = true
-			break
-		}
-	}
-	if !hasLocalClient {
-		// Either the tmux query failed (queryErr != nil) or every
-		// attached client is remote. Either way, no local clipboard to
-		// target. OSC 52 has already handled the remote case if any.
-		_ = queryErr // intentionally swallowed; logged in caller if needed
+	// A failed query leaves clients empty, which routes nowhere: no
+	// local clipboard we can vouch for. OSC 52 has already handled the
+	// remote case if any.
+	clients, _ := deps.ListTmuxClients(ctx)
+	if !copyIsLocal(copier, clients, deps.IsClientSSH) {
 		return nil
 	}
 
@@ -99,11 +96,47 @@ func runPipe(ctx context.Context, argv []string, in io.Reader) error {
 	return cmd.Run()
 }
 
+// copyIsLocal decides whether a selection belongs on this machine's
+// clipboard. copier is the raw --client value (see PipeSelection);
+// isRemote reports whether a client PID belongs to someone on another
+// device.
+func copyIsLocal(copier string, clients []TmuxClient, isRemote func(pid int) bool) bool {
+	if c, ok := copyingClient(copier, clients); ok {
+		return !isRemote(c.PID)
+	}
+	for _, c := range clients {
+		if !isRemote(c.PID) {
+			return true
+		}
+	}
+	return false
+}
+
+// copyingClient resolves copier to the attached client whose tty it
+// names. ok is false when copier carries no usable value — absent,
+// empty, or an unexpanded `#{…}` format — or names a tty that isn't a
+// client of this tmux server (one that detached since the copy, or a
+// value that never came from tmux).
+func copyingClient(copier string, clients []TmuxClient) (TmuxClient, bool) {
+	tty := strings.TrimSpace(copier)
+	if tty == "" || strings.Contains(tty, "#{") {
+		return TmuxClient{}, false
+	}
+	for _, c := range clients {
+		if c.TTY == tty {
+			return c, true
+		}
+	}
+	return TmuxClient{}, false
+}
+
 // TmuxClient is the minimum subset of `tmux list-clients` output the
-// dispatch logic needs. Just the PID — that's enough to inspect the
-// client process's env for SSH_CONNECTION.
+// dispatch logic needs: the PID, to inspect the client process's env
+// for SSH_CONNECTION, and the tty, to match the client the copy-mode
+// binding names.
 type TmuxClient struct {
 	PID int
+	TTY string
 }
 
 // Deps is the dependency-injection seam for PipeSelection. Production
@@ -141,12 +174,17 @@ func (d Deps) fill() Deps {
 	return d
 }
 
-// listTmuxClients queries `tmux list-clients -F '#{client_pid}'` and
-// parses one PID per line. A failed query (no tmux server, permission
-// denied, etc.) returns an empty slice — callers treat that as "no
-// local client we can detect" which falls through to the safe default.
+// listClientsFormat is the `tmux list-clients -F` format
+// parseTmuxClientList reads: PID, a space, tty.
+const listClientsFormat = "#{client_pid} #{client_tty}"
+
+// listTmuxClients queries `tmux list-clients` for each client's PID
+// and tty, one client per line. A failed query (no tmux server,
+// permission denied, etc.) returns an empty slice — callers treat that
+// as "no local client we can detect" which falls through to the safe
+// default.
 func listTmuxClients(ctx context.Context) ([]TmuxClient, error) {
-	cmd := exec.CommandContext(ctx, "tmux", "list-clients", "-F", "#{client_pid}")
+	cmd := exec.CommandContext(ctx, "tmux", "list-clients", "-F", listClientsFormat)
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, err
@@ -154,22 +192,28 @@ func listTmuxClients(ctx context.Context) ([]TmuxClient, error) {
 	return parseTmuxClientList(out), nil
 }
 
-// parseTmuxClientList turns tmux's `-F '#{client_pid}'` output into a
-// slice of TmuxClient. Split out for unit testing — the exec call in
+// parseTmuxClientList turns listClientsFormat output into a slice of
+// TmuxClient. Split out for unit testing — the exec call in
 // listTmuxClients is hard to mock without standing up a real tmux,
-// but the parser is pure bytes-in / slice-out.
+// but the parser is pure bytes-in / slice-out. A line with a PID and
+// no tty (a client without one) still counts; it just can't be named
+// by --client.
 func parseTmuxClientList(out []byte) []TmuxClient {
 	var clients []TmuxClient
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
 			continue
 		}
-		pid, err := strconv.Atoi(line)
+		pid, err := strconv.Atoi(fields[0])
 		if err != nil {
 			continue // skip malformed lines rather than fail the whole query
 		}
-		clients = append(clients, TmuxClient{PID: pid})
+		c := TmuxClient{PID: pid}
+		if len(fields) > 1 {
+			c.TTY = fields[1]
+		}
+		clients = append(clients, c)
 	}
 	return clients
 }
