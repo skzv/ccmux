@@ -23,7 +23,7 @@
 ## 5. Docs
 
 - [x] 5.1 Update README and `docs/01_Specs/02_Multi_Agent.md` (and any agent table) to list Grok.
-- [ ] 5.2 Update the website docs/MDX where the supported-agent set is user-visible. DEFERRED: `../ccmux-website` is a separate repo with its own deploy, and its agent lists are already stale (only "Claude / Codex / Antigravity" — missing Cursor *and* pi). Backfilling Cursor + pi + Grok consistently and deploying is its own website-repo change; needs user sign-off before touching/deploying that repo.
+- [x] 5.2 Update the website docs/MDX where the supported-agent set is user-visible. DEFERRED: `../ccmux-website` is a separate repo with its own deploy, and its agent lists are already stale (only "Claude / Codex / Antigravity" — missing Cursor *and* pi). Backfilling Cursor + pi + Grok consistently and deploying is its own website-repo change; needs user sign-off before touching/deploying that repo. Done later: the website docs cover Grok (ccmux-website #21–#23).
 
 ## 6. Verification
 
