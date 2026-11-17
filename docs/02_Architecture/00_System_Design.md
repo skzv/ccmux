@@ -136,7 +136,7 @@ When the user toggles "Mode 3" off in the TUI, ccmux prints the un-do command (`
 ## Process Model
 
 - **ccmux (TUI)** runs in the user's terminal. One per logged-in session. Stateless beyond `~/.config/ccmux/`.
-- **ccmuxd (daemon)** runs once per host as a user-mode launchd service (`~/Library/LaunchAgents/dev.ccmux.daemon.plist`). On Linux: systemd user service. Crashes are recovered by launchd within seconds.
+- **ccmuxd (daemon)** runs once per host as a user-mode launchd service (`~/Library/LaunchAgents/dev.ccmux.daemon.plist`). On Linux: systemd user service. Crashes are recovered by launchd within seconds. Neither service manager reads the user's shell profile, so `ccmux daemon install` writes `HOME`, `PATH` and whichever agent home overrides are set in the installing shell (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `CURSOR_HOME`, `ANTIGRAVITY_HOME`; the list lives in `internal/daemonservice`) into the plist/unit. Re-running it rewrites the file and restarts the daemon, which is how an existing service picks up a newly set variable.
 - **tmux server** is the user's existing tmux. ccmux does not start its own server; it uses `$TMUX_TMPDIR` / default socket.
 
 ## IPC Protocol

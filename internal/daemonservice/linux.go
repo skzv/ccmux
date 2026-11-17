@@ -11,9 +11,14 @@ import (
 	"github.com/skzv/ccmux/internal/config"
 )
 
+// linuxUnitPath is where the systemd-user unit lives under home.
+func linuxUnitPath(home string) string {
+	return filepath.Join(home, ".config", "systemd", "user", "ccmuxd.service")
+}
+
 // probeLinux fills in the systemd-user unit + is-enabled/is-active state.
 func probeLinux(s *Status, home string) {
-	s.ServicePath = filepath.Join(home, ".config", "systemd", "user", "ccmuxd.service")
+	s.ServicePath = linuxUnitPath(home)
 	if _, err := os.Stat(s.ServicePath); err == nil {
 		s.ServiceExists = true
 	}
@@ -27,7 +32,7 @@ func probeLinux(s *Status, home string) {
 	}
 }
 
-// installLinux writes the unit file and `systemctl --user enable --now`s it.
+// installLinux writes the unit file, enables it, and (re)starts it.
 func installLinux() (Status, error) {
 	if !hasSystemdUser() {
 		return Probe(), errors.New("systemd-user not available on this host (no systemctl, or your distro doesn't run a user manager). Print the unit with `ccmux daemon unit` and install it manually for your init system.")
@@ -37,25 +42,42 @@ func installLinux() (Status, error) {
 		return s, err
 	}
 	home, _ := os.UserHomeDir()
-	if _, err := ensureStateDirs(home); err != nil {
-		return s, err
-	}
-	if err := os.MkdirAll(filepath.Dir(s.ServicePath), 0o755); err != nil {
-		return s, err
-	}
 	cfg, _ := config.Load()
-	body := UnitFileWithPath(s.BinaryPath, managedPath(home, cfg.AgentCommands(), "/usr/local/bin", "/usr/bin", "/bin"))
-	if err := os.WriteFile(s.ServicePath, []byte(body), 0o644); err != nil {
+	if err := newInstaller(home, s.BinaryPath, cfg.AgentCommands()).installLinux(); err != nil {
 		return s, err
-	}
-	if out, err := combinedCmd("systemctl", "--user", "daemon-reload"); err != nil {
-		return s, fmt.Errorf("systemctl daemon-reload: %w (%s)", err, strings.TrimSpace(string(out)))
-	}
-	// `enable --now` enables boot-time activation AND starts the unit.
-	if out, err := combinedCmd("systemctl", "--user", "enable", "--now", "ccmuxd"); err != nil {
-		return s, fmt.Errorf("systemctl enable --now: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
 	return Probe(), nil
+}
+
+// installLinux renders the unit under in.home — replacing any existing
+// one — then reloads systemd, enables the unit, and restarts it.
+func (in installer) installLinux() error {
+	if _, err := ensureStateDirs(in.home); err != nil {
+		return err
+	}
+	unitPath := linuxUnitPath(in.home)
+	if err := os.MkdirAll(filepath.Dir(unitPath), 0o755); err != nil {
+		return err
+	}
+	body := unitFile(in.binary, managedPath(in.home, in.commands, "/usr/local/bin", "/usr/bin", "/bin"), passthroughEnv(in.getenv))
+	if err := os.WriteFile(unitPath, []byte(body), 0o644); err != nil {
+		return err
+	}
+	if out, err := in.run("systemctl", "--user", "daemon-reload"); err != nil {
+		return fmt.Errorf("systemctl daemon-reload: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	// Enable for boot-time activation, then restart rather than
+	// `enable --now`: --now only starts a stopped unit, so re-installing
+	// over a running daemon would leave it on the old binary path and
+	// Environment= lines until the next login. restart starts the unit
+	// when it isn't running yet.
+	if out, err := in.run("systemctl", "--user", "enable", "ccmuxd"); err != nil {
+		return fmt.Errorf("systemctl enable: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	if out, err := in.run("systemctl", "--user", "restart", "ccmuxd"); err != nil {
+		return fmt.Errorf("systemctl restart: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // restartLinux uses systemctl --user restart. If the user manager

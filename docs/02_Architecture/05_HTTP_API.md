@@ -202,7 +202,7 @@ Create a **shell-only** tmux session not tied to any project (no scaffold).
   that name, the directory it really runs in).
 - `path` empty resolves to `sessions.default_dir` or `$HOME` **on the daemon
   host** (never the client's home). `agent` empty falls back to
-  `sessions.default_agent` then `$SHELL`; `"shell"` means no agent; any
+  the `[agents] default` config key, then `$SHELL`; `"shell"` means no agent; any
   other value must be a known agent id (`400` otherwise).
 - **Errors:** as `POST /v1/sessions`; `409` only when `path` is given and an
   existing session of that name runs elsewhere.

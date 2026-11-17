@@ -12,9 +12,14 @@ import (
 	"github.com/skzv/ccmux/internal/config"
 )
 
+// darwinPlistPath is where the LaunchAgent lives under home.
+func darwinPlistPath(home string) string {
+	return filepath.Join(home, "Library", "LaunchAgents", Label+".plist")
+}
+
 // probeDarwin fills in plist + launchctl-load state.
 func probeDarwin(s *Status, home string) {
-	s.ServicePath = filepath.Join(home, "Library", "LaunchAgents", Label+".plist")
+	s.ServicePath = darwinPlistPath(home)
 	if _, err := os.Stat(s.ServicePath); err == nil {
 		s.ServiceExists = true
 	}
@@ -32,38 +37,50 @@ func installDarwin() (Status, error) {
 		return s, err
 	}
 	home, _ := os.UserHomeDir()
-	logsDir, err := ensureStateDirs(home)
-	if err != nil {
+	cfg, _ := config.Load()
+	if err := newInstaller(home, s.BinaryPath, cfg.AgentCommands()).installDarwin(); err != nil {
 		return s, err
 	}
-	if err := os.MkdirAll(filepath.Dir(s.ServicePath), 0o755); err != nil {
-		return s, err
+	return Probe(), nil
+}
+
+// installDarwin renders the plist under in.home — replacing any
+// existing one — and (re)loads it.
+func (in installer) installDarwin() error {
+	logsDir, err := ensureStateDirs(in.home)
+	if err != nil {
+		return err
+	}
+	plistPath := darwinPlistPath(in.home)
+	if err := os.MkdirAll(filepath.Dir(plistPath), 0o755); err != nil {
+		return err
 	}
 
-	cfg, _ := config.Load()
 	var buf strings.Builder
 	if err := plistTemplate.Execute(&buf, plistData{
 		Label:      Label,
-		Binary:     s.BinaryPath,
+		Binary:     in.binary,
 		StdoutPath: filepath.Join(logsDir, "ccmuxd.stdout.log"),
 		StderrPath: filepath.Join(logsDir, "ccmuxd.stderr.log"),
-		HomeDir:    home,
-		WorkingDir: home,
-		Path:       managedPath(home, cfg.AgentCommands(), "/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin", "/usr/bin", "/bin"),
+		HomeDir:    in.home,
+		WorkingDir: in.home,
+		Path:       managedPath(in.home, in.commands, "/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin", "/usr/bin", "/bin"),
+		Env:        passthroughEnv(in.getenv),
 	}); err != nil {
-		return s, err
+		return err
 	}
-	if err := os.WriteFile(s.ServicePath, []byte(buf.String()), 0o644); err != nil {
-		return s, err
+	if err := os.WriteFile(plistPath, []byte(buf.String()), 0o644); err != nil {
+		return err
 	}
 
 	// If already loaded, unload first so launchctl picks up any plist
-	// changes (most importantly: a binary path that moved).
-	_ = runCmd("launchctl", "unload", "-w", s.ServicePath)
-	if out, err := combinedCmd("launchctl", "load", "-w", s.ServicePath); err != nil {
-		return s, fmt.Errorf("launchctl load: %w (%s)", err, strings.TrimSpace(string(out)))
+	// changes: a binary path that moved, or an agent-home override set
+	// since the last install.
+	_, _ = in.run("launchctl", "unload", "-w", plistPath)
+	if out, err := in.run("launchctl", "load", "-w", plistPath); err != nil {
+		return fmt.Errorf("launchctl load: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
-	return Probe(), nil
+	return nil
 }
 
 // restartDarwin uses `launchctl kickstart -k` which signals launchd to
@@ -115,11 +132,15 @@ type plistData struct {
 	HomeDir    string
 	WorkingDir string
 	Path       string
+	// Env holds the agent-home overrides carried over from the
+	// installing shell (see passthroughEnvNames), written after HOME
+	// and PATH.
+	Env []EnvVar
 }
 
 // plistTemplate renders the LaunchAgent. Every value is piped through
-// xml: a home dir or binary path containing `&` or `<` would otherwise
-// produce a plist launchd refuses to load.
+// xml: a home dir, binary path or carried-over env value containing `&`
+// or `<` would otherwise produce a plist launchd refuses to load.
 var plistTemplate = template.Must(template.New("plist").Funcs(template.FuncMap{"xml": xmlEscape}).Parse(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -155,6 +176,10 @@ var plistTemplate = template.Must(template.New("plist").Funcs(template.FuncMap{"
     <string>{{.HomeDir | xml}}</string>
     <key>PATH</key>
     <string>{{.Path | xml}}</string>
+{{- range .Env}}
+    <key>{{.Name | xml}}</key>
+    <string>{{.Value | xml}}</string>
+{{- end}}
   </dict>
   <key>StandardOutPath</key>
   <string>{{.StdoutPath | xml}}</string>

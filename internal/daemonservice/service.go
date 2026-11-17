@@ -65,8 +65,9 @@ func Probe() Status {
 }
 
 // Install writes the service config and registers it with the OS
-// service manager. Idempotent — re-running re-applies the file in case
-// the binary path changed.
+// service manager. Idempotent — re-running rewrites the file and
+// restarts the daemon, picking up a binary path that moved or an
+// agent-home override (see passthroughEnvNames) set since the last run.
 func Install() (Status, error) {
 	switch runtime.GOOS {
 	case "darwin":
@@ -124,14 +125,96 @@ func ServicePathOrEmpty() string {
 	return ""
 }
 
-// UnitFile returns the printable systemd-user unit for users who'd
-// rather install manually. Same content the linux Install() writes.
-func UnitFile(binary string) string {
-	return UnitFileWithPath(binary, "%h/.local/bin:/usr/local/bin:/usr/bin:/bin")
+// passthroughEnvNames is the one list of environment variables Install
+// copies from the installing shell into the launchd plist / systemd
+// unit. A service manager starts ccmuxd with almost nothing in its
+// environment (we write HOME and PATH ourselves) and never reads the
+// user's shell profile, so an override exported there would reach the
+// TUI but not the daemon: its usage walker and conversation listing
+// would quietly read the default location instead. A tmux server the
+// daemon ends up starting inherits that same bare environment, and so
+// do the agents launched inside it.
+//
+// Only directory overrides belong here — each one is a variable ccmux
+// itself reads to find an agent's files. Never add credentials
+// (ANTHROPIC_API_KEY, OpenRouter keys, …): the plist and unit are
+// written world-readable (0644).
+var passthroughEnvNames = []string{
+	// Claude Code's config root (default ~/.claude); resolved by
+	// internal/claudeconfig and the setup wizard's MCP registration.
+	"CLAUDE_CONFIG_DIR",
+	// Codex's home (default ~/.codex); resolved by internal/codexpath
+	// for its config, and for the sessions/ transcripts the daemon's
+	// usage walker and conversation listing read.
+	"CODEX_HOME",
+	// Cursor's config root (default ~/.cursor); resolved by
+	// internal/cursorconfig.
+	"CURSOR_HOME",
+	// The Antigravity CLI's root (default ~/.gemini/antigravity-cli);
+	// resolved by internal/antigravityconfig.
+	"ANTIGRAVITY_HOME",
 }
 
-func UnitFileWithPath(binary, pathEnv string) string {
-	return fmt.Sprintf(`[Unit]
+// EnvVar is one NAME=value pair written into the service definition.
+type EnvVar struct {
+	Name  string
+	Value string
+}
+
+// PassthroughEnvNames returns the variables Install carries over from
+// the installing shell when they are set, for help text and docs.
+func PassthroughEnvNames() []string {
+	return append([]string(nil), passthroughEnvNames...)
+}
+
+// PassthroughEnv returns the agent-home overrides set (and non-empty) in
+// this process's environment, in a fixed order — exactly the extra
+// variables Install writes into the service definition.
+func PassthroughEnv() []EnvVar {
+	return passthroughEnv(os.Getenv)
+}
+
+func passthroughEnv(getenv func(string) string) []EnvVar {
+	var out []EnvVar
+	for _, name := range passthroughEnvNames {
+		if v := getenv(name); v != "" {
+			out = append(out, EnvVar{Name: name, Value: v})
+		}
+	}
+	return out
+}
+
+// installer is the write-and-register half of Install with its
+// outside-world inputs injected: the home dir the service file lives
+// under, where the agent-home overrides are read from, and the
+// service-manager runner. Install builds one over the real process;
+// tests build one over a temp dir and a fake runner, so they never
+// touch ~/Library/LaunchAgents, launchctl or systemctl.
+type installer struct {
+	home     string
+	binary   string
+	commands agent.Commands
+	getenv   func(string) string
+	run      func(name string, args ...string) ([]byte, error) // combined output
+}
+
+func newInstaller(home, binary string, commands agent.Commands) installer {
+	return installer{home: home, binary: binary, commands: commands, getenv: os.Getenv, run: combinedCmd}
+}
+
+// UnitFile returns the printable systemd-user unit for users who'd
+// rather install manually: the same unit the linux Install() writes,
+// including the agent-home overrides set in this process's environment.
+func UnitFile(binary string) string {
+	return unitFile(binary, "%h/.local/bin:/usr/local/bin:/usr/bin:/bin", PassthroughEnv())
+}
+
+// unitFile renders the systemd-user unit. pathEnv is written verbatim
+// (UnitFile relies on the %h specifier in it); every env value is
+// escaped by systemdEnvAssignment.
+func unitFile(binary, pathEnv string, env []EnvVar) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, `[Unit]
 Description=ccmux daemon (Claude Code session supervisor)
 After=default.target
 
@@ -140,10 +223,43 @@ ExecStart=%s
 Restart=on-failure
 RestartSec=3
 Environment=PATH=%s
-
+`, binary, pathEnv)
+	for _, e := range env {
+		fmt.Fprintf(&b, "Environment=%s\n", systemdEnvAssignment(e.Name, e.Value))
+	}
+	b.WriteString(`
 [Install]
 WantedBy=default.target
-`, binary, pathEnv)
+`)
+	return b.String()
+}
+
+// systemdEnvAssignment renders NAME=value for an Environment= line so
+// systemd hands the daemon value byte for byte. The whole assignment is
+// double-quoted, which keeps spaces and '=' inside one word. Inside the
+// quotes systemd applies C-style unescaping, so backslash and double
+// quote are backslash-escaped and control characters become \xNN.
+// Specifiers are expanded after unquoting, so '%' is doubled to "%%".
+// '$' needs nothing: Environment= does no variable expansion.
+func systemdEnvAssignment(name, value string) string {
+	s := name + "=" + value
+	var b strings.Builder
+	b.WriteByte('"')
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; {
+		case c == '\\' || c == '"':
+			b.WriteByte('\\')
+			b.WriteByte(c)
+		case c == '%':
+			b.WriteString("%%")
+		case c < 0x20 || c == 0x7f:
+			fmt.Fprintf(&b, `\x%02x`, c)
+		default:
+			b.WriteByte(c)
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
 }
 
 func managedPath(home string, commands agent.Commands, defaults ...string) string {

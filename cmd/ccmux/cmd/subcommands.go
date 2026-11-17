@@ -1179,13 +1179,21 @@ crashes. Stdout/stderr (macOS) go to
 through journalctl.
 
 Idempotent: re-running re-applies the service config, picking up
-any binary-path changes.`,
+any binary-path changes.
+
+launchd and systemd never read your shell profile, so the agent home
+overrides set in this shell (` + strings.Join(daemonservice.PassthroughEnvNames(), ", ") + `)
+are copied into the service. Set or change one later? Run
+` + "`ccmux daemon install`" + ` again so the daemon sees it.`,
 			RunE: func(_ *cobra.Command, _ []string) error {
 				s, err := daemonservice.Install()
 				if err != nil {
 					return err
 				}
 				fmt.Println("✓ service file written to", s.ServicePath)
+				if line := daemonInstallEnvLine(daemonservice.PassthroughEnv()); line != "" {
+					fmt.Println(line)
+				}
 				if s.ServiceEnabled {
 					switch s.OS {
 					case "darwin":
@@ -1214,18 +1222,36 @@ any binary-path changes.`,
 		&cobra.Command{
 			Use:   "unit",
 			Short: "Print the recommended systemd-user unit (Linux manual install)",
-			RunE: func(_ *cobra.Command, _ []string) error {
+			RunE: func(cmd *cobra.Command, _ []string) error {
 				bin, _ := daemonservice.CcmuxdBinary()
-				fmt.Println("# Save to ~/.config/systemd/user/ccmuxd.service, then:")
-				fmt.Println("#   systemctl --user daemon-reload")
-				fmt.Println("#   systemctl --user enable --now ccmuxd")
-				fmt.Println()
-				fmt.Print(daemonservice.UnitFile(bin))
+				out := cmd.OutOrStdout()
+				fmt.Fprintln(out, "# Save to ~/.config/systemd/user/ccmuxd.service, then:")
+				fmt.Fprintln(out, "#   systemctl --user daemon-reload")
+				fmt.Fprintln(out, "#   systemctl --user enable --now ccmuxd")
+				fmt.Fprintln(out, "# Agent home overrides set in this shell are included below; after")
+				fmt.Fprintln(out, "# changing one, save the unit again and `systemctl --user restart ccmuxd`.")
+				fmt.Fprintln(out)
+				fmt.Fprint(out, daemonservice.UnitFile(bin))
 				return nil
 			},
 		},
 	)
 	return c
+}
+
+// daemonInstallEnvLine reports which agent home overrides `ccmux daemon
+// install` copied from this shell into the service, or "" when none
+// were set.
+func daemonInstallEnvLine(env []daemonservice.EnvVar) string {
+	if len(env) == 0 {
+		return ""
+	}
+	parts := make([]string, len(env))
+	for i, e := range env {
+		parts[i] = e.Name + "=" + e.Value
+	}
+	return "✓ carried over from this shell: " + strings.Join(parts, ", ") +
+		" (re-run `ccmux daemon install` after changing these)"
 }
 
 // newHostCmd: `ccmux host add|remove|list` — manage remote ccmuxd targets.

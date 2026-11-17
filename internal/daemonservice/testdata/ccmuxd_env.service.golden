@@ -1,0 +1,16 @@
+[Unit]
+Description=ccmux daemon (Claude Code session supervisor)
+After=default.target
+
+[Service]
+ExecStart=/usr/local/bin/ccmuxd
+Restart=on-failure
+RestartSec=3
+Environment=PATH=/home/me/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment="CLAUDE_CONFIG_DIR=/home/me/claude config"
+Environment="CODEX_HOME=/home/me/100%%/%%h/codex"
+Environment="CURSOR_HOME=/home/me/\"quoted\" it's"
+Environment="ANTIGRAVITY_HOME=/home/me/back\\slash/$HOME/a=b"
+
+[Install]
+WantedBy=default.target

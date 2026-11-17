@@ -56,7 +56,7 @@ func requestAgent(raw string) (agent.ID, error) {
 //     `ccmux shell --agent`. The literal "shell" short-circuits to
 //     $SHELL so a conscious "no agent" pick isn't second-guessed by
 //     the config default.
-//  2. daemon's sessions.default_agent config (same rules).
+//  2. daemon's [agents] default config (cfg.Agents.Default; same rules).
 //  3. $SHELL (or /bin/sh if $SHELL is unset).
 //
 // IDs are normalized via agent.ParseID, keeping Gemini distinct from

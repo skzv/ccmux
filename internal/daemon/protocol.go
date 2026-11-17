@@ -119,7 +119,7 @@ type NewBareSessionRequest struct {
 	Path string `json:"path,omitempty"`
 	// Agent picks which AI agent the new session launches. One of
 	// "claude" / "codex" / "antigravity" / "gemini", or the explicit "shell" for no agent. Empty falls
-	// back to the daemon's configured sessions.default_agent; if
+	// back to the daemon's configured [agents] default; if
 	// that's also empty / "shell" the daemon spawns $SHELL.
 	Agent string `json:"agent,omitempty"`
 }

@@ -190,6 +190,8 @@ One screen for "is my agent installed and signed in?" Per-agent CLI version, con
 
 Codex configuration, conversation history, and usage honor `CODEX_HOME`, falling back to `~/.codex` when unset.
 
+launchd and systemd don't read your shell profile, so `ccmux daemon install` copies `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `CURSOR_HOME` and `ANTIGRAVITY_HOME` from your shell into the background service when they're set. Set one after installing? Run `ccmux daemon install` once more so the daemon sees it too.
+
 ---
 
 ## ⚙️ Setup is a flow, not a README.

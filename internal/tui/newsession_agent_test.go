@@ -104,7 +104,7 @@ func TestNewSessionForm_UsesConfiguredAgentCommand(t *testing.T) {
 // TestNewSessionForm_SubmitCarriesAgent — picking an agent in the
 // form and pressing Enter must produce a newBareSessionSubmitMsg
 // whose Agent field matches the picker's row. Without this, the
-// daemon would launch sessions.default_agent on every spawn,
+// daemon would launch the [agents] default on every spawn,
 // silently overriding the user's per-session choice.
 func TestNewSessionForm_SubmitCarriesAgent(t *testing.T) {
 	st := styles.Default()
@@ -168,7 +168,7 @@ func TestNewSessionForm_ShellRowSubmitsEmptyAgent(t *testing.T) {
 	}
 }
 
-// TestIndexOfDefaultAgent — sessions.default_agent must steer the
+// TestIndexOfDefaultAgent — [agents] default must steer the
 // picker's initial row. Empty / unknown values fall back to row 0
 // (the first installed agent); the literal "shell" lands on the
 // sentinel.
