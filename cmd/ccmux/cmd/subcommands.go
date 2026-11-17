@@ -962,6 +962,53 @@ func waitForDaemonHealth(timeout time.Duration) bool {
 	}
 }
 
+// daemonRestartWait bounds how long `ccmux daemon restart` waits for the
+// new ccmuxd to answer /v1/health. It was 8s, which a normal restart beats
+// easily (well under a second), but right after `make install` or
+// `ccmux update` macOS checks the freshly written binary on its first
+// launch: that took ~10s on an M4, so the command printed "ccmuxd is not
+// running" while launchd was in fact bringing it up.
+var daemonRestartWait = 30 * time.Second
+
+// daemonRestartProgressAfter is when `ccmux daemon restart` says it's
+// still waiting, so a slow first launch doesn't look like a hang.
+const daemonRestartProgressAfter = 3 * time.Second
+
+// daemonRestartDeps are the side effects runDaemonRestart needs, so the
+// reporting can be tested without launchd/systemd or a live daemon.
+type daemonRestartDeps struct {
+	restart func() (daemonservice.Status, error)
+	healthy func(timeout time.Duration) bool
+}
+
+// runDaemonRestart bounces the daemon service and reports its settled
+// state: daemonservice.Restart returns as soon as the bounce is issued,
+// so it polls /v1/health instead of probing once.
+func runDaemonRestart(out io.Writer, d daemonRestartDeps, wait time.Duration) error {
+	s, err := d.restart()
+	if err != nil {
+		return err
+	}
+	first := min(daemonRestartProgressAfter, wait)
+	ok := d.healthy(first)
+	if !ok && wait > first {
+		fmt.Fprintln(out, "waiting for ccmuxd to come back (a first launch after an install can take a few seconds)…")
+		ok = d.healthy(wait - first)
+	}
+	if ok {
+		fmt.Fprintln(out, "✓ ccmuxd restarted")
+		return nil
+	}
+	if s.Running {
+		// Process is up but not answering health yet — almost
+		// certainly still warming up, not a failure.
+		fmt.Fprintln(out, "✓ ccmuxd restarted (still warming up)")
+		return nil
+	}
+	fmt.Fprintln(out, "note: ccmuxd is not running — start it with `ccmux daemon start` or `ccmux daemon install`")
+	return nil
+}
+
 // runningCcmuxdPID returns the pid of a live ccmuxd via `pgrep -x`,
 // or ok=false when none is running. `-x` matches the exact process
 // name so it can't be confused by, say, `ccmux daemon start` itself
@@ -1086,29 +1133,10 @@ all pick up new code without a logout. Run by hand after a manual
 Idempotent. If the daemon isn't running yet, prints a note and exits 0
 so install scripts can call it unconditionally.`,
 			RunE: func(_ *cobra.Command, _ []string) error {
-				s, err := daemonservice.Restart()
-				if err != nil {
-					return err
-				}
-				// daemonservice.Restart() issues the bounce and returns
-				// immediately, but the new daemon needs a beat to re-bind
-				// the socket. Probing right away (as we used to) reported
-				// "not running" mid-restart even though it was coming back
-				// — the confusing message after `make install`. Poll the
-				// IPC health endpoint so we report the SETTLED state: a
-				// successful health check means it's actually serving.
-				if waitForDaemonHealth(8 * time.Second) {
-					fmt.Println("✓ ccmuxd restarted")
-					return nil
-				}
-				if s.Running {
-					// Process is up but not answering health yet — almost
-					// certainly still warming up, not a failure.
-					fmt.Println("✓ ccmuxd restarted (still warming up)")
-					return nil
-				}
-				fmt.Println("note: ccmuxd is not running — start it with `ccmux daemon start` or `ccmux daemon install`")
-				return nil
+				return runDaemonRestart(os.Stdout, daemonRestartDeps{
+					restart: daemonservice.Restart,
+					healthy: waitForDaemonHealth,
+				}, daemonRestartWait)
 			},
 		},
 		&cobra.Command{
