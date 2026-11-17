@@ -39,6 +39,7 @@ import (
 	"github.com/skzv/ccmux/internal/moshi"
 	"github.com/skzv/ccmux/internal/notes"
 	"github.com/skzv/ccmux/internal/openrouterusage"
+	"github.com/skzv/ccmux/internal/proctree"
 	"github.com/skzv/ccmux/internal/project"
 	"github.com/skzv/ccmux/internal/scaffold"
 	"github.com/skzv/ccmux/internal/sleeplock"
@@ -581,6 +582,11 @@ type server struct {
 	// daemon, or one that finds the session renamed behind its back,
 	// reads them back (see reviewDue in poll.go). nil skips recording.
 	markReview func(ctx context.Context, name string, r tmux.Review) error
+	// procs snapshots the process table (proctree.Snapshot), once per
+	// tick, to tell an agent still running in its pane from one that
+	// exited to the launch chain's fallback shell (see noteAgentExits in
+	// agent_exit.go). nil leaves agent exits to the screen rules.
+	procs func(ctx context.Context) (*proctree.Table, error)
 
 	// Session-handler seams, defaulted to tmux.Has / tmux.Kill /
 	// tmux.Rename so the create/kill/rename handlers' bookkeeping is
@@ -600,8 +606,10 @@ type server struct {
 	// sessions; tests shrink it to drive the timeout path fast.
 	pollBudget time.Duration
 	// listErrLoggedAt rate-limits the tmux.List failure log in
-	// pollOnce (accessed only from the poll goroutine).
+	// pollOnce, and procErrLoggedAt the process snapshot's (accessed
+	// only from the poll goroutine).
 	listErrLoggedAt time.Time
+	procErrLoggedAt time.Time
 }
 
 // newServer builds a server with its default (real, tmux-backed)
@@ -675,6 +683,7 @@ func newServer(cfg config.Config) *server {
 		sendKeys:        tmux.SendKeys,
 		markSpinner:     tmux.SetSessionSpinner,
 		markReview:      tmux.SetSessionReview,
+		procs:           proctree.Snapshot,
 		detectMoshi:     moshi.Detect,
 		bell:            notificationBell(cfg.Notifications),
 		readAgent:       project.ReadAgent,

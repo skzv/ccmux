@@ -145,7 +145,10 @@ picker without the client needing the `tailscale` CLI.
 List every tmux session this daemon manages, with daemon-derived state.
 - **Response `200`:** `[]SessionState` (see Types). `host` is always
   `"local"` from the daemon's own perspective; `state` ∈
-  `active | idle | needs_input | error | unknown`. `project` is the
+  `active | idle | needs_input | error | unknown`, where `error` is an
+  agent that exited (crashed, or quit) and left its pane to the shell its
+  launch chain fell back to — see "An agent that exited" under Pairing &
+  push. `project` is the
   project the session's directory belongs to — its top-level directory
   under the projects root, as `GET /v1/projects` names it, or the
   directory's name when it carries a `.ccmux/agent` sidecar outside the
@@ -528,10 +531,34 @@ turn of its own. The evidence, per poll tick:
   (the tmux user option `@ccmux_spinner`), so a daemon restart doesn't
   forget it.
 
-Nothing else is a turn: a pane resize or redraw, the user typing, an
-agent starting up (a session created while the daemon runs, or an agent
-started by hand in a shell session — see `GET /v1/sessions`' `agent`),
-or relaunching a crashed agent. A session the daemon first sees already
+**An agent that exited.** ccmux runs a session's agent under `$SHELL -c
+"agent --continue || agent || zsh || bash || sh"`, so when the agent
+exits the pane stays open in a shell, and tmux names that shell as the
+pane's command whether the agent is running under it or not. The screen
+can't always tell either: a Codex or Gemini CLI that crashed went quiet
+over a shell prompt their rules don't know (waiting for input, with a
+bell and a push), and a Claude Code killed with a permission dialog on
+screen still showed the dialog. So each tick the daemon also reads the
+process tree under each such pane (`#{pane_pid}`), with one `ps` for all
+sessions. When nothing in that tree is, or may be, an agent (an agent's
+binary, or `node`, `bun`, `deno` or Python it could run in) and every
+process holding the terminal is a shell, the agent has exited: the
+session is `error`, whatever the screen still shows, and its spinner
+title, if it left one, is not work. That takes two ticks in a row (one
+can catch a launch between two processes), or one on the daemon's first
+look at a session it joined. Background processes don't count (a prompt
+helper such as powerlevel10k's `gitstatusd`); anything else in the
+foreground does — `vim` started in that shell is left to the screen
+rules. Like any crash, the exit is published and marks the session
+unreviewed, but neither rings the bell nor sends a push. Only sessions
+with an agent of their own are read this way: a shell session, and an
+agent run by hand in one, see the agent come and go through the pane's
+foreground command. If `ps` fails, the screen decides alone.
+
+Nothing else is a turn: a pane resize or redraw, the user typing, or an
+agent starting up — in a session created while the daemon runs, by hand
+in a shell session (see `GET /v1/sessions`' `agent`), or relaunched in
+the shell a crashed agent left behind. A session the daemon first sees already
 running — after a daemon restart, or renamed directly in tmux — is
 recorded as it stands (a session waiting for input shows `needs_input`
 from that first look; one whose body shows a turn running, `active`) and
@@ -539,7 +566,8 @@ stays quiet until the daemon has seen it settle: in `needs_input`,
 `idle` or `error`, with its pane unchanged for a whole idle threshold
 since that first look, and any spinner title that look found gone or
 unchanged for the spinner's stale window (a spinner whose frames cycle
-in step with the poll interval reads the same on every tick). The end
+in step with the poll interval reads the same on every tick) — unless
+the agent that set it has exited. The end
 of a turn it was caught in the middle of, or a crash, is published but
 not announced. That holds even when
 the first look reads as settled: one capture can't tell a turn in

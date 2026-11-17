@@ -87,6 +87,13 @@ type paneMemory struct {
 	// agent.TurnView) — for agents that keep the two apart.
 	output   string
 	hasInput bool
+	// procPID is the pane process (#{pane_pid}) the counters below are
+	// about, goneTicks how many ticks in a row its process tree has shown
+	// the agent gone, and exited whether the daemon took it for exited as
+	// of the last tick that could tell (see noteExit).
+	procPID   int
+	goneTicks int
+	exited    bool
 }
 
 // redrawGraceTicks is how many ticks after a resize or pane switch a
@@ -264,22 +271,12 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 		s.events.Publish(ev)
 	}
 
-	// Phase 2.
-	type result struct {
-		name     string
-		pane     string
-		lastCh   time.Time // when the body last changed, redraws aside
-		mem      paneMemory
-		newState agent.State
-		ev       evidence
-		agentID  agent.ID // what the session was classified as
-		switched bool     // a different agent (or none) runs in the foreground now
-	}
-	results := make([]result, 0, len(snaps))
+	// Phase 2: read every session's pane, then what runs in it, then
+	// classify.
 	staleAfter := spinnerStaleAfter(idleNeeds)
+	looks := make([]look, 0, len(snaps))
 	for _, sn := range snaps {
-		mem := sn.pane
-		obs, err := s.observe(ctx, sn.ts.Name, mem.id)
+		obs, err := s.observe(ctx, sn.ts.Name, sn.pane.id)
 		if err != nil {
 			if errors.Is(ctx.Err(), context.Canceled) {
 				// The daemon is shutting down (the tick's own budget ends
@@ -290,67 +287,12 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 			log.Printf("ccmuxd: capture-pane %s: %v", sn.ts.Name, err)
 			continue
 		}
-		now := time.Now()
-		first := !mem.observed
-		redraw := mem.track(obs)
-		pane := obs.body
-		lastCh := sn.lastCh
-		if pane != sn.prevLast && !sn.baseline && !redraw {
-			lastCh = now
-		}
-		// A title counts as changed only between two of our own reads:
-		// the one found on a first look may be a dead agent's leftover.
-		if !first && obs.title != mem.title {
-			mem.titleChange = now
-		}
-		mem.title = obs.title
-		id := sn.agentID
-		if sn.follow {
-			id = shellAgentID
-			if fg, ok := agent.InForeground(obs.command, pane, obs.title); ok {
-				id = fg
-			}
-		}
-		switched := id != sn.agentID && !first
-		if switched {
-			mem.output, mem.hasInput = "", false // nothing to compare the new agent's output with
-		}
-		newSt := agent.StateIdle // a plain shell has no agent state to detect
-		var ev evidence
-		if id != shellAgentID {
-			a := agent.ByID(id)
-			view := agent.ReadTurn(a, pane)
-			if sn.baseline && view.Busy {
-				// The first look at a session the daemon joined backdates
-				// its last change, taking the pane for settled (Phase 1).
-				// A body that shows a turn running says otherwise: Claude's
-				// status line over a live input box read as waiting for
-				// input, and unreviewed, while it worked.
-				lastCh = now
-			}
-			life := mem.titleChange
-			if view.Busy {
-				life = now
-			}
-			title := liveTitle(obs.title, life, now, staleAfter)
-			// ClassifyStateFrom routes through ClassifyWithTitle when the
-			// agent implements TitleAwareAgent, otherwise falls back to
-			// the legacy body-only Classify. It also takes the previous
-			// state, which a skip_state_update rule (a transient overlay)
-			// keeps instead of reclassifying.
-			newSt = agent.ClassifyStateFrom(a, sn.prevSt, pane, title, lastCh, idleNeeds)
-			ev = evidence{spinning: isSpinnerTitle(title), busy: view.Busy, separated: view.Separated}
-			if view.Separated {
-				// New output above the input area since last tick. Not on
-				// a first look (nothing to compare with), a redraw (a
-				// resize re-wraps the output), or when either tick had no
-				// input area to measure from (the agent starting up in a
-				// shell, or gone from one).
-				ev.output = !first && !redraw && view.HasInput && mem.hasInput && view.Output != mem.output
-				mem.output, mem.hasInput = view.Output, view.HasInput
-			}
-		}
-		results = append(results, result{name: sn.ts.Name, pane: pane, lastCh: lastCh, mem: mem, newState: newSt, ev: ev, agentID: id, switched: switched})
+		looks = append(looks, newLook(sn, obs))
+	}
+	s.noteAgentExits(ctx, looks)
+	results := make([]result, 0, len(looks))
+	for i := range looks {
+		results = append(results, looks[i].classify(staleAfter, idleNeeds))
 	}
 
 	// Phase 3.
@@ -413,21 +355,31 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 		}
 		t.last = r.pane
 		t.lastChange = r.lastCh
-		if r.switched {
+		switch {
+		case r.switched:
 			// An agent started in the session's foreground, or exited
 			// from it. Its startup is not a turn, and nothing the previous
 			// one did carries over.
 			t.turn = turn{startup: true}
+		case r.restarted:
+			// Something runs again in the pane of an agent that exited:
+			// the user relaunched it in the fallback shell (or started
+			// another program there). Its startup is not a turn either.
+			// What the session has learned about its agent (spinnerSeen),
+			// and whether it is still joined, stay.
+			t.startup, t.worked = true, false
 		}
 		// Still: the pane hasn't changed for a whole idle window the
 		// daemon watched itself — since its last change, and since the
 		// first look at a session it joined, whose last change before
-		// that it could only guess.
+		// that it could only guess. A spinner title that may still be
+		// live holds that off (spinnerPending), unless the agent that set
+		// it is known to have exited.
 		ev, quietSince := r.ev, r.lastCh
 		if t.joinedAt.After(quietSince) {
 			quietSince = t.joinedAt
 		}
-		ev.still = time.Since(quietSince) >= idleNeeds && !spinnerPending(r.mem, t.joinedAt, staleAfter)
+		ev.still = time.Since(quietSince) >= idleNeeds && (r.exited || !spinnerPending(r.mem, t.joinedAt, staleAfter))
 		prevSeen := t.seen
 		decision := t.attend(t.state, r.newState, ev, t.seen, ts.Attached)
 		if t.spinnerMarkDue(ts) {
@@ -523,6 +475,130 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 		}
 	}
 	s.sleeper.SetActive(anyActive)
+}
+
+// look is one session's reading this tick, folded into a copy of its
+// pane memory, on its way from observe to classify (pollOnce's Phase 2).
+type look struct {
+	sn  pollSnap
+	obs observation
+	mem paneMemory
+	// at is when the pane was read: the "now" the session is classified
+	// as of.
+	at time.Time
+	// first: the daemon's first look at the session. redraw: a body
+	// change this tick is a resize or pane switch (see paneMemory.track).
+	first, redraw bool
+	// lastCh is when the body last changed, redraws aside.
+	lastCh time.Time
+	// id is the agent the session is classified as, and switched whether
+	// a different agent (or none) runs in its foreground now.
+	id       agent.ID
+	switched bool
+	// view is what the body shows of the agent's turn (agent.ReadTurn);
+	// zero for a plain shell.
+	view agent.TurnView
+	// exited: the agent's process is gone and its pane left to a shell;
+	// restarted: something runs again where it had (see noteExit).
+	exited, restarted bool
+}
+
+// newLook folds one tick's observation of a session into a look.
+func newLook(sn pollSnap, obs observation) look {
+	l := look{sn: sn, obs: obs, mem: sn.pane, at: time.Now(), lastCh: sn.lastCh}
+	l.first = !l.mem.observed
+	l.redraw = l.mem.track(obs)
+	if obs.body != sn.prevLast && !sn.baseline && !l.redraw {
+		l.lastCh = l.at
+	}
+	// A title counts as changed only between two of our own reads:
+	// the one found on a first look may be a dead agent's leftover.
+	if !l.first && obs.title != l.mem.title {
+		l.mem.titleChange = l.at
+	}
+	l.mem.title = obs.title
+	l.id = sn.agentID
+	if sn.follow {
+		l.id = shellAgentID
+		if fg, ok := agent.InForeground(obs.command, obs.body, obs.title); ok {
+			l.id = fg
+		}
+	}
+	l.switched = l.id != sn.agentID && !l.first
+	if l.switched {
+		l.mem.output, l.mem.hasInput = "", false // nothing to compare the new agent's output with
+	}
+	if l.id != shellAgentID {
+		l.view = agent.ReadTurn(agent.ByID(l.id), obs.body)
+	}
+	return l
+}
+
+// result is one session's classification this tick, for Phase 3.
+type result struct {
+	name     string
+	pane     string
+	lastCh   time.Time // when the body last changed, redraws aside
+	mem      paneMemory
+	newState agent.State
+	ev       evidence
+	agentID  agent.ID // what the session was classified as
+	switched bool     // a different agent (or none) runs in the foreground now
+	// exited and restarted: see look.
+	exited, restarted bool
+}
+
+// classify decides the session's state and this tick's turn evidence.
+func (l *look) classify(staleAfter, idleNeeds time.Duration) result {
+	pane, mem, lastCh, now := l.obs.body, l.mem, l.lastCh, l.at
+	newSt := agent.StateIdle // a plain shell has no agent state to detect
+	var ev evidence
+	switch {
+	case l.exited:
+		// The agent's process is gone and its fallback shell has the
+		// pane (noteAgentExits). That is a crash, whatever the screen
+		// still shows: a needs-input frame, a permission dialog or a
+		// spinner title the dead agent left behind. Nothing it shows is
+		// work, and there is no input area of its to measure output from.
+		newSt = agent.StateError
+		mem.output, mem.hasInput = "", false
+	case l.id != shellAgentID:
+		a := agent.ByID(l.id)
+		view := l.view
+		if l.sn.baseline && view.Busy {
+			// The first look at a session the daemon joined backdates
+			// its last change, taking the pane for settled (Phase 1).
+			// A body that shows a turn running says otherwise: Claude's
+			// status line over a live input box read as waiting for
+			// input, and unreviewed, while it worked.
+			lastCh = now
+		}
+		life := mem.titleChange
+		if view.Busy {
+			life = now
+		}
+		title := liveTitle(l.obs.title, life, now, staleAfter)
+		// ClassifyStateFrom routes through ClassifyWithTitle when the
+		// agent implements TitleAwareAgent, otherwise falls back to
+		// the legacy body-only Classify. It also takes the previous
+		// state, which a skip_state_update rule (a transient overlay)
+		// keeps instead of reclassifying.
+		newSt = agent.ClassifyStateFrom(a, l.sn.prevSt, pane, title, lastCh, idleNeeds)
+		ev = evidence{spinning: isSpinnerTitle(title), busy: view.Busy, separated: view.Separated}
+		if view.Separated {
+			// New output above the input area since last tick. Not on
+			// a first look (nothing to compare with), a redraw (a
+			// resize re-wraps the output), or when either tick had no
+			// input area to measure from (the agent starting up in a
+			// shell, or gone from one).
+			ev.output = !l.first && !l.redraw && view.HasInput && mem.hasInput && view.Output != mem.output
+			mem.output, mem.hasInput = view.Output, view.HasInput
+		}
+	}
+	return result{
+		name: l.sn.ts.Name, pane: pane, lastCh: lastCh, mem: mem, newState: newSt, ev: ev,
+		agentID: l.id, switched: l.switched, exited: l.exited, restarted: l.restarted,
+	}
 }
 
 // reviewMark is a session whose review record the poll tick writes (see
@@ -681,6 +757,9 @@ type observation struct {
 	// width and height are the pane's size; 0 when read through the
 	// active pane.
 	width, height int
+	// pid is the pane's first process (#{pane_pid}; see tmux.Pane.PID),
+	// 0 when read through the active pane.
+	pid int
 }
 
 // observe reads the pane a session's agent runs in: its body and the
@@ -699,7 +778,7 @@ func (s *server) observe(ctx context.Context, name, paneID string) (observation,
 		if panes, err := s.panes(ctx, name); err == nil {
 			if p, ok := agentPane(panes, paneID); ok {
 				if body, err := s.capturePane(ctx, p.ID, captureLines); err == nil {
-					return observation{body: body, title: p.Title, paneID: p.ID, width: p.Width, height: p.Height, command: p.Command}, nil
+					return observation{body: body, title: p.Title, paneID: p.ID, width: p.Width, height: p.Height, command: p.Command, pid: p.PID}, nil
 				}
 			}
 		}

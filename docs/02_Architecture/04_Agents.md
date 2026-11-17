@@ -89,6 +89,26 @@ Known limits, all because the name is the process's, not what was typed:
   fallback"`, whose foreground is that shell — which is why tagged and
   `c-` sessions keep their tag or sidecar instead.
 
+For those tagged and `c-` sessions the daemon reads the pane's process
+tree instead, to see their agent exit. `list-panes` reports each pane's
+first process (`#{pane_pid}`: the launch chain's shell), and once per
+tick `internal/proctree` takes one `ps -Ao pid=,ppid=,stat=,ucomm=`
+snapshot of the whole process table (only when some session needs it).
+`paneAgentGone` (`cmd/ccmuxd/agent_exit.go`) calls the agent gone when no
+process under the pane is an agent's binary (`agent.ForProcess`, or one
+cut at the kernel's 15/16-character name limit) or a runtime one could be
+written for (`node`, `bun`, `deno`, Python), and every process in the
+terminal's foreground group (`+` in ps's STAT) is a shell — so a
+prompt's background helper doesn't keep a crash alive, while `vim`
+started in the fallback shell hands the pane back to the screen rules.
+Two such ticks in a row (one on a restarted daemon's first look) make
+the session `error`, overriding whatever the screen still shows; that
+is how a Codex, Gemini CLI or OpenCode crash, which their rules can't
+tell from waiting for input, and a Claude permission dialog frozen over
+the shell prompt, read as crashes. Something running there again is the
+agent's startup, not a turn. Off Unix, and whenever `ps` fails, the
+screen rules decide alone.
+
 When the agent in a following session's foreground changes (started, or
 exited back to the shell), the session starts over as if new: its startup
 is not a turn, and a `state_change` event reports the new agent.
@@ -112,7 +132,9 @@ the pane — nothing under it but Claude's own footer (indented lines, or
 the `❯` row selected in its background-task list): a Claude killed
 mid-turn leaves its last frame on screen with the relaunch error and the
 shell prompt printed under it, and that pane is `error`, not waiting for
-input, however short the error. The bell, push
+input, however short the error — and for every agent, whatever the
+screen shows, once the pane's process tree says the agent has exited
+(above). The bell, push
 and prompt count fire only at the end of a real turn — see `turn`,
 `decideAttention` and `agent.ReadTurn`, and "What counts as a turn" in
 [05_HTTP_API.md](05_HTTP_API.md). An agent can help the daemon tell its
