@@ -121,7 +121,7 @@ func (m agentsModel) Update(msg tea.Msg) (agentsModel, tea.Cmd) {
 		c, cmd := m.cursor.Update(msg)
 		m.cursor = c
 		return m, cmd
-	case claudeModelChangedMsg, claudeEffortChangedMsg, claudeAlwaysThinkingChangedMsg, claudeYoloChangedMsg, claudeReloadMsg:
+	case claudeModelChangedMsg, claudeEffortChangedMsg, claudeAlwaysThinkingChangedMsg, claudeYoloChangedMsg, claudeMCPToggledMsg, claudeReloadMsg:
 		// Async Claude config saves can land after the user has tabbed to
 		// another agent.
 		c, cmd := m.claude.Update(msg)
@@ -227,6 +227,7 @@ func (m agentsModel) HelpBarProps(width int) components.HelpBarProps {
 			components.KeyHint{Key: "e", Label: tr("effort"), Priority: 4},
 			components.KeyHint{Key: "a", Label: tr("always"), Priority: 3},
 			components.KeyHint{Key: "y", Label: tr("yolo"), Priority: 3},
+			components.KeyHint{Key: "w", Label: tr("mcp"), Priority: 3},
 			components.KeyHint{Key: "c", Label: "CLAUDE.md", Priority: 3},
 		)
 	case agent.IDCodex, agent.IDAntigravity:

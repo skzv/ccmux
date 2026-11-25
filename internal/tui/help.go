@@ -108,6 +108,7 @@ func helpForScreen(s Screen, km Keymap) []HelpItem {
 			{"e", "Claude: " + tr("pick reasoning effort (modal)")},
 			{"a", "Claude: " + tr("toggle alwaysThinkingEnabled on/off")},
 			{"y", "Claude: " + tr("toggle yolo mode (permissions.defaultMode = bypassPermissions)")},
+			{"w", "Claude: " + tr("register or unregister ccmux-mcp in ~/.claude.json")},
 			{"c", "Claude: " + tr("edit global ~/.claude/CLAUDE.md in $EDITOR")},
 			{"r", "Codex, Antigravity: " + tr("pick reasoning effort (modal)")},
 			{"y", "Codex, Antigravity: " + tr("toggle yolo mode")},
@@ -120,12 +121,18 @@ func helpForScreen(s Screen, km Keymap) []HelpItem {
 			{"esc", tr("cancel edit")},
 			{"i", tr("open info modal (version, paths, last save)")},
 			{"e", tr("open ~/.config/ccmux/config.toml in $EDITOR")},
+			{"D", tr("start or restart the ccmuxd daemon")},
+			{"P", tr("show mobile pairing QR code")},
 		}
 	case ScreenNetwork:
 		return []HelpItem{
 			{"↑↓ / j k", tr("navigate device list")},
 			{"enter", tr("plain `ssh -t <host>` into the selected peer")},
+			{"a", tr("add a remote host to config.toml")},
+			{"x", tr("remove the selected configured host")},
 			{"s", tr("open the SSH setup wizard for the focused host")},
+			{"P", tr("show mobile pairing QR code")},
+			{"D", tr("start or restart the ccmuxd daemon")},
 			{"i", tr("open the host-detail overlay")},
 			{"r", tr("refresh tailnet scan + ccmuxd probes")},
 		}

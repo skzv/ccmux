@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/remoteattach"
@@ -274,6 +275,35 @@ func runRemoteAttach(ctx context.Context, w io.Writer, cfg config.Config, host, 
 		return nil
 	}
 	return runForeground(remoteAttachCmd(rh.cfg, session, detachOthersForAttachIntent(created)))
+}
+
+// runRemoteNewProject is `ccmux new --host`: asks the configured peer's
+// ccmuxd to create the project directory and start its agent session
+// (POST /v1/projects), then attaches over ssh/mosh (or prints the attach
+// command when stdin is not a terminal).
+func runRemoteNewProject(ctx context.Context, w io.Writer, cfg config.Config, host, name string, id agent.ID) error {
+	rh, err := lookupHost(cfg, host)
+	if err != nil {
+		return err
+	}
+	rctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	res, err := rh.cli.NewProject(rctx, daemon.NewProjectRequest{
+		Name:  name,
+		Agent: string(id),
+	})
+	if err != nil {
+		return rh.remoteErr("create project "+name, err)
+	}
+	if err := tmux.CheckTarget(res.Session); err != nil {
+		return fmt.Errorf("%s answered with session %q: %w", rh.name, res.Session, err)
+	}
+	if !stdinIsTTY() {
+		fmt.Fprintf(w, "created %s on %s; attach from a terminal with: ccmux attach --host %s %s\n",
+			safeField(res.Session), safeField(rh.name), shellWord(rh.name), shellWord(res.Session))
+		return nil
+	}
+	return runForeground(remoteAttachCmd(rh.cfg, res.Session, false))
 }
 
 // remoteAttachCmd is the ssh (or, for a host configured with mosh,

@@ -3,7 +3,6 @@ package tui
 import (
 	"errors"
 	"os"
-	"path/filepath"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -25,27 +24,8 @@ func (m notesModel) createAndOpenNote(filename, title string) (cmd tea.Cmd, crea
 			return toastMsg{Text: tr("no project selected"), Kind: toastError, Until: time.Now().Add(5 * time.Second)}
 		}, ""
 	}
-	rel, err := notes.CleanRel(filename)
+	rel, full, err := notes.Open(m.project.Path).Create(filename, title)
 	if err != nil {
-		msg := err.Error()
-		return func() tea.Msg {
-			return toastMsg{Text: msg, Kind: toastError, Until: time.Now().Add(5 * time.Second)}
-		}, ""
-	}
-	full := filepath.Join(m.project.Path, filepath.FromSlash(rel))
-	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
-		msg := tr("mkdir failed: ") + err.Error()
-		return func() tea.Msg {
-			return toastMsg{Text: msg, Kind: toastError, Until: time.Now().Add(5 * time.Second)}
-		}, ""
-	}
-	body := ""
-	if title != "" {
-		body = "# " + title + "\n\n"
-	}
-	// O_EXCL: creating and the already-exists check are one step, so a
-	// note written in between (sync, another editor) is never clobbered.
-	if err := writeNewFile(full, []byte(body)); err != nil {
 		msg := tr("write failed: ") + err.Error()
 		if errors.Is(err, os.ErrExist) {
 			msg = tr("file already exists: ") + filename

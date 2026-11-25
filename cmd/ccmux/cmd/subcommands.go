@@ -245,7 +245,10 @@ func detachOthersForAttachIntent(created bool) bool {
 // directory and launches the agent; run `/init`, `openspec`, or
 // `git init` yourself inside the session.
 func newNewCmd() *cobra.Command {
-	var agentFlag string
+	var (
+		agentFlag string
+		host      string
+	)
 	c := &cobra.Command{
 		Use:   "new <name>",
 		Short: "Create a project directory and start its agent session",
@@ -258,6 +261,13 @@ func newNewCmd() *cobra.Command {
 			if err := project.ValidateName(args[0]); err != nil {
 				return err
 			}
+			id, err := newCmdAgent(agentFlag, cfg.Agents.Default)
+			if err != nil {
+				return err
+			}
+			if !isLocalHost(host) {
+				return runRemoteNewProject(context.Background(), c.OutOrStdout(), cfg, host, args[0], id)
+			}
 			// Create under the projects root (README: "Creates
 			// ~/Projects/<name>"; --projects overrides it), not the
 			// current directory.
@@ -269,12 +279,8 @@ func newNewCmd() *cobra.Command {
 				Name:     args[0],
 				Dir:      filepath.Join(root, args[0]),
 				Commands: cfg.AgentCommands(),
+				Agent:    id,
 			}
-			id, err := newCmdAgent(agentFlag, cfg.Agents.Default)
-			if err != nil {
-				return err
-			}
-			opts.Agent = id
 			// A project whose session is already running used to fail
 			// with tmux's raw "duplicate session: c-alpha". Say what's
 			// going on and how to get to it — `new` doesn't attach to an
@@ -309,6 +315,7 @@ func newNewCmd() *cobra.Command {
 	}
 	c.Flags().StringVar(&agentFlag, "agent", "",
 		"agent to launch: "+agentIDList()+" (default: agents.default from config, else claude)")
+	c.Flags().StringVar(&host, "host", "", hostFlagUsage)
 	return c
 }
 

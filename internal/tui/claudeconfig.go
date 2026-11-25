@@ -193,6 +193,13 @@ func (m claudeModel) Update(msg tea.Msg) (claudeModel, tea.Cmd) {
 			6,
 		)
 
+	case claudeMCPToggledMsg:
+		if msg.Err != nil {
+			return m, toastCmd(toastError, "mcp: "+msg.Err.Error(), 5)
+		}
+		m.reload()
+		return m, toastCmd(toastSuccess, msg.Summary, 5)
+
 	case tea.MouseMsg:
 		if b, cmd, _ := m.browser.Update(msg); true {
 			m.browser = b
@@ -272,6 +279,8 @@ func (m claudeModel) Update(msg tea.Msg) (claudeModel, tea.Cmd) {
 		case "y":
 			m.rowCursor, m.focusTop = claudeRowYolo, true
 			return m, m.toggleYoloCmd()
+		case "w":
+			return m, toggleClaudeMCPCmd()
 		case "c":
 			m.rowCursor, m.focusTop = claudeRowClaudeMd, true
 			return m, openClaudeFileCmd(m.editor, m.paths.GlobalCLAUDEMd, true)

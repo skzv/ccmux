@@ -6,13 +6,17 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/skzv/ccmux/internal/antigravityconfig"
+	"github.com/skzv/ccmux/internal/claudeconfig"
 	"github.com/skzv/ccmux/internal/claudemodels"
+	"github.com/skzv/ccmux/internal/codexconfig"
 	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/daemon"
 )
@@ -39,7 +43,295 @@ every Claude session it launches.`,
 	}
 	c.AddCommand(newAgentsModelsCmd())
 	c.AddCommand(newAgentsSetDefaultModelCmd())
+	c.AddCommand(newAgentsConfigCmd())
 	return c
+}
+
+type agentConfigSnapshot struct {
+	Agent          string `json:"agent"`
+	Model          string `json:"model,omitempty"`
+	Effort         string `json:"effort,omitempty"`
+	AlwaysThinking *bool  `json:"always_thinking,omitempty"`
+	Yolo           bool   `json:"yolo"`
+}
+
+// newAgentsConfigCmd: `ccmux agents config [claude|codex|antigravity]`
+// and `ccmux agents config set <agent> <key> <value>` — CLI parity with
+// the Agents screen toggles (effort, always-thinking, yolo, model).
+func newAgentsConfigCmd() *cobra.Command {
+	var asJSON bool
+	c := &cobra.Command{
+		Use:   "config [claude|codex|antigravity]",
+		Short: "Inspect or update agent-level settings (effort, always-thinking, yolo, model)",
+		Long: `Show or update native agent configuration files (~/.claude/settings.json,
+~/.codex/config.toml, ~/.gemini/antigravity-cli/settings.json). Mirrors
+the toggles on the TUI Agents tab.
+
+Examples:
+  ccmux agents config
+  ccmux agents config claude --json
+  ccmux agents config set claude effort high
+  ccmux agents config set claude always-thinking true
+  ccmux agents config set codex yolo true
+  ccmux agents config set antigravity effort medium`,
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			targets := []string{"claude", "codex", "antigravity"}
+			if len(args) == 1 {
+				want := strings.ToLower(strings.TrimSpace(args[0]))
+				switch want {
+				case "claude", "codex", "antigravity":
+					targets = []string{want}
+				default:
+					return fmt.Errorf("unsupported agent %q (want claude, codex, or antigravity)", args[0])
+				}
+			}
+			snaps := make([]agentConfigSnapshot, 0, len(targets))
+			for _, a := range targets {
+				snaps = append(snaps, readAgentConfigSnapshot(a))
+			}
+			if asJSON {
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(snaps)
+			}
+			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+			fmt.Fprintln(tw, "AGENT\tMODEL\tEFFORT\tALWAYS THINKING\tYOLO")
+			for _, s := range snaps {
+				at := "-"
+				if s.AlwaysThinking != nil {
+					at = strconv.FormatBool(*s.AlwaysThinking)
+				}
+				model := s.Model
+				if model == "" {
+					model = "(default)"
+				}
+				effort := s.Effort
+				if effort == "" {
+					effort = "(default)"
+				}
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%v\n",
+					s.Agent, safeField(model), safeField(effort), at, s.Yolo)
+			}
+			return tw.Flush()
+		},
+	}
+	c.Flags().BoolVar(&asJSON, "json", false, "output agent settings as JSON")
+	c.AddCommand(newAgentsConfigSetCmd())
+	return c
+}
+
+func readAgentConfigSnapshot(name string) agentConfigSnapshot {
+	switch name {
+	case "claude":
+		model, _ := claudeconfig.EffectiveModel()
+		effort, _ := claudeconfig.EffectiveEffortLevel()
+		yolo, _ := claudeconfig.EffectiveYoloMode()
+		at := false
+		if s, err := claudeconfig.ReadSettings(); err == nil && s != nil {
+			at = s.AlwaysThinkingEnabled
+		}
+		return agentConfigSnapshot{
+			Agent: "claude", Model: model, Effort: effort, AlwaysThinking: &at, Yolo: yolo,
+		}
+	case "codex":
+		effort, _ := codexconfig.EffectiveEffortLevel()
+		yolo, _ := codexconfig.EffectiveYoloMode()
+		model := ""
+		if s, err := codexconfig.ReadSettings(); err == nil && s != nil {
+			model = s.Model
+		}
+		return agentConfigSnapshot{Agent: "codex", Model: model, Effort: effort, Yolo: yolo}
+	case "antigravity":
+		effort, _ := antigravityconfig.EffectiveEffortLevel()
+		yolo, _ := antigravityconfig.EffectiveYoloMode()
+		model := ""
+		if s, err := antigravityconfig.ReadSettings(); err == nil && s != nil {
+			model = s.Model
+		}
+		return agentConfigSnapshot{Agent: "antigravity", Model: model, Effort: effort, Yolo: yolo}
+	}
+	return agentConfigSnapshot{Agent: name}
+}
+
+func newAgentsConfigSetCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "set <claude|codex|antigravity> <key> <value>",
+		Short: "Set an agent-level knob (model, effort, always-thinking, yolo)",
+		Long: `Update a single setting in the agent's native config file (with automatic backup):
+
+  claude:       model, effort, always-thinking (true/false), yolo (true/false)
+  codex:        effort, yolo (true/false)
+  antigravity:  effort, yolo (true/false)`,
+		Args: cobra.ExactArgs(3),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ag := strings.ToLower(strings.TrimSpace(args[0]))
+			key := strings.ToLower(strings.TrimSpace(args[1]))
+			val := strings.TrimSpace(args[2])
+			switch ag {
+			case "claude":
+				switch key {
+				case "model":
+					if val == "default" || val == "clear" {
+						val = ""
+					}
+					if _, err := claudeconfig.SetModel(val); err != nil {
+						return fmt.Errorf("set claude model: %w", err)
+					}
+				case "effort":
+					if val == "default" || val == "clear" {
+						val = ""
+					}
+					if !validClaudeEffort(val) {
+						return fmt.Errorf("invalid claude effort %q (want %s)", val, claudeEffortList())
+					}
+					if _, err := claudeconfig.SetEffortLevel(val); err != nil {
+						return fmt.Errorf("set claude effort: %w", err)
+					}
+				case "always-thinking", "always_thinking":
+					b, err := parseBoolOption(val)
+					if err != nil {
+						return fmt.Errorf("invalid boolean %q: %w", val, err)
+					}
+					if _, err := claudeconfig.SetAlwaysThinking(b); err != nil {
+						return fmt.Errorf("set claude always-thinking: %w", err)
+					}
+				case "yolo":
+					b, err := parseBoolOption(val)
+					if err != nil {
+						return fmt.Errorf("invalid boolean %q: %w", val, err)
+					}
+					if _, err := claudeconfig.SetYoloMode(b); err != nil {
+						return fmt.Errorf("set claude yolo: %w", err)
+					}
+				default:
+					return fmt.Errorf("unknown claude config key %q (want model, effort, always-thinking, yolo)", key)
+				}
+			case "codex":
+				switch key {
+				case "effort":
+					if val == "default" || val == "clear" {
+						val = ""
+					}
+					if !validCodexEffort(val) {
+						return fmt.Errorf("invalid codex effort %q (want %s)", val, codexEffortList())
+					}
+					if _, err := codexconfig.SetEffortLevel(val); err != nil {
+						return fmt.Errorf("set codex effort: %w", err)
+					}
+				case "yolo":
+					b, err := parseBoolOption(val)
+					if err != nil {
+						return fmt.Errorf("invalid boolean %q: %w", val, err)
+					}
+					if _, err := codexconfig.SetYoloMode(b); err != nil {
+						return fmt.Errorf("set codex yolo: %w", err)
+					}
+				default:
+					return fmt.Errorf("unknown codex config key %q (want effort, yolo)", key)
+				}
+			case "antigravity":
+				switch key {
+				case "effort":
+					if val == "default" || val == "clear" {
+						val = ""
+					}
+					if !validAntigravityEffort(val) {
+						return fmt.Errorf("invalid antigravity effort %q (want %s)", val, antigravityEffortList())
+					}
+					if _, err := antigravityconfig.SetEffortLevel(val); err != nil {
+						return fmt.Errorf("set antigravity effort: %w", err)
+					}
+				case "yolo":
+					b, err := parseBoolOption(val)
+					if err != nil {
+						return fmt.Errorf("invalid boolean %q: %w", val, err)
+					}
+					if _, err := antigravityconfig.SetYoloMode(b); err != nil {
+						return fmt.Errorf("set antigravity yolo: %w", err)
+					}
+				default:
+					return fmt.Errorf("unknown antigravity config key %q (want effort, yolo)", key)
+				}
+			default:
+				return fmt.Errorf("unsupported agent %q (want claude, codex, or antigravity)", args[0])
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "%s %s → %s\n", ag, key, safeField(val))
+			return nil
+		},
+	}
+}
+
+func parseBoolOption(raw string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "true", "on", "yes", "1":
+		return true, nil
+	case "false", "off", "no", "0":
+		return false, nil
+	default:
+		return false, fmt.Errorf("want true/false (or on/off)")
+	}
+}
+
+func validClaudeEffort(v string) bool {
+	for _, opt := range claudeconfig.KnownEffortLevels() {
+		if opt.Value == v {
+			return true
+		}
+	}
+	return false
+}
+
+func claudeEffortList() string {
+	var vals []string
+	for _, opt := range claudeconfig.KnownEffortLevels() {
+		if opt.Value == "" {
+			vals = append(vals, "default")
+		} else {
+			vals = append(vals, opt.Value)
+		}
+	}
+	return strings.Join(vals, ", ")
+}
+
+func validCodexEffort(v string) bool {
+	for _, opt := range codexconfig.KnownEffortLevels() {
+		if opt.Value == v {
+			return true
+		}
+	}
+	return false
+}
+
+func codexEffortList() string {
+	var vals []string
+	for _, opt := range codexconfig.KnownEffortLevels() {
+		if opt.Value == "" {
+			vals = append(vals, "default")
+		} else {
+			vals = append(vals, opt.Value)
+		}
+	}
+	return strings.Join(vals, ", ")
+}
+
+func validAntigravityEffort(v string) bool {
+	for _, opt := range antigravityconfig.KnownEffortLevels() {
+		if opt.Value == v {
+			return true
+		}
+	}
+	return false
+}
+
+func antigravityEffortList() string {
+	var vals []string
+	for _, opt := range antigravityconfig.KnownEffortLevels() {
+		if opt.Value == "" {
+			vals = append(vals, "default")
+		} else {
+			vals = append(vals, opt.Value)
+		}
+	}
+	return strings.Join(vals, ", ")
 }
 
 // newAgentsModelsCmd: `ccmux agents models [--refresh] [--json]`
