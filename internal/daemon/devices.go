@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/crypto/ssh"
 )
 
 // Provider identifies which push gateway a registered device token
@@ -75,7 +77,7 @@ func DefaultDeviceStorePath() (string, error) {
 // OpenDeviceStore loads (or creates) the store at path.
 func OpenDeviceStore(path string) (*DeviceStore, error) {
 	s := &DeviceStore{path: path, byID: map[string]DeviceRegistration{}}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
 	raw, err := os.ReadFile(path)
@@ -324,9 +326,15 @@ func (s *DeviceStore) flush() error {
 // APNs token — only its hash — so a leak of devices.json doesn't
 // also leak the keypair.
 func HashPublicKey(publicKey string) string {
-	// Normalize: trim trailing comments / whitespace and take the
-	// base64 body, so semantically-equal keys hash identically even
-	// if the optional comment differs across pairings.
+	// Canonicalize real SSH public keys via ssh.ParseAuthorizedKey so
+	// comments, whitespace, and pre-key options (`from="…"`, `no-pty`)
+	// cannot produce distinct hashes for the same key material.
+	if pub, _, _, _, err := ssh.ParseAuthorizedKey([]byte(strings.TrimSpace(publicKey))); err == nil {
+		body := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(pub)))
+		sum := sha256.Sum256([]byte(body))
+		return hex.EncodeToString(sum[:])
+	}
+	// Fallback for non-SSH test keys: take `<type> <base64>`.
 	fields := strings.Fields(strings.TrimSpace(publicKey))
 	body := publicKey
 	if len(fields) >= 2 {

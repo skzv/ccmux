@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/skzv/ccmux/internal/agent"
+	"github.com/skzv/ccmux/internal/configfile"
 	"github.com/skzv/ccmux/internal/tmux"
 )
 
@@ -197,8 +198,9 @@ func SetAgent(projectPath string, id agent.ID) error {
 	}
 	path := filepath.Join(projectPath, agentSidecarRelPath)
 	// Trailing newline keeps git-add diffs clean — POSIX text files
-	// should end in \n.
-	return os.WriteFile(path, []byte(string(id)+"\n"), 0o644)
+	// should end in \n. Atomic write prevents concurrent ccmuxd ReadAgent
+	// polls from observing an empty truncated file and falling back to Claude.
+	return configfile.WriteAtomic(path, []byte(string(id)+"\n"), 0o644)
 }
 
 func expandHome(p string) (string, error) {

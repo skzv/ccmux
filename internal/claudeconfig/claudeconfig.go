@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/skzv/ccmux/internal/agenthome"
@@ -480,12 +481,15 @@ func WriteSettings(s *Settings) (backup string, err error) {
 		return backup, err
 	}
 	// Write-then-rename so a crash mid-write can't truncate settings.json
-	// and lose the round-trip-preserved Extra fields.
-	if err := configfile.WriteAtomic(p.Settings, data, 0o644); err != nil {
+	// and lose the round-trip-preserved Extra fields. 0600 protects MCP
+	// auth headers and env secrets (matching configfile.Backup).
+	if err := configfile.WriteAtomic(p.Settings, data, 0o600); err != nil {
 		return backup, err
 	}
 	return backup, nil
 }
+
+var settingsMu sync.Mutex
 
 // backupFile is a thin wrapper around the shared configfile.Backup
 // helper. Kept so the rest of this package doesn't need to import
@@ -503,6 +507,8 @@ const maxBackupsPerFile = configfile.MaxBackupsPerFile
 // ("claude-opus-4-7"), a short alias ("opus", "sonnet", "haiku",
 // "opusplan"), or "" to clear the override.
 func SetModel(model string) (string, error) {
+	settingsMu.Lock()
+	defer settingsMu.Unlock()
 	s, err := ReadSettings()
 	if err != nil {
 		return "", err
@@ -560,6 +566,8 @@ type ModelOption struct {
 // Code version, so we write whatever the caller asks for and let Claude
 // Code decide.
 func SetEffortLevel(level string) (string, error) {
+	settingsMu.Lock()
+	defer settingsMu.Unlock()
 	s, err := ReadSettings()
 	if err != nil {
 		return "", err
@@ -574,6 +582,8 @@ func SetEffortLevel(level string) (string, error) {
 // Code's default, which can be on. The false lives in Extra, the same
 // place readSettingsAt keeps a user-written one.
 func SetAlwaysThinking(enabled bool) (string, error) {
+	settingsMu.Lock()
+	defer settingsMu.Unlock()
 	s, err := ReadSettings()
 	if err != nil {
 		return "", err
@@ -631,6 +641,8 @@ type EffortOption struct {
 // Persisting through settings.json means ccmux's "yolo" toggle survives
 // reattach and matches Claude Code's documented permanent option.
 func SetYoloMode(enabled bool) (string, error) {
+	settingsMu.Lock()
+	defer settingsMu.Unlock()
 	s, err := ReadSettings()
 	if err != nil {
 		return "", err

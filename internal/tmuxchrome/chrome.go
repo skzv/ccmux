@@ -63,8 +63,8 @@ const (
 // exits Claude. The chrome explicitly uses "then" not "+" so this is
 // unambiguous.
 func Apply(ctx context.Context, session, projectLabel string, moshiReachable, nested bool) error {
-	if session == "" {
-		return fmt.Errorf("tmuxchrome: session name required")
+	if err := tmux.CheckSessionTarget(session); err != nil {
+		return fmt.Errorf("tmuxchrome: %w", err)
 	}
 	prefix := DetectedPrefix(ctx)
 	returnBinding := defaultNestedReturnBinding()
@@ -431,6 +431,9 @@ func PrettyKey(k string) string {
 // when ccmux kills or "releases" a session so the chrome doesn't linger
 // if the user later attaches to it from a non-ccmux client.
 func Reset(ctx context.Context, session string) error {
+	if err := tmux.CheckSessionTarget(session); err != nil {
+		return fmt.Errorf("tmuxchrome: %w", err)
+	}
 	// Derive the unset list from Options() so adding a new option
 	// can never leave a stale value behind after Reset. The values
 	// passed here are placeholders — we only care about the keys.

@@ -194,7 +194,15 @@ func (v Vault) searchFallback(ctx context.Context, query string, limit int) ([]S
 	needle := strings.ToLower(query)
 	var hits []SearchHit
 	walk := v.walkRoot() // a symlinked project root is followed, like List
-	err := filepath.WalkDir(walk, func(path string, d os.DirEntry, err error) error {
+	root, err := os.OpenRoot(walk)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer root.Close()
+	err = filepath.WalkDir(walk, func(path string, d os.DirEntry, err error) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -210,14 +218,24 @@ func (v Vault) searchFallback(ctx context.Context, query string, limit int) ([]S
 			}
 			return nil
 		}
+		if d.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
 		if !strings.EqualFold(filepath.Ext(d.Name()), ".md") {
 			return nil
 		}
-		f, err := os.Open(path)
+		rel, rerr := filepath.Rel(walk, path)
+		if rerr != nil {
+			return nil
+		}
+		f, err := root.Open(filepath.ToSlash(rel))
 		if err != nil {
 			return nil
 		}
 		defer f.Close()
+		if fi, serr := f.Stat(); serr != nil || !fi.Mode().IsRegular() {
+			return nil
+		}
 		sc := jsonl.NewScanner(f, maxSearchLineBytes)
 		perFile, read := 0, 0
 		for perFile < 5 && len(hits) < limit {
