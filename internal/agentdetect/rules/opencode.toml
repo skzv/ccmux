@@ -6,7 +6,7 @@ id = "title_spinner_working"
 state = "working"
 priority = 1100
 region = "osc_title"
-regex = ['^[\x{2800}-\x{28FF}]']
+regex = ['^\s*[\x{2800}-\x{28FF}]']
 
 # Permission gate: OpenCode draws a "△ Permission required" panel when
 # it needs the user to approve a tool call — header, the tool call, then

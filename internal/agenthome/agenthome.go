@@ -26,9 +26,10 @@ import (
 
 // The environment variables that relocate an agent's home.
 const (
-	ClaudeEnv = "CLAUDE_CONFIG_DIR"
-	CodexEnv  = "CODEX_HOME"
-	CursorEnv = "CURSOR_HOME"
+	ClaudeEnv      = "CLAUDE_CONFIG_DIR"
+	CodexEnv       = "CODEX_HOME"
+	CursorEnv      = "CURSOR_HOME"
+	AntigravityEnv = "ANTIGRAVITY_HOME"
 )
 
 // Override returns the directory the environment variable name points
@@ -43,8 +44,8 @@ const (
 // not where the agent put its files, and the transcript-deletion guard
 // must never be anchored to such a root.
 func Override(name, home string) (string, bool) {
-	v := os.Getenv(name)
-	if strings.TrimSpace(v) == "" {
+	v := strings.TrimSpace(os.Getenv(name))
+	if v == "" {
 		return "", false
 	}
 	if v == "~" || strings.HasPrefix(v, "~/") || strings.HasPrefix(v, "~"+string(filepath.Separator)) {
@@ -91,3 +92,15 @@ func Cursor(home string) string { return resolve(CursorEnv, home, ".cursor") }
 // CursorProjects is where Cursor Agent writes transcripts:
 // <Cursor>/projects/<encoded-cwd>/agent-transcripts/<uuid>/<uuid>.jsonl.
 func CursorProjects(home string) string { return filepath.Join(Cursor(home), "projects") }
+
+// Antigravity is the Antigravity CLI home: $ANTIGRAVITY_HOME, else
+// home/.gemini/antigravity-cli.
+func Antigravity(home string) string {
+	return resolve(AntigravityEnv, home, filepath.Join(".gemini", "antigravity-cli"))
+}
+
+// AntigravityConversations is where Antigravity stores .pb transcripts:
+// <Antigravity>/conversations/<uuid>.pb.
+func AntigravityConversations(home string) string {
+	return filepath.Join(Antigravity(home), "conversations")
+}

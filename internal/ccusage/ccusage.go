@@ -73,7 +73,8 @@ var (
 	cacheValid  bool
 	// nowFn is a seam so tests can advance the clock past cacheTTL
 	// without sleeping.
-	nowFn = time.Now
+	nowFn    = time.Now
+	inflight chan struct{}
 )
 
 // InvalidateCache drops the memoized block so the next CurrentBlock
@@ -88,6 +89,15 @@ func InvalidateCache() {
 	cacheValid = false
 }
 
+// cloneBlock copies b and clones its Models slice so callers cannot
+// mutate the cached slice.
+func cloneBlock(b Block) Block {
+	if b.Models != nil {
+		b.Models = append([]string(nil), b.Models...)
+	}
+	return b
+}
+
 // cachedResult returns the memoized outcome when it is still fresh.
 func cachedResult() (Block, error, bool) {
 	cacheMu.Lock()
@@ -98,11 +108,16 @@ func cachedResult() (Block, error, bool) {
 	if cachedErr != nil {
 		return Block{}, cachedErr, true
 	}
-	return *cachedBlock, nil, true
+	return cloneBlock(*cachedBlock), nil, true
 }
 
 // memoize stores an outcome (success or failure) as the current result.
+// Context cancellation is never cached so one canceled caller cannot
+// poison subsequent requests for cacheTTL.
 func memoize(b Block, err error) (Block, error) {
+	if errors.Is(err, context.Canceled) {
+		return Block{}, err
+	}
 	cacheMu.Lock()
 	defer cacheMu.Unlock()
 	cachedAt = nowFn()
@@ -111,9 +126,9 @@ func memoize(b Block, err error) (Block, error) {
 		cachedBlock, cachedErr = nil, err
 		return Block{}, err
 	}
-	blk := b
+	blk := cloneBlock(b)
 	cachedBlock, cachedErr = &blk, nil
-	return b, nil
+	return cloneBlock(blk), nil
 }
 
 func realRunCmd(ctx context.Context, args ...string) ([]byte, error) {
@@ -173,57 +188,113 @@ type jsonResponse struct {
 // memoized block. Use InvalidateCache for a user-requested refresh.
 // A 10-second timeout is applied to the subprocess.
 func CurrentBlock(ctx context.Context) (Block, error) {
-	if b, err, ok := cachedResult(); ok {
-		return b, err
+	if err := ctx.Err(); err != nil {
+		return Block{}, err
 	}
-
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	out, err := runCmd(ctx, "npx", "ccusage", "blocks", "--json")
-	if err != nil {
-		if errors.Is(err, exec.ErrNotFound) {
-			return memoize(Block{}, fmt.Errorf("npx not found; ccusage unavailable: %w", err))
+	for {
+		if b, err, ok := cachedResult(); ok {
+			return b, err
 		}
-		return memoize(Block{}, fmt.Errorf("run ccusage: %w", err))
-	}
-
-	var resp jsonResponse
-	if err := json.Unmarshal(out, &resp); err != nil {
-		return memoize(Block{}, fmt.Errorf("parse ccusage output: %w", err))
-	}
-	if len(resp.Blocks) == 0 {
-		// Machine with no Claude transcripts yet — ccusage exits 0 with
-		// an empty list. Memoized like any other outcome so a fresh
-		// install doesn't spawn npx every 15s forever.
-		return memoize(Block{}, fmt.Errorf("ccusage returned no blocks"))
-	}
-
-	raw := resp.Blocks[len(resp.Blocks)-1]
-	for _, b := range resp.Blocks {
-		if b.IsActive {
-			raw = b
-			break
+		cacheMu.Lock()
+		if cacheValid && nowFn().Sub(cachedAt) < cacheTTL {
+			var (
+				b   Block
+				err = cachedErr
+			)
+			if err == nil && cachedBlock != nil {
+				b = cloneBlock(*cachedBlock)
+			}
+			cacheMu.Unlock()
+			return b, err
 		}
-	}
+		if ch := inflight; ch != nil {
+			cacheMu.Unlock()
+			select {
+			case <-ch:
+				continue
+			case <-ctx.Done():
+				return Block{}, ctx.Err()
+			}
+		}
+		ch := make(chan struct{})
+		inflight = ch
+		cacheMu.Unlock()
 
-	block := Block{
-		ID:                  raw.ID,
-		StartTime:           raw.StartTime,
-		EndTime:             raw.EndTime,
-		IsActive:            raw.IsActive,
-		CostUSD:             raw.CostUSD,
-		TotalTokens:         raw.TotalTokens,
-		BurnRateCostPerHour: raw.BurnRate.CostPerHour,
-		ProjectedTotalCost:  raw.Projection.TotalCost,
-		Models:              raw.Models,
-		TokenCounts: TokenCounts{
-			InputTokens:       raw.TokenCounts.InputTokens,
-			OutputTokens:      raw.TokenCounts.OutputTokens,
-			CacheCreateTokens: raw.TokenCounts.CacheCreationInputTokens,
-			CacheReadTokens:   raw.TokenCounts.CacheReadInputTokens,
-		},
-	}
+		var (
+			resBlock Block
+			resErr   error
+		)
+		func() {
+			defer func() {
+				cacheMu.Lock()
+				inflight = nil
+				cacheMu.Unlock()
+				close(ch)
+			}()
+			runCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
 
-	return memoize(block, nil)
+			// Prefer a globally-installed `ccusage` binary on PATH; fall
+			// back to `npx --no-install` so we never stall on interactive
+			// prompts or download unpinned code from npm.
+			args := []string{"npx", "--no-install", "ccusage", "blocks", "--json"}
+			if bin, lerr := exec.LookPath("ccusage"); lerr == nil && bin != "" {
+				args = []string{bin, "blocks", "--json"}
+			}
+			out, err := runCmd(runCtx, args...)
+			if err != nil {
+				if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
+					resErr = context.Canceled
+					return
+				}
+				if errors.Is(err, exec.ErrNotFound) {
+					resBlock, resErr = memoize(Block{}, fmt.Errorf("ccusage/npx not found; ccusage unavailable: %w", err))
+					return
+				}
+				resBlock, resErr = memoize(Block{}, fmt.Errorf("run ccusage: %w", err))
+				return
+			}
+
+			var resp jsonResponse
+			if err := json.Unmarshal(out, &resp); err != nil {
+				resBlock, resErr = memoize(Block{}, fmt.Errorf("parse ccusage output: %w", err))
+				return
+			}
+			if len(resp.Blocks) == 0 {
+				// Machine with no Claude transcripts yet — ccusage exits 0 with
+				// an empty list. Memoized like any other outcome so a fresh
+				// install doesn't spawn npx every 15s forever.
+				resBlock, resErr = memoize(Block{}, fmt.Errorf("ccusage returned no blocks"))
+				return
+			}
+
+			raw := resp.Blocks[len(resp.Blocks)-1]
+			for _, b := range resp.Blocks {
+				if b.IsActive {
+					raw = b
+					break
+				}
+			}
+
+			block := Block{
+				ID:                  raw.ID,
+				StartTime:           raw.StartTime,
+				EndTime:             raw.EndTime,
+				IsActive:            raw.IsActive,
+				CostUSD:             raw.CostUSD,
+				TotalTokens:         raw.TotalTokens,
+				BurnRateCostPerHour: raw.BurnRate.CostPerHour,
+				ProjectedTotalCost:  raw.Projection.TotalCost,
+				Models:              raw.Models,
+				TokenCounts: TokenCounts{
+					InputTokens:       raw.TokenCounts.InputTokens,
+					OutputTokens:      raw.TokenCounts.OutputTokens,
+					CacheCreateTokens: raw.TokenCounts.CacheCreationInputTokens,
+					CacheReadTokens:   raw.TokenCounts.CacheReadInputTokens,
+				},
+			}
+			resBlock, resErr = memoize(block, nil)
+		}()
+		return resBlock, resErr
+	}
 }

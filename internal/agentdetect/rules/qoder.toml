@@ -6,7 +6,7 @@ id = "title_spinner_working"
 state = "working"
 priority = 1100
 region = "osc_title"
-regex = ['^[\x{2800}-\x{28FF}]']
+regex = ['^\s*[\x{2800}-\x{28FF}]']
 
 # Approval / confirmation: Qoder spells out what it's waiting for.
 # Scoped to the bottom of the pane and idle-gated: the same phrases in

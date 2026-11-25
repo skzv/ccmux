@@ -130,7 +130,7 @@ func inspect(path string) (Project, bool) {
 		Path:     path,
 		Modified: info.ModTime(),
 	}
-	if fi, err := os.Stat(filepath.Join(path, ".git")); err == nil && fi.IsDir() {
+	if _, err := os.Stat(filepath.Join(path, ".git")); err == nil {
 		p.HasGit = true
 	}
 	if fi, err := os.Stat(filepath.Join(path, "CLAUDE.md")); err == nil && !fi.IsDir() {
@@ -204,7 +204,7 @@ func SetAgent(projectPath string, id agent.ID) error {
 }
 
 func expandHome(p string) (string, error) {
-	if strings.HasPrefix(p, "~/") {
+	if strings.HasPrefix(p, "~/") || strings.HasPrefix(p, "~"+string(filepath.Separator)) {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return "", err

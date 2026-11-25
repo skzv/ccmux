@@ -6,7 +6,7 @@ id = "title_spinner_working"
 state = "working"
 priority = 1100
 region = "osc_title"
-regex = ['^[\x{2800}-\x{28FF}]']
+regex = ['^\s*[\x{2800}-\x{28FF}]']
 
 # Approval gate: Kiro asks the user to grant a single permission or
 # trust the tool when an action "requires approval". Scoped to the
@@ -26,7 +26,8 @@ any = [
 ]
 
 # Working markers: the explicit "kiro is working" footer or the
-# clock/circle spinner it cycles while a turn runs.
+# partial-circle spinner frames it cycles while a turn runs.
+# Omit bare ● (U+25CF) which is a common bullet/status glyph in idle output.
 [[rules]]
 id = "body_working_marker"
 state = "working"
@@ -34,5 +35,5 @@ priority = 800
 region = "bottom_non_empty_lines(3)"
 any = [
   { contains = ["kiro is working"] },
-  { regex = ['[◔◑◕●]'] },
+  { regex = ['[◔◑◕]'] },
 ]

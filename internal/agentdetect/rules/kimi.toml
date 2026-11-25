@@ -6,7 +6,7 @@ id = "title_spinner_working"
 state = "working"
 priority = 1100
 region = "osc_title"
-regex = ['^[\x{2800}-\x{28FF}]']
+regex = ['^\s*[\x{2800}-\x{28FF}]']
 
 # Approval panel: Kimi shows a confirm prompt before running / writing /
 # applying a tool action.
@@ -25,15 +25,15 @@ all = [
   ] },
 ]
 
-# Working markers: a literal "Working" / "thinking" footer, or the
-# moon-phase spinner Kimi cycles while a turn runs (U+1F311..U+1F318).
+# Working markers: a standalone "Working..." / "thinking..." footer,
+# or the moon-phase spinner Kimi cycles while a turn runs (U+1F311..U+1F318).
+# Avoid bare substring contains ("working" matches "networking" / "not working").
 [[rules]]
 id = "body_working_marker"
 state = "working"
 priority = 800
 region = "bottom_non_empty_lines(3)"
 any = [
-  { contains = ["thinking"] },
-  { contains = ["working"] },
+  { regex = ['(?im)(?:^|\s)(?:thinking|working)(?:\.\.\.|…)'] },
   { regex = ['[\x{1F311}-\x{1F318}]'] },
 ]

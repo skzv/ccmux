@@ -367,6 +367,9 @@ func AttentionPriority(state State, seen bool) int {
 func AllInstalled(ctx context.Context) []Agent {
 	out := []Agent{}
 	for _, a := range All() {
+		if ctx != nil && ctx.Err() != nil {
+			break
+		}
 		if isInstalled(ctx, a.Binary()) {
 			out = append(out, a)
 		}
@@ -380,6 +383,9 @@ func AllInstalled(ctx context.Context) []Agent {
 func AllAvailable(ctx context.Context, commands Commands) []Agent {
 	out := []Agent{}
 	for _, a := range All() {
+		if ctx != nil && ctx.Err() != nil {
+			break
+		}
 		if isInstalled(ctx, a.Binary()) || commandAvailable(ctx, commandOverride(a.ID(), commands)) {
 			out = append(out, a)
 		}
@@ -503,8 +509,13 @@ func ResumeArgs(id ID, conversationID string, commands Commands) []string {
 // resumeArgv is the per-agent argv for resuming one conversation,
 // before any env wrapping.
 func resumeArgv(id ID, conversationID string, commands Commands) []string {
-	if conversationID == "" {
+	if conversationID == "" || strings.HasPrefix(conversationID, "-") {
 		return nil
+	}
+	for _, r := range conversationID {
+		if r < 0x20 || r == 0x7f {
+			return nil
+		}
 	}
 	switch id {
 	case IDGemini:

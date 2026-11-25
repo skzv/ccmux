@@ -745,8 +745,8 @@ func firstDescriptionLine(path string) string {
 			skipHeader = false
 			continue
 		}
-		if len(trim) > 100 {
-			trim = trim[:100] + "…"
+		if r := []rune(trim); len(r) > 100 {
+			trim = string(r[:100]) + "…"
 		}
 		return trim
 	}
@@ -760,7 +760,8 @@ type Skill struct {
 	Description string
 }
 
-// ListSkills returns installed skills.
+// ListSkills returns installed skills (following symlinked skill dirs,
+// the standard layout for npx skills / ~/.agents/skills symlinks).
 func ListSkills() ([]Skill, error) {
 	p, err := Paths()
 	if err != nil {
@@ -775,7 +776,13 @@ func ListSkills() ([]Skill, error) {
 	}
 	var out []Skill
 	for _, e := range entries {
-		if !e.IsDir() {
+		isDir := e.IsDir()
+		if !isDir && e.Type()&fs.ModeSymlink != 0 {
+			if fi, serr := os.Stat(filepath.Join(p.SkillsDir, e.Name())); serr == nil && fi.IsDir() {
+				isDir = true
+			}
+		}
+		if !isDir {
 			continue
 		}
 		skillFile := filepath.Join(p.SkillsDir, e.Name(), "SKILL.md")

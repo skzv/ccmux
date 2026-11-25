@@ -129,10 +129,15 @@ func priceFor(model string) price {
 // reads only the bytes appended since.
 func Walk(window time.Duration) (*Aggregate, error) {
 	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, err
+	root := ""
+	if dir, ok := agenthome.Override(agenthome.CodexEnv, home); ok {
+		root = filepath.Join(dir, "sessions")
+	} else {
+		if err != nil {
+			return nil, err
+		}
+		root = agenthome.CodexSessions(home)
 	}
-	root := agenthome.CodexSessions(home)
 	return walkRoot(root, window, time.Now())
 }
 
@@ -171,10 +176,15 @@ func walkRoot(root string, window time.Duration, now time.Time) (*Aggregate, err
 			return nil
 		}
 		present[path] = true
-		// Skip files whose mtime is older than the window. Codex
-		// session files are append-only until the session closes, so
-		// mtime is a sound cutoff signal.
+		// Skip files whose mtime is older than the window. Follow symlinks
+		// via os.Stat so symlinked transcripts don't get skipped due to a
+		// stale symlink mtime.
 		info, _ := d.Info()
+		if d.Type()&fs.ModeSymlink != 0 {
+			if si, serr := os.Stat(path); serr == nil {
+				info = si
+			}
+		}
 		if info != nil && info.ModTime().Before(cutoff) {
 			return nil
 		}

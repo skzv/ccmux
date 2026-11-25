@@ -124,9 +124,15 @@ func Walk(root string, window time.Duration) (Summary, error) {
 		if d.IsDir() || !strings.HasSuffix(d.Name(), ".jsonl") {
 			return nil
 		}
-		// Pre-filter by file mtime: a file last written before the
-		// window can't contain in-window messages.
-		if info, ierr := d.Info(); ierr == nil && info.ModTime().Before(cutoff) {
+		// Pre-filter by file mtime: follow symlinks so a symlinked
+		// transcript with an old link mtime isn't skipped.
+		info, ierr := d.Info()
+		if d.Type()&fs.ModeSymlink != 0 {
+			if si, serr := os.Stat(path); serr == nil {
+				info, ierr = si, nil
+			}
+		}
+		if ierr == nil && info.ModTime().Before(cutoff) {
 			return nil
 		}
 		scanFile(path, cutoff, &sum)
@@ -249,9 +255,17 @@ func parseWhen(raw json.RawMessage) (time.Time, bool) {
 	if n <= 0 || math.IsInf(n, 0) || math.IsNaN(n) {
 		return time.Time{}, false
 	}
-	// Epoch seconds stay below 1e11 until the year 5138; epoch
-	// milliseconds passed 1e11 in 1973.
-	if n >= 1e11 {
+	// Distinguish Unix epoch magnitudes:
+	//   < 1e11  → seconds
+	//   < 1e14  → milliseconds
+	//   < 1e17  → microseconds
+	//   >= 1e17 → nanoseconds
+	switch {
+	case n >= 1e17:
+		return time.Unix(0, int64(n)), true
+	case n >= 1e14:
+		return time.UnixMicro(int64(n)), true
+	case n >= 1e11:
 		return time.UnixMilli(int64(n)), true
 	}
 	sec, frac := math.Modf(n)

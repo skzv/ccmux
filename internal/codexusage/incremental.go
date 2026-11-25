@@ -204,13 +204,18 @@ func (f *fileRecords) Prune(from time.Time) {
 	f.recs = kept
 }
 
-// result tallies the file's records inside [cutoff, now]: what
-// scanFile returns for the same bytes.
+// futureSkewTolerance allows events stamped slightly ahead of now
+// (e.g. appended while Walk is running) to be counted, matching claudeusage.
+const futureSkewTolerance = 2 * time.Minute
+
+// result tallies the file's records inside [cutoff, now+futureSkewTolerance]:
+// what scanFile returns for the same bytes.
 func (f *fileRecords) result(cutoff, now time.Time) scanResult {
 	r := scanResult{byModel: map[string]*Tokens{}}
+	upper := now.Add(futureSkewTolerance)
 	for _, recs := range [][]record{f.recs, f.tail} {
 		for _, rec := range recs {
-			if rec.ts.Before(cutoff) || rec.ts.After(now) {
+			if rec.ts.Before(cutoff) || rec.ts.After(upper) {
 				continue
 			}
 			if rec.prompt {

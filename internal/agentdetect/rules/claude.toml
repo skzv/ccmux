@@ -7,7 +7,7 @@ id = "title_spinner_working"
 state = "working"
 priority = 1100
 region = "osc_title"
-regex = ['^[\x{2800}-\x{28FF}]']
+regex = ['^\s*[\x{2800}-\x{28FF}]']
 
 # Claude Code v1 rounded prompt frame on the last non-empty line of the
 # pane. Mirrors looksLikeClaudePrompt exactly: the line must START

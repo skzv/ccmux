@@ -6,7 +6,7 @@ id = "title_spinner_working"
 state = "working"
 priority = 1100
 region = "osc_title"
-regex = ['^[\x{2800}-\x{28FF}]']
+regex = ['^\s*[\x{2800}-\x{28FF}]']
 
 # Confirmation prompt: Copilot CLI shows an "enter to confirm/select/
 # submit" + "esc to cancel" pair when waiting on the user.

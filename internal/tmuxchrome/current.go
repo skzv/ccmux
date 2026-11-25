@@ -29,5 +29,7 @@ func CurrentSession(ctx context.Context) string {
 
 // currentSessionRun runs tmux for CurrentSession; a seam for tests.
 var currentSessionRun = func(ctx context.Context, args []string) ([]byte, error) {
-	return exec.CommandContext(ctx, "tmux", args...).Output()
+	cmd := exec.CommandContext(ctx, "tmux", args...)
+	cmd.WaitDelay = tmuxCmdWaitDelay
+	return cmd.Output()
 }

@@ -75,16 +75,42 @@ func command(ctx context.Context, name string, args ...string) *exec.Cmd {
 // cancelled call returns promptly.
 const commandWaitDelay = 2 * time.Second
 
-// withLocale returns env with LC_ALL=C.UTF-8 appended iff none of
-// LC_ALL / LC_CTYPE / LANG are already set. Pulled out of command() so
-// the locale-decision logic is unit-testable without spawning a process.
+// withLocale ensures tmux runs under a UTF-8 locale so `-F` format
+// strings preserve literal tabs instead of replacing them with `_`.
+// Effective locale follows POSIX precedence (LC_ALL > LC_CTYPE > LANG):
+// if empty or non-UTF-8 (e.g. `C`, `POSIX`, or `LANG=`), any existing
+// LC_ALL= entry is stripped from a copied slice and LC_ALL=C.UTF-8 is
+// appended.
 func withLocale(env []string) []string {
+	var lcAll, lcCtype, lang string
 	for _, e := range env {
-		if strings.HasPrefix(e, "LC_ALL=") || strings.HasPrefix(e, "LC_CTYPE=") || strings.HasPrefix(e, "LANG=") {
-			return env
+		switch {
+		case strings.HasPrefix(e, "LC_ALL="):
+			lcAll = e[len("LC_ALL="):]
+		case strings.HasPrefix(e, "LC_CTYPE="):
+			lcCtype = e[len("LC_CTYPE="):]
+		case strings.HasPrefix(e, "LANG="):
+			lang = e[len("LANG="):]
 		}
 	}
-	return append(env, "LC_ALL=C.UTF-8")
+	effective := lcAll
+	if effective == "" {
+		effective = lcCtype
+	}
+	if effective == "" {
+		effective = lang
+	}
+	if strings.Contains(strings.ToLower(effective), "utf") {
+		return env
+	}
+	out := make([]string, 0, len(env)+1)
+	for _, e := range env {
+		if strings.HasPrefix(e, "LC_ALL=") {
+			continue
+		}
+		out = append(out, e)
+	}
+	return append(out, "LC_ALL=C.UTF-8")
 }
 
 // exactSession wraps a session name as a tmux target that requires an
@@ -219,14 +245,22 @@ func Has(ctx context.Context, name string) (bool, error) {
 		return false, fmt.Errorf("tmux has-session %q: %w", name, err)
 	}
 	cmd := command(ctx, "tmux", "has-session", "-t", exactSession(name))
-	if err := cmd.Run(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			// tmux exits 1 when the session doesn't exist; that's not a "real" error.
-			if exitErr.ExitCode() == 1 {
+	if _, err := cmd.Output(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+			stderr := string(exitErr.Stderr)
+			// tmux exits 1 both for "can't find session" / no server AND
+			// for real failures like socket permission denied. Only treat
+			// missing session/server (or silent exit 1 from stubs) as absent.
+			ls := strings.ToLower(stderr)
+			if strings.TrimSpace(stderr) == "" ||
+				strings.Contains(ls, "can't find session") ||
+				strings.Contains(ls, "session not found") ||
+				noServerRunning(stderr) {
 				return false, nil
 			}
 		}
-		return false, fmt.Errorf("tmux has-session: %w", err)
+		return false, fmt.Errorf("tmux has-session: %w", withStderr(err))
 	}
 	return true, nil
 }
@@ -254,6 +288,11 @@ func List(ctx context.Context) ([]Session, error) {
 	sessions := parseList(out)
 	tags, err := command(ctx, "tmux", "list-sessions", "-F", sessionTagsFormat).Output()
 	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 && noServerRunning(string(exitErr.Stderr)) {
+			// Last session exited between the two list-sessions calls.
+			return nil, nil
+		}
 		return nil, fmt.Errorf("read tmux session agents: %w", withStderr(err))
 	}
 	applySessionTags(sessions, tags)

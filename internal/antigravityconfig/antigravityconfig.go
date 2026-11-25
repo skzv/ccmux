@@ -33,6 +33,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/skzv/ccmux/internal/agenthome"
 	"github.com/skzv/ccmux/internal/configfile"
 )
 
@@ -42,13 +43,13 @@ var settingsMu sync.Mutex
 // on this host. Honors $ANTIGRAVITY_HOME for tests / relocations,
 // otherwise defaults to ~/.gemini/antigravity-cli.
 func Paths() (Locations, error) {
-	root := os.Getenv("ANTIGRAVITY_HOME")
-	if root == "" {
-		home, err := os.UserHomeDir()
+	home, err := os.UserHomeDir()
+	root, ok := agenthome.Override(agenthome.AntigravityEnv, home)
+	if !ok {
 		if err != nil {
 			return Locations{}, err
 		}
-		root = filepath.Join(home, ".gemini", "antigravity-cli")
+		root = agenthome.Antigravity(home)
 	}
 	return Locations{
 		Root:       root,

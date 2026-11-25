@@ -32,6 +32,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // EnableTmuxClipboard applies ccmux's tmux-side clipboard config:
@@ -50,7 +51,9 @@ import (
 func EnableTmuxClipboard(ctx context.Context) error {
 	var firstErr error
 	for _, argv := range TmuxClipboardCommands() {
-		if err := exec.CommandContext(ctx, argv[0], argv[1:]...).Run(); err != nil && firstErr == nil {
+		cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+		cmd.WaitDelay = 2 * time.Second
+		if err := cmd.Run(); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
@@ -168,7 +171,7 @@ func (s BindingState) String() string {
 func ClassifyCopyBindings(listKeys string) BindingState {
 	state := BindingMissing
 	for _, line := range strings.Split(listKeys, "\n") {
-		if !isCopyDragBinding(line) || !strings.Contains(line, legacyPipeCommand) {
+		if copyDragBindingTable(line) == "" || !strings.Contains(line, legacyPipeCommand) {
 			continue
 		}
 		if !strings.Contains(line, "--client") {
@@ -179,24 +182,29 @@ func ClassifyCopyBindings(listKeys string) BindingState {
 	return state
 }
 
-// isCopyDragBinding reports whether a `tmux list-keys` line binds
-// MouseDragEnd1Pane in a copy-mode table. Lines read
-// `bind-key [-r] -T <table> <key> <command…>`.
-func isCopyDragBinding(line string) bool {
+// copyDragBindingTable returns the copy-mode table name ("copy-mode" or
+// "copy-mode-vi") when a `tmux list-keys` line binds MouseDragEnd1Pane
+// in that table, or "" otherwise.
+func copyDragBindingTable(line string) string {
 	f := strings.Fields(line)
 	for i := 0; i+2 < len(f); i++ {
 		if f[i] == "-T" {
-			return (f[i+1] == "copy-mode" || f[i+1] == "copy-mode-vi") && f[i+2] == "MouseDragEnd1Pane"
+			if (f[i+1] == "copy-mode" || f[i+1] == "copy-mode-vi") && f[i+2] == "MouseDragEnd1Pane" {
+				return f[i+1]
+			}
+			return ""
 		}
 	}
-	return false
+	return ""
 }
 
 // TmuxCopyBindingState classifies the running tmux server's copy-mode
 // mouse bindings (see ClassifyCopyBindings). Errors when tmux isn't
 // running.
 func TmuxCopyBindingState(ctx context.Context) (BindingState, error) {
-	out, err := exec.CommandContext(ctx, "tmux", "list-keys").Output()
+	cmd := exec.CommandContext(ctx, "tmux", "list-keys")
+	cmd.WaitDelay = 2 * time.Second
+	out, err := cmd.Output()
 	if err != nil {
 		return BindingMissing, fmt.Errorf("tmux list-keys: %w", err)
 	}
@@ -207,7 +215,9 @@ func TmuxCopyBindingState(ctx context.Context) (BindingState, error) {
 // the running tmux server. Returns "off"/"on"/"external", or an error
 // if tmux isn't running.
 func TmuxClipboardState(ctx context.Context) (string, error) {
-	out, err := exec.CommandContext(ctx, "tmux", "show", "-s", "-v", "set-clipboard").Output()
+	cmd := exec.CommandContext(ctx, "tmux", "show", "-s", "-v", "set-clipboard")
+	cmd.WaitDelay = 2 * time.Second
+	out, err := cmd.Output()
 	if err != nil {
 		return "", err
 	}

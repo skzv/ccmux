@@ -75,6 +75,7 @@ func (s *Scanner) Scan() bool {
 			s.done = true
 			if err != io.EOF {
 				s.err = err
+				return false
 			}
 			if tooLong {
 				s.skipped++

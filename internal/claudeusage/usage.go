@@ -7,6 +7,7 @@
 package claudeusage
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -210,7 +211,7 @@ func priceFor(model string) price {
 // including Vertex AI's "@" form ("claude-opus-4-5@20251101"); Bedrock
 // ids ("us.anthropic.claude-opus-4-5-20251101-v1:0") parse as-is.
 func familyVersion(m, family string) float64 {
-	parts := strings.FieldsFunc(m, func(r rune) bool { return r == '-' || r == '@' })
+	parts := strings.FieldsFunc(m, func(r rune) bool { return r == '-' || r == '@' || r == '.' || r == '/' || r == ':' })
 	idx := -1
 	for i, p := range parts {
 		if p == family {
@@ -232,14 +233,20 @@ func familyVersion(m, family string) float64 {
 		if !hasMinor {
 			return float64(major)
 		}
+		// Keep single-digit minors as major + minor/10 (so 4.5 == 4.5,
+		// matching the thresholds in priceFor) and cap two-digit minors
+		// below major+1 (4.10 → 4.99 < 5.0) so 4-10 never promotes to 5.0.
+		if minor >= 10 {
+			return float64(major) + 0.9 + float64(minor)/1000
+		}
 		return float64(major) + float64(minor)/10
 	}
-	// New shape: family-major[-minor]
+	// New shape: family-major[-minor] or family-major.minor
 	if major, ok := small(idx + 1); ok {
 		minor, hasMinor := small(idx + 2)
 		return combine(major, minor, hasMinor)
 	}
-	// Old shape: major[-minor]-family
+	// Old shape: major[-minor]-family or major.minor-family
 	if n, ok := small(idx - 1); ok {
 		if major, ok := small(idx - 2); ok {
 			return combine(major, n, true)
@@ -308,10 +315,15 @@ type fileEvents struct {
 
 func walk(now time.Time, d time.Duration, block bool) (*Aggregate, error) {
 	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, err
+	root := ""
+	if dir, ok := agenthome.Override(agenthome.ClaudeEnv, home); ok {
+		root = filepath.Join(dir, "projects")
+	} else {
+		if err != nil {
+			return nil, err
+		}
+		root = agenthome.ClaudeProjects(home)
 	}
-	root := agenthome.ClaudeProjects(home)
 	agg := &Aggregate{
 		Window:      d,
 		WindowStart: now.Add(-d),
@@ -364,9 +376,15 @@ func walk(now time.Time, d time.Duration, block bool) (*Aggregate, error) {
 			return nil
 		}
 		present[path] = true
-		// Skip files whose mtime is older than the lookback — saves IO
-		// when the user has a huge transcript history.
+		// Skip files whose mtime is older than the lookback — follow
+		// symlinks so a symlinked transcript isn't skipped due to a stale
+		// symlink mtime.
 		info, _ := d.Info()
+		if d.Type()&fs.ModeSymlink != 0 {
+			if si, serr := os.Stat(path); serr == nil {
+				info = si
+			}
+		}
 		if info != nil && info.ModTime().Before(cutoff) {
 			return nil
 		}
@@ -719,22 +737,7 @@ func trimSpace(b []byte) []byte {
 
 // maybeContains is a cheap byte-level substring check.
 func maybeContains(line, sub []byte) bool {
-	if len(sub) == 0 || len(line) < len(sub) {
-		return false
-	}
-	for i := 0; i+len(sub) <= len(line); i++ {
-		match := true
-		for j := 0; j < len(sub); j++ {
-			if line[i+j] != sub[j] {
-				match = false
-				break
-			}
-		}
-		if match {
-			return true
-		}
-	}
-	return false
+	return len(sub) > 0 && bytes.Contains(line, sub)
 }
 
 // (maybeHasUsage was inlined into scanFile alongside the user-prompt

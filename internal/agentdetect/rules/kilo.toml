@@ -6,7 +6,7 @@ id = "title_spinner_working"
 state = "working"
 priority = 1100
 region = "osc_title"
-regex = ['^[\x{2800}-\x{28FF}]']
+regex = ['^\s*[\x{2800}-\x{28FF}]']
 
 # Permission gate: Kilo is an OpenCode-compatible fork, so it draws the
 # same "△ Permission required" panel with an "Allow once  Allow always

@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/skzv/ccmux/internal/agent"
+	"github.com/skzv/ccmux/internal/agenthome"
 	"github.com/skzv/ccmux/internal/agentusage"
 	"github.com/skzv/ccmux/internal/claudeusage"
 	"github.com/skzv/ccmux/internal/codexusage"
@@ -193,11 +194,19 @@ func WalkCodex(window time.Duration) (AgentSummary, error) {
 // — token-zero with HasData=true means "the agent IS being used but
 // we can't see inside." Honest about the gap.
 func WalkAntigravity(window time.Duration) (AgentSummary, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return AgentSummary{}, nil //nolint:nilerr // missing $HOME → empty summary, not an error to surface
+	if window <= 0 {
+		window = 24 * time.Hour
 	}
-	root := filepath.Join(home, ".gemini", "antigravity-cli", "conversations")
+	home, err := os.UserHomeDir()
+	root := ""
+	if dir, ok := agenthome.Override(agenthome.AntigravityEnv, home); ok {
+		root = filepath.Join(dir, "conversations")
+	} else {
+		if err != nil {
+			return AgentSummary{}, nil //nolint:nilerr // missing $HOME → empty summary, not an error to surface
+		}
+		root = agenthome.AntigravityConversations(home)
+	}
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -212,6 +221,11 @@ func WalkAntigravity(window time.Duration) (AgentSummary, error) {
 			continue
 		}
 		info, err := e.Info()
+		if e.Type()&os.ModeSymlink != 0 {
+			if si, serr := os.Stat(filepath.Join(root, e.Name())); serr == nil {
+				info, err = si, nil
+			}
+		}
 		if err != nil {
 			continue
 		}
