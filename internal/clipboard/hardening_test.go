@@ -1,6 +1,33 @@
 package clipboard
 
-import "testing"
+import (
+	"errors"
+	"reflect"
+	"testing"
+)
+
+func TestLinuxClipboardToolSelection(t *testing.T) {
+	allInstalled := func(name string) (string, error) { return "/usr/bin/" + name, nil }
+	onlyXclip := func(name string) (string, error) {
+		if name == "xclip" {
+			return "/usr/bin/xclip", nil
+		}
+		return "", errors.New("not found")
+	}
+
+	if got := linuxClipboardTool(false, true, allInstalled); !reflect.DeepEqual(got, []string{"xclip", "-selection", "clipboard"}) {
+		t.Errorf("X11 with wl-copy+xclip installed = %v, want xclip", got)
+	}
+	if got := linuxClipboardTool(true, true, allInstalled); !reflect.DeepEqual(got, []string{"wl-copy"}) {
+		t.Errorf("Wayland+XWayland = %v, want wl-copy", got)
+	}
+	if got := linuxClipboardTool(false, false, allInstalled); !reflect.DeepEqual(got, []string{"wl-copy"}) {
+		t.Errorf("headless fallback (wl-copy present) = %v, want wl-copy", got)
+	}
+	if got := linuxClipboardTool(false, false, onlyXclip); !reflect.DeepEqual(got, []string{"xclip", "-selection", "clipboard"}) {
+		t.Errorf("headless fallback (only xclip) = %v, want xclip", got)
+	}
+}
 
 func TestEnvMarksRemote_NoSubstringFalsePositives(t *testing.T) {
 	for _, local := range []string{

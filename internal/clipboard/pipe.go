@@ -291,8 +291,10 @@ func isRemoteEnvEntry(entry []byte) bool {
 }
 
 // nativeClipboardTool returns the argv for the OS's clipboard reader.
-// On Linux, selects wl-copy only when WAYLAND_DISPLAY is set (avoiding
-// Wayland failures under X11) and xclip/xsel when DISPLAY is set.
+// On Linux, prefers wl-copy when WAYLAND_DISPLAY is set and xclip/xsel
+// when only DISPLAY is set (avoiding Wayland failures under X11). When
+// neither display variable is set in the environment, falls back to
+// probing wl-copy, xclip, then xsel.
 func nativeClipboardTool() []string {
 	switch runtime.GOOS {
 	case "darwin":
@@ -300,18 +302,27 @@ func nativeClipboardTool() []string {
 			return []string{"pbcopy"}
 		}
 	case "linux":
-		if os.Getenv("WAYLAND_DISPLAY") != "" {
-			if _, err := exec.LookPath("wl-copy"); err == nil {
-				return []string{"wl-copy"}
-			}
+		return linuxClipboardTool(
+			os.Getenv("WAYLAND_DISPLAY") != "",
+			os.Getenv("DISPLAY") != "",
+			exec.LookPath,
+		)
+	}
+	return nil
+}
+
+func linuxClipboardTool(wayland, x11 bool, lookPath func(string) (string, error)) []string {
+	if wayland || !x11 {
+		if _, err := lookPath("wl-copy"); err == nil {
+			return []string{"wl-copy"}
 		}
-		if os.Getenv("DISPLAY") != "" {
-			if _, err := exec.LookPath("xclip"); err == nil {
-				return []string{"xclip", "-selection", "clipboard"}
-			}
-			if _, err := exec.LookPath("xsel"); err == nil {
-				return []string{"xsel", "--clipboard", "--input"}
-			}
+	}
+	if x11 || !wayland {
+		if _, err := lookPath("xclip"); err == nil {
+			return []string{"xclip", "-selection", "clipboard"}
+		}
+		if _, err := lookPath("xsel"); err == nil {
+			return []string{"xsel", "--clipboard", "--input"}
 		}
 	}
 	return nil
