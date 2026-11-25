@@ -1,14 +1,19 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/skzv/ccmux/internal/daemon"
 	"github.com/skzv/ccmux/internal/notes"
 	"github.com/skzv/ccmux/internal/project"
 )
+
+const notesSearchTimeout = 10 * time.Second
 
 // handleNotes serves both list and read for a project's markdown
 // vault — `?project=<name>` returns the list, `&file=<rel>` returns
@@ -45,11 +50,16 @@ func (s *server) handleNotes(w http.ResponseWriter, r *http.Request) {
 		}
 		body, err := vault.Read(cleaned)
 		if err != nil {
-			if os.IsNotExist(err) {
+			switch {
+			case errors.Is(err, notes.ErrOutsideVault):
+				http.Error(w, "file must stay inside project", http.StatusBadRequest)
+			case errors.Is(err, notes.ErrNoteTooLarge):
+				http.Error(w, err.Error(), http.StatusRequestEntityTooLarge)
+			case os.IsNotExist(err):
 				http.Error(w, "file not found", http.StatusNotFound)
-				return
+			default:
+				http.Error(w, err.Error(), http.StatusInternalServerError)
 			}
-			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		writeJSON(w, daemon.NoteContent{Rel: cleaned, Content: string(body)})
@@ -85,7 +95,7 @@ func (s *server) resolveProject(w http.ResponseWriter, r *http.Request) (project
 		http.Error(w, "project query required", http.StatusBadRequest)
 		return project.Project{}, false
 	}
-	projs, err := project.Discover(s.cfg.Projects.Root)
+	projs, err := project.Discover(project.ResolveRoot(s.cfg.Projects.Root))
 	if err != nil {
 		http.Error(w, "discover: "+err.Error(), http.StatusInternalServerError)
 		return project.Project{}, false
@@ -117,7 +127,9 @@ func (s *server) handleNotesSearch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "q query required", http.StatusBadRequest)
 		return
 	}
-	hits, err := notes.Open(proj.Path).Search(r.Context(), query, 0)
+	searchCtx, cancel := context.WithTimeout(r.Context(), notesSearchTimeout)
+	defer cancel()
+	hits, err := notes.Open(proj.Path).Search(searchCtx, query, 0)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

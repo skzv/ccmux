@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -62,6 +63,11 @@ func (s *server) handlePairToken(w http.ResponseWriter, r *http.Request) {
 	sshUser := s.cfg.Daemon.SSHUser
 	if sshUser == "" {
 		sshUser, _ = os.LookupEnv("USER")
+	}
+	if sshUser == "" {
+		if u, err := user.Current(); err == nil {
+			sshUser = u.Username
+		}
 	}
 	q := url.Values{}
 	q.Set("host", pairHost)
@@ -135,10 +141,20 @@ func (s *server) handleRegisterDevice(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "decode: "+err.Error(), http.StatusBadRequest)
 		return
 	}
+	// Canonicalize before checking authorized_keys and registering:
+	// without this, a peer knowing any authorized key could prepend
+	// arbitrary pre-key options (`from="1" <key>`, `from="2" <key>`, …)
+	// which ssh.ParseAuthorizedKey accepts while HashPublicKey would
+	// hash differently — bypassing the one-entry-per-paired-key bound.
+	canonicalKey, err := validatePairKey(req.PublicKey)
+	if err != nil {
+		http.Error(w, "invalid public key: "+err.Error(), http.StatusBadRequest)
+		return
+	}
 	// Only a key that completed pairing may bind a push token. Without
 	// this any tailnet peer could register unlimited made-up keys and
 	// make every notification fan out to (and queue behind) its junk.
-	paired, err := authorizedKeyPresent(req.PublicKey)
+	paired, err := authorizedKeyPresent(canonicalKey)
 	if err != nil {
 		http.Error(w, "read authorized_keys: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -147,7 +163,7 @@ func (s *server) handleRegisterDevice(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "public key is not paired with this host", http.StatusForbidden)
 		return
 	}
-	if err := s.devices.RegisterWithProvider(req.PublicKey, req.Token, req.Provider, req.Env); err != nil {
+	if err := s.devices.RegisterWithProvider(canonicalKey, req.Token, req.Provider, req.Env); err != nil {
 		// A bad request is the client's to fix; a failed save is ours
 		// (and the store has already undone it in memory).
 		status := http.StatusInternalServerError

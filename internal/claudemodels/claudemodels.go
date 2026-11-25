@@ -32,6 +32,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -139,10 +140,16 @@ func (f Fetcher) Fetch(ctx context.Context) ([]Model, error) {
 	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
 	defer cancel()
 
+	const (
+		maxPages          = 20
+		maxPageBodyBytes  = 4 << 20
+		maxErrBodyPreview = 512
+	)
 	var out []Model
-	url := base + "/v1/models?limit=100"
-	for {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	seenCursors := map[string]bool{}
+	reqURL := base + "/v1/models?limit=100"
+	for pageNum := 0; pageNum < maxPages; pageNum++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 		if err != nil {
 			return nil, fmt.Errorf("build models request: %w", err)
 		}
@@ -153,7 +160,7 @@ func (f Fetcher) Fetch(ctx context.Context) ([]Model, error) {
 		if err != nil {
 			return nil, fmt.Errorf("call models api: %w", err)
 		}
-		body, readErr := io.ReadAll(resp.Body)
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxPageBodyBytes))
 		resp.Body.Close()
 		if readErr != nil {
 			return nil, fmt.Errorf("read models response: %w", readErr)
@@ -162,7 +169,11 @@ func (f Fetcher) Fetch(ctx context.Context) ([]Model, error) {
 			// Surface the API's own error envelope when possible — it
 			// usually carries a more actionable message than the bare
 			// status line (e.g. "invalid x-api-key").
-			return nil, fmt.Errorf("models api %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+			msg := strings.TrimSpace(string(body))
+			if len(msg) > maxErrBodyPreview {
+				msg = msg[:maxErrBodyPreview] + "…"
+			}
+			return nil, fmt.Errorf("models api %d: %s", resp.StatusCode, msg)
 		}
 
 		var page modelsPage
@@ -172,10 +183,11 @@ func (f Fetcher) Fetch(ctx context.Context) ([]Model, error) {
 		for _, raw := range page.Data {
 			out = append(out, raw.toModel())
 		}
-		if !page.HasMore || page.LastID == "" {
+		if !page.HasMore || page.LastID == "" || seenCursors[page.LastID] {
 			break
 		}
-		url = base + "/v1/models?limit=100&after_id=" + page.LastID
+		seenCursors[page.LastID] = true
+		reqURL = base + "/v1/models?limit=100&after_id=" + url.QueryEscape(page.LastID)
 	}
 	return out, nil
 }
@@ -619,6 +631,9 @@ var errRefreshInFlight = errors.New("claudemodels: a refresh is already running"
 // run is Refresh; with wait false, a call that arrives while a run is
 // in progress returns errRefreshInFlight instead of waiting for it.
 func (s *Service) run(ctx context.Context, wait bool) (Catalog, error) {
+	if err := ctx.Err(); err != nil {
+		return Catalog{}, err
+	}
 	f := &s.flight
 	f.mu.Lock()
 	if running := f.running; running != nil {
@@ -643,14 +658,40 @@ func (s *Service) run(ctx context.Context, wait bool) (Catalog, error) {
 	f.running = running
 	f.mu.Unlock()
 
-	cat, err := s.refresh(ctx)
+	// Detach from a single caller's cancellation so an aborted HTTP
+	// request neither fails co-waiters nor bricks refreshes for
+	// MinRefreshInterval. Each underlying fetcher applies its own timeout.
+	refreshCtx := context.WithoutCancel(ctx)
+	go func() {
+		var (
+			cat Catalog
+			err error
+		)
+		defer func() {
+			if r := recover(); r != nil {
+				err = fmt.Errorf("claudemodels: refresh panic: %v", r)
+			}
+			f.mu.Lock()
+			if err == nil {
+				f.at, f.cat, f.err = time.Now(), cat, nil
+			} else if !errors.Is(err, context.Canceled) {
+				f.cat, f.err = cat, err
+			}
+			f.running = nil
+			f.mu.Unlock()
+			close(running)
+		}()
+		cat, err = s.refresh(refreshCtx)
+	}()
 
+	select {
+	case <-running:
+	case <-ctx.Done():
+		return Catalog{}, ctx.Err()
+	}
 	f.mu.Lock()
-	f.at, f.cat, f.err = time.Now(), cat, err
-	f.running = nil
-	f.mu.Unlock()
-	close(running)
-	return cat, err
+	defer f.mu.Unlock()
+	return f.cat, f.err
 }
 
 // refresh is one run of the discovery chain (see Refresh).

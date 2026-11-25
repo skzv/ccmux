@@ -464,8 +464,7 @@ var ErrForeignMCPEntry = errors.New(`an MCP server named "ccmux" that isn't ccmu
 func RegisterMCP(ctx context.Context, out io.Writer, opts RegisterOptions) error {
 	allowMutate := opts.AllowMutate
 	if !claudeCodeInstalled() {
-		fmt.Fprintln(out, "✗ Claude Code not found (no `claude` on PATH, no ~/.claude.json) — install it first, then re-run")
-		return nil
+		return fmt.Errorf("Claude Code not found (no `claude` on PATH, no %s) — install it first, then re-run", displayUserConfigPath())
 	}
 
 	cfg, err := readUserMCPConfig()

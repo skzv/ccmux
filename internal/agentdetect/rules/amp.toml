@@ -6,7 +6,7 @@ id = "title_spinner_working"
 state = "working"
 priority = 1100
 region = "osc_title"
-regex = ['^[\x{2800}-\x{28FF}]']
+regex = ['^\s*[\x{2800}-\x{28FF}]']
 
 # Approval gate: Amp waits for approval before invoking a tool or
 # editing a file. Scoped to the bottom of the pane and idle-gated: the

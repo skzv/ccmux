@@ -171,3 +171,46 @@ func TestHandleNotesSearch_RejectsBadMethod(t *testing.T) {
 		t.Errorf("POST status = %d, want 405", rec.Code)
 	}
 }
+
+func TestHandleNotes_EmptyProjectsRootResolvesDefault(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	projDir := filepath.Join(home, "Projects", "demo")
+	if err := os.MkdirAll(projDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projDir, "README.md"), []byte("# Demo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := &server{cfg: config.Config{Projects: config.ProjectsConfig{Root: ""}}}
+	rec := httptest.NewRecorder()
+	s.handleNotes(rec, httptest.NewRequest(http.MethodGet, "/v1/notes?project=demo&file=README.md", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body)
+	}
+}
+
+func TestHandleNotes_BlocksSymlinkEscape(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "Projects")
+	projDir := filepath.Join(root, "proj")
+	if err := os.MkdirAll(projDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	secret := filepath.Join(base, "secret.toml")
+	if err := os.WriteFile(secret, []byte("api_key = \"supersecret\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secret, filepath.Join(projDir, "leak.md")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	s := &server{cfg: config.Config{Projects: config.ProjectsConfig{Root: root}}}
+	rec := httptest.NewRecorder()
+	s.handleNotes(rec, httptest.NewRequest(http.MethodGet, "/v1/notes?project=proj&file=leak.md", nil))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("symlink escape status = %d, want 400; body=%s", rec.Code, rec.Body)
+	}
+	if strings.Contains(rec.Body.String(), "supersecret") {
+		t.Fatalf("response leaked secret: %s", rec.Body)
+	}
+}

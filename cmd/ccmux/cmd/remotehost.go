@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os/exec"
 	"path"
+	"strconv"
 	"strings"
 	"time"
 
@@ -71,7 +72,7 @@ func hostDaemonAddr(cfg config.Config, h config.Host) string {
 	if port == 0 {
 		port = defaultTailnetPort
 	}
-	return fmt.Sprintf("%s:%d", h.Address, port)
+	return net.JoinHostPort(h.Address, strconv.Itoa(port))
 }
 
 // remoteErr explains a failed call to rh's daemon: that the host

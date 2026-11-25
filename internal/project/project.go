@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/skzv/ccmux/internal/agent"
+	"github.com/skzv/ccmux/internal/configfile"
 	"github.com/skzv/ccmux/internal/tmux"
 )
 
@@ -129,7 +130,7 @@ func inspect(path string) (Project, bool) {
 		Path:     path,
 		Modified: info.ModTime(),
 	}
-	if fi, err := os.Stat(filepath.Join(path, ".git")); err == nil && fi.IsDir() {
+	if _, err := os.Stat(filepath.Join(path, ".git")); err == nil {
 		p.HasGit = true
 	}
 	if fi, err := os.Stat(filepath.Join(path, "CLAUDE.md")); err == nil && !fi.IsDir() {
@@ -197,12 +198,13 @@ func SetAgent(projectPath string, id agent.ID) error {
 	}
 	path := filepath.Join(projectPath, agentSidecarRelPath)
 	// Trailing newline keeps git-add diffs clean — POSIX text files
-	// should end in \n.
-	return os.WriteFile(path, []byte(string(id)+"\n"), 0o644)
+	// should end in \n. Atomic write prevents concurrent ccmuxd ReadAgent
+	// polls from observing an empty truncated file and falling back to Claude.
+	return configfile.WriteAtomic(path, []byte(string(id)+"\n"), 0o644)
 }
 
 func expandHome(p string) (string, error) {
-	if strings.HasPrefix(p, "~/") {
+	if strings.HasPrefix(p, "~/") || strings.HasPrefix(p, "~"+string(filepath.Separator)) {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return "", err

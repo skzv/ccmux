@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/skzv/ccmux/internal/agenthome"
@@ -480,12 +481,15 @@ func WriteSettings(s *Settings) (backup string, err error) {
 		return backup, err
 	}
 	// Write-then-rename so a crash mid-write can't truncate settings.json
-	// and lose the round-trip-preserved Extra fields.
-	if err := configfile.WriteAtomic(p.Settings, data, 0o644); err != nil {
+	// and lose the round-trip-preserved Extra fields. 0600 protects MCP
+	// auth headers and env secrets (matching configfile.Backup).
+	if err := configfile.WriteAtomic(p.Settings, data, 0o600); err != nil {
 		return backup, err
 	}
 	return backup, nil
 }
+
+var settingsMu sync.Mutex
 
 // backupFile is a thin wrapper around the shared configfile.Backup
 // helper. Kept so the rest of this package doesn't need to import
@@ -503,6 +507,8 @@ const maxBackupsPerFile = configfile.MaxBackupsPerFile
 // ("claude-opus-4-7"), a short alias ("opus", "sonnet", "haiku",
 // "opusplan"), or "" to clear the override.
 func SetModel(model string) (string, error) {
+	settingsMu.Lock()
+	defer settingsMu.Unlock()
 	s, err := ReadSettings()
 	if err != nil {
 		return "", err
@@ -560,6 +566,8 @@ type ModelOption struct {
 // Code version, so we write whatever the caller asks for and let Claude
 // Code decide.
 func SetEffortLevel(level string) (string, error) {
+	settingsMu.Lock()
+	defer settingsMu.Unlock()
 	s, err := ReadSettings()
 	if err != nil {
 		return "", err
@@ -574,6 +582,8 @@ func SetEffortLevel(level string) (string, error) {
 // Code's default, which can be on. The false lives in Extra, the same
 // place readSettingsAt keeps a user-written one.
 func SetAlwaysThinking(enabled bool) (string, error) {
+	settingsMu.Lock()
+	defer settingsMu.Unlock()
 	s, err := ReadSettings()
 	if err != nil {
 		return "", err
@@ -631,6 +641,8 @@ type EffortOption struct {
 // Persisting through settings.json means ccmux's "yolo" toggle survives
 // reattach and matches Claude Code's documented permanent option.
 func SetYoloMode(enabled bool) (string, error) {
+	settingsMu.Lock()
+	defer settingsMu.Unlock()
 	s, err := ReadSettings()
 	if err != nil {
 		return "", err
@@ -733,8 +745,8 @@ func firstDescriptionLine(path string) string {
 			skipHeader = false
 			continue
 		}
-		if len(trim) > 100 {
-			trim = trim[:100] + "…"
+		if r := []rune(trim); len(r) > 100 {
+			trim = string(r[:100]) + "…"
 		}
 		return trim
 	}
@@ -748,7 +760,50 @@ type Skill struct {
 	Description string
 }
 
-// ListSkills returns installed skills.
+// UserConfigPath returns Claude Code's user-level config file where
+// user-scope MCP servers (`claude mcp add --scope user`) live:
+// $CLAUDE_CONFIG_DIR/.claude.json when that override is set, else
+// ~/.claude.json.
+func UserConfigPath() (string, error) {
+	home, homeErr := os.UserHomeDir()
+	if dir, ok := agenthome.Override(agenthome.ClaudeEnv, home); ok {
+		return filepath.Join(dir, ".claude.json"), nil
+	}
+	if homeErr != nil {
+		return "", homeErr
+	}
+	return filepath.Join(home, ".claude.json"), nil
+}
+
+// ReadUserMCPServers reads user-scope `mcpServers` from ~/.claude.json
+// (or $CLAUDE_CONFIG_DIR/.claude.json). Returns an empty map if the
+// file is missing or has no mcpServers key.
+func ReadUserMCPServers() (map[string]MCPServer, error) {
+	path, err := UserConfigPath()
+	if err != nil {
+		return nil, err
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return map[string]MCPServer{}, nil
+		}
+		return nil, err
+	}
+	var doc struct {
+		MCPServers map[string]MCPServer `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(b, &doc); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", path, err)
+	}
+	if doc.MCPServers == nil {
+		return map[string]MCPServer{}, nil
+	}
+	return doc.MCPServers, nil
+}
+
+// ListSkills returns installed skills (following symlinked skill dirs,
+// the standard layout for npx skills / ~/.agents/skills symlinks).
 func ListSkills() ([]Skill, error) {
 	p, err := Paths()
 	if err != nil {
@@ -763,7 +818,13 @@ func ListSkills() ([]Skill, error) {
 	}
 	var out []Skill
 	for _, e := range entries {
-		if !e.IsDir() {
+		isDir := e.IsDir()
+		if !isDir && e.Type()&fs.ModeSymlink != 0 {
+			if fi, serr := os.Stat(filepath.Join(p.SkillsDir, e.Name())); serr == nil && fi.IsDir() {
+				isDir = true
+			}
+		}
+		if !isDir {
 			continue
 		}
 		skillFile := filepath.Join(p.SkillsDir, e.Name(), "SKILL.md")

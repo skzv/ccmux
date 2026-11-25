@@ -748,7 +748,7 @@ func carryUnknownKeys(encoded, prev []byte) ([]byte, bool) {
 	if !carried {
 		return nil, false
 	}
-	out, err := encode(merged)
+	out, err := tomlpatch.EncodeMap(merged)
 	if err != nil {
 		return nil, false
 	}
@@ -787,7 +787,7 @@ func omitDefaults(target, prev []byte) ([]byte, bool) {
 		return nil, false
 	}
 	loadsSame := func() bool {
-		b, err := encode(tgt)
+		b, err := tomlpatch.EncodeMap(tgt)
 		if err != nil {
 			return false
 		}
@@ -835,7 +835,7 @@ func omitDefaults(target, prev []byte) ([]byte, bool) {
 	if !omitted {
 		return nil, false
 	}
-	out, err := encode(tgt)
+	out, err := tomlpatch.EncodeMap(tgt)
 	if err != nil {
 		return nil, false
 	}
@@ -926,6 +926,15 @@ var updateMu sync.Mutex
 func Update(fn func(*Config) error) (Config, error) {
 	updateMu.Lock()
 	defer updateMu.Unlock()
+	p, err := Path()
+	if err != nil {
+		return Config{}, err
+	}
+	unlock, err := acquireUpdateLock(p)
+	if err != nil {
+		return Config{}, err
+	}
+	defer unlock()
 	cfg, err := Load()
 	if err != nil {
 		return cfg, err

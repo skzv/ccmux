@@ -40,6 +40,7 @@ command -v brew >/dev/null 2>&1 || { echo "brew-test: brew not installed" >&2; e
 brew_prefix=$(brew --prefix)
 brew_ccmux="$brew_prefix/bin/ccmux"
 brew_ccmuxd="$brew_prefix/bin/ccmuxd"
+brew_ccmux_mcp="$brew_prefix/bin/ccmux-mcp"
 
 # Fresh sandbox HOME so ccmux reads/writes its own scratch state.
 root=$(mktemp -d "${TMPDIR:-/tmp}/ccmux-brew-test.XXXXXX")
@@ -126,7 +127,7 @@ esac
 
 echo
 echo "== brew install location:"
-ls -l "$brew_ccmux" "$brew_ccmuxd"
+ls -l "$brew_ccmux" "$brew_ccmuxd" "$brew_ccmux_mcp"
 
 echo
 echo "== ccmux --help (first 6 lines):"

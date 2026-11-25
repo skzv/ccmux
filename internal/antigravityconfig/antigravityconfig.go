@@ -31,21 +31,25 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
+	"github.com/skzv/ccmux/internal/agenthome"
 	"github.com/skzv/ccmux/internal/configfile"
 )
+
+var settingsMu sync.Mutex
 
 // Paths returns the canonical file locations the Antigravity CLI uses
 // on this host. Honors $ANTIGRAVITY_HOME for tests / relocations,
 // otherwise defaults to ~/.gemini/antigravity-cli.
 func Paths() (Locations, error) {
-	root := os.Getenv("ANTIGRAVITY_HOME")
-	if root == "" {
-		home, err := os.UserHomeDir()
+	home, err := os.UserHomeDir()
+	root, ok := agenthome.Override(agenthome.AntigravityEnv, home)
+	if !ok {
 		if err != nil {
 			return Locations{}, err
 		}
-		root = filepath.Join(home, ".gemini", "antigravity-cli")
+		root = agenthome.Antigravity(home)
 	}
 	return Locations{
 		Root:       root,
@@ -133,7 +137,7 @@ func WriteSettings(s *Settings) (backup string, err error) {
 	if err != nil {
 		return backup, err
 	}
-	if err := configfile.WriteAtomic(p.Settings, data, 0o644); err != nil {
+	if err := configfile.WriteAtomic(p.Settings, data, 0o600); err != nil {
 		return backup, err
 	}
 	return backup, nil
@@ -181,6 +185,8 @@ func backupFile(src, backupDir string) (string, error) {
 
 // SetEffortLevel updates only reasoningEffort. Pass "" to clear.
 func SetEffortLevel(level string) (string, error) {
+	settingsMu.Lock()
+	defer settingsMu.Unlock()
 	s, err := ReadSettings()
 	if err != nil {
 		return "", err
@@ -223,6 +229,8 @@ type EffortOption struct {
 // false → omits the key (omitempty), so we never litter the file with
 // an explicit `false` the user didn't add.
 func SetYoloMode(enabled bool) (string, error) {
+	settingsMu.Lock()
+	defer settingsMu.Unlock()
 	s, err := ReadSettings()
 	if err != nil {
 		return "", err

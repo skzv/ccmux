@@ -6,6 +6,8 @@
 package configfile
 
 import (
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -33,9 +35,7 @@ const MaxBackupsPerFile = 50
 // target is rewritten and the link itself is left in place — renaming
 // over dst would silently replace the link with a regular file.
 func WriteAtomic(dst string, data []byte, mode os.FileMode) error {
-	if resolved, err := filepath.EvalSymlinks(dst); err == nil {
-		dst = resolved
-	}
+	dst = resolveSymlinkTarget(dst)
 	if info, err := os.Stat(dst); err == nil {
 		mode &= info.Mode().Perm()
 	}
@@ -76,6 +76,36 @@ func WriteAtomic(dst string, data []byte, mode os.FileMode) error {
 	return nil
 }
 
+// resolveSymlinkTarget resolves dst through any symlink chain — including
+// dangling symlinks (e.g. a dotfile manager's link whose target has not
+// been created yet) — so os.Rename writes to the link's target rather
+// than replacing the symlink itself with a regular file.
+func resolveSymlinkTarget(dst string) string {
+	if resolved, err := filepath.EvalSymlinks(dst); err == nil {
+		return resolved
+	}
+	cur := dst
+	for range 40 {
+		fi, err := os.Lstat(cur)
+		if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+			break
+		}
+		target, err := os.Readlink(cur)
+		if err != nil {
+			break
+		}
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(filepath.Dir(cur), target)
+		}
+		cur = filepath.Clean(target)
+	}
+	// Resolve any existing symlinked parent directory of the final target.
+	if parent, err := filepath.EvalSymlinks(filepath.Dir(cur)); err == nil {
+		return filepath.Join(parent, filepath.Base(cur))
+	}
+	return cur
+}
+
 // Backup copies `src` to <backupDir>/<basename>.<timestamp> and prunes
 // older backups for the same basename beyond MaxBackupsPerFile.
 // Idempotent on missing src (no-op, returns "").
@@ -86,33 +116,57 @@ func Backup(src, backupDir string) (string, error) {
 	if err := os.MkdirAll(backupDir, 0o700); err != nil {
 		return "", err
 	}
-	ts := time.Now().Format("20060102-150405.000")
 	base := filepath.Base(src)
-	dst := filepath.Join(backupDir, base+"."+ts)
 	in, err := os.Open(src)
 	if err != nil {
 		return "", err
 	}
 	defer in.Close()
 	// 0600: backups are copies of files that can hold API keys, and
-	// they outlive any later chmod of the original.
-	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
-	if err != nil {
-		return "", err
+	// they outlive any later chmod of the original. Use UTC nanosecond
+	// timestamps + O_EXCL so back-to-back saves within 1ms or across a
+	// DST fallback never clobber an earlier backup.
+	var (
+		dst string
+		out *os.File
+	)
+	ts := time.Now().UTC().Format("20060102-150405.000000000Z")
+	for attempt := 0; attempt < 100; attempt++ {
+		name := base + "." + ts
+		if attempt > 0 {
+			name = fmt.Sprintf("%s.%s.%d", base, ts, attempt)
+		}
+		cand := filepath.Join(backupDir, name)
+		f, oerr := os.OpenFile(cand, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if oerr == nil {
+			dst, out = cand, f
+			break
+		}
+		if !errors.Is(oerr, os.ErrExist) {
+			return "", oerr
+		}
+	}
+	if out == nil {
+		return "", fmt.Errorf("create unique backup file in %q: exhausted retries", backupDir)
+	}
+	cleanup := func() {
+		_ = out.Close()
+		_ = os.Remove(dst)
 	}
 	if _, err := io.Copy(out, in); err != nil {
-		_ = out.Close()
-		return dst, err
+		cleanup()
+		return "", err
 	}
 	// fsync + checked close: this backup is the caller's rollback of
 	// last resort — it must actually be on disk before the caller
 	// overwrites src, or a crash could leave BOTH copies truncated.
 	if err := syncBackup(out); err != nil {
-		_ = out.Close()
-		return dst, err
+		cleanup()
+		return "", err
 	}
 	if err := out.Close(); err != nil {
-		return dst, err
+		_ = os.Remove(dst)
+		return "", err
 	}
 	pruneBackups(backupDir, base, MaxBackupsPerFile)
 	return dst, nil
@@ -138,7 +192,7 @@ func pruneBackups(dir, base string, keep int) {
 			continue
 		}
 		name := e.Name()
-		if strings.HasPrefix(name, prefix) {
+		if suffix, ok := strings.CutPrefix(name, prefix); ok && isBackupSuffix(suffix) {
 			matches = append(matches, name)
 		}
 	}
@@ -149,4 +203,21 @@ func pruneBackups(dir, base string, keep int) {
 	for _, name := range matches[:len(matches)-keep] {
 		_ = os.Remove(filepath.Join(dir, name))
 	}
+}
+
+// isBackupSuffix reports whether suffix looks like a numeric/timestamp
+// backup suffix (e.g. "20260102-150405.000", "20260102-150405.000000000Z",
+// "000001") rather than an unrelated filename sharing a prefix (e.g.
+// base "config" must not match "config.toml.20260102-...").
+func isBackupSuffix(suffix string) bool {
+	if len(suffix) == 0 || suffix[0] < '0' || suffix[0] > '9' {
+		return false
+	}
+	for i := 0; i < len(suffix); i++ {
+		c := suffix[i]
+		if !((c >= '0' && c <= '9') || c == '-' || c == '.' || c == 'Z') {
+			return false
+		}
+	}
+	return true
 }

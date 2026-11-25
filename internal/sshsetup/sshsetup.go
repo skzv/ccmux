@@ -35,6 +35,8 @@ package sshsetup
 
 import (
 	"fmt"
+	"net"
+	"strconv"
 	"strings"
 )
 
@@ -52,7 +54,7 @@ func (t Target) Addr() string {
 	if p == 0 {
 		p = 22
 	}
-	return fmt.Sprintf("%s:%d", t.Host, p)
+	return net.JoinHostPort(t.Host, strconv.Itoa(p))
 }
 
 // UserOr returns t.User, or fallback if t.User is blank. Used so the

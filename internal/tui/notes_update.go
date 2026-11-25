@@ -103,9 +103,9 @@ func (m notesModel) Update(msg tea.Msg) (notesModel, tea.Cmd) {
 				return m, m.refreshPreview()
 			case "enter":
 				query := strings.TrimSpace(m.searchInput.Value())
+				m.searching = false
 				m.searchInput.Blur()
 				if query == "" {
-					m.searching = false
 					return m, nil
 				}
 				return m, m.runSearch(query)

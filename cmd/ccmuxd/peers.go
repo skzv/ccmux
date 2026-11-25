@@ -3,8 +3,8 @@ package main
 import (
 	"context"
 	"log"
+	"net"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/skzv/ccmux/internal/daemon"
@@ -43,8 +43,11 @@ func peerInfos(scan tailnet.Scan, port int) []daemon.PeerInfo {
 		port = 7474
 	}
 	for _, d := range scan.Reachable {
-		// Address is "ip:port" — split for the client.
-		ip, _, _ := strings.Cut(d.Address, ":")
+		// Address is "ip:port" or "[ipv6]:port" — split safely.
+		ip, _, err := net.SplitHostPort(d.Address)
+		if err != nil {
+			ip = d.Address
+		}
 		p := port
 		out = append(out, daemon.PeerInfo{
 			Hostname: d.Name, Addr: ip, OS: d.OS,

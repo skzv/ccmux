@@ -139,7 +139,10 @@ func (c *Cursor) FollowFS(fsys fs.FS, path string, maxLen int, restart func(), l
 	if sc.Err() != nil {
 		return sc.Err()
 	}
-	if len(c.sig) == int(min(c.off, sigLen)) {
+	if postFI, serr := f.Stat(); serr == nil {
+		fi = postFI
+	}
+	if c.off <= fi.Size() && len(c.sig) == int(min(c.off, sigLen)) {
 		c.size, c.mtime, c.valid = fi.Size(), fi.ModTime(), true
 	}
 	return nil

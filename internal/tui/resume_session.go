@@ -59,9 +59,10 @@ func (a App) resumeConversationCmd(c conversations.Conversation) tea.Cmd {
 			return conversationResumedMsg{Err: fmt.Errorf("don't know how to resume agent %q", c.Agent)}
 		}
 		sessionName := conversations.ResumeSessionName(c.ID)
-		// Build the shell command tmux runs in the new pane. zsh
-		// fallback keeps the pane alive if the agent binary is missing.
-		cmdline := joinShellArgs(argv) + " || zsh"
+		// Build the shell command tmux runs in the new pane. POSIX shell
+		// fallback chain keeps the pane alive if the agent binary or zsh
+		// is missing (e.g. minimal Linux hosts).
+		cmdline := joinShellArgs(argv) + " || zsh || bash || sh"
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		// Resumed before and still running: attach to that session (as

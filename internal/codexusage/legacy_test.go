@@ -56,7 +56,7 @@ func legacyScanFile(fsys fs.FS, path string, cutoff, now time.Time) scanResult {
 			continue
 		}
 		ts := parseTimestamp(env.Timestamp)
-		inWindow := !ts.IsZero() && !ts.Before(cutoff) && !ts.After(now)
+		inWindow := !ts.IsZero() && !ts.Before(cutoff) && !ts.After(now.Add(futureSkewTolerance))
 
 		switch env.Type {
 		case "session_meta":

@@ -161,10 +161,7 @@ func printConversationsTable(list []conversations.Conversation) {
 		when := relativeTime(c.LastActivity)
 		// IDs come from transcript file names and the preview/project
 		// from their contents: sanitize (see safeprint.go).
-		idShort := safeField(c.ID)
-		if len(idShort) > idW {
-			idShort = idShort[:idW-1] + "…"
-		}
+		idShort := truncateRunes(safeField(c.ID), idW)
 		preview := safeField(c.Preview)
 		if preview == "" {
 			preview = "(" + safeField(c.Project) + ")"

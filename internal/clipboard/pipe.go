@@ -46,13 +46,17 @@ import (
 // `deps` carries all OS / tmux interactions so tests can pin the full
 // matrix without spinning up a tmux server or forking processes. The
 // zero value works in production (Deps{}.fill() resolves all hooks).
+// maxClipboardPayloadBytes caps selection reads in PipeSelection so a
+// malicious or runaway pipe cannot exhaust memory.
+const maxClipboardPayloadBytes = 4 << 20
+
 func PipeSelection(ctx context.Context, in io.Reader, copier string, deps Deps) error {
 	deps = deps.fill()
 
 	// Drain stdin into memory first: selections are small (mouse drags
 	// rarely exceed a few KB), and an empty one — tmux firing the
 	// binding on a click with no drag — needs no tmux query at all.
-	payload, err := io.ReadAll(in)
+	payload, err := io.ReadAll(io.LimitReader(in, maxClipboardPayloadBytes))
 	if err != nil {
 		return fmt.Errorf("read selection: %w", err)
 	}
@@ -185,6 +189,7 @@ const listClientsFormat = "#{client_pid} #{client_tty}"
 // default.
 func listTmuxClients(ctx context.Context) ([]TmuxClient, error) {
 	cmd := exec.CommandContext(ctx, "tmux", "list-clients", "-F", listClientsFormat)
+	cmd.WaitDelay = 2 * time.Second
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, err
@@ -257,14 +262,39 @@ func isClientSSH(pid int) bool {
 const RemoteClientEnv = "CCMUX_REMOTE_CLIENT"
 
 // envMarksRemote reports whether a dumped process environment belongs
-// to a client whose user is on another device.
+// to a client whose user is on another device. Handles NUL-separated
+// entries (Linux /proc/<pid>/environ) and whitespace-separated entries
+// (macOS `ps -E -p <pid>`) with exact KEY=VALUE matching so unrelated
+// substrings or empty `SSH_CONNECTION=` don't false-positive.
 func envMarksRemote(env []byte) bool {
-	return bytes.Contains(env, []byte("SSH_CONNECTION=")) ||
-		bytes.Contains(env, []byte(RemoteClientEnv+"=1"))
+	if bytes.IndexByte(env, 0) >= 0 {
+		for _, entry := range bytes.Split(env, []byte{0}) {
+			if isRemoteEnvEntry(entry) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, tok := range bytes.Fields(env) {
+		if isRemoteEnvEntry(tok) {
+			return true
+		}
+	}
+	return false
+}
+
+func isRemoteEnvEntry(entry []byte) bool {
+	if v, ok := bytes.CutPrefix(entry, []byte("SSH_CONNECTION=")); ok && len(v) > 0 {
+		return true
+	}
+	return bytes.Equal(entry, []byte(RemoteClientEnv+"=1"))
 }
 
 // nativeClipboardTool returns the argv for the OS's clipboard reader.
-// Wayland before X on Linux. Empty slice when no tool is available.
+// On Linux, prefers wl-copy when WAYLAND_DISPLAY is set and xclip/xsel
+// when only DISPLAY is set (avoiding Wayland failures under X11). When
+// neither display variable is set in the environment, falls back to
+// probing wl-copy, xclip, then xsel.
 func nativeClipboardTool() []string {
 	switch runtime.GOOS {
 	case "darwin":
@@ -272,11 +302,27 @@ func nativeClipboardTool() []string {
 			return []string{"pbcopy"}
 		}
 	case "linux":
-		if _, err := exec.LookPath("wl-copy"); err == nil {
+		return linuxClipboardTool(
+			os.Getenv("WAYLAND_DISPLAY") != "",
+			os.Getenv("DISPLAY") != "",
+			exec.LookPath,
+		)
+	}
+	return nil
+}
+
+func linuxClipboardTool(wayland, x11 bool, lookPath func(string) (string, error)) []string {
+	if wayland || !x11 {
+		if _, err := lookPath("wl-copy"); err == nil {
 			return []string{"wl-copy"}
 		}
-		if _, err := exec.LookPath("xclip"); err == nil {
+	}
+	if x11 || !wayland {
+		if _, err := lookPath("xclip"); err == nil {
 			return []string{"xclip", "-selection", "clipboard"}
+		}
+		if _, err := lookPath("xsel"); err == nil {
+			return []string{"xsel", "--clipboard", "--input"}
 		}
 	}
 	return nil

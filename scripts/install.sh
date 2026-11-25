@@ -69,6 +69,8 @@ for bin in $bins; do
 done
 
 echo "ccmux: installed $bins to ${BIN_DIR}"
+# Best-effort daemon restart so an upgrade doesn't leave an older ccmuxd running.
+"$BIN_DIR/ccmux" daemon restart >/dev/null 2>&1 || true
 case ":$PATH:" in
 	*":$BIN_DIR:"*) ;;
 	*) echo "ccmux: add ${BIN_DIR} to your PATH, then re-open your shell" ;;

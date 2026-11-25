@@ -213,10 +213,21 @@ func UnitFile(binary string) string {
 }
 
 // unitFile renders the systemd-user unit. pathEnv is written verbatim
-// (UnitFile relies on the %h specifier in it); every env value is
-// escaped by systemdEnvAssignment.
+// when it needs no quoting (preserving UnitFile's %h specifier and
+// clean PATHs); values with whitespace, quotes, backslashes, or
+// control characters are escaped via systemdEnvAssignment. When
+// escapePathPercent is true (installed units with a resolved PATH),
+// literal '%' characters in PATH are also escaped.
 func unitFile(binary, pathEnv string, env []EnvVar) string {
+	return renderUnitFile(binary, pathEnv, false, env)
+}
+
+func renderUnitFile(binary, pathEnv string, escapePathPercent bool, env []EnvVar) string {
 	var b strings.Builder
+	pathLine := "PATH=" + pathEnv
+	if needsSystemdQuoting(pathEnv, escapePathPercent) {
+		pathLine = systemdEnvAssignment("PATH", pathEnv)
+	}
 	fmt.Fprintf(&b, `[Unit]
 Description=ccmux daemon (Claude Code session supervisor)
 After=default.target
@@ -225,8 +236,8 @@ After=default.target
 ExecStart=%s
 Restart=on-failure
 RestartSec=3
-Environment=PATH=%s
-`, binary, pathEnv)
+Environment=%s
+`, systemdExecArg(binary), pathLine)
 	for _, e := range env {
 		fmt.Fprintf(&b, "Environment=%s\n", systemdEnvAssignment(e.Name, e.Value))
 	}
@@ -234,6 +245,45 @@ Environment=PATH=%s
 [Install]
 WantedBy=default.target
 `)
+	return b.String()
+}
+
+func needsSystemdQuoting(s string, escapePercent bool) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c <= 0x20 || c == 0x7f || c == '"' || c == '\\' || c == '\'' {
+			return true
+		}
+		if escapePercent && c == '%' {
+			return true
+		}
+	}
+	return false
+}
+
+// systemdExecArg formats a single executable path for ExecStart=,
+// quoting and escaping only when necessary so clean paths stay
+// readable and golden-compatible.
+func systemdExecArg(arg string) string {
+	if !needsSystemdQuoting(arg, true) {
+		return arg
+	}
+	var b strings.Builder
+	b.WriteByte('"')
+	for i := 0; i < len(arg); i++ {
+		switch c := arg[i]; {
+		case c == '\\' || c == '"':
+			b.WriteByte('\\')
+			b.WriteByte(c)
+		case c == '%':
+			b.WriteString("%%")
+		case c < 0x20 || c == 0x7f:
+			fmt.Fprintf(&b, `\x%02x`, c)
+		default:
+			b.WriteByte(c)
+		}
+	}
+	b.WriteByte('"')
 	return b.String()
 }
 
@@ -280,8 +330,18 @@ func managedPath(home string, commands agent.Commands, defaults ...string) strin
 		parts = append(parts, p)
 	}
 	add(filepath.Join(home, ".local", "bin"))
-	for _, cmd := range []string{commands.Claude, commands.Codex, commands.Antigravity, commands.Cursor, commands.Pi, commands.Grok, commands.Gemini} {
-		if cmd = strings.TrimSpace(cmd); cmd != "" {
+	for _, cmd := range []string{commands.Claude, commands.Codex, commands.Antigravity, commands.Cursor, commands.Pi, commands.Grok, commands.Gemini, commands.Muse} {
+		cmd = strings.TrimSpace(cmd)
+		if cmd == "" {
+			continue
+		}
+		if strings.HasPrefix(cmd, "~/") && home != "" {
+			cmd = filepath.Join(home, cmd[2:])
+		}
+		// Only absolute binary overrides contribute a PATH directory:
+		// a bare command name ("claude-dev") has filepath.Dir == ".",
+		// which would inject CWD ($HOME) near the front of PATH.
+		if filepath.IsAbs(cmd) {
 			add(filepath.Dir(cmd))
 		}
 	}
@@ -367,9 +427,10 @@ func requireBinary(s Status) error {
 // both backends for stdout/stderr logs. Returns the absolute path.
 func ensureStateDirs(home string) (string, error) {
 	dir := filepath.Join(home, ".local", "state", "ccmux")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
+	_ = os.Chmod(dir, 0o700)
 	return dir, nil
 }
 

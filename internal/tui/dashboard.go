@@ -934,6 +934,9 @@ func stateGlyph(st styles.Styles, state string) string {
 }
 
 func humanDuration(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
 	if d < time.Minute {
 		return fmt.Sprintf("%ds", int(d.Seconds()))
 	}

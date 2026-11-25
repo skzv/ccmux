@@ -3,6 +3,7 @@ package tui
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os/exec"
 	"strings"
 
@@ -208,6 +209,9 @@ func sshPortOr22(p int) int {
 // auto-generated host names ("bob@sputnik") don't drag the full
 // MagicDNS suffix.
 func networkHostShortName(host string) string {
+	if net.ParseIP(host) != nil {
+		return host
+	}
 	if i := strings.Index(host, "."); i > 0 {
 		return host[:i]
 	}

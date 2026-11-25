@@ -8,6 +8,8 @@ package notes
 
 import (
 	"bufio"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -19,6 +21,14 @@ import (
 
 	"github.com/skzv/ccmux/internal/termsafe"
 )
+
+// ErrNoteTooLarge is returned by Vault.Read when a markdown file exceeds
+// maxNoteReadBytes.
+var ErrNoteTooLarge = errors.New("note exceeds maximum readable size")
+
+// maxNoteReadBytes bounds Vault.Read so a multi-GB .md file or special
+// device can't OOM or hang the TUI or ccmuxd.
+const maxNoteReadBytes = 16 << 20
 
 // Vault is the markdown tree for one project — rooted at the project
 // directory itself, so List() and Search() see every .md file, not
@@ -67,6 +77,12 @@ func (v Vault) List() ([]Entry, error) {
 			if path != walk && skipDir(d.Name()) {
 				return filepath.SkipDir
 			}
+			return nil
+		}
+		// Never follow symlinks inside the project tree: a repo could
+		// drop `leak.md -> ~/.ssh/id_rsa`, which would otherwise be
+		// listed, H1-scanned, and served over /v1/notes.
+		if d.Type()&os.ModeSymlink != 0 {
 			return nil
 		}
 		if !strings.EqualFold(filepath.Ext(d.Name()), ".md") {
@@ -142,11 +158,53 @@ func (v Vault) Read(rel string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	data, err := os.ReadFile(filepath.Join(v.Root, filepath.FromSlash(cleaned)))
+	root, err := os.OpenRoot(v.walkRoot())
 	if err != nil {
 		return nil, err
 	}
+	defer root.Close()
+	// Refuse symlinks directly (matching List/Search) and rely on
+	// os.Root's kernel-enforced confinement to block directory symlink
+	// escapes out of the vault.
+	if fi, lerr := root.Lstat(cleaned); lerr == nil {
+		if fi.Mode()&os.ModeSymlink != 0 {
+			return nil, ErrOutsideVault
+		}
+	} else if isRootEscapeErr(lerr) {
+		return nil, ErrOutsideVault
+	}
+	f, err := root.Open(cleaned)
+	if err != nil {
+		if isRootEscapeErr(err) {
+			return nil, ErrOutsideVault
+		}
+		return nil, err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, fmt.Errorf("read note %q: not a regular file", cleaned)
+	}
+	data, err := io.ReadAll(io.LimitReader(f, maxNoteReadBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxNoteReadBytes {
+		return nil, fmt.Errorf("%w: %s", ErrNoteTooLarge, cleaned)
+	}
 	return termsafe.Bytes(data), nil
+}
+
+// isRootEscapeErr reports whether an error from os.Root indicates a path
+// or symlink attempted to escape the root directory.
+func isRootEscapeErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "escapes from parent")
 }
 
 // prunedDirs are the dependency and build-output directory names the
@@ -207,7 +265,9 @@ var sortPrefixRx = regexp.MustCompile(`^\d{2,}_`)
 // underscores into spaces.
 func filenameLabel(rel string) string {
 	base := filepath.Base(rel)
-	base = strings.TrimSuffix(base, ".md")
+	if strings.EqualFold(filepath.Ext(base), ".md") {
+		base = base[:len(base)-len(".md")]
+	}
 	base = sortPrefixRx.ReplaceAllString(base, "")
 	base = strings.ReplaceAll(base, "_", " ")
 	return base
@@ -232,6 +292,10 @@ type h1CacheEntry struct {
 	h1    string
 }
 
+// h1CacheMaxEntries bounds the process-global H1 cache so a long-running
+// ccmuxd never grows unboundedly as files or projects churn.
+const h1CacheMaxEntries = 4096
+
 var (
 	h1CacheMu sync.RWMutex
 	h1Cache   = map[string]h1CacheEntry{}
@@ -249,6 +313,9 @@ func cachedH1(absPath string, mtime time.Time) string {
 	}
 	h1 := extractH1(absPath)
 	h1CacheMu.Lock()
+	if len(h1Cache) >= h1CacheMaxEntries {
+		clear(h1Cache)
+	}
 	h1Cache[absPath] = h1CacheEntry{mtime: mtime, h1: h1}
 	h1CacheMu.Unlock()
 	return h1

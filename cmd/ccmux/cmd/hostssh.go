@@ -5,8 +5,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/user"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -303,11 +305,9 @@ func sshTargetForHost(h config.Host) sshsetup.Target {
 	return sshsetup.Target{User: user, Host: h.Address, Port: port}
 }
 
-// parseAdHocTarget reads "[user@]host[:port]" and constructs a
-// Target, defaulting user to the local $USER and port to 22.
-//
-// IPv6 brackets are NOT supported — that's a future-me problem; the
-// vast majority of tailnet targets are MagicDNS names or v4 IPs.
+// parseAdHocTarget reads "[user@]host[:port]" (including bracketed IPv6
+// such as "[fd7a::1]" or "alice@[fd7a::1]:2222") and constructs a Target,
+// defaulting user to the local $USER and port to 22.
 func parseAdHocTarget(arg string) (sshsetup.Target, string, error) {
 	if arg == "" {
 		return sshsetup.Target{}, "", errors.New("target is empty")
@@ -318,17 +318,33 @@ func parseAdHocTarget(arg string) (sshsetup.Target, string, error) {
 		t.User = rest[:i]
 		rest = rest[i+1:]
 	}
-	if i := strings.LastIndex(rest, ":"); i >= 0 {
-		t.Host = rest[:i]
-		p := 0
-		for _, r := range rest[i+1:] {
-			if r < '0' || r > '9' {
-				return sshsetup.Target{}, "", fmt.Errorf("invalid port in %q", arg)
+	if strings.HasPrefix(rest, "[") {
+		closeIdx := strings.Index(rest, "]")
+		if closeIdx <= 1 {
+			return sshsetup.Target{}, "", fmt.Errorf("could not parse host from %q", arg)
+		}
+		t.Host = rest[1:closeIdx]
+		after := rest[closeIdx+1:]
+		if after != "" {
+			if !strings.HasPrefix(after, ":") {
+				return sshsetup.Target{}, "", fmt.Errorf("could not parse host from %q", arg)
 			}
-			p = p*10 + int(r-'0')
+			p, err := parseSSHPort(after[1:], arg)
+			if err != nil {
+				return sshsetup.Target{}, "", err
+			}
+			t.Port = p
+		}
+	} else if strings.Count(rest, ":") == 1 {
+		i := strings.IndexByte(rest, ':')
+		t.Host = rest[:i]
+		p, err := parseSSHPort(rest[i+1:], arg)
+		if err != nil {
+			return sshsetup.Target{}, "", err
 		}
 		t.Port = p
 	} else {
+		// Bare hostname, IPv4, or unbracketed IPv6 literal (multiple colons).
 		t.Host = rest
 	}
 	if t.Host == "" {
@@ -341,6 +357,22 @@ func parseAdHocTarget(arg string) (sshsetup.Target, string, error) {
 		t.Port = 22
 	}
 	return t, "", nil
+}
+
+func parseSSHPort(raw, fullArg string) (int, error) {
+	if raw == "" {
+		return 0, fmt.Errorf("invalid port in %q", fullArg)
+	}
+	for _, r := range raw {
+		if r < '0' || r > '9' {
+			return 0, fmt.Errorf("invalid port in %q", fullArg)
+		}
+	}
+	p, err := strconv.Atoi(raw)
+	if err != nil || p < 1 || p > 65535 {
+		return 0, fmt.Errorf("invalid port in %q: must be 1..65535", fullArg)
+	}
+	return p, nil
 }
 
 // currentUser returns the local username, falling back to $USER and
@@ -357,8 +389,12 @@ func currentUser() string {
 
 // defaultHostName picks a name for a freshly-added host. Strips
 // MagicDNS suffixes (".tail-xxxxx.ts.net") so we get "sputnik"
-// instead of "sputnik.tail-12345.ts.net".
+// instead of "sputnik.tail-12345.ts.net", while preserving numeric IP
+// literals intact so 100.64.1.2 doesn't collapse to "100".
 func defaultHostName(host string) string {
+	if net.ParseIP(host) != nil {
+		return host
+	}
 	if i := strings.Index(host, "."); i > 0 {
 		return host[:i]
 	}

@@ -112,6 +112,10 @@ func TestTUILKeysSynced(t *testing.T) {
 		sort.Strings(result)
 		return result
 	}
+	used := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		used[k] = true
+	}
 	for _, language := range Languages() {
 		if language.Code == LangEn {
 			continue
@@ -132,6 +136,9 @@ func TestTUILKeysSynced(t *testing.T) {
 				}
 			}
 			for key, value := range table {
+				if !used[key] {
+					t.Errorf("unused translation key: %q", key)
+				}
 				if !strings.Contains(key, "\n") && strings.Contains(value, "\n") {
 					t.Errorf("unexpected line break in %q", key)
 				}

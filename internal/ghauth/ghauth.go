@@ -84,13 +84,16 @@ func Detect(ctx context.Context) Status {
 	c, cancel := context.WithTimeout(ctx, authStatusTimeout)
 	defer cancel()
 	out, err := exec.CommandContext(c, bin, "auth", "status").CombinedOutput()
+	if errors.Is(c.Err(), context.Canceled) {
+		return Status{State: StateUnknown, Detail: "gh auth status canceled"}
+	}
 	st := classify(out, err, errors.Is(c.Err(), context.DeadlineExceeded))
 	// gh keeps its OAuth token in the macOS keychain. A locked keychain
 	// makes that token unreadable, so gh falls back to a stale
 	// config-file token and reports it invalid — which is "couldn't
 	// verify", not "not signed in". Only probe the keychain when we'd
 	// otherwise be about to nag a (possibly signed-in) user.
-	if st.State == StateNotAuthed {
+	if st.State == StateNotAuthed && ctx.Err() == nil {
 		st = relabelForLockedKeychain(st, keychain.Locked(ctx))
 	}
 	return st

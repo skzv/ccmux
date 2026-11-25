@@ -57,6 +57,9 @@ const paneListFormat = "#{pane_id}\t#{window_index}\t#{pane_index}\t#{pane_width
 // its foreground and its title — so resolving the agent's pane costs no
 // more shell-outs than the display-message it replaces.
 func ListPanes(ctx context.Context, session string) ([]Pane, error) {
+	if err := CheckSessionTarget(session); err != nil {
+		return nil, fmt.Errorf("tmux list-panes %q: %w", session, err)
+	}
 	out, err := command(ctx, "tmux", "list-panes", "-s", "-t", exactSession(session), "-F", paneListFormat).Output()
 	if err != nil {
 		return nil, fmt.Errorf("tmux list-panes: %w", withStderr(err))
@@ -176,7 +179,8 @@ func SendKeysPane(ctx context.Context, paneID, keys string) error {
 		return fmt.Errorf("%w: %q", errBadPaneID, paneID)
 	}
 	// "--" as in SendKeys: keys starting with "-" are typed, not parsed.
-	if out, err := command(ctx, "tmux", "send-keys", "-t", paneID, "--", keys).CombinedOutput(); err != nil {
+	// escapeTmuxArg prevents trailing ";" command splitting.
+	if out, err := command(ctx, "tmux", "send-keys", "-t", paneID, "--", escapeTmuxArg(keys)).CombinedOutput(); err != nil {
 		return fmt.Errorf("tmux send-keys: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
 	return nil

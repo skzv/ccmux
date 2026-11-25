@@ -48,7 +48,13 @@ var gitRunner = realGit
 func realGit(ctx context.Context, dir string, args ...string) (string, error) {
 	full := append([]string{"-C", dir}, args...)
 	cmd := exec.CommandContext(ctx, "git", full...)
-	cmd.Env = nonInteractiveGitEnv(os.Environ(), gitConfigSSHCommand(ctx, dir))
+	// Only probe core.sshCommand for network subcommands (fetch/pull/ls-remote);
+	// local rev-parse/rev-list/config calls never invoke ssh.
+	var configSSH string
+	if len(args) > 0 && (args[0] == "fetch" || args[0] == "pull" || args[0] == "ls-remote") {
+		configSSH = gitConfigSSHCommand(ctx, dir)
+	}
+	cmd.Env = nonInteractiveGitEnv(os.Environ(), configSSH)
 	out, err := cmd.Output()
 	if err != nil {
 		return "", err
@@ -144,15 +150,18 @@ func Check(ctx context.Context) (Result, error) {
 	}
 
 	// Fetch just the tracked remote so the upstream ref is current.
-	// upstream looks like "origin/main" — the remote is the part
-	// before the first slash.
-	remote := upstream
-	if i := strings.IndexByte(upstream, '/'); i > 0 {
-		remote = upstream[:i]
+	// Prefer git's own `branch.<branch>.remote` so remote names containing
+	// '/' work; fall back to splitting upstream on the first '/'.
+	remote, rerr := gitRunner(ctx, root, "config", "--get", "branch."+branch+".remote")
+	if rerr != nil || remote == "" {
+		remote = upstream
+		if i := strings.IndexByte(upstream, '/'); i > 0 {
+			remote = upstream[:i]
+		}
 	}
 	fetchCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	if _, err := gitRunner(fetchCtx, root, "fetch", "--quiet", remote); err != nil {
+	if _, err := gitRunner(fetchCtx, root, "fetch", "--quiet", "--", remote); err != nil {
 		return Result{}, fmt.Errorf("git fetch %s: %w", remote, err)
 	}
 

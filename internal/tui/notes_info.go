@@ -181,8 +181,11 @@ func (m notesModel) renderNoteInfoOverlay(width, height int) string {
 			lines = append(lines, "  "+l)
 		}
 	}
-	modalW := minInt(96, width-4)
+	modalW := max(20, minInt(96, width-4))
 	body := strings.Join(lines, "\n")
+	if height > 6 {
+		body = clampLines(body, height-6)
+	}
 	modal := st.PaneFocused.Width(modalW).Render(body)
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, modal)
 }

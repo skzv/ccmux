@@ -23,11 +23,11 @@
 package codexconfig
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/BurntSushi/toml"
 
@@ -113,19 +113,39 @@ func readSettingsAt(path string) (*Settings, error) {
 	for key, val := range raw {
 		switch key {
 		case "model":
-			s.Model, _ = val.(string)
+			if str, ok := val.(string); ok {
+				s.Model = str
+			} else {
+				s.Extra[key] = val
+			}
 		case "model_reasoning_effort":
-			s.ModelReasoningEffort, _ = val.(string)
+			if str, ok := val.(string); ok {
+				s.ModelReasoningEffort = str
+			} else {
+				s.Extra[key] = val
+			}
 		case "approval_policy":
-			s.ApprovalPolicy, _ = val.(string)
+			if str, ok := val.(string); ok {
+				s.ApprovalPolicy = str
+			} else {
+				s.Extra[key] = val
+			}
 		case "sandbox_mode":
-			s.SandboxMode, _ = val.(string)
+			if str, ok := val.(string); ok {
+				s.SandboxMode = str
+			} else {
+				s.Extra[key] = val
+			}
 		default:
 			s.Extra[key] = val
 		}
 	}
 	return s, nil
 }
+
+// settingsMu serializes read-modify-write helpers in this package so
+// concurrent toggles don't clobber each other.
+var settingsMu sync.Mutex
 
 // WriteSettings writes Settings back to disk, backing up the previous
 // file first. Returns the path to the backup so the UI can offer a
@@ -156,13 +176,10 @@ func WriteSettings(s *Settings) (backup string, err error) {
 	if s.SandboxMode != "" {
 		out["sandbox_mode"] = s.SandboxMode
 	}
-	var buf bytes.Buffer
-	enc := toml.NewEncoder(&buf)
-	enc.Indent = "  "
-	if err := enc.Encode(out); err != nil {
+	data, err := tomlpatch.EncodeMap(out)
+	if err != nil {
 		return backup, err
 	}
-	data := buf.Bytes()
 	// Patch the user's file rather than replace it, so a toggle in the
 	// Codex tab changes one line and leaves their comments and layout
 	// alone. If it can't be patched safely, write the encoding whole.
@@ -171,7 +188,7 @@ func WriteSettings(s *Settings) (backup string, err error) {
 			data = patched
 		}
 	}
-	if err := configfile.WriteAtomic(p.Config, data, 0o644); err != nil {
+	if err := configfile.WriteAtomic(p.Config, data, 0o600); err != nil {
 		return backup, err
 	}
 	return backup, nil
@@ -190,6 +207,8 @@ func backupFile(src, backupDir string) (string, error) {
 // SetEffortLevel updates only model_reasoning_effort. Pass "" to clear
 // the override.
 func SetEffortLevel(level string) (string, error) {
+	settingsMu.Lock()
+	defer settingsMu.Unlock()
 	s, err := ReadSettings()
 	if err != nil {
 		return "", err
@@ -234,6 +253,8 @@ type EffortOption struct {
 // fields if they currently hold our YOLO values; any other policy the
 // user set by hand is preserved.
 func SetYoloMode(enabled bool) (string, error) {
+	settingsMu.Lock()
+	defer settingsMu.Unlock()
 	s, err := ReadSettings()
 	if err != nil {
 		return "", err

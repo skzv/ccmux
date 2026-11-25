@@ -3,8 +3,10 @@ package tui
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -148,7 +150,7 @@ func hostDaemonAddr(h config.Host, tailnetPort int) string {
 	if port == 0 {
 		port = tailnetPort
 	}
-	return fmt.Sprintf("%s:%d", h.Address, port)
+	return net.JoinHostPort(h.Address, strconv.Itoa(port))
 }
 
 // configuredSeenKeys resolves every configured host's dedupe keys (see
@@ -313,7 +315,7 @@ func probeDiscoveredHosts(tailnetPort int, seen map[string]bool) ([]hostStatus, 
 		sessions = append(sessions, ss...)
 	}
 	for _, p := range scan.NeedsInstall {
-		addr := fmt.Sprintf("%s:%d", p.Addr, tailnetPort)
+		addr := net.JoinHostPort(p.Addr, strconv.Itoa(tailnetPort))
 		if seen[addr] {
 			continue
 		}

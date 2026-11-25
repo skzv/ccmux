@@ -119,7 +119,7 @@ func (m *notesModel) refreshPreview() tea.Cmd {
 	// notesPreviewLoadedMsg path (and its staleness guard) as remote.
 	m.previewRel = rel
 	m.previewSrc = ""
-	m.preview.SetContent(m.st.Muted.Render("Loading…"))
+	m.preview.SetContent(m.st.Muted.Render(tr("Loading…")))
 	m.preview.GotoTop()
 	return localNoteContentCmd(m.project.Path, rel)
 }

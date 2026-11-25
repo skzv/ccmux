@@ -84,6 +84,9 @@ func prepareDir(opts Options) (dir string, wroteSidecar bool, err error) {
 	}
 	dir = opts.Dir
 	if dir == "" {
+		if err := project.ValidateName(opts.Name); err != nil {
+			return "", false, fmt.Errorf("scaffold: %w", err)
+		}
 		abs, err := filepath.Abs(opts.Name)
 		if err != nil {
 			return "", false, err

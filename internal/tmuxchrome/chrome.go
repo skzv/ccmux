@@ -63,8 +63,8 @@ const (
 // exits Claude. The chrome explicitly uses "then" not "+" so this is
 // unambiguous.
 func Apply(ctx context.Context, session, projectLabel string, moshiReachable, nested bool) error {
-	if session == "" {
-		return fmt.Errorf("tmuxchrome: session name required")
+	if err := tmux.CheckSessionTarget(session); err != nil {
+		return fmt.Errorf("tmuxchrome: %w", err)
 	}
 	prefix := DetectedPrefix(ctx)
 	returnBinding := defaultNestedReturnBinding()
@@ -179,12 +179,13 @@ func isNestedReturnCommand(command []string) bool {
 	switch command[0] {
 	case "switch-client", "switchc":
 		for _, arg := range command[1:] {
-			if arg == "-l" {
+			if arg == "--" {
+				break
+			}
+			if strings.HasPrefix(arg, "-") && !strings.HasPrefix(arg, "--") && strings.ContainsRune(arg[1:], 'l') {
 				return true
 			}
 		}
-	case "last-session", "last":
-		return true
 	}
 	return false
 }
@@ -359,11 +360,20 @@ var prefixCache struct {
 	fetched time.Time
 }
 
+const (
+	prefixProbeTimeout = 2 * time.Second
+	tmuxCmdWaitDelay   = 2 * time.Second
+)
+
 // Seams for tests: the exec that reads the prefix option, and the
 // clock the cache expires against.
 var (
 	showPrefixOption = func(ctx context.Context) ([]byte, error) {
-		return exec.CommandContext(ctx, "tmux", "show-options", "-g", "prefix").Output()
+		pctx, cancel := context.WithTimeout(ctx, prefixProbeTimeout)
+		defer cancel()
+		cmd := exec.CommandContext(pctx, "tmux", "show-options", "-g", "prefix")
+		cmd.WaitDelay = tmuxCmdWaitDelay
+		return cmd.Output()
 	}
 	prefixNow = time.Now
 )
@@ -383,16 +393,25 @@ func resetPrefixCache() {
 // instead of assuming defaults. Returns "Ctrl-b" on any error.
 //
 // Results (including the error fallback) are cached for prefixCacheTTL
-// so hot render paths don't spawn a subprocess per frame.
+// so hot render paths don't spawn a subprocess per frame. The mutex is
+// released during subprocess I/O so a wedged tmux server cannot block
+// unrelated callers.
 func DetectedPrefix(ctx context.Context) string {
 	prefixCache.mu.Lock()
-	defer prefixCache.mu.Unlock()
 	if prefixCache.value != "" && prefixNow().Sub(prefixCache.fetched) < prefixCacheTTL {
-		return prefixCache.value
+		v := prefixCache.value
+		prefixCache.mu.Unlock()
+		return v
 	}
-	prefixCache.value = detectPrefixUncached(ctx)
-	prefixCache.fetched = prefixNow()
-	return prefixCache.value
+	prefixCache.mu.Unlock()
+
+	v := detectPrefixUncached(ctx)
+	now := prefixNow()
+	prefixCache.mu.Lock()
+	prefixCache.value = v
+	prefixCache.fetched = now
+	prefixCache.mu.Unlock()
+	return v
 }
 
 // detectPrefixUncached is the single real read of the prefix option.
@@ -431,20 +450,29 @@ func PrettyKey(k string) string {
 // when ccmux kills or "releases" a session so the chrome doesn't linger
 // if the user later attaches to it from a non-ccmux client.
 func Reset(ctx context.Context, session string) error {
+	if err := tmux.CheckSessionTarget(session); err != nil {
+		return fmt.Errorf("tmuxchrome: %w", err)
+	}
 	// Derive the unset list from Options() so adding a new option
 	// can never leave a stale value behind after Reset. The values
 	// passed here are placeholders — we only care about the keys.
 	applied := Options(session, session, false, false, "Ctrl-b")
 	opts := make([]string, 0, len(applied)+1)
-	// status itself isn't part of Options' key list (we set it to
-	// "on" but a fresh session already defaults to on, so unsetting
-	// is a no-op). Include it anyway so future toggles are covered.
-	opts = append(opts, "status")
+	seen := map[string]bool{}
+	addOpt := func(k string) {
+		if !seen[k] {
+			seen[k] = true
+			opts = append(opts, k)
+		}
+	}
+	addOpt("status")
 	for _, kv := range applied {
-		opts = append(opts, kv[0])
+		addOpt(kv[0])
 	}
 	for _, key := range opts {
-		_ = exec.CommandContext(ctx, "tmux", "set-option", "-t", tmux.ExactSession(session), "-u", key).Run()
+		cmd := exec.CommandContext(ctx, "tmux", "set-option", "-t", tmux.ExactSession(session), "-u", key)
+		cmd.WaitDelay = tmuxCmdWaitDelay
+		_ = cmd.Run()
 	}
 	targets := windowTargets(ctx, session)
 	if len(targets) == 0 {
@@ -452,7 +480,9 @@ func Reset(ctx context.Context, session string) error {
 	}
 	for _, target := range targets {
 		for _, kv := range windowOptions() {
-			_ = exec.CommandContext(ctx, "tmux", "set-window-option", "-t", target, "-u", kv[0]).Run()
+			cmd := exec.CommandContext(ctx, "tmux", "set-window-option", "-t", target, "-u", kv[0])
+			cmd.WaitDelay = tmuxCmdWaitDelay
+			_ = cmd.Run()
 		}
 	}
 	return nil

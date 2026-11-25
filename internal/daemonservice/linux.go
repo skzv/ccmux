@@ -59,7 +59,7 @@ func (in installer) installLinux() error {
 	if err := os.MkdirAll(filepath.Dir(unitPath), 0o755); err != nil {
 		return err
 	}
-	body := unitFile(in.binary, managedPath(in.home, in.commands, "/usr/local/bin", "/usr/bin", "/bin"), passthroughEnv(in.getenv))
+	body := renderUnitFile(in.binary, managedPath(in.home, in.commands, "/usr/local/bin", "/usr/bin", "/bin"), true, passthroughEnv(in.getenv))
 	if err := os.WriteFile(unitPath, []byte(body), 0o644); err != nil {
 		return err
 	}

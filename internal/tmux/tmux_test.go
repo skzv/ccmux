@@ -30,8 +30,23 @@ func TestWithLocale(t *testing.T) {
 			wantAdded: false,
 		},
 		{
-			name:      "LC_ALL already set — leave it alone",
+			name:      "LC_ALL=C is non-UTF-8 — override with LC_ALL=C.UTF-8",
 			env:       []string{"LC_ALL=C"},
+			wantAdded: true,
+		},
+		{
+			name:      "LANG=C is non-UTF-8 — override with LC_ALL=C.UTF-8",
+			env:       []string{"LANG=C"},
+			wantAdded: true,
+		},
+		{
+			name:      "empty LANG= — override with LC_ALL=C.UTF-8",
+			env:       []string{"LANG="},
+			wantAdded: true,
+		},
+		{
+			name:      "LC_ALL=en_US.UTF-8 — leave it alone",
+			env:       []string{"LC_ALL=en_US.UTF-8"},
 			wantAdded: false,
 		},
 		{

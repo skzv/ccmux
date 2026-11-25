@@ -23,6 +23,12 @@ const previewMessageLimit = 30
 // outside the screen body, swallows keystrokes except its own close
 // keys. The model is intentionally small: state is just the in-focus
 // conversation + the latest-loaded messages + a sticky error string.
+type convPreviewCache struct {
+	rev  int
+	wrap int
+	body string
+}
+
 type conversationPreviewOverlay struct {
 	open         bool
 	conversation conversations.Conversation
@@ -34,6 +40,8 @@ type conversationPreviewOverlay struct {
 	// empty transcript or an Antigravity (opaque protobuf) one, and
 	// keying off nil left those stuck on "(loading…)" forever.
 	loaded bool
+	rev    int
+	cache  *convPreviewCache
 }
 
 // Open arms the overlay against a specific conversation. The caller is
@@ -45,6 +53,8 @@ func (o *conversationPreviewOverlay) Open(c conversations.Conversation) {
 	o.messages = nil
 	o.loadErr = ""
 	o.loaded = false
+	o.rev++
+	o.cache = &convPreviewCache{}
 }
 
 // Close dismisses the overlay and drops the cached messages so the
@@ -55,6 +65,8 @@ func (o *conversationPreviewOverlay) Close() {
 	o.messages = nil
 	o.loadErr = ""
 	o.loaded = false
+	o.rev++
+	o.cache = nil
 }
 
 // IsOpen reports whether the overlay is currently visible.
@@ -76,6 +88,10 @@ func (o *conversationPreviewOverlay) SetMessages(id string, msgs []conversations
 	o.messages = msgs
 	o.loadErr = ""
 	o.loaded = true
+	o.rev++
+	if o.cache == nil {
+		o.cache = &convPreviewCache{}
+	}
 }
 
 // SetLoadErr records a transcript-read failure so the overlay can
@@ -156,6 +172,10 @@ func (o conversationPreviewOverlay) renderBody(st styles.Styles, overlayW int) s
 		wrap = 30
 	}
 
+	if o.cache != nil && o.cache.rev == o.rev && o.cache.wrap == wrap && o.cache.body != "" {
+		return o.cache.body
+	}
+
 	md := previewMarkdown(o.messages)
 	renderer, err := glamour.NewTermRenderer(
 		glamour.WithStandardStyle("dark"),
@@ -168,7 +188,13 @@ func (o conversationPreviewOverlay) renderBody(st styles.Styles, overlayW int) s
 	if rerr != nil {
 		return md
 	}
-	return strings.TrimRight(out, "\n")
+	rendered := strings.TrimRight(out, "\n")
+	if o.cache != nil {
+		o.cache.rev = o.rev
+		o.cache.wrap = wrap
+		o.cache.body = rendered
+	}
+	return rendered
 }
 
 // previewMarkdown turns the loaded messages into a single markdown

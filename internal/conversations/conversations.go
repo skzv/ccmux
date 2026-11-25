@@ -786,7 +786,7 @@ func guardTranscriptPath(home string, agentID agent.ID, path string) error {
 		allowed = []transcriptRoot{{root: filepath.Join(home, ".pi", "agent", "sessions"), ext: ".jsonl"}}
 	case agent.IDAntigravity:
 		allowed = []transcriptRoot{
-			{root: filepath.Join(home, ".gemini", "antigravity-cli", "conversations"), ext: ".pb"},
+			{root: agenthome.AntigravityConversations(home), ext: ".pb"},
 		}
 	default:
 		return fmt.Errorf("unknown agent %q — refusing to delete %s", agentID, path)
@@ -896,9 +896,15 @@ func All(opts Options) ([]Conversation, error) {
 		return nil, fmt.Errorf("all walkers failed: %w", lastErr)
 	}
 
-	// Sort most-recent first.
-	sort.Slice(all, func(i, j int) bool {
-		return all[i].LastActivity.After(all[j].LastActivity)
+	// Sort most-recent first with deterministic tie-breaking on Agent+ID.
+	sort.SliceStable(all, func(i, j int) bool {
+		if !all[i].LastActivity.Equal(all[j].LastActivity) {
+			return all[i].LastActivity.After(all[j].LastActivity)
+		}
+		if all[i].Agent != all[j].Agent {
+			return all[i].Agent < all[j].Agent
+		}
+		return all[i].ID < all[j].ID
 	})
 
 	if opts.Since > 0 {
@@ -1301,33 +1307,40 @@ func readCodexTranscript(path string) Conversation {
 		return c
 	}
 	defer f.Close()
-	sc := jsonl.NewScanner(f, 4*1024*1024)
+	sc := jsonl.NewScanner(f, 32*1024*1024)
 	var latestEvent time.Time
 	for sc.Scan() {
 		var ev codexEvent
 		if err := json.Unmarshal(sc.Bytes(), &ev); err != nil {
 			continue
 		}
-		// session_meta is always the first event in a Codex rollout
-		// and carries the launch-mode tag in payload.originator
-		// ("codex_exec" for headless `codex exec`, "codex-tui" for an
-		// interactive session). Capture once; subsequent events don't
-		// re-state it.
-		meta := ev.Metadata()
-		if ev.Type == "session_meta" && c.Entrypoint == "" && meta.Originator != "" {
-			c.Entrypoint = meta.Originator
-		}
-		if ev.Type == "session_meta" && meta.isSubagent() {
-			c.Subagent = true
+		// Only decode payload metadata when needed (session_meta or before
+		// Project is known), avoiding an extra json.Unmarshal on every line.
+		if ev.Type == "session_meta" || c.Project == "" {
+			meta := ev.Metadata()
+			if ev.Type == "session_meta" {
+				if c.Entrypoint == "" && meta.Originator != "" {
+					c.Entrypoint = meta.Originator
+				}
+				if meta.isSubagent() {
+					c.Subagent = true
+				}
+				if c.ID == "" && meta.ID != "" {
+					c.ID = meta.ID
+				}
+			}
+			if meta.Cwd != "" && c.Project == "" {
+				c.Project = meta.Cwd
+			}
 		}
 		if ev.Cwd != "" && c.Project == "" {
 			c.Project = ev.Cwd
 		}
-		if meta.Cwd != "" && c.Project == "" {
-			c.Project = meta.Cwd
-		}
-		if role, body := ev.MessageContent(); role == "user" && c.Preview == "" {
-			c.Preview = truncatedPreview(cleanPromptText(body))
+		// Only decode message payload until the first user preview is found.
+		if c.Preview == "" {
+			if role, body := ev.MessageContent(); role == "user" {
+				c.Preview = truncatedPreview(cleanPromptText(body))
+			}
 		}
 		if ts := ev.Timestamp(); !ts.IsZero() && ts.After(latestEvent) {
 			latestEvent = ts
@@ -1353,6 +1366,7 @@ type codexEvent struct {
 // session_meta's payload carries the originator + source fields that
 // distinguish headless `codex exec` from interactive `codex` runs.
 type codexEventPayload struct {
+	ID string `json:"id"`
 	// Originator is Codex's launch-mode tag on the session_meta event:
 	// "codex_exec" for headless `codex exec`, "codex-tui" for the
 	// interactive TUI. Mirrors Claude's `entrypoint` field; surfaces
@@ -1508,7 +1522,7 @@ func resolveCursorProject(encoded string) (string, error) {
 	}
 	root, rest := string(filepath.Separator), enc
 	if runtime.GOOS == "windows" && len(enc) >= 2 && enc[1] == '-' && isASCIILetter(enc[0]) {
-		root, rest = strings.ToUpper(enc[:1])+`:\`, enc[2:]
+		root, rest = strings.ToUpper(enc[:1])+`:\`, strings.TrimLeft(enc[2:], "-")
 	}
 	if p, ok := resolveEncodedPath(root, encodePathSegment(rest)); ok {
 		return p, nil
@@ -1864,7 +1878,7 @@ func ListAntigravity(home string) ([]Conversation, error) {
 }
 
 func listAntigravityPB(home string) ([]Conversation, error) {
-	root := filepath.Join(home, ".gemini", "antigravity-cli", "conversations")
+	root := agenthome.AntigravityConversations(home)
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		if os.IsNotExist(err) {

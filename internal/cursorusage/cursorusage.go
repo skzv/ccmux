@@ -21,6 +21,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -74,8 +75,14 @@ func Open(dbPath string) (Summary, error) {
 	}
 
 	// The path goes into a URI, so `?`, `#` and `%` in it must be
-	// escaped or they'd be read as the query/fragment.
-	dsn := "file:" + (&url.URL{Path: dbPath}).EscapedPath() + "?mode=ro&_pragma=busy_timeout(2000)"
+	// escaped or they'd be read as the query/fragment. On Windows,
+	// backslashes must become slashes and drive-letter paths need a
+	// leading `/` (file:///C:/...).
+	slashPath := filepath.ToSlash(dbPath)
+	if !strings.HasPrefix(slashPath, "/") {
+		slashPath = "/" + slashPath
+	}
+	dsn := "file:" + (&url.URL{Path: slashPath}).EscapedPath() + "?mode=ro&_pragma=busy_timeout(2000)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return Summary{}, fmt.Errorf("cursorusage: open %s: %w", dbPath, err)
@@ -113,6 +120,7 @@ func countConversations(db *sql.DB) (int, error) {
 // most-used first. Returns nil when the table is empty.
 func topModels(db *sql.DB, n int) ([]string, error) {
 	rows, err := db.Query(`SELECT model FROM ai_code_hashes
+		WHERE model IS NOT NULL AND model != ''
 		GROUP BY model ORDER BY COUNT(*) DESC LIMIT ?`, n)
 	if err != nil {
 		return nil, fmt.Errorf("cursorusage: top models: %w", err)

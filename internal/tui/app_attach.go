@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"net"
 	"os/exec"
 	"strings"
 	"time"
@@ -9,7 +10,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/skzv/ccmux/internal/remoteattach"
-	"github.com/skzv/ccmux/internal/tmux"
 )
 
 // attachSelectedSession is Enter on Sessions screen.
@@ -60,17 +60,21 @@ func (a App) attachSelectedSession() (App, tea.Cmd) {
 			if h.User != "" {
 				target = h.User + "@" + h.Address
 			}
-			remoteArgs := tmux.AttachArgs(sel.Name, a.cfg.Sessions.DetachOthersOnAttach())
+			remoteCmd := remoteTmuxAttach(sel.Name, a.cfg.Sessions.DetachOthersOnAttach())
 			tick := a.startAttaching(attachKindRemote, sel.Host)
 			rt := &attachRemoteTarget{User: h.User, Host: h.Address, Port: h.EffectiveSSHPort()}
-			label := "ssh " + target
+			var (
+				cmd   *exec.Cmd
+				label string
+			)
 			if h.Mosh {
 				label = "mosh " + target
+				cmd = remoteattach.Mosh(target, remoteCmd, h.EffectiveSSHPort())
+			} else {
+				label = "ssh " + target
+				cmd = remoteattach.SSH(target, remoteCmd, h.EffectiveSSHPort())
 			}
-			return a, tea.Batch(tick, execAttach(
-				remoteattach.RunArgv(target, h.Mosh, h.EffectiveSSHPort(), append([]string{"tmux"}, remoteArgs...)),
-				label, rt, false,
-			))
+			return a, tea.Batch(tick, execAttach(cmd, label, rt, false))
 		}
 	}
 
@@ -144,8 +148,8 @@ func dialAddrFor(hs hostStatus) string {
 	if hs.Address == "" {
 		return ""
 	}
-	if i := strings.LastIndex(hs.Address, ":"); i > 0 {
-		return hs.Address[:i]
+	if host, _, err := net.SplitHostPort(hs.Address); err == nil {
+		return host
 	}
 	return hs.Address
 }

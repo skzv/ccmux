@@ -78,6 +78,59 @@ func TestList_FollowsSymlinkedRoot(t *testing.T) {
 	if _, err := v.Read("../outside/secret.md"); err != ErrOutsideVault {
 		t.Errorf("Read escaped the vault: err = %v", err)
 	}
+	// Directory symlink escape inside the vault must also return ErrOutsideVault.
+	if _, err := v.Read("escape/secret.md"); err != ErrOutsideVault {
+		t.Errorf("Read(escape/secret.md) via dir symlink = %v, want ErrOutsideVault", err)
+	}
+}
+
+// TestSymlinkedFileInsideVault_BlockedAcrossListReadSearch verifies that
+// a file symlink inside a project pointing outside the vault is skipped by
+// List and Search, and rejected with ErrOutsideVault by Read.
+func TestSymlinkedFileInsideVault_BlockedAcrossListReadSearch(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks need privileges on Windows")
+	}
+	base := t.TempDir()
+	proj := filepath.Join(base, "proj")
+	outside := filepath.Join(base, "outside")
+	for _, d := range []string{proj, outside} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(proj, "NOTES.MD"), []byte("hello world\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	secret := filepath.Join(outside, "secret.toml")
+	if err := os.WriteFile(secret, []byte("topsecret needle\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secret, filepath.Join(proj, "leak.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	v := Open(proj)
+	entries, err := v.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Rel != "NOTES.MD" {
+		t.Fatalf("List = %+v, want only NOTES.MD (leak.md symlink must be skipped)", entries)
+	}
+	if entries[0].Display != "NOTES" {
+		t.Errorf("Display for NOTES.MD = %q, want %q (case-insensitive .md trim)", entries[0].Display, "NOTES")
+	}
+	if _, err := v.Read("leak.md"); err != ErrOutsideVault {
+		t.Errorf("Read(leak.md) = %v, want ErrOutsideVault", err)
+	}
+	hits, err := v.searchFallback(context.Background(), "topsecret", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 0 {
+		t.Errorf("searchFallback leaked symlinked file: %+v", hits)
+	}
 }
 
 // TestSearch_FollowsSymlinkedRoot — both search backends must search a

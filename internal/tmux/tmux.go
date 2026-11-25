@@ -5,6 +5,7 @@ package tmux
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -74,16 +75,42 @@ func command(ctx context.Context, name string, args ...string) *exec.Cmd {
 // cancelled call returns promptly.
 const commandWaitDelay = 2 * time.Second
 
-// withLocale returns env with LC_ALL=C.UTF-8 appended iff none of
-// LC_ALL / LC_CTYPE / LANG are already set. Pulled out of command() so
-// the locale-decision logic is unit-testable without spawning a process.
+// withLocale ensures tmux runs under a UTF-8 locale so `-F` format
+// strings preserve literal tabs instead of replacing them with `_`.
+// Effective locale follows POSIX precedence (LC_ALL > LC_CTYPE > LANG):
+// if empty or non-UTF-8 (e.g. `C`, `POSIX`, or `LANG=`), any existing
+// LC_ALL= entry is stripped from a copied slice and LC_ALL=C.UTF-8 is
+// appended.
 func withLocale(env []string) []string {
+	var lcAll, lcCtype, lang string
 	for _, e := range env {
-		if strings.HasPrefix(e, "LC_ALL=") || strings.HasPrefix(e, "LC_CTYPE=") || strings.HasPrefix(e, "LANG=") {
-			return env
+		switch {
+		case strings.HasPrefix(e, "LC_ALL="):
+			lcAll = e[len("LC_ALL="):]
+		case strings.HasPrefix(e, "LC_CTYPE="):
+			lcCtype = e[len("LC_CTYPE="):]
+		case strings.HasPrefix(e, "LANG="):
+			lang = e[len("LANG="):]
 		}
 	}
-	return append(env, "LC_ALL=C.UTF-8")
+	effective := lcAll
+	if effective == "" {
+		effective = lcCtype
+	}
+	if effective == "" {
+		effective = lang
+	}
+	if strings.Contains(strings.ToLower(effective), "utf") {
+		return env
+	}
+	out := make([]string, 0, len(env)+1)
+	for _, e := range env {
+		if strings.HasPrefix(e, "LC_ALL=") {
+			continue
+		}
+		out = append(out, e)
+	}
+	return append(out, "LC_ALL=C.UTF-8")
 }
 
 // exactSession wraps a session name as a tmux target that requires an
@@ -166,6 +193,33 @@ func CheckTarget(name string) error {
 	return nil
 }
 
+// CheckSessionTarget verifies that name can be safely placed inside an
+// exactSession (`=name:`) target without addressing another session by
+// ID (`$1`) or window/pane separator (`:`). Unlike CheckTarget, dots
+// (`.`) are permitted so external dotted tmux sessions like `api.v2`
+// remain readable, killable, and targetable via `=api.v2:`.
+func CheckSessionTarget(name string) error {
+	switch {
+	case name == "":
+		return errEmptyTarget
+	case strings.HasPrefix(name, "$"):
+		return ErrSessionIDTarget
+	case strings.ContainsRune(name, ':') || strings.ContainsFunc(name, unicode.IsControl):
+		return errTargetSpecials
+	}
+	return nil
+}
+
+// escapeTmuxArg prevents tmux's CLI parser from interpreting a trailing
+// `;` in a literal argument as a command separator (or stripping a
+// literal `\` before `;`).
+func escapeTmuxArg(s string) string {
+	if strings.HasSuffix(s, ";") {
+		return s[:len(s)-1] + `\;`
+	}
+	return s
+}
+
 // Session is the static metadata about a tmux session.
 type Session struct {
 	Agent string // optional explicit agent for a resumed conversation
@@ -187,15 +241,26 @@ type Session struct {
 
 // Has reports whether a session by the given name exists on the default tmux server.
 func Has(ctx context.Context, name string) (bool, error) {
+	if err := CheckSessionTarget(name); err != nil {
+		return false, fmt.Errorf("tmux has-session %q: %w", name, err)
+	}
 	cmd := command(ctx, "tmux", "has-session", "-t", exactSession(name))
-	if err := cmd.Run(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			// tmux exits 1 when the session doesn't exist; that's not a "real" error.
-			if exitErr.ExitCode() == 1 {
+	if _, err := cmd.Output(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+			stderr := string(exitErr.Stderr)
+			// tmux exits 1 both for "can't find session" / no server AND
+			// for real failures like socket permission denied. Only treat
+			// missing session/server (or silent exit 1 from stubs) as absent.
+			ls := strings.ToLower(stderr)
+			if strings.TrimSpace(stderr) == "" ||
+				strings.Contains(ls, "can't find session") ||
+				strings.Contains(ls, "session not found") ||
+				noServerRunning(stderr) {
 				return false, nil
 			}
 		}
-		return false, fmt.Errorf("tmux has-session: %w", err)
+		return false, fmt.Errorf("tmux has-session: %w", withStderr(err))
 	}
 	return true, nil
 }
@@ -223,6 +288,11 @@ func List(ctx context.Context) ([]Session, error) {
 	sessions := parseList(out)
 	tags, err := command(ctx, "tmux", "list-sessions", "-F", sessionTagsFormat).Output()
 	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 && noServerRunning(string(exitErr.Stderr)) {
+			// Last session exited between the two list-sessions calls.
+			return nil, nil
+		}
 		return nil, fmt.Errorf("read tmux session agents: %w", withStderr(err))
 	}
 	applySessionTags(sessions, tags)
@@ -303,17 +373,22 @@ func NewWithAgent(ctx context.Context, name, dir, cmdline, agentTag string) erro
 		if err := checkOptionTarget(name); err != nil {
 			return fmt.Errorf("tmux new-session: %w", err)
 		}
+	} else if err := CheckSessionTarget(name); err != nil {
+		return fmt.Errorf("tmux new-session %q: %w", name, err)
 	}
-	args := []string{"new-session", "-d", "-s", name}
+	args := []string{"new-session", "-d", "-s", escapeTmuxArg(name)}
 	if dir != "" {
-		args = append(args, "-c", escapeFormat(dir))
+		args = append(args, "-c", escapeTmuxArg(escapeFormat(dir)))
 	}
 	if cmdline != "" {
-		args = append(args, cmdline)
+		if strings.HasPrefix(cmdline, "-") {
+			args = append(args, "--")
+		}
+		args = append(args, escapeTmuxArg(cmdline))
 	}
 	if agentTag != "" {
 		// A lone ";" argument separates tmux commands.
-		args = append(args, ";", "set-option", "-t", exactSession(name), agentOption, agentTag)
+		args = append(args, ";", "set-option", "-t", exactSession(name), agentOption, escapeTmuxArg(agentTag))
 	}
 	cmd := command(ctx, "tmux", args...)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -337,8 +412,8 @@ func escapeFormat(s string) string { return strings.ReplaceAll(s, "#", "##") }
 // also covers a name read back from tmux's own session list — a session
 // created outside ccmux as "$5" — which no target can reach by name.
 func Kill(ctx context.Context, name string) error {
-	if strings.HasPrefix(name, "$") {
-		return fmt.Errorf("tmux kill-session %q: %w", name, ErrSessionIDTarget)
+	if err := CheckSessionTarget(name); err != nil {
+		return fmt.Errorf("tmux kill-session %q: %w", name, err)
 	}
 	cmd := command(ctx, "tmux", "kill-session", "-t", exactSession(name))
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -347,15 +422,18 @@ func Kill(ctx context.Context, name string) error {
 	return nil
 }
 
-// Rename renames a session. As with Kill, an old name starting with "$"
-// is refused (ErrSessionIDTarget): it would rename the session with
-// that ID.
+// Rename renames a session. As with Kill, an untargetable oldName
+// (`$…`, `:`, empty, or control chars) is refused so it can't target
+// another session.
 func Rename(ctx context.Context, oldName, newName string) error {
-	if strings.HasPrefix(oldName, "$") {
-		return fmt.Errorf("tmux rename-session %q: %w", oldName, ErrSessionIDTarget)
+	if err := CheckSessionTarget(oldName); err != nil {
+		return fmt.Errorf("tmux rename-session %q: %w", oldName, err)
+	}
+	if err := CheckSessionTarget(newName); err != nil {
+		return fmt.Errorf("tmux rename-session new name %q: %w", newName, err)
 	}
 	// "--" so a new name starting with "-" is a name, not a flag.
-	cmd := command(ctx, "tmux", "rename-session", "-t", exactSession(oldName), "--", newName)
+	cmd := command(ctx, "tmux", "rename-session", "-t", exactSession(oldName), "--", escapeTmuxArg(newName))
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("tmux rename-session: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
@@ -366,6 +444,9 @@ func Rename(ctx context.Context, oldName, newName string) error {
 // Used both for the live-preview pane in the TUI and for "needs input" detection
 // by ccmuxd.
 func CapturePane(ctx context.Context, name string, lines int) (string, error) {
+	if err := CheckSessionTarget(name); err != nil {
+		return "", fmt.Errorf("tmux capture-pane %q: %w", name, err)
+	}
 	args := []string{"capture-pane", "-p", "-t", exactPane(name)}
 	if lines > 0 {
 		args = append(args, "-S", fmt.Sprintf("-%d", lines))
@@ -394,6 +475,9 @@ func CapturePane(ctx context.Context, name string, lines int) (string, error) {
 // "title not available") so callers can pass the result straight
 // through without special-casing absent sessions.
 func PaneTitle(ctx context.Context, name string) (string, error) {
+	if err := CheckSessionTarget(name); err != nil {
+		return "", nil
+	}
 	args := []string{"display-message", "-p", "-t", exactPane(name), "#{pane_title}"}
 	cmd := command(ctx, "tmux", args...)
 	out, err := cmd.Output()
@@ -414,10 +498,14 @@ func PaneTitle(ctx context.Context, name string) (string, error) {
 
 // SendKeys sends a literal key sequence to the named session.
 func SendKeys(ctx context.Context, name, keys string) error {
+	if err := CheckSessionTarget(name); err != nil {
+		return fmt.Errorf("tmux send-keys %q: %w", name, err)
+	}
 	// "--" ends tmux's option parsing: without it text such as
 	// "- fix the bug", "-1" or "--help" failed as an unknown flag, and
 	// "-R" silently reset the pane instead of being typed.
-	cmd := command(ctx, "tmux", "send-keys", "-t", exactPane(name), "--", keys)
+	// escapeTmuxArg prevents a trailing ";" from splitting the command.
+	cmd := command(ctx, "tmux", "send-keys", "-t", exactPane(name), "--", escapeTmuxArg(keys))
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("tmux send-keys: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
@@ -428,6 +516,9 @@ func SendKeys(ctx context.Context, name, keys string) error {
 // Do not use send-keys for this: BEL is Ctrl-G, and interactive agents such
 // as Claude Code and Codex bind Ctrl-G to "open prompt in external editor".
 func RingBell(ctx context.Context, name string) error {
+	if err := CheckSessionTarget(name); err != nil {
+		return fmt.Errorf("tmux list-clients %q: %w", name, err)
+	}
 	cmd := command(ctx, "tmux", "list-clients", "-t", exactSession(name), "-F", "#{client_tty}")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -459,15 +550,39 @@ func clientTTYs(raw []byte) []string {
 	return out
 }
 
-// SendText types `text` into the named session's pane verbatim. The
-// `-l` flag disables key-name lookup, so user-supplied text containing
-// a key name (e.g. an initial prompt of "Press Enter to begin") is
-// typed as characters instead of being interpreted as the Enter key.
-// Call SendKeys(ctx, name, "Enter") separately to submit.
+// sendTextChunkBytes bounds each `tmux send-keys -H` invocation so very
+// long initial prompts don't exceed OS argv limits.
+const sendTextChunkBytes = 512
+
+// SendText types `text` into the named session's pane verbatim. Using
+// `-H` (hex bytes) bypasses all tmux key-name lookup, flag parsing, and
+// trailing-semicolon command splitting, so arbitrary text (including
+// `"SELECT 1;"`, `";"` or `"find . -exec rm {} \\;"`) is delivered
+// byte-for-byte. Call SendKeys(ctx, name, "Enter") separately to submit.
 func SendText(ctx context.Context, name, text string) error {
-	cmd := command(ctx, "tmux", "send-keys", "-t", exactPane(name), "-l", "--", text)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("tmux send-keys -l: %w (%s)", err, strings.TrimSpace(string(out)))
+	if err := CheckSessionTarget(name); err != nil {
+		return fmt.Errorf("tmux send-keys -H %q: %w", name, err)
+	}
+	raw := []byte(text)
+	if len(raw) == 0 {
+		return nil
+	}
+	target := exactPane(name)
+	for len(raw) > 0 {
+		n := min(len(raw), sendTextChunkBytes)
+		chunk := raw[:n]
+		raw = raw[n:]
+		args := make([]string, 0, 4+n)
+		args = append(args, "send-keys", "-t", target, "-H")
+		var pair [2]byte
+		for _, b := range chunk {
+			hex.Encode(pair[:], []byte{b})
+			args = append(args, string(pair[:]))
+		}
+		cmd := command(ctx, "tmux", args...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("tmux send-keys -H: %w (%s)", err, strings.TrimSpace(string(out)))
+		}
 	}
 	return nil
 }

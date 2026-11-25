@@ -161,15 +161,19 @@ func runLonghaul(ctx context.Context, duration time.Duration, count int, sample 
 	// configured (slower) cadence.
 	probeTicker := time.NewTicker(30 * time.Second)
 	sampleTicker := time.NewTicker(sample)
+	deadlineTimer := time.NewTimer(duration)
 	defer probeTicker.Stop()
 	defer sampleTicker.Stop()
-	deadline := time.Now().Add(duration)
+	defer deadlineTimer.Stop()
 
 	rssSamples := []int{startRSS}
-	for time.Now().Before(deadline) {
+loop:
+	for {
 		select {
 		case <-ctx.Done():
 			return 2, ctx.Err()
+		case <-deadlineTimer.C:
+			break loop
 		case <-probeTicker.C:
 			pctx, pcancel := context.WithTimeout(ctx, 5*time.Second)
 			_, _ = cli.Sessions(pctx)
@@ -236,7 +240,10 @@ func openLonghaulReport(runID int64, startRSS, count int, duration, sample time.
 		count, duration, sample,
 		startRSS, float64(startRSS)/1024,
 	)
-	return path, os.WriteFile(path, []byte(header), 0o644)
+	if err := os.WriteFile(path, []byte(header), 0o644); err != nil {
+		return "", err
+	}
+	return path, nil
 }
 
 // appendLonghaulSample appends a single sample line to the report

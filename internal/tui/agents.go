@@ -121,9 +121,9 @@ func (m agentsModel) Update(msg tea.Msg) (agentsModel, tea.Cmd) {
 		c, cmd := m.cursor.Update(msg)
 		m.cursor = c
 		return m, cmd
-	case claudeModelChangedMsg:
-		// Same for the Claude model pick: the save can land after the
-		// user has tabbed to another agent.
+	case claudeModelChangedMsg, claudeEffortChangedMsg, claudeAlwaysThinkingChangedMsg, claudeYoloChangedMsg, claudeReloadMsg:
+		// Async Claude config saves can land after the user has tabbed to
+		// another agent.
 		c, cmd := m.claude.Update(msg)
 		m.claude = c
 		return m, cmd

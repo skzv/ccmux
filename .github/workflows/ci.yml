@@ -116,6 +116,9 @@ jobs:
       - name: govulncheck
         run: make vulncheck
 
+      - name: CUJ catalog / VHS tapes sync
+        run: make tapes-check
+
   cross-compile:
     name: cross-compile
     runs-on: ubuntu-latest

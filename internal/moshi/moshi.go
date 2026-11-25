@@ -20,6 +20,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/skzv/ccmux/internal/agenthome"
@@ -191,11 +192,30 @@ func HostSetup(ctx context.Context) (string, error) {
 	defer cancel()
 	cmd := exec.CommandContext(c, bin, "host", "setup")
 	cmd.Stdin = os.Stdin
-	var buf strings.Builder
+	var buf syncBuffer
 	cmd.Stdout = io.MultiWriter(os.Stdout, &buf)
 	cmd.Stderr = io.MultiWriter(os.Stderr, &buf)
 	err = cmd.Run()
 	return buf.String(), err
+}
+
+// syncBuffer is a goroutine-safe strings.Builder for capturing stdout
+// and stderr concurrently via separate io.MultiWriter instances.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
 }
 
 // HostSetupFix is one recoverable error condition recognized in the

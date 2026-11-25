@@ -66,6 +66,9 @@ func applyDaemonDefaults(d *config.DaemonConfig) {
 	if d.IdleSecondsForNeedsInput <= 0 {
 		d.IdleSecondsForNeedsInput = 3
 	}
+	if d.TailnetPort <= 0 || d.TailnetPort > 65535 {
+		d.TailnetPort = 7474
+	}
 	d.PollIntervalSeconds = min(d.PollIntervalSeconds, maxDaemonSeconds)
 	d.IdleSecondsForNeedsInput = min(d.IdleSecondsForNeedsInput, maxDaemonSeconds)
 }
@@ -97,9 +100,13 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(sockPath), 0o755); err != nil {
+	stateDir := filepath.Dir(sockPath)
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		return err
 	}
+	// Tighten pre-existing 0755 state dirs so other local users can't
+	// race the Unix socket creation below or read daemon logs.
+	_ = os.Chmod(stateDir, 0o700)
 	// Bind safely:
 	//
 	// The old logic was `os.Remove(sockPath); net.Listen(...)` — a race
@@ -151,6 +158,7 @@ func run() error {
 		return fmt.Errorf("listen unix %q: %w", sockPath, err)
 	}
 	if err := os.Chmod(sockPath, 0o600); err != nil {
+		_ = unixLn.Close()
 		bindGuard.release()
 		return err
 	}

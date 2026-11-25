@@ -162,9 +162,12 @@ func inputArea(lines []string) (start, closing, below int, ok bool) {
 			}
 		}
 		return last, -1, len(lines), true // drawn no further yet
-	case last+1 < len(lines) && isInputLine(lines[last+1]):
-		return last, -1, len(lines), true // a box whose closing rule isn't drawn yet
 	}
+	// Check first whether `last` is the CLOSING rule of a complete v2
+	// input box (an opening rule above with an input line beneath it).
+	// Running this before the unclosed-box `last+1` check prevents a
+	// `❯` background-task row or post-crash shell prompt right under
+	// the closing rule from hiding the real input box.
 	for i := last - 1; i >= lo; i-- {
 		if isRuleLine(lines[i]) {
 			if isInputLine(lines[i+1]) {
@@ -172,6 +175,9 @@ func inputArea(lines []string) (start, closing, below int, ok bool) {
 			}
 			break
 		}
+	}
+	if last+1 < len(lines) && isInputLine(lines[last+1]) {
+		return last, -1, len(lines), true // a box whose closing rule isn't drawn yet
 	}
 	return last, -1, last + 1, true // a dialog
 }

@@ -52,7 +52,11 @@ func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	n := len(s.seen)
 	s.mu.Unlock()
+	sleepMode := ""
+	if s.sleeper != nil {
+		sleepMode = string(s.sleeper.Effective())
+	}
 	writeJSON(w, daemon.HealthInfo{
-		OK: true, Hostname: host, Version: version, Sessions: n, SleepMode: string(s.sleeper.Effective()),
+		OK: true, Hostname: host, Version: version, Sessions: n, SleepMode: sleepMode,
 	})
 }

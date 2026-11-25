@@ -139,7 +139,13 @@ func ListSkills() ([]Skill, error) {
 	}
 	out := []Skill{}
 	for _, e := range entries {
-		if !e.IsDir() {
+		isDir := e.IsDir()
+		if !isDir && e.Type()&os.ModeSymlink != 0 {
+			if fi, serr := os.Stat(filepath.Join(p.SkillsDir, e.Name())); serr == nil && fi.IsDir() {
+				isDir = true
+			}
+		}
+		if !isDir {
 			continue
 		}
 		full := filepath.Join(p.SkillsDir, e.Name(), "SKILL.md")
@@ -181,7 +187,7 @@ func extractFrontmatterDescription(body string) string {
 			continue
 		}
 		value := strings.TrimSpace(strings.TrimPrefix(trimmed, "description:"))
-		if value != "" && value != ">-" && value != ">" && value != "|" {
+		if value != "" && value != ">-" && value != ">+" && value != ">" && value != "|" && value != "|-" && value != "|+" {
 			return value
 		}
 		// Folded block — collect indented lines until the next top-key.

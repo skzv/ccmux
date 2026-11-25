@@ -21,7 +21,7 @@ const bellWriteTimeout = 2 * time.Second
 // covers the pollable-fd path, where Go's runtime would otherwise park
 // the goroutine in the netpoller waiting for writability.
 func writeBellToTTY(tty string) error {
-	f, err := os.OpenFile(tty, os.O_WRONLY|syscall.O_NONBLOCK, 0)
+	f, err := os.OpenFile(tty, os.O_WRONLY|syscall.O_NONBLOCK|syscall.O_NOCTTY, 0)
 	if err != nil {
 		return err
 	}
