@@ -158,6 +158,9 @@ func (a App) View() string {
 	if a.settingsInfoOpen {
 		return a.settings.renderSettingsInfoOverlay(a.width, a.height)
 	}
+	if a.pair.IsOpen() {
+		return a.pair.View(a.styles, a.width, a.height)
+	}
 	if a.network.DetailOpen() {
 		return a.network.renderDetailOverlay(a.width, a.height)
 	}

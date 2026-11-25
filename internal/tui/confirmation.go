@@ -19,6 +19,7 @@ const (
 	confirmationNone confirmationKind = iota
 	confirmationQuit
 	confirmationKillSession
+	confirmationRemoveHost
 )
 
 type confirmationFocus int
@@ -55,6 +56,10 @@ func newKillSessionConfirmation(host, name string) confirmationModal {
 	return confirmationModal{kind: confirmationKillSession, target: name, host: host, focus: confirmationFocusCancel}
 }
 
+func newRemoveHostConfirmation(name string) confirmationModal {
+	return confirmationModal{kind: confirmationRemoveHost, target: name, focus: confirmationFocusCancel}
+}
+
 func (m confirmationModal) open() bool {
 	return m.kind != confirmationNone
 }
@@ -65,6 +70,8 @@ func (m confirmationModal) title() string {
 		return tr("Quit ccmux?")
 	case confirmationKillSession:
 		return tr("Kill session?")
+	case confirmationRemoveHost:
+		return tr("Remove host?")
 	default:
 		return ""
 	}
@@ -85,6 +92,8 @@ func (m confirmationModal) body(target string) string {
 			return fmt.Sprintf(tr("Kill tmux session %q on %s. This cannot be undone."), target, label)
 		}
 		return fmt.Sprintf(tr("Kill tmux session %q. This cannot be undone."), target)
+	case confirmationRemoveHost:
+		return fmt.Sprintf(tr("Remove configured host %q from config.toml."), target)
 	default:
 		return ""
 	}
@@ -104,6 +113,8 @@ func (m confirmationModal) confirmLabel() string {
 		return tr("Quit")
 	case confirmationKillSession:
 		return tr("Kill")
+	case confirmationRemoveHost:
+		return tr("Remove")
 	default:
 		return tr("Confirm")
 	}
@@ -140,6 +151,11 @@ var currentTmuxSession = func() string {
 	return tmuxchrome.CurrentSession(ctx)
 }
 
+func (a App) openRemoveHostConfirmation(name string) (App, tea.Cmd) {
+	a.confirm = newRemoveHostConfirmation(name)
+	return a, nil
+}
+
 func (a App) cancelConfirmation() (App, tea.Cmd) {
 	a.confirm = confirmationModal{}
 	return a, nil
@@ -156,6 +172,11 @@ func (a App) acceptConfirmation() (App, tea.Cmd) {
 			return a, nil
 		}
 		return a, a.killSessionTargetCmd(confirm.host, confirm.target)
+	case confirmationRemoveHost:
+		if confirm.target == "" {
+			return a, nil
+		}
+		return a, a.removeHostCmd(confirm.target)
 	default:
 		return a, nil
 	}

@@ -2,8 +2,11 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -11,6 +14,7 @@ import (
 
 	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/daemon"
+	"github.com/skzv/ccmux/internal/notes"
 )
 
 // defaultTailnetPort is the ccmuxd HTTP port used when neither the host
@@ -161,6 +165,66 @@ func newNotesCmd() *cobra.Command {
 		},
 	}
 
-	parent.AddCommand(list, read, search)
+	var (
+		noteTitle string
+		noteEdit  bool
+	)
+	create := &cobra.Command{
+		Use:   "new <project> <filename>",
+		Short: "Create a new markdown note in a local project",
+		Long: `Create a new markdown note under a local project (mirroring 'n' on the Notes tab).
+Appends .md if omitted, creates missing parent directories inside the project,
+and refuses to overwrite an existing file.`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(c *cobra.Command, args []string) error {
+			if !isLocalHost(host) {
+				return fmt.Errorf("remote notes are read-only — create on %s directly", safeField(host))
+			}
+			cfg, err := config.Load()
+			if err != nil {
+				return fmt.Errorf("load config: %w", err)
+			}
+			root, err := cliProjectsRoot(cfg)
+			if err != nil {
+				return err
+			}
+			dir, found := resolveAttachDir(args[0], root)
+			if !found {
+				return fmt.Errorf("no project named %q under %s", args[0], root)
+			}
+			rel, abs, err := notes.Open(dir).Create(args[1], noteTitle)
+			if err != nil {
+				if errors.Is(err, os.ErrExist) {
+					return fmt.Errorf("note already exists: %s", args[1])
+				}
+				return fmt.Errorf("create note: %w", err)
+			}
+			fmt.Fprintf(c.OutOrStdout(), "created %s (%s)\n", safeField(rel), safeField(abs))
+			if noteEdit {
+				ed := strings.TrimSpace(os.Getenv("VISUAL"))
+				if ed == "" {
+					ed = strings.TrimSpace(os.Getenv("EDITOR"))
+				}
+				if ed == "" {
+					ed = "vi"
+				}
+				parts := strings.Fields(ed)
+				ectx := c.Context()
+				if ectx == nil {
+					ectx = context.Background()
+				}
+				ecmd := exec.CommandContext(ectx, parts[0], append(parts[1:], abs)...)
+				ecmd.Stdin = os.Stdin
+				ecmd.Stdout = os.Stdout
+				ecmd.Stderr = os.Stderr
+				return ecmd.Run()
+			}
+			return nil
+		},
+	}
+	create.Flags().StringVar(&noteTitle, "title", "", "optional leading H1 title written into the new note")
+	create.Flags().BoolVar(&noteEdit, "edit", false, "open the newly created note in $VISUAL / $EDITOR")
+
+	parent.AddCommand(list, read, search, create)
 	return parent
 }

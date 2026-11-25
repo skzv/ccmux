@@ -189,6 +189,7 @@ type App struct {
 	convPreview      conversationPreviewOverlay // `p` opens the transcript-preview overlay on the Conversations screen
 	projectInfoOpen  bool                       // `i` on Projects opens the per-project info overlay; esc/i closes
 	settingsInfoOpen bool                       // `i` on Settings opens the version/paths/last-save overlay; esc/i closes
+	pair             pairModal                  // `P` on Network/Settings opens the mobile pairing QR overlay
 	tour             tourModel                  // first-run interactive tour; re-openable with T
 	lastRefresh      time.Time
 	daemonOnline     bool
@@ -236,7 +237,7 @@ func (a App) modalCapturingText() bool {
 		return true
 	}
 	// App-owned overlays.
-	if a.tour.Active() || a.helpOpen || a.usageOpen || a.convPreview.IsOpen() || a.projectInfoOpen || a.settingsInfoOpen {
+	if a.tour.Active() || a.helpOpen || a.usageOpen || a.convPreview.IsOpen() || a.projectInfoOpen || a.settingsInfoOpen || a.pair.IsOpen() {
 		return true
 	}
 	return a.activeScreenCapturesInput()

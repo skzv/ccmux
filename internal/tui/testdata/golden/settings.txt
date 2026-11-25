@@ -37,4 +37,4 @@
 │    Use `ccmux host add` only for non-Tailscale hosts or  │ │                                                         │
 │ non-default ports.)                                      │ │                                                         │
 ╰──────────────────────────────────────────────────────────╯ ╰─────────────────────────────────────────────────────────╯
-? help · q quit · i info · e edit config · 1-7 screens                                                                  
+? help · q quit · i info · e edit config · D daemon · P pair · 1-7 screens                                              

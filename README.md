@@ -347,7 +347,7 @@ Comment the file however you like. When ccmux saves it (a Settings row, `ccmux h
 ### 🔌 MCP server
 
 - `ccmux-mcp` ships alongside ccmux in the same install — a Model Context Protocol server agents can plug into to see and act on every session
-- Wire it into Claude Code with `ccmux mcp register` (also offered by `ccmux setup`), or by hand: `claude mcp add --scope user ccmux -- ccmux-mcp`. `ccmux mcp unregister` takes it out again (`ccmux uninstall` does that for you). Other MCP-aware clients: point a stdio server at the `ccmux-mcp` binary
+- Wire it into Claude Code with `ccmux mcp register` (or press `w` on the Agents → Claude tab; also offered by `ccmux setup`), or by hand: `claude mcp add --scope user ccmux -- ccmux-mcp`. `ccmux mcp unregister` takes it out again (`ccmux uninstall` does that for you). Other MCP-aware clients: point a stdio server at the `ccmux-mcp` binary
 - Read-only by default: `list_sessions`, `read_pane`, `list_projects`, `list_conversations`, `get_usage`, `list_machines`, notes ones, daemon health
 - `--allow-mutate` exposes `spawn_session`, `send_keys`, `kill_session` — opt-in, hidden from `tools/list` until the flag is on
 - `CCMUX_HOST=mini.tail-xxxxx.ts.net:7474 ccmux-mcp` points it at a tailnet peer's daemon — an agent on the laptop can drive sessions on the Mac mini
@@ -357,7 +357,7 @@ Comment the file however you like. When ccmux saves it (a Settings row, `ccmux h
 
 - Dedicated "Claude" screen for everything in `~/.claude/`
 - Model picker (Opus 4.7 / Sonnet 4.6 / Haiku 4.5 / opusplan / custom) — global or per-project
-- Reasoning-effort picker (`low` / `medium` / `high` / `xhigh` / `max`) + `alwaysThinkingEnabled` toggle. Writes `effortLevel` to `~/.claude/settings.json` so every new Claude Code session inherits your default.
+- Reasoning-effort picker (`low` / `medium` / `high` / `xhigh` / `max`) + `alwaysThinkingEnabled` toggle. Writes `effortLevel` to `~/.claude/settings.json` so every new Claude Code session inherits your default. Also scriptable via `ccmux agents config [claude|codex|antigravity]` and `ccmux agents config set <agent> <key> <value>`
 - Browse + create slash-command aliases, manage MCP servers, hooks, permission allowlists
 - View & edit global and per-project `CLAUDE.md` from the TUI
 
@@ -367,7 +367,7 @@ Comment the file however you like. When ccmux saves it (a Settings row, `ccmux h
 - Folders open collapsed; `→`/`←` (or `l`/`h`) expand/collapse them — or open everything with `ccmux --expand-notes`
 - Ripgrep-backed `/` search; plain markdown on disk is the source of truth (no required cloud)
 - Browse, preview, edit-in-`$EDITOR` — ccmux reads your notes; writing them is the agent's job
-- Cross-device: `H` toggles which device's notes you're viewing (local or any tailnet peer); also via `ccmux notes list|read|search --host <name>`
+- Cross-device: `H` toggles which device's notes you're viewing (local or any tailnet peer); also via `ccmux notes list|read|search --host <name>` and `ccmux notes new <project> <filename> [--title ...]` locally
 
 ### 📲 Mobile workflow (Moshi / iOS / Android)
 
@@ -381,7 +381,7 @@ Comment the file however you like. When ccmux saves it (a Settings row, `ccmux h
 - **Local** — manages tmux sessions on this machine; prevents sleep while sessions are active
 - **Server** — daemon binds an HTTP API to your Tailscale interface for remote ccmux clients
 - **Mixed** — dashboard shows local + remote sessions, color-coded by origin
-- Same from a shell: `ccmux list`, `attach`, `kill` and `rename` take `--host <name>` for any host you added with `ccmux host add`. `ccmux kill --host mini api` kills the mini's `api` session, not yours
+- Same from a shell: `ccmux list`, `new`, `attach`, `preview`, `kill` and `rename` take `--host <name>` for any host you added with `ccmux host add` (or from the Network tab via `a` add / `x` remove / `P` pair QR / `D` daemon restart). `ccmux kill --host mini api` kills the mini's `api` session, not yours. Also: `ccmux project set-agent <project> <agent>`, `ccmux config get|set|list`, and `ccmux read-conversation <id>`
 
 ### 🩺 Setup, doctor, update
 

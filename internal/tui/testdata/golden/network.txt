@@ -37,4 +37,4 @@
 │                                                                                                                      │
 │                                                                                                                      │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-? help · q quit · enter ssh · s setup ssh · i details · r refresh · 1-7 screens                                         
+? help · q quit · enter ssh · a add host · x remove · s setup ssh · P pair · D daemon · i details · r refresh           

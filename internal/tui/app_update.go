@@ -685,13 +685,57 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.agentsM, cmd = a.agentsM.Update(msg)
 		return a, tea.Batch(adopt, cmd)
 
-	case claudeEffortChangedMsg, claudeAlwaysThinkingChangedMsg, claudeYoloChangedMsg, claudeReloadMsg:
+	case claudeEffortChangedMsg, claudeAlwaysThinkingChangedMsg, claudeYoloChangedMsg, claudeMCPToggledMsg, claudeReloadMsg:
 		// Async Claude config saves can land after the user switches
 		// screens or sub-tabs — route globally so toasts and state
 		// reloads are never silently dropped.
 		var cmd tea.Cmd
 		a.agentsM, cmd = a.agentsM.Update(msg)
 		return a, cmd
+
+	case pairTokenLoadedMsg:
+		a.pair.Apply(msg)
+		return a, nil
+
+	case addHostSubmitMsg:
+		a.network.CloseAddForm()
+		return a, a.addHostCmd(msg.Host)
+
+	case addHostCancelMsg:
+		a.network.CloseAddForm()
+		return a, nil
+
+	case hostAddedMsg:
+		if msg.Err != nil {
+			a.toasts.Set(toastError, tr("add host: ")+msg.Err.Error(), 5*time.Second)
+			return a, nil
+		}
+		var adopt tea.Cmd
+		if cfg, err := config.Load(); err == nil {
+			adopt = a.adoptConfig(cfg)
+		}
+		a.toasts.Set(toastSuccess, fmt.Sprintf(tr("added host %s"), msg.Name), 4*time.Second)
+		return a, tea.Batch(adopt, a.refreshSessionsCmd())
+
+	case hostRemovedMsg:
+		if msg.Err != nil {
+			a.toasts.Set(toastError, tr("remove host: ")+msg.Err.Error(), 5*time.Second)
+			return a, nil
+		}
+		var adopt tea.Cmd
+		if cfg, err := config.Load(); err == nil {
+			adopt = a.adoptConfig(cfg)
+		}
+		a.toasts.Set(toastSuccess, fmt.Sprintf(tr("removed host %s"), msg.Name), 4*time.Second)
+		return a, tea.Batch(adopt, a.refreshSessionsCmd())
+
+	case daemonActionDoneMsg:
+		if msg.Err != nil {
+			a.toasts.Set(toastError, tr("daemon: ")+msg.Err.Error(), 5*time.Second)
+			return a, nil
+		}
+		a.toasts.Set(toastSuccess, msg.Summary, 4*time.Second)
+		return a, a.refreshSessionsCmd()
 
 	case projectAgentSwitchedMsg:
 		// Applied straight to the list: neither another active screen
@@ -707,7 +751,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// and scroll Notes/Agents underneath.
 		if a.attach.active || a.tour.Active() || a.helpOpen || a.usageOpen ||
 			a.convPreview.IsOpen() || a.projectInfoOpen || a.settingsInfoOpen ||
-			a.network.DetailOpen() || a.matrix.Active() || (a.sshWizard != nil && a.sshWizard.Active()) {
+			a.pair.IsOpen() || a.network.DetailOpen() || a.network.AddFormOpen() ||
+			a.matrix.Active() || (a.sshWizard != nil && a.sshWizard.Active()) {
 			return a, nil
 		}
 		// Forward wheel events to the active screen so its
@@ -871,6 +916,15 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch msg.String() {
 			case "i", "esc":
 				a.settingsInfoOpen = false
+			}
+			return a, nil
+		}
+
+		// Mobile pairing QR overlay — `P` or `esc` close it.
+		if a.pair.IsOpen() {
+			switch msg.String() {
+			case "P", "esc":
+				a.pair.Close()
 			}
 			return a, nil
 		}
@@ -1078,6 +1132,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, cmd
 		}
 
+		// Network add-host modal owns every keystroke while open.
+		if a.screen == ScreenNetwork && a.network.AddFormOpen() {
+			var cmd tea.Cmd
+			a.network, cmd = a.network.Update(msg)
+			return a, cmd
+		}
+
 		switch {
 		case msg.String() == "q":
 			return a.openQuitConfirmation()
@@ -1218,6 +1279,21 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, func() tea.Msg {
 				return toastMsg{Text: tr("nothing to set up for that row"), Kind: toastInfo, Until: time.Now().Add(3 * time.Second)}
 			}
+		case msg.String() == "a" && a.screen == ScreenNetwork && !a.modalCapturingText():
+			a.network.OpenAddForm()
+			return a, nil
+		case msg.String() == "x" && a.screen == ScreenNetwork && !a.modalCapturingText():
+			sel := a.network.Selected()
+			if sel == nil || sel.Source != "configured" {
+				return a, func() tea.Msg {
+					return toastMsg{Text: tr("only configured hosts can be removed"), Kind: toastInfo, Until: time.Now().Add(4 * time.Second)}
+				}
+			}
+			return a.openRemoveHostConfirmation(sel.Name)
+		case msg.String() == "P" && (a.screen == ScreenNetwork || a.screen == ScreenSettings) && !a.modalCapturingText():
+			return a, a.pair.Open()
+		case msg.String() == "D" && (a.screen == ScreenNetwork || a.screen == ScreenSettings) && !a.modalCapturingText():
+			return a, daemonLifecycleCmd()
 		case msg.String() == "i" && a.screen == ScreenNetwork && !a.modalCapturingText():
 			// `i` opens the host-detail overlay for the focused
 			// row. Parallel to `u` on the home screen — same

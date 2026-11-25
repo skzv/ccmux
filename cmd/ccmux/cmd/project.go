@@ -18,15 +18,53 @@ import (
 // newProjectCmd: `ccmux project <name>` — the CLI mirror of pressing
 // Enter on a project in the TUI Projects screen. It prints the
 // project's running tmux sessions and its past agent conversations, so
-// the user can see what to attach to or resume. The actions stay in the
-// existing verbs: `ccmux attach`, `ccmux resume`, `ccmux new`.
+// the user can see what to attach to or resume. Also exposes
+// `ccmux project set-agent <project> <agent>` to mirror the Projects
+// tab's `a` agent-switch binding.
 func newProjectCmd() *cobra.Command {
-	return &cobra.Command{
+	c := &cobra.Command{
 		Use:   "project <name>",
-		Short: "Show a project's running sessions and past conversations",
+		Short: "Show a project's running sessions and past conversations, or switch its agent",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			return runProjectCmd(args[0])
+		},
+	}
+	c.AddCommand(newProjectSetAgentCmd())
+	return c
+}
+
+// newProjectSetAgentCmd: `ccmux project set-agent <project> <agent>`
+// writes <project>/.ccmux/agent atomically so subsequent launches of
+// that project use the chosen coding agent.
+func newProjectSetAgentCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "set-agent <project> <agent>",
+		Short: "Set the coding agent recorded for a project (.ccmux/agent)",
+		Long:  "Record which coding agent ccmux launches for <project> (agents: " + agentIDList() + "). Mirrors pressing 'a' on the Projects screen.",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(c *cobra.Command, args []string) error {
+			cfg, err := config.Load()
+			if err != nil {
+				return fmt.Errorf("load config: %w", err)
+			}
+			root, err := cliProjectsRoot(cfg)
+			if err != nil {
+				return err
+			}
+			id, ok := agent.ParseID(args[1])
+			if !ok {
+				return fmt.Errorf("unknown agent %q (want %s)", args[1], agentIDList())
+			}
+			dir, found := resolveAttachDir(args[0], root)
+			if !found {
+				return fmt.Errorf("no project named %q under %s", args[0], root)
+			}
+			if err := project.SetAgent(dir, id); err != nil {
+				return fmt.Errorf("set project agent: %w", err)
+			}
+			fmt.Fprintf(c.OutOrStdout(), "%s: agent → %s (%s)\n", safeField(args[0]), id, agent.ByID(id).DisplayName())
+			return nil
 		},
 	}
 }

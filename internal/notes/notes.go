@@ -198,6 +198,67 @@ func (v Vault) Read(rel string) ([]byte, error) {
 	return termsafe.Bytes(data), nil
 }
 
+// Create writes a brand-new markdown note at `filename` inside the vault.
+// Appends ".md" if omitted, creates missing parent directories inside the
+// vault, and uses O_EXCL under an os.Root handle so existing files are never
+// clobbered and symlinks cannot escape the project root. Returns the
+// normalized vault-relative path and the absolute path under v.Root.
+func (v Vault) Create(filename, title string) (rel, abs string, err error) {
+	fn := strings.TrimSpace(filename)
+	if fn == "" {
+		return "", "", fmt.Errorf("filename is required")
+	}
+	if !strings.HasSuffix(strings.ToLower(fn), ".md") {
+		fn += ".md"
+	}
+	rel, err = CleanRel(fn)
+	if err != nil {
+		return "", "", err
+	}
+	root, err := os.OpenRoot(v.walkRoot())
+	if err != nil {
+		return "", "", err
+	}
+	defer root.Close()
+	if dir := dirOf(rel); dir != "" {
+		cur := ""
+		for _, seg := range strings.Split(dir, "/") {
+			if cur == "" {
+				cur = seg
+			} else {
+				cur += "/" + seg
+			}
+			if merr := root.Mkdir(cur, 0o755); merr != nil && !errors.Is(merr, os.ErrExist) {
+				if isRootEscapeErr(merr) {
+					return "", "", ErrOutsideVault
+				}
+				return "", "", fmt.Errorf("mkdir %s: %w", cur, merr)
+			}
+		}
+	}
+	f, err := root.OpenFile(rel, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		if isRootEscapeErr(err) {
+			return "", "", ErrOutsideVault
+		}
+		return "", "", err
+	}
+	body := ""
+	if strings.TrimSpace(title) != "" {
+		body = "# " + strings.TrimSpace(title) + "\n\n"
+	}
+	if len(body) > 0 {
+		if _, werr := f.WriteString(body); werr != nil {
+			_ = f.Close()
+			return "", "", werr
+		}
+	}
+	if cerr := f.Close(); cerr != nil {
+		return "", "", cerr
+	}
+	return rel, v.pathFor(rel), nil
+}
+
 // isRootEscapeErr reports whether an error from os.Root indicates a path
 // or symlink attempted to escape the root directory.
 func isRootEscapeErr(err error) bool {

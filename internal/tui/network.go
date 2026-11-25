@@ -59,6 +59,9 @@ type networkModel struct {
 	// or `esc`. The overlay reads from Selected() so the App
 	// doesn't need to thread a separate "which host" argument.
 	detailOpen bool
+
+	// addForm is non-nil while the `a` add-host modal is open.
+	addForm *addHostFormModel
 }
 
 func newNetwork(st styles.Styles, km Keymap) networkModel {
@@ -116,7 +119,11 @@ func (m networkModel) HelpBarProps(width int) components.HelpBarProps {
 			{Key: "?", Label: tr("help"), Priority: 10},
 			{Key: "q", Label: tr("quit"), Priority: 10},
 			{Key: "enter", Label: tr("ssh"), Priority: 8},
+			{Key: "a", Label: tr("add host"), Priority: 7},
+			{Key: "x", Label: tr("remove"), Priority: 6},
 			{Key: "s", Label: tr("setup ssh"), Priority: 7},
+			{Key: "P", Label: tr("pair"), Priority: 5},
+			{Key: "D", Label: tr("daemon"), Priority: 5},
 			{Key: "i", Label: tr("details"), Priority: 5},
 			{Key: "r", Label: tr("refresh"), Priority: 4},
 			{Key: "1-7", Label: tr("screens"), Priority: 2},
@@ -126,6 +133,11 @@ func (m networkModel) HelpBarProps(width int) components.HelpBarProps {
 }
 
 func (m networkModel) Update(msg tea.Msg) (networkModel, tea.Cmd) {
+	if m.addForm != nil {
+		f, cmd := m.addForm.Update(msg)
+		m.addForm = &f
+		return m, cmd
+	}
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch {
@@ -173,11 +185,23 @@ func (m *networkModel) CloseDetail() { m.detailOpen = false }
 // Used by App.modalCapturingText / overlay routing.
 func (m networkModel) DetailOpen() bool { return m.detailOpen }
 
+// OpenAddForm opens the `a` add-host modal.
+func (m *networkModel) OpenAddForm() {
+	f := newAddHostForm(m.st)
+	m.addForm = &f
+}
+
+// CloseAddForm dismisses the `a` add-host modal.
+func (m *networkModel) CloseAddForm() { m.addForm = nil }
+
+// AddFormOpen reports whether the add-host form is currently open.
+func (m networkModel) AddFormOpen() bool { return m.addForm != nil }
+
 // capturesInput reports whether this screen has a modal/text-entry
 // state that must swallow global single-key handlers. OR'd into
 // App.modalCapturingText — extend this when adding a new modal to
 // the Network screen.
-func (m networkModel) capturesInput() bool { return m.DetailOpen() }
+func (m networkModel) capturesInput() bool { return m.DetailOpen() || m.AddFormOpen() }
 
 // SSHCmd builds the tea.Cmd that opens an interactive shell on the
 // selected peer. Returns nil when the selection isn't ssh-able
@@ -335,6 +359,10 @@ func (m networkModel) SetupSSHCmd() tea.Cmd {
 }
 
 func (m networkModel) View(width, height int) string {
+	if m.addForm != nil {
+		modal := m.addForm.View(width)
+		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, modal)
+	}
 	st := m.st
 	narrow := isNarrow(width)
 
