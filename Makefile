@@ -1,4 +1,4 @@
-.PHONY: build install setup uninstall run test test-e2e lint staticcheck vulncheck clean fmt vet daemon tui check-go bootstrap fuzz fuzz-quick tapes tapes-check release-check release-snapshot brew-test mcp
+.PHONY: build install setup uninstall run test test-e2e test-vhs-cleanup lint staticcheck vulncheck clean fmt vet daemon tui check-go bootstrap fuzz fuzz-quick tapes tapes-check release-check release-snapshot brew-test mcp
 
 BIN_DIR    := bin
 INSTALL_DIR := $(HOME)/.local/bin
@@ -38,17 +38,17 @@ check-go:
 
 build: check-go $(BIN_DIR)/ccmux $(BIN_DIR)/ccmuxd $(BIN_DIR)/ccmux-mcp
 
-$(BIN_DIR)/ccmux: $(shell find cmd/ccmux internal -type f -name '*.go' 2>/dev/null) go.mod go.sum
+$(BIN_DIR)/ccmux: $(shell find cmd/ccmux internal -type f \( -name '*.go' -o -name '*.toml' \) 2>/dev/null) go.mod go.sum
 	@mkdir -p $(BIN_DIR)
 	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/ccmux ./cmd/ccmux
 	@$(CODESIGN)
 
-$(BIN_DIR)/ccmuxd: $(shell find cmd/ccmuxd internal -type f -name '*.go' 2>/dev/null) go.mod go.sum
+$(BIN_DIR)/ccmuxd: $(shell find cmd/ccmuxd internal -type f \( -name '*.go' -o -name '*.toml' \) 2>/dev/null) go.mod go.sum
 	@mkdir -p $(BIN_DIR)
 	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/ccmuxd ./cmd/ccmuxd
 	@$(CODESIGN)
 
-$(BIN_DIR)/ccmux-mcp: $(shell find cmd/ccmux-mcp internal/daemon -type f -name '*.go' 2>/dev/null) go.mod go.sum
+$(BIN_DIR)/ccmux-mcp: $(shell find cmd/ccmux-mcp internal/daemon internal/claudemodels -type f -name '*.go' 2>/dev/null) go.mod go.sum
 	@mkdir -p $(BIN_DIR)
 	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/ccmux-mcp ./cmd/ccmux-mcp
 	@$(CODESIGN)
@@ -124,7 +124,7 @@ uninstall:
 		$(INSTALL_DIR)/ccmux uninstall --yes || true; \
 	else \
 		echo "ccmux is not on PATH — removing binaries only"; \
-		rm -f $(INSTALL_DIR)/ccmux $(INSTALL_DIR)/ccmuxd; \
+		rm -f $(INSTALL_DIR)/ccmux $(INSTALL_DIR)/ccmuxd $(INSTALL_DIR)/ccmux-mcp; \
 	fi
 
 tui run: check-go
@@ -285,7 +285,8 @@ tapes: build
 #
 # Runs cheaply in CI — no VHS or ffmpeg needed.
 tapes-check:
-	@awk -F'|' '/^\| C[0-9]+ \|/ { \
+	@mkdir -p $(BIN_DIR); \
+	awk -F'|' '/^\| C[0-9]+ \|/ { \
 		id=$$2; slug=$$3; demoable=$$7; \
 		gsub(/^ +| +$$/, "", id); \
 		gsub(/^ +| +$$/, "", slug); \

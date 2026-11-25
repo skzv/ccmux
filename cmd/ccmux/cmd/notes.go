@@ -86,7 +86,10 @@ func newNotesCmd() *cobra.Command {
 		RunE: func(_ *cobra.Command, args []string) error {
 			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 			defer cancel()
-			cfg, _ := config.Load()
+			cfg, err := config.Load()
+			if err != nil {
+				return fmt.Errorf("load config: %w", err)
+			}
 			cli, local, err := notesClientFor(cfg, host)
 			if err != nil {
 				return err
@@ -113,7 +116,10 @@ func newNotesCmd() *cobra.Command {
 		RunE: func(_ *cobra.Command, args []string) error {
 			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 			defer cancel()
-			cfg, _ := config.Load()
+			cfg, err := config.Load()
+			if err != nil {
+				return fmt.Errorf("load config: %w", err)
+			}
 			cli, local, err := notesClientFor(cfg, host)
 			if err != nil {
 				return err
@@ -136,7 +142,10 @@ func newNotesCmd() *cobra.Command {
 		RunE: func(_ *cobra.Command, args []string) error {
 			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 			defer cancel()
-			cfg, _ := config.Load()
+			cfg, err := config.Load()
+			if err != nil {
+				return fmt.Errorf("load config: %w", err)
+			}
 			cli, local, err := notesClientFor(cfg, host)
 			if err != nil {
 				return err

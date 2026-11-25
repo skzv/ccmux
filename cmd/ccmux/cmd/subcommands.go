@@ -66,7 +66,10 @@ user and ssh port.`,
 			}
 			ctx := context.Background()
 			if !isLocalHost(host) {
-				cfg, _ := config.Load()
+				cfg, err := config.Load()
+				if err != nil {
+					return fmt.Errorf("load config: %w", err)
+				}
 				return runRemoteAttach(ctx, c.OutOrStdout(), cfg, host, arg)
 			}
 			// A live session's own name — what `ccmux list` prints,
@@ -80,7 +83,9 @@ user and ssh port.`,
 				case errors.Is(err, tmux.ErrSessionIDTarget):
 					return fmt.Errorf("refusing to attach to %q: %w", arg, err)
 				case err == nil:
-					live, err := tmux.Has(ctx, arg)
+					tctx, cancel := context.WithTimeout(ctx, listTmuxTimeout)
+					live, err := tmux.Has(tctx, arg)
+					cancel()
 					if err != nil {
 						return err
 					}
@@ -90,13 +95,18 @@ user and ssh port.`,
 				}
 			}
 
-			cfg, _ := config.Load()
+			cfg, err := config.Load()
+			if err != nil {
+				return fmt.Errorf("load config: %w", err)
+			}
 			root, err := cliProjectsRoot(cfg)
 			if err != nil {
 				return err
 			}
 			dir, found := resolveAttachDir(arg, root)
-			sessions, err := tmux.List(ctx)
+			listCtx, listCancel := context.WithTimeout(ctx, listTmuxTimeout)
+			sessions, err := tmux.List(listCtx)
+			listCancel()
 			if err != nil {
 				return err
 			}
@@ -116,8 +126,12 @@ user and ssh port.`,
 				// Resolve the launch command from the project's
 				// sidecar so an Antigravity-tagged project doesn't
 				// silently boot into claude.
-				launch := agent.LaunchCmd(project.ReadAgent(dir), true, cfg.AgentCommands())
-				if err := tmux.New(ctx, session, dir, launch); err != nil {
+				agentID := project.ReadAgent(dir)
+				launch := agent.LaunchCmd(agentID, true, cfg.AgentCommands())
+				newCtx, newCancel := context.WithTimeout(ctx, listTmuxTimeout)
+				err = tmux.NewWithAgent(newCtx, session, dir, launch, string(agentID))
+				newCancel()
+				if err != nil {
 					return err
 				}
 				created = true
@@ -237,7 +251,10 @@ func newNewCmd() *cobra.Command {
 		Short: "Create a project directory and start its agent session",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
-			cfg, _ := config.Load()
+			cfg, err := config.Load()
+			if err != nil {
+				return fmt.Errorf("load config: %w", err)
+			}
 			if err := project.ValidateName(args[0]); err != nil {
 				return err
 			}
@@ -267,7 +284,8 @@ func newNewCmd() *cobra.Command {
 			// "Running" is by directory (tmux.ProjectSessionName): a
 			// c-<name> session of a same-named project elsewhere no
 			// longer counts, and this project gets its own session.
-			ctx := context.Background()
+			ctx, cancel := context.WithTimeout(context.Background(), listTmuxTimeout)
+			defer cancel()
 			alreadyRunning := func() error {
 				running, live, err := tmux.ResolveProjectSession(ctx, opts.Dir)
 				if err != nil || !live {
@@ -354,7 +372,10 @@ same match as "/" on the TUI's Sessions screen.`,
 			defer cancel()
 			var sessions []daemon.SessionState
 			if !isLocalHost(host) {
-				cfg, _ := config.Load()
+				cfg, err := config.Load()
+				if err != nil {
+					return fmt.Errorf("load config: %w", err)
+				}
 				ss, err := runRemoteList(context.Background(), cfg, host)
 				if err != nil {
 					return err
@@ -433,8 +454,12 @@ and its ccmuxd kills it; a project is a project name or an absolute path
 on that host.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
-			ctx := context.Background()
-			cfg, _ := config.Load()
+			ctx, cancel := context.WithTimeout(context.Background(), listTmuxTimeout)
+			defer cancel()
+			cfg, err := config.Load()
+			if err != nil {
+				return fmt.Errorf("load config: %w", err)
+			}
 			if !isLocalHost(host) {
 				return runRemoteKill(ctx, c.OutOrStdout(), cfg, host, args[0])
 			}
@@ -1291,7 +1316,10 @@ func newHostCmd() *cobra.Command {
 			Use:   "list",
 			Short: "List configured remote hosts",
 			RunE: func(_ *cobra.Command, _ []string) error {
-				cfg, _ := config.Load()
+				cfg, err := config.Load()
+				if err != nil {
+					return fmt.Errorf("load config: %w", err)
+				}
 				tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 				fmt.Fprintln(tw, "NAME\tADDRESS\tUSER\tMOSH")
 				for _, h := range cfg.Hosts {

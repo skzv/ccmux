@@ -31,7 +31,7 @@ func (a App) screenBodyHeight() int {
 
 func (a App) View() string {
 	if a.width == 0 {
-		return "loading…"
+		return tr("loading…")
 	}
 	// Attach-loading overlay takes the full screen between Enter and
 	// the tmux suspend. Placed before the regular chrome render so

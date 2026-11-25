@@ -83,14 +83,24 @@ func detectShellRC(home, shellEnv, zdotdir string) (rcPath, exportLine string) {
 			fmt.Sprintf(`export PATH="%s:$PATH"`, binDir)
 	case "fish":
 		// fish has its own syntax — `set -x PATH …` not `export …` — and
-		// reads ~/.config/fish/config.fish.
+		// reads ~/.config/fish/config.fish. Quote when binDir contains
+		// whitespace or shell metacharacters; keep plain paths unquoted.
 		return filepath.Join(home, ".config", "fish", "config.fish"),
-			fmt.Sprintf(`set -gx PATH %s $PATH`, binDir)
+			fmt.Sprintf(`set -gx PATH %s $PATH`, fishQuoteIfNeeded(binDir))
 	}
 	// Unknown shell — fall back to ~/.profile which every POSIX shell
 	// reads on login.
 	return filepath.Join(home, ".profile"),
 		fmt.Sprintf(`export PATH="%s:$PATH"`, binDir)
+}
+
+func fishQuoteIfNeeded(s string) string {
+	if !strings.ContainsAny(s, " \t'\"$\\;()&|<>?*") {
+		return s
+	}
+	escaped := strings.ReplaceAll(s, `\`, `\\`)
+	escaped = strings.ReplaceAll(escaped, `'`, `\'`)
+	return "'" + escaped + "'"
 }
 
 // hostGOOS is runtime.GOOS, as a variable so tests can exercise the

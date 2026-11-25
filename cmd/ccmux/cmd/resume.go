@@ -64,7 +64,21 @@ its table work as-is, trailing "…" included.`,
 
 			var target conversations.Conversation
 			if len(args) == 1 {
-				if target, err = pickByID(list, args[0]); err != nil {
+				candidates := list
+				if agentFilter != "" {
+					want, ok := agent.ParseID(agentFilter)
+					if !ok {
+						return fmt.Errorf("unknown agent %q (want %s)", agentFilter, agentIDList())
+					}
+					filtered := make([]conversations.Conversation, 0, len(list))
+					for _, c := range list {
+						if c.Agent == want {
+							filtered = append(filtered, c)
+						}
+					}
+					candidates = filtered
+				}
+				if target, err = pickByID(candidates, args[0]); err != nil {
 					return err
 				}
 			} else {
@@ -190,9 +204,10 @@ func resumeNow(target conversations.Conversation) error {
 		return fmt.Errorf("unknown agent %q — cannot resume", target.Agent)
 	}
 	// Quote-free join is safe — agent argv elements are well-known
-	// flags + a UUID; no shell metacharacters. zsh fallback keeps the
-	// pane alive if the agent binary went missing between list + resume.
-	cmdline := joinArgs(argv) + " || zsh"
+	// flags + a UUID; no shell metacharacters. Shell fallback chain keeps
+	// the pane alive if the agent binary went missing between list + resume
+	// (including Linux hosts where zsh is not installed).
+	cmdline := joinArgs(argv) + " || zsh || bash || sh"
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	sessionName, existed, err := ensureResumeSession(ctx, target, cmdline)

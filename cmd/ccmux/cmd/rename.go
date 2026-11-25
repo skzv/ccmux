@@ -38,7 +38,10 @@ and its ccmuxd renames it.`,
 				return fmt.Errorf("invalid session name %q: use only letters, digits, hyphens and underscores, not starting with a hyphen", newName)
 			}
 			if !isLocalHost(host) {
-				cfg, _ := config.Load()
+				cfg, err := config.Load()
+				if err != nil {
+					return fmt.Errorf("load config: %w", err)
+				}
 				return runRemoteRename(context.Background(), c.OutOrStdout(), cfg, host, oldName, newName)
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

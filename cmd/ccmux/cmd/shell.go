@@ -136,7 +136,10 @@ func runShellLocal(ctx context.Context, name, path, agentFlag string) error {
 // unknown host points at `ccmux host add`, and a daemon that doesn't
 // answer is named with the address that was dialed.
 func runShellRemote(ctx context.Context, name, path, host, agentFlag string) error {
-	cfg, _ := config.Load()
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
 	rh, err := lookupHost(cfg, host)
 	if err != nil {
 		return err
@@ -152,11 +155,6 @@ func runShellRemote(ctx context.Context, name, path, host, agentFlag string) err
 	if err != nil {
 		return rh.remoteErr("new bare session", err)
 	}
-	// ssh -t <host> "tmux attach …" with the same PATH prepend the
-	// TUI uses for cross-platform tmux discovery. Duplicating here
-	// rather than reaching into internal/tui — that package is
-	// gigantic and the CLI shouldn't drag it in.
-	tmuxAttach := remoteShellTmuxAttach(res.Session)
 	if !stdinIsTTY() {
 		// ssh -t can't give tmux a terminal it doesn't have. The
 		// session is up on the peer; say how to reach it.
@@ -165,15 +163,10 @@ func runShellRemote(ctx context.Context, name, path, host, agentFlag string) err
 			dial = hostCfg.User + "@" + dial
 		}
 		fmt.Printf("created %s on %s; attach from a terminal with: %s\n",
-			safeField(res.Session), safeField(host), remoteAttachHint(dial, res.Session))
+			safeField(res.Session), safeField(host), remoteAttachHintPort(dial, hostCfg.EffectiveSSHPort(), res.Session))
 		return nil
 	}
-	// nocontext: foreground interactive ssh; it ends when the user detaches.
-	c := exec.Command("ssh", shellSSHArgs(hostCfg, tmuxAttach)...)
-	c.Stdin = os.Stdin
-	c.Stdout = os.Stdout
-	c.Stderr = os.Stderr
-	return c.Run()
+	return runForeground(remoteAttachCmd(hostCfg, res.Session, false))
 }
 
 // remoteShellTmuxAttach builds the remote command for `ccmux shell --host`.
@@ -211,14 +204,22 @@ func remoteTmuxAttach(session string, detachOthers bool) string {
 // this one, and the remote login shell ssh hands the joined command to.
 // Unquoted there, "=name:" would also trip zsh's `=cmd` expansion.
 func remoteAttachHint(dial, session string) string {
+	return remoteAttachHintPort(dial, 22, session)
+}
+
+func remoteAttachHintPort(dial string, port int, session string) string {
 	session = safeField(session)
 	target := tmux.ExactSession(session)
+	portFlag := ""
+	if port != 0 && port != 22 {
+		portFlag = fmt.Sprintf(" -p %d", port)
+	}
 	if strings.Trim(session, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-@%+,") == "" {
 		// Nothing a shell expands, even inside double quotes: keep
 		// the common case readable.
-		return fmt.Sprintf(`ssh -t %s "tmux attach-session -t '%s'"`, shellWord(dial), target)
+		return fmt.Sprintf(`ssh -t%s %s "tmux attach-session -t '%s'"`, portFlag, shellWord(dial), target)
 	}
-	return fmt.Sprintf("ssh -t %s %s", shellWord(dial), shellQuote("tmux attach-session -t "+shellQuote(target)))
+	return fmt.Sprintf("ssh -t%s %s %s", portFlag, shellWord(dial), shellQuote("tmux attach-session -t "+shellQuote(target)))
 }
 
 // shellAttachCmd builds the foreground tmux attach for a freshly-created

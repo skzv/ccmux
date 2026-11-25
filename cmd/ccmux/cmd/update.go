@@ -40,9 +40,12 @@ const (
 	networkGitTimeout = 20 * time.Second
 )
 
-// restartDaemon is a test seam; production always points at
-// daemonservice.Restart.
-var restartDaemon = daemonservice.Restart
+// Test seams; production points at the real implementations.
+var (
+	restartDaemon = daemonservice.Restart
+	checkHomebrew = isHomebrewInstall
+	offerSetup    = offerSetupRerun
+)
 
 // newUpdateCmd: `ccmux update [--repo PATH] [--no-restart] [--dry-run]`.
 func newUpdateCmd() *cobra.Command {
@@ -86,11 +89,14 @@ Use --dry-run to preview the commands without executing them.`,
 			// `--skip-pull` doesn't map cleanly onto brew's flow (brew
 			// update is the closest analogue) so we just let it run.
 			exe, _ := os.Executable()
-			if repoFlag == "" && exe != "" && isHomebrewInstall(ctx, exe) {
+			if repoFlag == "" && exe != "" && checkHomebrew(ctx, exe) {
 				if err := runBrewUpdate(ctx, exe, dryRun, noRestart); err != nil {
 					return err
 				}
-				return offerSetupRerun(ctx, runSetup, noSetupPrompt)
+				if dryRun {
+					return nil
+				}
+				return offerSetup(ctx, runSetup, noSetupPrompt)
 			}
 
 			// Source path: git pull + make install.
@@ -127,7 +133,7 @@ Use --dry-run to preview the commands without executing them.`,
 			}
 			fmt.Println("✓ ccmux updated. Restart any open TUIs to pick up the new binary.")
 
-			return offerSetupRerun(ctx, runSetup, noSetupPrompt)
+			return offerSetup(ctx, runSetup, noSetupPrompt)
 		},
 	}
 	c.Flags().StringVar(&repoFlag, "repo", "", "path to the ccmux git checkout (default: auto-detect)")

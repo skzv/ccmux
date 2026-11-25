@@ -72,6 +72,8 @@ func RunWithOptions(ctx context.Context, out io.Writer, opts Options) error {
 		ctx = withAssumeYes(ctx)
 		fmt.Fprintln(out, stMuted.Render("Non-interactive (--yes): taking recommended answers; interactive integrations are skipped."))
 	}
+	daemonRestartNeeded := false
+	ctx = withDaemonRestartFlag(ctx, &daemonRestartNeeded)
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, stTitle.Render("ccmux setup wizard"))
 	fmt.Fprintln(out, stMuted.Render("Walk through deps, Tailscale, Moshi, SSH key, and config. Idempotent — safe to re-run."))
@@ -157,10 +159,30 @@ func markSetupCompleted(out io.Writer) {
 
 type wizCtxKey int
 
-const assumeYesKey wizCtxKey = iota
+const (
+	assumeYesKey wizCtxKey = iota
+	daemonRestartKey
+)
 
 func withAssumeYes(ctx context.Context) context.Context {
 	return context.WithValue(ctx, assumeYesKey, true)
+}
+
+func withDaemonRestartFlag(ctx context.Context, flag *bool) context.Context {
+	return context.WithValue(ctx, daemonRestartKey, flag)
+}
+
+func markDaemonRestartNeeded(ctx context.Context) {
+	if flag, _ := ctx.Value(daemonRestartKey).(*bool); flag != nil {
+		*flag = true
+	}
+}
+
+func daemonRestartNeeded(ctx context.Context) bool {
+	if flag, _ := ctx.Value(daemonRestartKey).(*bool); flag != nil {
+		return *flag
+	}
+	return false
 }
 
 // assumeYes reports whether the wizard is running non-interactively
@@ -361,7 +383,9 @@ func shellResolvedAgentCandidate(ctx context.Context, bin string) string {
 	if shell == "" {
 		shell = "/bin/sh"
 	}
-	cmd := exec.CommandContext(ctx, shell, "-lc", "command -v "+agent.ShellQuote(bin))
+	tctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(tctx, shell, "-lc", "command -v "+agent.ShellQuote(bin))
 	out, err := cmd.Output()
 	if err != nil {
 		return ""
@@ -476,6 +500,10 @@ func installRequired(ctx context.Context, out io.Writer, missing []string) error
 		return nil
 	}
 	if _, err := exec.LookPath("brew"); err != nil {
+		if runtime.GOOS == "linux" {
+			return fmt.Errorf("missing required package(s): %s — install with your distro's package manager (e.g. `sudo apt install %s` / `sudo dnf install %s` / `sudo pacman -S %s`), then re-run",
+				strings.Join(missing, ", "), strings.Join(missing, " "), strings.Join(missing, " "), strings.Join(missing, " "))
+		}
 		return fmt.Errorf("brew not on PATH; install Homebrew first, then re-run")
 	}
 	install, err := confirm(ctx, true,
@@ -570,7 +598,11 @@ func stepGitHubAuth(ctx context.Context, out io.Writer) error {
 				return nil
 			}
 		} else {
-			fmt.Fprintln(out, "  Install yourself: "+stEmphasis.Render("brew install gh")+", then "+stEmphasis.Render("gh auth login"))
+			if runtime.GOOS == "linux" {
+				fmt.Fprintln(out, "  Install yourself via your distro package manager (e.g. "+stEmphasis.Render("sudo apt install gh")+"), then "+stEmphasis.Render("gh auth login"))
+			} else {
+				fmt.Fprintln(out, "  Install yourself: "+stEmphasis.Render("brew install gh")+", then "+stEmphasis.Render("gh auth login"))
+			}
 		}
 		return nil
 	case ghauth.StateNotAuthed:
@@ -864,6 +896,7 @@ func stepConfig(ctx context.Context, out io.Writer) error {
 	if defaultAgent == "" {
 		defaultAgent = "claude"
 	}
+	prevListenTailnet := cfg.Daemon.ListenTailnet
 	listenTailnet := cfg.Daemon.ListenTailnet
 	autoCheckUpdates := cfg.Update.AutoCheck
 
@@ -921,10 +954,13 @@ func stepConfig(ctx context.Context, out io.Writer) error {
 	}
 	p, _ := config.Path()
 	fmt.Fprintf(out, "  %s  wrote %s\n", stOK.Render("✓"), p)
+	if listenTailnet != prevListenTailnet {
+		markDaemonRestartNeeded(ctx)
+	}
 	if listenTailnet {
 		fmt.Fprintf(out, "  %s  tailnet listener enabled (port %d)\n",
 			stOK.Render("✓"), tailnetPortOrDefault(cfg.Daemon.TailnetPort))
-		fmt.Fprintln(out, stMuted.Render("  ccmuxd will pick this up on next restart — `ccmux update` to apply now."))
+		fmt.Fprintln(out, stMuted.Render("  ccmuxd will pick this up on next restart — `ccmux daemon restart` to apply now."))
 	}
 	return nil
 }
@@ -980,9 +1016,12 @@ func defaultAgentChoices(ctx context.Context, cfg config.Config) []agent.ID {
 	}
 
 	choices := []agent.ID{agent.IDClaude}
-	for _, id := range []agent.ID{agent.IDCodex, agent.IDAntigravity, agent.IDCursor, agent.IDPi, agent.IDGemini} {
-		if available[id] {
-			choices = append(choices, id)
+	for _, a := range agent.All() {
+		if a.ID() == agent.IDClaude {
+			continue
+		}
+		if available[a.ID()] {
+			choices = append(choices, a.ID())
 		}
 	}
 	return choices
@@ -1003,6 +1042,9 @@ func defaultAgentLabel(id agent.ID) string {
 	case agent.IDPi:
 		return "Pi"
 	default:
+		if a := agent.ByID(id); a != nil && a.DisplayName() != "" {
+			return a.DisplayName()
+		}
 		return string(id)
 	}
 }
@@ -1026,6 +1068,16 @@ func stepDaemonService(ctx context.Context, out io.Writer) error {
 		return nil
 	}
 	if s.ServiceEnabled && s.Running {
+		if daemonRestartNeeded(ctx) {
+			if _, err := daemonservice.Restart(); err != nil {
+				fmt.Fprintf(out, "  %s  already installed and running (%s), but restart to apply config failed: %v\n",
+					stWarn.Render("⚠"), s.ServicePath, err)
+				return nil
+			}
+			fmt.Fprintf(out, "  %s  restarted ccmuxd to apply updated config (%s)\n",
+				stOK.Render("✓"), s.ServicePath)
+			return nil
+		}
 		fmt.Fprintf(out, "  %s  already installed and running (%s)\n",
 			stOK.Render("✓"), s.ServicePath)
 		return nil

@@ -32,7 +32,10 @@ func newProjectCmd() *cobra.Command {
 }
 
 func runProjectCmd(name string) error {
-	cfg, _ := config.Load()
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
 	// Same root as `new`/`attach`: --projects wins, and a configured
 	// "~/code" is expanded (the old inline fallback didn't).
 	root, err := cliProjectsRoot(cfg)
@@ -89,10 +92,7 @@ func runProjectCmd(name string) error {
 	// list-conversations` so automation runs don't clutter the
 	// per-project picker.
 	fmt.Println("\nPast conversations:")
-	showHeadless := false
-	if cfg, err := config.Load(); err == nil {
-		showHeadless = cfg.Conversations.ShowHeadless
-	}
+	showHeadless := cfg.Conversations.ShowHeadless
 	convs, _ := conversations.All(conversations.Options{
 		ExcludeHeadless: !showHeadless,
 	})

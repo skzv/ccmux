@@ -67,6 +67,11 @@ case "$OS" in
         # The canonical one-liner; non-interactive because we already
         # asked. NONINTERACTIVE=1 keeps brew from prompting on its own.
         NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+        if [[ -x /opt/homebrew/bin/brew ]]; then
+          eval "$(/opt/homebrew/bin/brew shellenv)"
+        elif [[ -x /usr/local/bin/brew ]]; then
+          eval "$(/usr/local/bin/brew shellenv)"
+        fi
       else
         err "brew is required on macOS — bailing. Re-run when ready."
         exit 1
@@ -76,11 +81,12 @@ case "$OS" in
     PKG_INSTALL="brew install"
     ;;
   linux)
+    LINUX_GO_PKG="golang"
     if   command -v apt-get >/dev/null 2>&1; then PKG_INSTALL="sudo apt-get install -y"
     elif command -v dnf     >/dev/null 2>&1; then PKG_INSTALL="sudo dnf install -y"
-    elif command -v pacman  >/dev/null 2>&1; then PKG_INSTALL="sudo pacman -S --noconfirm"
+    elif command -v pacman  >/dev/null 2>&1; then PKG_INSTALL="sudo pacman -S --noconfirm"; LINUX_GO_PKG="go"
     elif command -v zypper  >/dev/null 2>&1; then PKG_INSTALL="sudo zypper install -y"
-    elif command -v apk     >/dev/null 2>&1; then PKG_INSTALL="sudo apk add"
+    elif command -v apk     >/dev/null 2>&1; then PKG_INSTALL="sudo apk add"; LINUX_GO_PKG="go"
     else
       warn "no recognized package manager (apt / dnf / pacman / zypper / apk)"
       dim  "you'll need to install go / git / make manually before this script can proceed."
@@ -112,7 +118,7 @@ check_dep() {
 step "Build prerequisites"
 check_dep git  git  git  "needed to clone + pull updates"
 check_dep make make make "drives the build (you already have it if you got this far via 'make bootstrap')"
-check_dep go   go   golang "Go 1.26+ — ccmux is written in Go"
+check_dep go   go   "${LINUX_GO_PKG:-golang}" "Go 1.26+ — ccmux is written in Go"
 
 if (( ${#MISSING_DEPS[@]} > 0 )); then
   echo
@@ -145,10 +151,12 @@ if command -v go >/dev/null 2>&1; then
     gv_major="${GO_VERSION%%.*}"
     gv_rest="${GO_VERSION#*.}"
     gv_minor="${gv_rest%%.*}"
+    gv_major="${gv_major%%[^0-9]*}"
+    gv_minor="${gv_minor%%[^0-9]*}"
     min_major="${GO_MIN_VERSION%%.*}"
     min_rest="${GO_MIN_VERSION#*.}"
     min_minor="${min_rest%%.*}"
-    if (( gv_major < min_major || (gv_major == min_major && gv_minor < min_minor) )); then
+    if [[ -n "$gv_major" && -n "$gv_minor" ]] && (( gv_major < min_major || (gv_major == min_major && gv_minor < min_minor) )); then
       warn "go $GO_VERSION installed; ccmux wants ≥ $GO_MIN_VERSION"
       dim  "upgrade via your package manager and re-run."
       exit 1
