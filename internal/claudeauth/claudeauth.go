@@ -73,7 +73,7 @@ var (
 	// that exec a real stub can give it room: on a loaded macOS box the
 	// first exec of a freshly written script can take seconds just to
 	// clear the system's code checks.
-	statusTimeout = 3 * time.Second
+	statusTimeout  = 3 * time.Second
 	fetchWaitDelay = 2 * time.Second
 	inflight       chan struct{}
 )
