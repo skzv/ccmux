@@ -80,6 +80,7 @@ func newCursorAgent(st styles.Styles) cursorAgentModel {
 		st:      st,
 		spinner: sp,
 		browser: newAgentBrowser(st),
+		loading: true,
 	}
 	m.dbPath = defaultCursorDBPath()
 	m.hooks, _ = cursorconfig.ReadHooks()

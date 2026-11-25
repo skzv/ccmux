@@ -35,6 +35,18 @@ func (m *notesModel) SetHosts(h []hostStatus) {
 		}
 	}
 	m.deviceName = localDeviceLabel
+	if m.activeIsRemote() {
+		m.project = nil
+		m.entries = nil
+		m.cursor = 0
+		m.previewRel = ""
+		m.previewSrc = ""
+		m.preview.SetContent("")
+		m.searchResults = nil
+		m.searchQuery = ""
+		m.searching = false
+		m.deviceErr = ""
+	}
 }
 
 // localDeviceLabel is the canonical project-host label for this machine,

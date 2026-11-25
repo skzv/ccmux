@@ -126,7 +126,15 @@ func (a App) View() string {
 	}
 	parts = append(parts, statusBar, helpLine)
 	frame := lipgloss.JoinVertical(lipgloss.Left, parts...)
-	// Overlay precedence: tour > help > confirmation > regular frame.
+	// Overlay precedence mirrors App.Update input routing:
+	// confirm > sshWizard > tour > help > usage > convPreview >
+	// projectInfo > settingsInfo > network.Detail > regular frame.
+	if a.confirm.open() {
+		return a.renderConfirmationOverlay(a.width, a.height)
+	}
+	if a.sshWizard != nil && a.sshWizard.Active() {
+		return a.sshWizard.View(a.width, a.height)
+	}
 	if a.tour.Active() {
 		return a.tour.View(a.width, a.height)
 	}
@@ -152,15 +160,6 @@ func (a App) View() string {
 	}
 	if a.network.DetailOpen() {
 		return a.network.renderDetailOverlay(a.width, a.height)
-	}
-	if a.confirm.open() {
-		return a.renderConfirmationOverlay(a.width, a.height)
-	}
-	if a.sshWizard != nil && a.sshWizard.Active() {
-		// Wizard overlays everything else (it owns input). Drawn
-		// on top of the still-rendered base frame, just like the
-		// other modal overlays above.
-		return a.sshWizard.View(a.width, a.height)
 	}
 	return frame
 }

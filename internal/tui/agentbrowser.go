@@ -338,8 +338,8 @@ type agentBrowserGeo struct {
 // the call sets inner-frame width (content + padding), so the actual
 // content area is N - 2.
 func agentBrowserGeometry(width, height int) agentBrowserGeo {
-	if width < 60 {
-		width = 60
+	if width < 20 {
+		width = 20
 	}
 	if height < 10 {
 		height = 10
@@ -352,8 +352,10 @@ func agentBrowserGeometry(width, height int) agentBrowserGeo {
 	}
 
 	listW := width * 4 / 10
-	if listW < 24 {
+	if width >= 60 && listW < 24 {
 		listW = 24
+	} else if listW < 10 {
+		listW = 10
 	}
 	previewW := width - listW
 

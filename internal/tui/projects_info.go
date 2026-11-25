@@ -44,7 +44,7 @@ func (projectInfoOverlay) View(st styles.Styles, p project.Project, sessions []d
 	// inside that area at a further 2-cell indent (s.Spacing.MD) so
 	// wrapped lines and blank lines all stay aligned with their
 	// "  " prefixed siblings above.
-	modalW := minInt(96, width-4)
+	modalW := max(20, minInt(96, width-4))
 	contentW := modalW - 4
 	if contentW < 10 {
 		contentW = 10

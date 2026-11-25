@@ -721,6 +721,7 @@ type pickerRow struct {
 func openClaudeFileCmd(editor, path string, createIfMissing bool) tea.Cmd {
 	if createIfMissing {
 		if _, err := os.Stat(path); os.IsNotExist(err) {
+			_ = os.MkdirAll(filepath.Dir(path), 0o755)
 			_ = os.WriteFile(path, []byte("# CLAUDE.md\n\n(global Claude Code instructions for this host)\n"), 0o644)
 		}
 	}
@@ -821,16 +822,31 @@ func (m claudeModel) browserHooksSection() agentBrowserSection {
 
 func (m claudeModel) browserMCPSection() agentBrowserSection {
 	section := agentBrowserSection{Title: "MCP servers", Color: m.st.P.Sky}
-	if m.settings == nil || len(m.settings.MCPServers) == 0 {
+	// Claude Code stores user-scope MCP servers in ~/.claude.json
+	// (written by `claude mcp add --scope user` and `ccmux mcp register`).
+	// Merge with any legacy entries in ~/.claude/settings.json so both
+	// real user configs and legacy test fixtures display properly.
+	merged := map[string]claudeconfig.MCPServer{}
+	if m.settings != nil {
+		for k, v := range m.settings.MCPServers {
+			merged[k] = v
+		}
+	}
+	if userMCP, err := claudeconfig.ReadUserMCPServers(); err == nil {
+		for k, v := range userMCP {
+			merged[k] = v
+		}
+	}
+	if len(merged) == 0 {
 		return section
 	}
-	names := make([]string, 0, len(m.settings.MCPServers))
-	for k := range m.settings.MCPServers {
+	names := make([]string, 0, len(merged))
+	for k := range merged {
 		names = append(names, k)
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		s := m.settings.MCPServers[name]
+		s := merged[name]
 		kind := s.Type
 		if kind == "" {
 			if s.URL != "" {

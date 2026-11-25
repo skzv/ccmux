@@ -183,11 +183,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case moshiDetectedMsg:
 		// Async result of detectMoshiCmd — push it into the Settings
 		// screen, which renders the moshi/moshi-hook status block.
-		// Also kick the spinner one more time so it picks back up
-		// on the next probe (the spinner's tick loop pauses when no
-		// TickMsg comes in for its ID).
+		// Probe is now finished, so do not re-arm the spinner ticker.
 		a.settings.SetMoshiState(msg.State)
-		return a, a.settings.SpinnerTick()
+		return a, nil
 
 	case spinner.TickMsg:
 		// Route every spinner tick globally, fanning it out to every
@@ -225,6 +223,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.conversationsM.SetLoading(true)
 		return a, tea.Batch(
 			a.refreshConversationsCmd(),
+			a.conversationsM.SpinnerTickCmd(),
 			func() tea.Msg {
 				return toastMsg{
 					Text:  fmt.Sprintf(tr("deleted %s conversation %s"), msg.Agent, shortConversationID(msg.ID)),
@@ -686,6 +685,14 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.agentsM, cmd = a.agentsM.Update(msg)
 		return a, tea.Batch(adopt, cmd)
 
+	case claudeEffortChangedMsg, claudeAlwaysThinkingChangedMsg, claudeYoloChangedMsg, claudeReloadMsg:
+		// Async Claude config saves can land after the user switches
+		// screens or sub-tabs — route globally so toasts and state
+		// reloads are never silently dropped.
+		var cmd tea.Cmd
+		a.agentsM, cmd = a.agentsM.Update(msg)
+		return a, cmd
+
 	case projectAgentSwitchedMsg:
 		// Applied straight to the list: neither another active screen
 		// nor a form open over Projects may swallow it.
@@ -695,6 +702,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseMsg:
 		if a.confirm.open() {
 			return a.updateConfirmationMouse(msg)
+		}
+		// Never let mouse wheel events bleed through active overlays
+		// and scroll Notes/Agents underneath.
+		if a.attach.active || a.tour.Active() || a.helpOpen || a.usageOpen ||
+			a.convPreview.IsOpen() || a.projectInfoOpen || a.settingsInfoOpen ||
+			a.network.DetailOpen() || a.matrix.Active() || (a.sshWizard != nil && a.sshWizard.Active()) {
+			return a, nil
 		}
 		// Forward wheel events to the active screen so its
 		// scrollable regions (notes preview, agents browser preview,
@@ -1015,9 +1029,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, cmd
 		}
 
-		// Notes search mode: the search textinput owns every keystroke so
-		// global bindings like "r" (refresh) don't swallow characters mid-query.
-		if a.screen == ScreenNotes && a.notes.searching {
+		// Notes search mode: the search textinput owns every keystroke only
+		// while it actually holds focus, so browsing results doesn't swallow
+		// global shortcuts (1-7, q, ?, r) or trap the screen on search error.
+		if a.screen == ScreenNotes && a.notes.searching && a.notes.searchInput.Focused() {
 			var cmd tea.Cmd
 			a.notes, cmd = a.notes.Update(msg)
 			return a, cmd
@@ -1137,6 +1152,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				sessions := a.refreshSessionsCmd()
 				convs := a.refreshConversationsCmd()
 				return a, tea.Batch(sessions, convs, a.conversationsM.SpinnerTickCmd())
+			}
+			if a.screen == ScreenNotes {
+				return a, tea.Batch(a.refreshSessionsCmd(), func() tea.Msg { return notesReloadMsg{} })
 			}
 			// Network screen: start the per-row spinner so the user
 			// sees a refresh in flight, even when the actual probe

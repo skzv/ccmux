@@ -514,11 +514,11 @@ func (m conversationsModel) focusedSectionDef() conversationAgentSectionDef {
 }
 
 func (m conversationsModel) Update(msg tea.Msg) (conversationsModel, tea.Cmd) {
-	// Spinner Tick advances the loading-spinner animation while the
-	// initial walk (or a refresh) is in flight. We forward every
-	// spinner.TickMsg so the spinner stays responsive even when the
-	// user isn't pressing keys.
+	// Advance the loading spinner only while a transcript walk is in flight.
 	if _, ok := msg.(spinner.TickMsg); ok {
+		if !m.loading {
+			return m, nil
+		}
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd

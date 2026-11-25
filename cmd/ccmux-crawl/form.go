@@ -37,7 +37,7 @@ func runForm(iters int, seed int64) error {
 
 	res := runCrawlWithPreamble(iters,
 		[]Input{
-			keyRune('3'), // Projects screen
+			keyRune('2'), // Projects screen
 			keyRune('n'), // open new-project modal
 		},
 		func(iter int) Input {

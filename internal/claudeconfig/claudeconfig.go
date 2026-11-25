@@ -760,6 +760,48 @@ type Skill struct {
 	Description string
 }
 
+// UserConfigPath returns Claude Code's user-level config file where
+// user-scope MCP servers (`claude mcp add --scope user`) live:
+// $CLAUDE_CONFIG_DIR/.claude.json when that override is set, else
+// ~/.claude.json.
+func UserConfigPath() (string, error) {
+	home, homeErr := os.UserHomeDir()
+	if dir, ok := agenthome.Override(agenthome.ClaudeEnv, home); ok {
+		return filepath.Join(dir, ".claude.json"), nil
+	}
+	if homeErr != nil {
+		return "", homeErr
+	}
+	return filepath.Join(home, ".claude.json"), nil
+}
+
+// ReadUserMCPServers reads user-scope `mcpServers` from ~/.claude.json
+// (or $CLAUDE_CONFIG_DIR/.claude.json). Returns an empty map if the
+// file is missing or has no mcpServers key.
+func ReadUserMCPServers() (map[string]MCPServer, error) {
+	path, err := UserConfigPath()
+	if err != nil {
+		return nil, err
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return map[string]MCPServer{}, nil
+		}
+		return nil, err
+	}
+	var doc struct {
+		MCPServers map[string]MCPServer `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(b, &doc); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", path, err)
+	}
+	if doc.MCPServers == nil {
+		return map[string]MCPServer{}, nil
+	}
+	return doc.MCPServers, nil
+}
+
 // ListSkills returns installed skills (following symlinked skill dirs,
 // the standard layout for npx skills / ~/.agents/skills symlinks).
 func ListSkills() ([]Skill, error) {

@@ -31,6 +31,7 @@ func (m notesModel) applySearchResult(msg notesSearchResultMsg) (notesModel, tea
 		return m, nil
 	}
 	if msg.Err != "" {
+		m.searching = false
 		m.deviceErr = msg.Err
 		return m, nil
 	}

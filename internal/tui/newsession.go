@@ -358,10 +358,17 @@ func spawnBareSessionCmd(submit newBareSessionSubmitMsg) tea.Cmd {
 			cli := daemon.RemoteClient(submit.Address)
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
+			agentTag := string(submit.Agent)
+			if agentTag == "" {
+				// Remote /v1/sessions/bare treats "" as "use remote default
+				// agent" and requires "shell" (tmux.ShellAgentTag) for a
+				// plain shell session.
+				agentTag = tmux.ShellAgentTag
+			}
 			res, err := cli.NewBareSession(ctx, daemon.NewBareSessionRequest{
 				Name:  submit.Name,
 				Path:  submit.Path,
-				Agent: string(submit.Agent),
+				Agent: agentTag,
 			})
 			if err != nil {
 				return toastMsg{

@@ -73,7 +73,20 @@ func newNetwork(st styles.Styles, km Keymap) networkModel {
 // Side effect: clears the refreshing flag so the spinner column
 // reverts to chips once fresh state lands.
 func (m *networkModel) SetHosts(hs []hostStatus) {
+	var prevKey string
+	if sel := m.Selected(); sel != nil {
+		prevKey = sel.key()
+	}
 	m.hosts = hs
+	if prevKey != "" {
+		for i, h := range hs {
+			if h.key() == prevKey {
+				m.cursor = i
+				m.refreshing = false
+				return
+			}
+		}
+	}
 	if m.cursor >= len(hs) {
 		m.cursor = max0(len(hs) - 1)
 	}
@@ -283,10 +296,7 @@ func (m networkModel) SetupSSHCmd() tea.Cmd {
 	if sel == nil || sel.Local || sel.Mobile {
 		return nil
 	}
-	host := sel.DialHost
-	if host == "" {
-		host = sel.Address
-	}
+	host := sel.DialHostOrAddr()
 	if host == "" {
 		return nil
 	}

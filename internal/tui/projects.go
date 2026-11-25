@@ -244,11 +244,11 @@ func (m *projectsModel) SetSessions(s []daemon.SessionState) {
 func (m projectsModel) Init() tea.Cmd { return m.spin.Tick }
 
 func (m projectsModel) Update(msg tea.Msg) (projectsModel, tea.Cmd) {
-	// Spinner advances on its own tick. Forwarding only the spinner
-	// message (not all messages) keeps the spinner self-driving
-	// without polluting the rest of the model's Update with batch
-	// commands every keystroke.
+	// Spinner advances only while initial discovery is still loading.
 	if _, ok := msg.(spinner.TickMsg); ok {
+		if m.loaded {
+			return m, nil
+		}
 		var cmd tea.Cmd
 		m.spin, cmd = m.spin.Update(msg)
 		return m, cmd
@@ -779,7 +779,9 @@ func createProjectCmd(submit newProjectSubmitMsg) tea.Cmd {
 			Agent:    submit.Agent,
 			Commands: submit.Commands,
 		}
-		session, err := startProjectSession(context.Background(), opts)
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		session, err := startProjectSession(ctx, opts)
 		if err != nil {
 			return toastMsg{Text: fmt.Sprintf(tr("new project: %s"), err.Error()), Kind: toastError, Until: time.Now().Add(6 * time.Second)}
 		}

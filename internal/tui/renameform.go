@@ -82,5 +82,6 @@ func (m renameFormModel) View(width int) string {
 	if m.err != "" {
 		parts = append(parts, st.StatusError.Render("⚠ "+m.err))
 	}
-	return st.PaneFocused.Width(width - 2).Render(strings.Join(parts, "\n"))
+	frameW := max(20, width-2)
+	return st.PaneFocused.Width(frameW).Render(strings.Join(parts, "\n"))
 }

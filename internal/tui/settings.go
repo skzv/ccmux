@@ -448,9 +448,12 @@ func (m settingsModel) Update(msg tea.Msg) (settingsModel, tea.Cmd) {
 		return m, cmd
 	}
 
-	// Forward spinner ticks regardless of editing state so the Moshi
-	// probe's animation keeps advancing in the background.
+	// Forward spinner ticks only while a Moshi probe is actually in flight
+	// so the idle TUI does not spin a 10Hz ticker forever.
 	if _, ok := msg.(spinner.TickMsg); ok {
+		if !m.moshiProbing() {
+			return m, nil
+		}
 		var cmd tea.Cmd
 		m.moshiProbe, cmd = m.moshiProbe.Update(msg)
 		return m, cmd
@@ -1040,7 +1043,11 @@ func (m settingsModel) renderHosts() string {
 	}
 	out := []string{}
 	for _, h := range m.cfg.Hosts {
-		out = append(out, fmt.Sprintf("  %s  %s@%s  mosh=%v", m.st.HostColor(h.Name).Render("●"), h.User, h.Address, h.Mosh))
+		target := h.Address
+		if h.User != "" {
+			target = h.User + "@" + h.Address
+		}
+		out = append(out, fmt.Sprintf("  %s  %s  mosh=%v", m.st.HostColor(h.Name).Render("●"), target, h.Mosh))
 	}
 	return strings.Join(out, "\n")
 }

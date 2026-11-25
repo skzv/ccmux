@@ -124,7 +124,7 @@ func TestNetworkHostShortName(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"sputnik", "sputnik"},
 		{"sputnik.tail-1234.ts.net", "sputnik"},
-		{"100.64.1.1", "100"},
+		{"100.64.1.1", "100.64.1.1"},
 		{"", ""},
 	}
 	for _, c := range cases {

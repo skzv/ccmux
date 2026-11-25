@@ -967,6 +967,9 @@ func relTime(t time.Time) string {
 		return "—"
 	}
 	d := time.Since(t)
+	if d < 0 {
+		d = 0
+	}
 	switch {
 	case d < time.Minute:
 		return fmt.Sprintf(tr("%ds ago"), int(d.Seconds()))
