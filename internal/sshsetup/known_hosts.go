@@ -68,15 +68,24 @@ func RemoveKnownHostEntries(host string, port int) (removed int, err error) {
 	if info, statErr := os.Stat(path); statErr == nil {
 		mode = info.Mode().Perm()
 	}
-	// Write through a temp file + rename so a crash mid-write
-	// doesn't leave the user without any known_hosts at all.
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, kept.Bytes(), mode); err != nil {
+	// Write through a unique temp file + rename so concurrent callers
+	// don't clobber each other and a crash never leaves known_hosts missing.
+	tmpFile, err := os.CreateTemp(filepath.Dir(path), "known_hosts-*.tmp")
+	if err != nil {
 		return 0, err
 	}
-	// WriteFile's mode is filtered through the umask; Chmod makes the
-	// preserved permissions exact.
-	if err := os.Chmod(tmp, mode); err != nil {
+	tmp := tmpFile.Name()
+	if _, err := tmpFile.Write(kept.Bytes()); err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmp)
+		return 0, err
+	}
+	if err := tmpFile.Chmod(mode); err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmp)
+		return 0, err
+	}
+	if err := tmpFile.Close(); err != nil {
 		_ = os.Remove(tmp)
 		return 0, err
 	}

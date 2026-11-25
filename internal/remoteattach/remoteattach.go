@@ -160,7 +160,7 @@ func RunArgv(target string, useMosh bool, port int, argv []string) *exec.Cmd {
 	for i, a := range argv {
 		quoted[i] = shellQuote(a)
 	}
-	args := append(append([]string{"-t"}, sshPortFlags(port)...), target, "--", strings.Join(quoted, " "))
+	args := append(append([]string{"-t"}, sshPortFlags(port)...), "--", target, strings.Join(quoted, " "))
 	// nocontext: interactive foreground attach (see package doc).
 	return guard(exec.Command("ssh", args...), target)
 }

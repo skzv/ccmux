@@ -74,6 +74,8 @@ var (
 	// first exec of a freshly written script can take seconds just to
 	// clear the system's code checks.
 	statusTimeout = 3 * time.Second
+	fetchWaitDelay = 2 * time.Second
+	inflight       chan struct{}
 )
 
 // Get returns the current Claude auth status, caching a successful
@@ -86,14 +88,68 @@ var (
 // the next Get after that retries. An error is returned only when
 // there has never been a good result to serve.
 func Get(ctx context.Context) (Status, error) {
-	cacheMu.Lock()
-	if cached != nil && time.Since(cachedAt) < cacheTTL {
-		s := *cached
-		cacheMu.Unlock()
-		return s, nil
+	if err := ctx.Err(); err != nil {
+		return Status{}, err
 	}
-	if cachedErr != nil && time.Since(lastAttempt) < negativeTTL {
-		// Recent failure — don't hammer the CLI. Serve stale if we can.
+	for {
+		cacheMu.Lock()
+		if cached != nil && time.Since(cachedAt) < cacheTTL {
+			s := *cached
+			cacheMu.Unlock()
+			return s, nil
+		}
+		if cachedErr != nil && time.Since(lastAttempt) < negativeTTL {
+			// Recent failure — don't hammer the CLI. Serve stale if we can.
+			if cached != nil {
+				s := *cached
+				cacheMu.Unlock()
+				return s, nil
+			}
+			err := cachedErr
+			cacheMu.Unlock()
+			return Status{}, err
+		}
+		if ch := inflight; ch != nil {
+			cacheMu.Unlock()
+			select {
+			case <-ch:
+				continue
+			case <-ctx.Done():
+				return Status{}, ctx.Err()
+			}
+		}
+		ch := make(chan struct{})
+		inflight = ch
+		cacheMu.Unlock()
+
+		fetchCtx := context.WithoutCancel(ctx)
+		go func() {
+			defer func() {
+				cacheMu.Lock()
+				inflight = nil
+				cacheMu.Unlock()
+				close(ch)
+			}()
+			s, err := fetchFn(fetchCtx)
+			cacheMu.Lock()
+			defer cacheMu.Unlock()
+			if err == nil {
+				lastAttempt = time.Now()
+				cachedErr = nil
+				cached = &s
+				cachedAt = lastAttempt
+			} else if !errors.Is(err, context.Canceled) {
+				lastAttempt = time.Now()
+				cachedErr = err
+			}
+		}()
+
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			return Status{}, ctx.Err()
+		}
+		cacheMu.Lock()
 		if cached != nil {
 			s := *cached
 			cacheMu.Unlock()
@@ -103,22 +159,6 @@ func Get(ctx context.Context) (Status, error) {
 		cacheMu.Unlock()
 		return Status{}, err
 	}
-	cacheMu.Unlock()
-
-	s, err := fetchFn(ctx)
-	cacheMu.Lock()
-	defer cacheMu.Unlock()
-	lastAttempt = time.Now()
-	cachedErr = err
-	if err == nil {
-		cached = &s
-		cachedAt = lastAttempt
-		return s, nil
-	}
-	if cached != nil {
-		return *cached, nil // serve-stale
-	}
-	return Status{}, err
 }
 
 // fetch shells out to `claude auth status` and parses its JSON output.
@@ -137,6 +177,8 @@ func fetch(ctx context.Context) (Status, error) {
 	c, cancel := context.WithTimeout(ctx, statusTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(c, bin, "auth", "status")
+	killGroupOnCancel(cmd)
+	cmd.WaitDelay = fetchWaitDelay
 	out, err := cmd.Output()
 	if err != nil {
 		return Status{}, err

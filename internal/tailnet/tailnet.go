@@ -10,7 +10,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -145,10 +147,10 @@ func parsePeers(raw []byte) ([]Peer, error) {
 		return nil, errors.New("tailscale: " + doc.BackendState)
 	}
 	var peers []Peer
-	if len(doc.Self.TailscaleIPs) > 0 {
+	if ip := preferredTailscaleIP(doc.Self.TailscaleIPs); ip != "" {
 		peers = append(peers, Peer{
 			HostName:     doc.Self.HostName,
-			Addr:         doc.Self.TailscaleIPs[0],
+			Addr:         ip,
 			DNSName:      doc.Self.DNSName,
 			OS:           doc.Self.OS,
 			Online:       true,
@@ -157,12 +159,13 @@ func parsePeers(raw []byte) ([]Peer, error) {
 		})
 	}
 	for _, p := range doc.Peer {
-		if len(p.TailscaleIPs) == 0 {
+		ip := preferredTailscaleIP(p.TailscaleIPs)
+		if ip == "" {
 			continue
 		}
 		peers = append(peers, Peer{
 			HostName:     p.HostName,
-			Addr:         p.TailscaleIPs[0],
+			Addr:         ip,
 			DNSName:      p.DNSName,
 			OS:           p.OS,
 			Online:       p.Online,
@@ -170,6 +173,22 @@ func parsePeers(raw []byte) ([]Peer, error) {
 		})
 	}
 	return peers, nil
+}
+
+// preferredTailscaleIP picks an IPv4 address when available (Tailscale's
+// 100.64.0.0/10 space), falling back to the first non-empty entry (IPv6).
+func preferredTailscaleIP(ips []string) string {
+	for _, s := range ips {
+		if parsed := net.ParseIP(strings.TrimSpace(s)); parsed != nil && parsed.To4() != nil {
+			return strings.TrimSpace(s)
+		}
+	}
+	for _, s := range ips {
+		if t := strings.TrimSpace(s); t != "" {
+			return t
+		}
+	}
+	return ""
 }
 
 // Discovered is one tailnet peer that responded to a ccmuxd health probe.
@@ -252,7 +271,7 @@ func scanPeers(ctx context.Context, peers []Peer, port int) Scan {
 		wg.Add(1)
 		go func(p Peer) {
 			defer wg.Done()
-			addr := fmt.Sprintf("%s:%d", p.Addr, port)
+			addr := net.JoinHostPort(p.Addr, strconv.Itoa(port))
 			info, perr := probeOne(ctx, addr)
 			if perr != nil {
 				results <- result{peer: p, ok: false}

@@ -152,12 +152,38 @@ func (f ClaudeCLIFetcher) Fetch(ctx context.Context) ([]Model, error) {
 	}
 
 	out := make([]Model, 0, len(res.StructuredOutput.Models))
-	for _, id := range res.StructuredOutput.Models {
+	for _, raw := range res.StructuredOutput.Models {
+		id := strings.TrimSpace(raw)
+		if !validModelID(id) {
+			continue
+		}
 		out = append(out, Model{
-			ID:     strings.TrimSpace(id),
+			ID:     id,
 			Family: familyOf(id),
 			Source: SourceClaudeCLI,
 		})
 	}
+	if len(out) == 0 {
+		return nil, errors.New("claude -p returned no valid model IDs")
+	}
 	return out, nil
+}
+
+// validModelID guards against malformed or control-character-bearing
+// LLM responses from `claude -p`.
+func validModelID(id string) bool {
+	if len(id) == 0 || len(id) > 128 {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		isAlnum := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+		if i == 0 && !isAlnum {
+			return false
+		}
+		if !isAlnum && c != '.' && c != '_' && c != ':' && c != '/' && c != '-' {
+			return false
+		}
+	}
+	return true
 }

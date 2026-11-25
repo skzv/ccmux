@@ -73,6 +73,14 @@ func (in *installer) Install(ctx context.Context, t Target, password string, key
 		return err
 	}
 
+	// Validate our local private key BEFORE dialing or mutating the remote
+	// authorized_keys, so an unreadable or passphrase-protected key fails
+	// cleanly without side effects.
+	signer, err := loadSigner(key.PrivatePath)
+	if err != nil {
+		return fmt.Errorf("load private key %s: %w", key.PrivatePath, err)
+	}
+
 	p.report("hostkey", "resolving known_hosts callback")
 	hk, err := tofuHostKeyConfig(t.Addr())
 	if err != nil {
@@ -84,8 +92,17 @@ func (in *installer) Install(ctx context.Context, t Target, password string, key
 
 	p.report("connect", fmt.Sprintf("dialing %s with password auth", t.Addr()))
 	pwClient, err := in.dial(cctx, t.Addr(), &ssh.ClientConfig{
-		User:              user,
-		Auth:              []ssh.AuthMethod{ssh.Password(password)},
+		User: user,
+		Auth: []ssh.AuthMethod{
+			ssh.Password(password),
+			ssh.KeyboardInteractive(func(_, _ string, questions []string, _ []bool) ([]string, error) {
+				answers := make([]string, len(questions))
+				for i := range questions {
+					answers[i] = password
+				}
+				return answers, nil
+			}),
+		},
 		HostKeyCallback:   hk.callback,
 		HostKeyAlgorithms: hk.algorithms,
 		Timeout:           10 * time.Second,
@@ -105,10 +122,6 @@ func (in *installer) Install(ctx context.Context, t Target, password string, key
 	// — it proves the remote actually accepted the key, which is
 	// exactly the failure mode the wizard is supposed to surface.
 	p.report("validate", "reconnecting with key auth to confirm")
-	signer, err := loadSigner(key.PrivatePath)
-	if err != nil {
-		return fmt.Errorf("load private key %s: %w", key.PrivatePath, err)
-	}
 	// Rebuild the host-key callback for the validation hop. knownhosts.New
 	// reads known_hosts ONCE into an in-memory db at construction, so the
 	// callback from the password hop (hk) still believes this host is
@@ -142,7 +155,7 @@ func (in *installer) Install(ctx context.Context, t Target, password string, key
 	if err != nil {
 		return fmt.Errorf("validation: NewSession: %w", err)
 	}
-	if err := sess.Run("exit"); err != nil {
+	if err := runSession(cctx, sess, "exit"); err != nil {
 		_ = sess.Close()
 		return fmt.Errorf("validation: exit: %w", err)
 	}
@@ -169,14 +182,17 @@ func remoteInstallKey(ctx context.Context, client *ssh.Client, pubLine string) e
 		return errors.New("public key has no base64 middle field")
 	}
 	// Single-quoted heredoc so the shell never expands $ in the key.
-	// `printf '%s\n'` is the most portable way to append exactly one
-	// trailing newline; `echo` differs across /bin/sh implementations.
+	// If authorized_keys is non-empty and lacks a trailing newline,
+	// prepend one so we don't glue our key onto the previous key's comment.
 	script := fmt.Sprintf(`set -e
 mkdir -p "$HOME/.ssh"
 chmod 700 "$HOME/.ssh"
 touch "$HOME/.ssh/authorized_keys"
 chmod 600 "$HOME/.ssh/authorized_keys"
 if ! grep -F %s "$HOME/.ssh/authorized_keys" >/dev/null 2>&1; then
+  if [ -s "$HOME/.ssh/authorized_keys" ] && [ -n "$(tail -c 1 "$HOME/.ssh/authorized_keys")" ]; then
+    printf '\n' >> "$HOME/.ssh/authorized_keys"
+  fi
   printf '%%s\n' %s >> "$HOME/.ssh/authorized_keys"
 fi
 `, shellQuote(mid), shellQuote(pubLine))
@@ -617,6 +633,7 @@ func recordedHostKeyTypes(knownCB ssh.HostKeyCallback, addr string) []string {
 // accumulate one duplicate per run forever.
 func appendKnownHost(path, hostname string, key ssh.PublicKey) error {
 	line := knownhosts.Line([]string{hostname}, key)
+	needLeadingNL := false
 	if existing, err := os.ReadFile(path); err == nil {
 		// Whole-line comparison, NOT bytes.Contains: with a substring
 		// check, a hostname that is a suffix of an already-recorded
@@ -628,16 +645,23 @@ func appendKnownHost(path, hostname string, key ssh.PublicKey) error {
 				return nil
 			}
 		}
+		if len(existing) > 0 && existing[len(existing)-1] != '\n' {
+			needLeadingNL = true
+		}
 	}
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o644)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	if _, err := f.WriteString(line + "\n"); err != nil {
+	toWrite := line + "\n"
+	if needLeadingNL {
+		toWrite = "\n" + toWrite
+	}
+	if _, err := f.WriteString(toWrite); err != nil {
+		_ = f.Close()
 		return err
 	}
-	return nil
+	return f.Close()
 }
 
 // loadSigner reads a private key file (with no passphrase) and turns

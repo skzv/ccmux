@@ -481,7 +481,9 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 			}
 		}
 	}
-	s.sleeper.SetActive(anyActive)
+	if s.sleeper != nil {
+		s.sleeper.SetActive(anyActive)
+	}
 }
 
 // look is one session's reading this tick, folded into a copy of its

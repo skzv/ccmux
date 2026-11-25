@@ -397,9 +397,15 @@ func ensureDeadline(ctx context.Context) (context.Context, context.CancelFunc) {
 // decodeCapped decodes a JSON response body behind an io.LimitReader so
 // an oversized or never-terminating response from a remote daemon can't
 // drive the client to OOM. The whole-request context still bounds wall
-// time; this bounds bytes.
+// time; this bounds bytes. Drains up to 4 KiB of trailing bytes (e.g.
+// json.Encoder's trailing newline / chunked EOF) so http.Transport can
+// reuse keep-alive connections.
 func decodeCapped(body io.Reader, out any) error {
-	return json.NewDecoder(io.LimitReader(body, maxResponseBytes)).Decode(out)
+	err := json.NewDecoder(io.LimitReader(body, maxResponseBytes)).Decode(out)
+	if err == nil {
+		_, _ = io.Copy(io.Discard, io.LimitReader(body, 4096))
+	}
+	return err
 }
 
 // maxErrorBodyBytes caps how much of an HTTP error response body is
@@ -500,5 +506,6 @@ func (c *Client) post(ctx context.Context, path string, body, out any) error {
 	if out != nil {
 		return decodeCapped(resp.Body, out)
 	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 	return nil
 }

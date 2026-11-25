@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"os/exec"
@@ -87,11 +88,21 @@ func (s *server) handleAttach(w http.ResponseWriter, r *http.Request, name strin
 	defer conn.CloseNow()
 	conn.SetReadLimit(attachReadLimit)
 
-	// Carry the request context — tmux attach gets cancelled if the
-	// daemon shuts down. Previously this used exec.Command (no ctx),
-	// so a daemon SIGTERM left the child running.
+	// Carry the request context AND wire daemon shutdown (s.streamsDone):
+	// http.Server.Shutdown stops tracking hijacked WebSocket connections
+	// and never cancels r.Context(), so watching streamsDone ensures
+	// shutdownHTTP tears down the PTY and tmux attach child cleanly.
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
+	if s.streamsDone != nil {
+		go func() {
+			select {
+			case <-s.streamsDone:
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
+	}
 
 	cmd := exec.CommandContext(ctx, "tmux", tmux.AttachArgs(name, false)...)
 	// RemoteClientEnv tells `ccmux clipboard-pipe` this tmux client
@@ -169,7 +180,9 @@ func (s *server) handleAttach(w http.ResponseWriter, r *http.Request, name strin
 				Cols int `json:"cols"`
 				Rows int `json:"rows"`
 			}
-			if json.Unmarshal(data, &ctrl) == nil && ctrl.Cols > 0 && ctrl.Rows > 0 {
+			if json.Unmarshal(data, &ctrl) == nil &&
+				ctrl.Cols > 0 && ctrl.Cols <= math.MaxUint16 &&
+				ctrl.Rows > 0 && ctrl.Rows <= math.MaxUint16 {
 				_ = pty.Setsize(ptmx, &pty.Winsize{
 					Rows: uint16(ctrl.Rows),
 					Cols: uint16(ctrl.Cols),

@@ -66,6 +66,9 @@ func applyDaemonDefaults(d *config.DaemonConfig) {
 	if d.IdleSecondsForNeedsInput <= 0 {
 		d.IdleSecondsForNeedsInput = 3
 	}
+	if d.TailnetPort <= 0 || d.TailnetPort > 65535 {
+		d.TailnetPort = 7474
+	}
 	d.PollIntervalSeconds = min(d.PollIntervalSeconds, maxDaemonSeconds)
 	d.IdleSecondsForNeedsInput = min(d.IdleSecondsForNeedsInput, maxDaemonSeconds)
 }

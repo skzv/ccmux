@@ -63,17 +63,14 @@ func TestRunArgv_PicksBinary(t *testing.T) {
 	if mosh.Args[0] != "mosh" {
 		t.Errorf("useMosh=true should use mosh; got %v", mosh.Args)
 	}
-	// Both interpose `--` right after the target so nothing in the
-	// remote argv is read as an ssh/mosh flag.
-	for _, c := range []string{"ssh", "mosh"} {
-		var cmd = ssh
-		if c == "mosh" {
-			cmd = mosh
-		}
-		i := slices.Index(cmd.Args, "alice@mini")
-		if i < 0 || i+1 >= len(cmd.Args) || cmd.Args[i+1] != "--" {
-			t.Errorf("%s argv should have -- right after the target; got %v", c, cmd.Args)
-		}
+	// ssh takes `--` BEFORE the destination (everything after destination
+	// is passed to the remote shell); mosh takes `--` AFTER the destination
+	// to separate mosh options from the remote argv.
+	if i := slices.Index(ssh.Args, "alice@mini"); i < 1 || ssh.Args[i-1] != "--" {
+		t.Errorf("ssh argv should have -- immediately before target; got %v", ssh.Args)
+	}
+	if i := slices.Index(mosh.Args, "alice@mini"); i < 0 || i+1 >= len(mosh.Args) || mosh.Args[i+1] != "--" {
+		t.Errorf("mosh argv should have -- right after target; got %v", mosh.Args)
 	}
 }
 

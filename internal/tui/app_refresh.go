@@ -2,8 +2,8 @@ package tui
 
 import (
 	"context"
-	"fmt"
 	"net"
+	"strconv"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -85,13 +85,14 @@ func configuredHostKeys(h config.Host, defaultPort int) []string {
 	if port == 0 {
 		port = defaultPort
 	}
-	keys := []string{fmt.Sprintf("%s:%d", h.Address, port)}
+	portStr := strconv.Itoa(port)
+	keys := []string{net.JoinHostPort(h.Address, portStr)}
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	var r net.Resolver
 	if ips, err := r.LookupHost(ctx, h.Address); err == nil {
 		for _, ip := range ips {
-			keys = append(keys, fmt.Sprintf("%s:%d", ip, port))
+			keys = append(keys, net.JoinHostPort(ip, portStr))
 		}
 	}
 	return keys

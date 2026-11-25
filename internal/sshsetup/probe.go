@@ -251,7 +251,7 @@ func probeTCP(ctx context.Context, t Target) ProbeResult {
 	}
 	cctx, cancel := context.WithTimeout(ctx, 2500*time.Millisecond)
 	defer cancel()
-	conn, err := dialFilteredTCP(cctx, fmt.Sprintf("%s:%d", t.Host, port), 2*time.Second)
+	conn, err := dialFilteredTCP(cctx, t.Addr(), 2*time.Second)
 	if err == nil {
 		_ = conn.Close()
 		return ProbeOK

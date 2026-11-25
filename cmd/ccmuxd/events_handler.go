@@ -24,15 +24,30 @@ func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	ch := s.events.Subscribe()
 	defer s.events.Unsubscribe(ch)
+	rc := http.NewResponseController(w)
+	const sseWriteTimeout = 10 * time.Second
+	writeSSE := func(fn func() error) bool {
+		// Bound each SSE write+flush so a half-open tailnet peer with a
+		// full TCP send buffer cannot pin this goroutine or stall Shutdown.
+		_ = rc.SetWriteDeadline(time.Now().Add(sseWriteTimeout))
+		if err := fn(); err != nil {
+			return false
+		}
+		flusher.Flush()
+		_ = rc.SetWriteDeadline(time.Time{})
+		return true
+	}
 	enc := json.NewEncoder(w)
 	// Push the headers + a comment frame immediately. Without this,
 	// http.Get on the client side blocks until the handler writes
 	// something — which doesn't happen until the first event arrives
 	// (or the heartbeat fires 20s later).
-	if _, err := fmt.Fprintf(w, ": connected\n\n"); err != nil {
+	if !writeSSE(func() error {
+		_, err := fmt.Fprintf(w, ": connected\n\n")
+		return err
+	}) {
 		return
 	}
-	flusher.Flush()
 	// Heartbeat keeps idle connections alive across NAT timeouts and
 	// gives a fast path to detect a dead client. SSE comment lines
 	// (starting with ":") are ignored by the EventSource spec.
@@ -46,10 +61,12 @@ func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		case <-s.streamsDone: // daemon shutting down (nil: never)
 			return
 		case <-hb.C:
-			if _, err := fmt.Fprintf(w, ": ping\n\n"); err != nil {
+			if !writeSSE(func() error {
+				_, err := fmt.Fprintf(w, ": ping\n\n")
+				return err
+			}) {
 				return
 			}
-			flusher.Flush()
 		case ev, open := <-ch:
 			if !open {
 				return
@@ -65,23 +82,27 @@ func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 			if s.events.Dropped(ch) > lastDropsReported {
 				discarded := 1 + drainEvents(ch)
 				d := s.events.Dropped(ch)
-				if _, err := fmt.Fprintf(w, "event: drops\ndata: %d\n\n", d-lastDropsReported+uint64(discarded)); err != nil {
+				if !writeSSE(func() error {
+					_, err := fmt.Fprintf(w, "event: drops\ndata: %d\n\n", d-lastDropsReported+uint64(discarded))
+					return err
+				}) {
 					return
 				}
 				lastDropsReported = d
-				flusher.Flush()
 				continue
 			}
-			if _, err := fmt.Fprintf(w, "data: "); err != nil {
+			if !writeSSE(func() error {
+				if _, err := fmt.Fprintf(w, "data: "); err != nil {
+					return err
+				}
+				if err := enc.Encode(ev); err != nil {
+					return err
+				}
+				_, err := fmt.Fprintf(w, "\n")
+				return err
+			}) {
 				return
 			}
-			if err := enc.Encode(ev); err != nil {
-				return
-			}
-			if _, err := fmt.Fprintf(w, "\n"); err != nil {
-				return
-			}
-			flusher.Flush()
 		}
 	}
 }

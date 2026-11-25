@@ -47,8 +47,10 @@ func parsePmsetBatt(out string) BatteryStatus {
 		case strings.HasPrefix(line, "Now drawing from"):
 			bs.OnAC = strings.Contains(line, "'AC Power'")
 		case strings.Contains(line, "InternalBattery"):
-			bs.HasBattery = true
 			// e.g. "-InternalBattery-0 (id=…)\t87%; discharging; …"
+			// Only mark HasBattery=true once a valid percentage is parsed;
+			// leaving HasBattery=true with Percent=0 on a malformed line
+			// would falsely trip low-battery cutoffs.
 			if idx := strings.Index(line, "%"); idx > 0 {
 				// Walk back to find the start of the digit run.
 				start := idx
@@ -57,14 +59,7 @@ func parsePmsetBatt(out string) BatteryStatus {
 				}
 				if start < idx {
 					if n, err := strconv.Atoi(line[start:idx]); err == nil {
-						// Clamp to [0, 100]. pmset normally reports
-						// 0–100 but a future macOS variant could ship
-						// a different shape (a boot/health percentage,
-						// or a multi-battery sum). The low-battery
-						// cutoff logic compares Percent against an
-						// int threshold, so an out-of-range value
-						// would silently break the cutoff. Defense
-						// in depth at the parser boundary.
+						bs.HasBattery = true
 						switch {
 						case n < 0:
 							bs.Percent = 0
@@ -94,11 +89,17 @@ func readLinuxBattery() (BatteryStatus, error) {
 	}
 	// Use the first battery we find.
 	dir := matches[0]
-	bs := BatteryStatus{HasBattery: true}
-	if data, err := os.ReadFile(filepath.Join(dir, "capacity")); err == nil {
-		if n, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil {
-			bs.Percent = n
-		}
+	data, err := os.ReadFile(filepath.Join(dir, "capacity"))
+	if err != nil {
+		return BatteryStatus{}, err
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		return BatteryStatus{}, err
+	}
+	bs := BatteryStatus{
+		HasBattery: true,
+		Percent:    min(max(n, 0), 100),
 	}
 	if data, err := os.ReadFile(filepath.Join(dir, "status")); err == nil {
 		// "Charging" or "Full" -> on AC. "Discharging" -> not on AC.
