@@ -58,11 +58,9 @@ func (Antigravity) InitialPrompt(name, description string) string {
 		`(4) Pick the right source-code layout for the language/stack we choose and create those directories.`
 }
 
-// Classify uses the same conservative fallback as Codex — see that
-// file's comment for why.
-//
-// TODO(multi-agent): capture real Antigravity pane fixtures into
-// internal/agent/testdata/antigravity_*.txt and tighten this. Phase 4.
+// Classify routes through the data-driven detection engine
+// (internal/agentdetect/rules/antigravity.toml), pinned by pane
+// fixtures under internal/agent/testdata/panes/antigravity_*.txt.
 func (Antigravity) Classify(pane string, lastChange time.Time, idleThreshold time.Duration) State {
 	return engineClassify(IDAntigravity, pane, "", lastChange, idleThreshold)
 }

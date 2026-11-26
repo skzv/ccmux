@@ -1,0 +1,8 @@
+Antigravity CLI · /Users/demo/project
+
+Running go test ./... to verify the new parser.
+
+⠋ Running command (esc to interrupt)
+──────────────────────────────────────────────────────────────────────────────
+❯ 
+──────────────────────────────────────────────────────────────────────────────

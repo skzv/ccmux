@@ -152,6 +152,8 @@ func (c Conversation) IsHeadless() bool {
 		return strings.HasPrefix(c.Entrypoint, "sdk-")
 	case agent.IDCodex:
 		return c.Subagent || c.Entrypoint == "codex_exec"
+	case agent.IDAntigravity:
+		return c.Subagent
 	}
 	return false
 }
@@ -322,6 +324,12 @@ func RecentMessages(c Conversation, limit int) ([]Message, error) {
 			}
 			all = append(all, msgs...)
 		}
+	case agent.IDAntigravity:
+		msgs, err := readAntigravityMessages(c, limit)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, msgs...)
 	case agent.IDGemini:
 		for _, path := range []string{c.Path} {
 			msgs, err := readGeminiMessages(path, limit)
@@ -514,6 +522,12 @@ func CountMessages(c Conversation) (int, error) {
 			}
 			total += n
 		}
+	case agent.IDAntigravity:
+		n, err := countAntigravityMessages(c)
+		if err != nil {
+			return 0, err
+		}
+		total += n
 	case agent.IDGemini:
 		for _, path := range []string{c.Path} {
 			n, err := countGeminiMessages(path)
@@ -787,6 +801,7 @@ func guardTranscriptPath(home string, agentID agent.ID, path string) error {
 	case agent.IDAntigravity:
 		allowed = []transcriptRoot{
 			{root: agenthome.AntigravityConversations(home), ext: ".pb"},
+			{root: agenthome.AntigravityBrain(home), ext: ".jsonl"},
 		}
 	default:
 		return fmt.Errorf("unknown agent %q — refusing to delete %s", agentID, path)
@@ -1870,39 +1885,6 @@ func countPiMessages(path string) (int, error) {
 		}
 	}
 	return n, nil
-}
-
-// ListAntigravity lists only Antigravity's native protobuf transcripts.
-func ListAntigravity(home string) ([]Conversation, error) {
-	return listAntigravityPB(home)
-}
-
-func listAntigravityPB(home string) ([]Conversation, error) {
-	root := agenthome.AntigravityConversations(home)
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("read %s: %w", root, err)
-	}
-	var out []Conversation
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".pb") {
-			continue
-		}
-		path := filepath.Join(root, e.Name())
-		c := Conversation{
-			Agent: agent.IDAntigravity,
-			ID:    strings.TrimSuffix(e.Name(), ".pb"),
-			Path:  path,
-		}
-		if info, err := e.Info(); err == nil {
-			c.LastActivity = info.ModTime()
-		}
-		out = append(out, c)
-	}
-	return out, nil
 }
 
 // ListGemini preserves Gemini ownership and resolves the native project cwd.

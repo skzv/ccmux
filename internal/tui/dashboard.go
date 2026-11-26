@@ -744,7 +744,14 @@ func (m dashboardModel) renderOtherAgentSection(s usage.AgentSummary) []string {
 	}
 	lines := []string{line}
 	if s.CachedInputTokens > 0 || s.ReasoningTokens > 0 {
-		lines = append(lines, st.Muted.Render(fmt.Sprintf("   %s %s · %s %s", claudeusage.HumanCount(s.CachedInputTokens), tr("cached input"), claudeusage.HumanCount(s.ReasoningTokens), tr("reasoning tokens"))))
+		var details []string
+		if s.CachedInputTokens > 0 {
+			details = append(details, fmt.Sprintf("%s %s", claudeusage.HumanCount(s.CachedInputTokens), tr("cached input")))
+		}
+		if s.ReasoningTokens > 0 {
+			details = append(details, fmt.Sprintf("%s %s", claudeusage.HumanCount(s.ReasoningTokens), tr("reasoning tokens")))
+		}
+		lines = append(lines, st.Muted.Render("   "+strings.Join(details, " · ")))
 	}
 	return lines
 }

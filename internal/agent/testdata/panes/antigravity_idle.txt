@@ -1,0 +1,8 @@
+Antigravity CLI · /Users/demo/project
+
+I updated internal/usage/usage.go and added unit tests.
+
+──────────────────────────────────────────────────────────────────────────────
+❯ 
+──────────────────────────────────────────────────────────────────────────────
+  gemini-4-neon-medium · ? for help

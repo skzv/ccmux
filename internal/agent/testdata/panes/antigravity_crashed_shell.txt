@@ -1,0 +1,4 @@
+Antigravity CLI · /Users/demo/project
+fatal error: unexpected EOF
+zsh: exit 1
+demo@macbook ~/project % 

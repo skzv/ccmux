@@ -1,8 +1,83 @@
 id = "antigravity"
 
+# OSC-title spinner: leading braille glyph means "working."
 [[rules]]
 id = "title_spinner_working"
 state = "working"
 priority = 1100
 region = "osc_title"
 regex = ['^\s*[\x{2800}-\x{28FF}]']
+
+# Explicit OSC-title blocker broadcast.
+[[rules]]
+id = "title_action_required"
+state = "blocked"
+priority = 1100
+region = "osc_title"
+any = [
+  { contains = ["Action Required"] },
+  { contains = ["Waiting for input"] },
+  { contains = ["Approval required"] },
+]
+
+# Interactive approval, confirmation, or multiple-choice question dialogs
+# rendered near the bottom of the pane. Idle-gated so a mid-turn frame
+# redraw or scrollback line doesn't fire a spurious bell.
+[[rules]]
+id = "body_approval_dialog"
+state = "blocked"
+priority = 900
+region = "bottom_non_empty_lines(10)"
+require_idle = true
+any = [
+  { contains = ["Allow once"] },
+  { contains = ["Allow always"] },
+  { contains = ["Do you want to proceed?"] },
+  { contains = ["Approve command"] },
+  { contains = ["press enter to confirm"] },
+  { all = [{ contains = ["Enter to confirm"] }, { contains = ["Esc to cancel"] }] },
+]
+
+# Active footer while Antigravity is thinking or running tools.
+[[rules]]
+id = "body_working_footer"
+state = "working"
+priority = 850
+region = "bottom_non_empty_lines(4)"
+any = [
+  { contains = ["esc to interrupt"] },
+  { contains = ["esc to cancel"] },
+  { line_regex = ['^\s*[\x{2800}-\x{28FF}]\s+'] },
+]
+
+# Shell prompt at the tail = agy exited and the launch chain fell through
+# to zsh/bash/sh. Vetoed when Antigravity's input box or footer chrome is
+# still live at the bottom of the pane.
+[[rules]]
+id = "antigravity_shell_prompt"
+state = "error"
+priority = 800
+region = "bottom_non_empty_lines(4)"
+any = [
+  { regex = ['[\$#%]\s*\z'] },
+  { regex = ['(?m)^[ \t]*➜[ \t]+(?:\S+(?:[ \t]+git:\([^)\n]*\))?(?:[ \t]+✗)?)?\s*\z'] },
+]
+not = [
+  { contains = ["esc to interrupt"] },
+  { contains = ["esc to cancel"] },
+  { regex = ['(?m)^[ \t]*[╭╰](?:─{3,}|─*[╮╯])'] },
+  { regex = ['(?m)^[ \t]*─{10,}'] },
+]
+
+# Waiting at Antigravity's input prompt once quiet.
+[[rules]]
+id = "body_prompt_box"
+state = "blocked"
+priority = 750
+region = "bottom_non_empty_lines(6)"
+require_idle = true
+any = [
+  { regex = ['(?m)^[ \t]*─{10,}[^\n]*\n[ \t]*[❯>](?:[ \t\x{00A0}][^\n]*)?\n(?:[^\n]*\n)*?[ \t]*─{10,}'] },
+  { regex = ['(?m)^[ \t]*[╭╰](?:─{3,}|─*[╮╯])'] },
+  { line_regex = ['^\s*[>❯]\s*$'] },
+]

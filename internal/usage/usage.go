@@ -23,6 +23,7 @@
 package usage
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,6 +35,7 @@ import (
 	"github.com/skzv/ccmux/internal/claudeusage"
 	"github.com/skzv/ccmux/internal/codexusage"
 	"github.com/skzv/ccmux/internal/gemini"
+	"github.com/skzv/ccmux/internal/jsonl"
 	"github.com/skzv/ccmux/internal/muse"
 )
 
@@ -179,34 +181,45 @@ func WalkCodex(window time.Duration) (AgentSummary, error) {
 	}, nil
 }
 
-// WalkAntigravity walks ~/.gemini/antigravity-cli/conversations/<uuid>.pb
-// — Antigravity's per-conversation transcripts. The files are opaque
-// protobuf; without a schema we can't extract tokens, models, or the
-// first-prompt preview. What we CAN derive from the filesystem alone:
-// how many conversations live in the window (each pb file = one
-// conversation), and when each one was last touched. That's enough
-// for the dashboard's per-agent panel to surface "you've had N
-// conversations in the last 5 hours."
-//
-// Returns HasData=true when at least one .pb file's mtime falls in the
-// window, even though token fields stay zero. The dashboard renderer
-// reads HasData to decide between "install hint" and "real activity"
-// — token-zero with HasData=true means "the agent IS being used but
-// we can't see inside." Honest about the gap.
+type antigravityTranscriptStep struct {
+	Source          string `json:"source"`
+	Type            string `json:"type"`
+	CreatedAt       string `json:"created_at"`
+	InputTokens     int    `json:"input_tokens"`
+	CacheReadTokens int    `json:"cache_read_tokens"`
+	OutputTokens    int    `json:"output_tokens"`
+}
+
+// WalkAntigravity aggregates usage from Antigravity CLI's plain JSONL
+// transcripts under ~/.gemini/antigravity-cli/brain/<uuid>/.system_generated/logs/transcript.jsonl
+// (summing real prompts, input, cache-read, and output tokens within
+// window). When no JSONL transcripts exist in the window (older
+// installs or .pb-only fixtures), it falls back to counting recent
+// ~/.gemini/antigravity-cli/conversations/<uuid>.pb files by mtime so
+// the dashboard still surfaces activity honestly.
 func WalkAntigravity(window time.Duration) (AgentSummary, error) {
 	if window <= 0 {
 		window = 24 * time.Hour
 	}
 	home, err := os.UserHomeDir()
-	root := ""
+	base := ""
 	if dir, ok := agenthome.Override(agenthome.AntigravityEnv, home); ok {
-		root = filepath.Join(dir, "conversations")
+		base = dir
 	} else {
 		if err != nil {
 			return AgentSummary{}, nil //nolint:nilerr // missing $HOME → empty summary, not an error to surface
 		}
-		root = agenthome.AntigravityConversations(home)
+		base = agenthome.Antigravity(home)
 	}
+	cutoff := time.Now().Add(-window)
+
+	// 1. Prefer plain JSONL transcripts under brain/<uuid>/.system_generated/logs/.
+	if sum, ok := walkAntigravityBrainJSONL(filepath.Join(base, "brain"), window, cutoff); ok {
+		return sum, nil
+	}
+
+	// 2. Fallback: count .pb files touched within the window.
+	root := filepath.Join(base, "conversations")
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -214,7 +227,6 @@ func WalkAntigravity(window time.Duration) (AgentSummary, error) {
 		}
 		return AgentSummary{}, err
 	}
-	cutoff := time.Now().Add(-window)
 	prompts := 0
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".pb") {
@@ -240,9 +252,67 @@ func WalkAntigravity(window time.Duration) (AgentSummary, error) {
 		HasData:      true,
 		Window:       window,
 		Prompts:      prompts,
-		InputTokens:  0, // unknown — opaque protobuf
+		InputTokens:  0, // unknown — opaque protobuf fallback
 		OutputTokens: 0,
 	}, nil
+}
+
+func walkAntigravityBrainJSONL(brainRoot string, window time.Duration, cutoff time.Time) (AgentSummary, bool) {
+	entries, err := os.ReadDir(brainRoot)
+	if err != nil {
+		return AgentSummary{}, false
+	}
+	var sum AgentSummary
+	sum.Window = window
+	found := false
+	for _, e := range entries {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		tPath := filepath.Join(brainRoot, e.Name(), ".system_generated", "logs", "transcript.jsonl")
+		info, err := os.Stat(tPath)
+		if err != nil || info.IsDir() || !info.ModTime().After(cutoff) {
+			continue
+		}
+		f, err := os.Open(tPath)
+		if err != nil {
+			continue
+		}
+		sc := jsonl.NewScanner(f, 4*1024*1024)
+		for sc.Scan() {
+			var step antigravityTranscriptStep
+			if err := json.Unmarshal(sc.Bytes(), &step); err != nil {
+				continue
+			}
+			ts := info.ModTime()
+			if step.CreatedAt != "" {
+				if parsed, err := time.Parse(time.RFC3339Nano, step.CreatedAt); err == nil {
+					ts = parsed
+				} else if parsed, err := time.Parse(time.RFC3339, step.CreatedAt); err == nil {
+					ts = parsed
+				}
+			}
+			if ts.Before(cutoff) {
+				continue
+			}
+			if step.Type == "USER_INPUT" || step.Source == "USER_EXPLICIT" {
+				sum.Prompts++
+				found = true
+			}
+			if step.InputTokens > 0 || step.CacheReadTokens > 0 || step.OutputTokens > 0 {
+				sum.InputTokens += step.InputTokens
+				sum.CachedInputTokens += step.CacheReadTokens
+				sum.OutputTokens += step.OutputTokens
+				found = true
+			}
+		}
+		_ = f.Close()
+	}
+	if !found {
+		return AgentSummary{}, false
+	}
+	sum.HasData = true
+	return sum, true
 }
 
 // WalkMuse uses completion events, never duplicate attribution samples.

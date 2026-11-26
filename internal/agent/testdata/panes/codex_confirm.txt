@@ -1,0 +1,5 @@
+OpenAI Codex (v0.42.0)
+workdir: /Users/demo/project
+
+Run command: git push origin main
+  press enter to confirm · esc to cancel

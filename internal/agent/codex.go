@@ -51,17 +51,9 @@ func (Codex) InitialPrompt(name, description string) string {
 		`(4) Pick the right source-code layout for the language/stack we choose and create those directories.`
 }
 
-// Classify is a deliberately conservative heuristic for Codex panes.
-// Without testdata-pinned samples we can't reliably distinguish "Codex
-// is rendering its prompt" from "Codex is mid-output", so we fall back
-// to time-based idleness: a quiet pane for >= idleThreshold goes to
-// needs_input, anything else is active. The same fallback the daemon's
-// old code used for non-Claude sessions.
-//
-// TODO(multi-agent): capture real Codex pane fixtures into
-// internal/agent/testdata/codex_*.txt and tighten this to recognize
-// the prompt frame. Tracked in docs/01_Specs/02_Multi_Agent.md
-// Phase 4.
+// Classify routes through the data-driven detection engine
+// (internal/agentdetect/rules/codex.toml), pinned by pane fixtures
+// under internal/agent/testdata/panes/codex_*.txt.
 func (Codex) Classify(pane string, lastChange time.Time, idleThreshold time.Duration) State {
 	return engineClassify(IDCodex, pane, "", lastChange, idleThreshold)
 }
