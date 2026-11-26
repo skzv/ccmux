@@ -144,6 +144,8 @@ func (s *server) handleSessionsItem(w http.ResponseWriter, r *http.Request) {
 		s.handleRename(w, r, name)
 	case "send-keys":
 		s.handleSendKeys(w, r, name)
+	case "mute":
+		s.handleMute(w, r, name)
 	case "preview":
 		s.handlePreview(w, r, name)
 	case "attach":
@@ -236,6 +238,40 @@ func (s *server) handleSendKeys(w http.ResponseWriter, r *http.Request, name str
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *server) handleMute(w http.ResponseWriter, r *http.Request, name string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req daemon.MuteRequest
+	if err := decodeJSONBody(w, r, &req); err != nil {
+		http.Error(w, "invalid mute request", http.StatusBadRequest)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	setter := s.setMuted
+	if setter == nil {
+		setter = tmux.SetSessionMuted
+	}
+	if err := setter(ctx, name, req.Muted); err != nil {
+		writeTmuxError(w, err)
+		return
+	}
+	s.mu.Lock()
+	var updated daemon.SessionState
+	if t, ok := s.seen[name]; ok {
+		t.muted = req.Muted
+		t.listed.Muted = req.Muted
+		updated = t.sessionState(name)
+	} else {
+		updated = daemon.SessionState{Name: name, Host: "local", Muted: req.Muted}
+	}
+	s.mu.Unlock()
+	s.events.Publish(daemon.SessionEvent{At: time.Now(), Kind: "state_change", Session: updated})
+	writeJSON(w, updated)
 }
 
 // sendKeysToAgent types keys into the pane the session's agent runs in

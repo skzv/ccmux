@@ -23,12 +23,30 @@ type Review struct {
 	State    string
 }
 
-// The user options a Review is kept in.
+// The user options a Review (and per-session mute) are kept in.
 const (
 	seenOption    = "@ccmux_seen"
 	promptsOption = "@ccmux_prompts"
 	stateOption   = "@ccmux_state"
+	mutedOption   = "@ccmux_muted"
 )
+
+// SetSessionMuted persists whether notifications (terminal bell and
+// push alerts) are muted for the named session in its @ccmux_muted
+// tmux user option, so mute state survives daemon restarts and renames.
+func SetSessionMuted(ctx context.Context, name string, muted bool) error {
+	if err := checkOptionTarget(name); err != nil {
+		return fmt.Errorf("set session mute: %w", err)
+	}
+	val := "0"
+	if muted {
+		val = "1"
+	}
+	if out, err := command(ctx, "tmux", "set-option", "-t", exactPane(name), mutedOption, val).CombinedOutput(); err != nil {
+		return fmt.Errorf("set session mute: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
 
 // SetSessionReview writes r on the session called name: its three
 // options in one tmux invocation (`set-option … ; set-option …`), so a

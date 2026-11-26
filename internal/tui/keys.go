@@ -36,7 +36,9 @@ type Keymap struct {
 	// screen: a read-only view of the selected session's recent pane
 	// content, refreshed each second. Off by default so the keystroke
 	// list stays short for users who don't want it.
-	Preview key.Binding
+	Preview    key.Binding
+	QuickReply key.Binding
+	Mute       key.Binding
 
 	// Conversations-screen actions
 	ToggleHeadless key.Binding
@@ -64,11 +66,13 @@ func DefaultKeymap() Keymap {
 		Quit:    key.NewBinding(key.WithKeys("ctrl+c", "q"), key.WithHelp("q", tr("quit"))),
 		Refresh: key.NewBinding(key.WithKeys("r"), key.WithHelp("r", tr("refresh"))),
 
-		NewItem:  key.NewBinding(key.WithKeys("n"), key.WithHelp("n", tr("new"))),
-		Kill:     key.NewBinding(key.WithKeys("x"), key.WithHelp("x", tr("kill"))),
-		Rename:   key.NewBinding(key.WithKeys("R"), key.WithHelp("R", tr("rename"))),
-		EditInEd: key.NewBinding(key.WithKeys("e"), key.WithHelp("e", tr("edit"))),
-		Preview:  key.NewBinding(key.WithKeys("p"), key.WithHelp("p", tr("preview"))),
+		NewItem:    key.NewBinding(key.WithKeys("n"), key.WithHelp("n", tr("new"))),
+		Kill:       key.NewBinding(key.WithKeys("x"), key.WithHelp("x", tr("kill"))),
+		Rename:     key.NewBinding(key.WithKeys("R"), key.WithHelp("R", tr("rename"))),
+		EditInEd:   key.NewBinding(key.WithKeys("e"), key.WithHelp("e", tr("edit"))),
+		Preview:    key.NewBinding(key.WithKeys("p"), key.WithHelp("p", tr("preview"))),
+		QuickReply: key.NewBinding(key.WithKeys("i"), key.WithHelp("i", tr("reply"))),
+		Mute:       key.NewBinding(key.WithKeys("m"), key.WithHelp("m", tr("mute"))),
 
 		ToggleHeadless: key.NewBinding(key.WithKeys("H"), key.WithHelp("H", tr("toggle headless"))),
 	}

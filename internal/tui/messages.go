@@ -330,6 +330,37 @@ type sessionRenamedMsg struct {
 	Err     error
 }
 
+// Quick reply flow (Sessions screen `i` key).
+
+type quickReplySubmitMsg struct {
+	Host string
+	Name string
+	Text string
+}
+
+type quickReplyCancelMsg struct{}
+
+type quickReplySentMsg struct {
+	Host string
+	Name string
+	Err  error
+}
+
+// Notification mute toggle (Sessions screen `m` key).
+
+type sessionMuteToggleMsg struct {
+	Host  string
+	Name  string
+	Muted bool
+}
+
+type sessionMutedMsg struct {
+	Host  string
+	Name  string
+	Muted bool
+	Err   error
+}
+
 // Notes screen messages.
 
 // openEditorMsg asks the app to suspend the TUI and run $EDITOR on `Path`.

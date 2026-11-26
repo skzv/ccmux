@@ -58,6 +58,9 @@ type tracked struct {
 	// the daemon just discovered don't immediately scream for
 	// attention until they actually do something.
 	seen bool
+	// muted mirrors @ccmux_muted on the tmux session. When true,
+	// bells and push notifications are suppressed for this session.
+	muted bool
 	// baseline marks a session the daemon is seeing for the first time
 	// although it wasn't just created: it existed before this daemon
 	// started (restart, upgrade, crash respawn) or appeared under a new
@@ -190,9 +193,10 @@ type server struct {
 	// Session-handler seams, defaulted to tmux.Has / tmux.Kill /
 	// tmux.Rename so the create/kill/rename handlers' bookkeeping is
 	// unit-testable without a tmux server.
-	has    func(ctx context.Context, name string) (bool, error)
-	kill   func(ctx context.Context, name string) error
-	rename func(ctx context.Context, oldName, newName string) error
+	has      func(ctx context.Context, name string) (bool, error)
+	kill     func(ctx context.Context, name string) error
+	rename   func(ctx context.Context, oldName, newName string) error
+	setMuted func(ctx context.Context, name string, muted bool) error
 	// startGrace is how long the create handlers watch a new session
 	// for an immediate exit (confirmStarted). Zero skips the check.
 	startGrace time.Duration
@@ -289,6 +293,7 @@ func newServer(cfg config.Config) *server {
 		has:             tmux.Has,
 		kill:            tmux.Kill,
 		rename:          tmux.Rename,
+		setMuted:        tmux.SetSessionMuted,
 		startGrace:      defaultStartGrace,
 		tokens:          daemon.NewTokenStore(),
 		events:          daemon.NewEventBus(),

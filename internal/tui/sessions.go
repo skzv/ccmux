@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -62,6 +63,10 @@ type sessionsModel struct {
 	// nil when not showing.
 	renameForm *renameFormModel
 
+	// `i` opens a compact inline quick-reply form to send text+Enter
+	// into the selected session's agent pane without attaching.
+	quickReplyForm *quickReplyFormModel
+
 	// Cached so the form's device picker has the same set as the
 	// Projects screen. Pushed by App on every sessionsLoadedMsg.
 	hosts []hostStatus
@@ -95,6 +100,10 @@ type sessionsModel struct {
 	preview        string
 	previewLoading bool
 	previewErr     string
+	// previewScroll is how many lines UP from the live bottom tail the
+	// user has scrolled in the preview pane (0 = auto-tailing live).
+	previewScroll  int
+	previewSpinner spinner.Model
 	// previewGen is the tick-chain generation. Incremented on every
 	// toggle-on; each scheduled tick carries the generation it was
 	// armed under and stale-generation ticks are dropped without
@@ -135,7 +144,10 @@ func newSessions(st styles.Styles, km Keymap) sessionsModel {
 	ti.Prompt = "/ "
 	ti.CharLimit = 64
 	ti.Width = 40
-	return sessionsModel{st: st, km: km, filter: ti}
+	sp := spinner.New()
+	sp.Spinner = spinner.MiniDot
+	sp.Style = lipgloss.NewStyle().Foreground(st.Semantic.Accent)
+	return sessionsModel{st: st, km: km, filter: ti, previewSpinner: sp}
 }
 
 // visibleSessions is the list the user actually sees: every session
@@ -266,6 +278,7 @@ func (m *sessionsModel) clearPreview() {
 	m.previewLoading = false
 	m.previewSession = ""
 	m.previewHost = ""
+	m.previewScroll = 0
 }
 
 // RenameSession applies a completed rename to the in-memory list so the
@@ -312,7 +325,7 @@ func sessionHostKey(h string) string {
 // App.modalCapturingText while Sessions is the active screen — extend
 // this when adding a new modal to the Sessions screen.
 func (m sessionsModel) capturesInput() bool {
-	return m.form != nil || m.renameForm != nil || m.filterActive
+	return m.form != nil || m.renameForm != nil || m.quickReplyForm != nil || m.filterActive
 }
 
 // Selected returns the currently-highlighted session in the visible
@@ -360,6 +373,13 @@ func (m sessionsModel) Update(msg tea.Msg) (sessionsModel, tea.Cmd) {
 	// new-session form they were swallowed, the tick chain died, and
 	// the preview froze for good (even after the form was cancelled).
 	switch msg := msg.(type) {
+	case spinner.TickMsg:
+		if !m.previewLoading {
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.previewSpinner, cmd = m.previewSpinner.Update(msg)
+		return m, cmd
 	case previewLoadedMsg:
 		return m.applyPreviewLoaded(msg), nil
 	case previewTickMsg:
@@ -375,6 +395,22 @@ func (m sessionsModel) Update(msg tea.Msg) (sessionsModel, tea.Cmd) {
 			return m, tea.Batch(capturePreviewCmd(*sel), previewTickCmd(m.previewGen))
 		}
 		return m, previewTickCmd(m.previewGen)
+	}
+
+	// Quick reply modal: route everything through the reply form except its
+	// own finalizer messages, which App handles.
+	if m.quickReplyForm != nil {
+		switch msg := msg.(type) {
+		case quickReplyCancelMsg:
+			m.quickReplyForm = nil
+			return m, nil
+		case quickReplySubmitMsg:
+			m.quickReplyForm = nil
+			return m, func() tea.Msg { return msg }
+		}
+		f, cmd := m.quickReplyForm.Update(msg)
+		m.quickReplyForm = &f
+		return m, cmd
 	}
 
 	// Rename modal: route everything through the rename form except its
@@ -469,6 +505,30 @@ func (m sessionsModel) Update(msg tea.Msg) (sessionsModel, tea.Cmd) {
 				m.renameForm = &f
 				return m, textinput.Blink
 			}
+		case keyMatches(km, m.km.QuickReply):
+			if sel := m.Selected(); sel != nil {
+				f := newQuickReplyForm(m.st, sessionHostLabel(*sel), sel.Name)
+				m.quickReplyForm = &f
+				return m, textinput.Blink
+			}
+		case keyMatches(km, m.km.Mute):
+			if sel := m.Selected(); sel != nil {
+				host := sessionHostLabel(*sel)
+				name := sel.Name
+				nextMuted := !sel.Muted
+				return m, func() tea.Msg {
+					return sessionMuteToggleMsg{Host: host, Name: name, Muted: nextMuted}
+				}
+			}
+		case m.showPreview && (km.String() == "ctrl+u" || km.String() == "pgup"):
+			m.scrollPreview(10)
+			return m, nil
+		case m.showPreview && (km.String() == "ctrl+d" || km.String() == "pgdown"):
+			m.scrollPreview(-10)
+			return m, nil
+		case m.showPreview && km.String() == "G":
+			m.previewScroll = 0
+			return m, nil
 		case keyMatches(km, m.km.Preview):
 			m.showPreview = !m.showPreview
 			if m.showPreview {
@@ -480,9 +540,10 @@ func (m sessionsModel) Update(msg tea.Msg) (sessionsModel, tea.Cmd) {
 				// internally. The first capture fills the pane without
 				// waiting a full second; the tick keeps it warm.
 				m.previewGen++
+				m.previewScroll = 0
 				if sel := m.Selected(); sel != nil {
 					m.previewLoading = true
-					return m, tea.Batch(capturePreviewCmd(*sel), previewTickCmd(m.previewGen))
+					return m, tea.Batch(capturePreviewCmd(*sel), previewTickCmd(m.previewGen), m.previewSpinner.Tick)
 				}
 				return m, previewTickCmd(m.previewGen)
 			}
@@ -529,6 +590,30 @@ func (m sessionsModel) applyPreviewLoaded(msg previewLoadedMsg) sessionsModel {
 	return m
 }
 
+// scrollPreview shifts the preview scrollback offset by delta lines
+// (+delta scrolls UP into history, -delta scrolls DOWN toward live tail).
+func (m *sessionsModel) scrollPreview(delta int) {
+	next := m.previewScroll + delta
+	if next < 0 {
+		next = 0
+	}
+	lines := strings.Count(strings.TrimRight(m.preview, "\n"), "\n") + 1
+	if maxScroll := max0(lines - 1); next > maxScroll {
+		next = maxScroll
+	}
+	m.previewScroll = next
+}
+
+// SetSessionMuted updates the in-memory muted flag for a session immediately
+// after a mute toggle so the row badge updates without waiting for the next poll.
+func (m *sessionsModel) SetSessionMuted(host, name string, muted bool) {
+	for i, s := range m.sessions {
+		if sameSession(sessionHostLabel(s), s.Name, host, name) {
+			m.sessions[i].Muted = muted
+		}
+	}
+}
+
 // maybeRefreshPreview returns a capture command when the preview is on
 // and the cursor just moved to a different session — so the right pane
 // updates instantly instead of waiting for the next tick. Returns nil
@@ -541,8 +626,9 @@ func (m *sessionsModel) maybeRefreshPreview() tea.Cmd {
 	if sel == nil {
 		return nil
 	}
+	m.previewScroll = 0
 	m.previewLoading = true
-	return capturePreviewCmd(*sel)
+	return tea.Batch(capturePreviewCmd(*sel), m.previewSpinner.Tick)
 }
 
 // capturePreviewCmd reads the last N lines of the named session's
@@ -558,11 +644,10 @@ func realCapturePreviewCmd(s daemon.SessionState) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
-		const lines = 30
-		// Local host: capture directly via tmux. The "local" / "" check
-		// matches daemon.SessionState.Host's convention (empty = local).
+		const lines = 120
+		// Local host: capture directly via tmux with ANSI SGR colors preserved.
 		if isLocalSessionHost(sessionHostLabel(s)) {
-			out, err := tmux.CapturePane(ctx, s.Name, lines)
+			out, err := tmux.CapturePaneANSI(ctx, s.Name, lines)
 			return previewLoadedMsg{Session: s.Name, Host: sessionHostLabel(s), Content: out, Err: err}
 		}
 		// Remote: the daemon at the peer's address has a Preview method
@@ -605,6 +690,10 @@ func (remotePreviewErr) Error() string {
 // passed in rather than derived from `width`, which on a monitor is
 // only this component's column and is itself below the breakpoint.
 func (m sessionsModel) View(width, height int, narrow bool) string {
+	if m.quickReplyForm != nil {
+		formW := minInt(80, width-4)
+		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, m.quickReplyForm.View(formW))
+	}
 	if m.renameForm != nil {
 		formW := minInt(80, width-4)
 		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, m.renameForm.View(formW))
@@ -656,6 +745,9 @@ func (m sessionsModel) renderPreview(width, height int) string {
 	header := ""
 	if sel := m.Selected(); sel != nil {
 		header = m.st.Emphasis.Render(sel.Name)
+		if m.previewScroll > 0 {
+			header += "  " + m.st.Muted.Render(fmt.Sprintf("↑%d · G", m.previewScroll))
+		}
 	} else {
 		header = m.st.Muted.Render(tr("No session selected."))
 	}
@@ -681,7 +773,7 @@ func (m sessionsModel) renderPreview(width, height int) string {
 	stale := m.previewSession == "" || !sameSession(m.previewHost, m.previewSession, sessionHostLabel(*sel), sel.Name)
 	switch {
 	case stale:
-		return render(m.st.Muted.Render(tr("capturing…")))
+		return render(m.previewSpinner.View() + " " + m.st.Muted.Render(tr("capturing…")))
 	case m.previewErr != "":
 		// Show the err verbatim — the remote-not-supported sentinel and
 		// any real tmux error both fit on a couple of lines.
@@ -689,33 +781,48 @@ func (m sessionsModel) renderPreview(width, height int) string {
 			"\n\n" + m.st.Muted.Render(m.previewErr)
 		return render(body)
 	case m.previewLoading && m.preview == "":
-		return render(m.st.Muted.Render(tr("capturing…")))
-	case strings.TrimSpace(m.preview) == "":
+		return render(m.previewSpinner.View() + " " + m.st.Muted.Render(tr("capturing…")))
+	case strings.TrimSpace(ansi.Strip(m.preview)) == "":
 		return render(m.st.Muted.Render(tr("(empty pane)")))
 	}
-	// Tail to the last contentH non-padding lines and clamp each to the
-	// inner width so a long agent line can't blow out the box.
-	body := tailLines(strings.TrimRight(m.preview, "\n"), contentH, innerW)
+	// Slice to contentH lines at the current scroll offset, preserving safe
+	// SGR colors and hard-clamping each line to innerW display cells.
+	body := slicePreviewLines(sanitizePreviewANSI(strings.TrimRight(m.preview, "\n")), contentH, innerW, m.previewScroll)
 	return render(body)
 }
 
-// tailLines returns the last `n` lines of `s`, each hard-truncated to
-// `width` display cells. Used by the preview pane so the captured
-// content always fits its box and shows the most-recent output.
-func tailLines(s string, n, width int) string {
+// slicePreviewLines returns `n` lines from `s` shifted `scrollUp` lines
+// above the bottom tail (scrollUp == 0 matches tailLines), each clamped
+// to `width` display cells while keeping ANSI SGR color escapes intact.
+func slicePreviewLines(s string, n, width, scrollUp int) string {
 	if n <= 0 {
 		return ""
 	}
 	lines := strings.Split(s, "\n")
-	if len(lines) > n {
-		lines = lines[len(lines)-n:]
+	end := len(lines) - scrollUp
+	if end < n {
+		end = minInt(len(lines), n)
 	}
+	if end > len(lines) {
+		end = len(lines)
+	}
+	start := end - n
+	if start < 0 {
+		start = 0
+	}
+	lines = lines[start:end]
 	if width > 0 {
 		for i, ln := range lines {
 			lines[i] = truncateDisplay(ln, width)
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+// tailLines returns the last `n` lines of `s`, each hard-truncated to
+// `width` display cells. Used by tests and callers expecting bottom tail.
+func tailLines(s string, n, width int) string {
+	return slicePreviewLines(s, n, width, 0)
 }
 
 func (m sessionsModel) renderList(width, height int) string {

@@ -199,14 +199,15 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// returns early, so any model left out of the fan-out has its
 		// spinner frozen on frame 0 (the Conversations/Notes/Cursor
 		// bug) — add new spinner owners here.
-		var scmd, pcmd, ncmd, ccmd, nocmd, acmd tea.Cmd
+		var scmd, pcmd, ncmd, ccmd, nocmd, acmd, sesscmd tea.Cmd
 		a.settings, scmd = a.settings.Update(msg)
 		a.projectsM, pcmd = a.projectsM.Update(msg)
 		a.network, ncmd = a.network.Update(msg)
 		a.conversationsM, ccmd = a.conversationsM.Update(msg)
 		a.notes, nocmd = a.notes.Update(msg)
 		a.agentsM, acmd = a.agentsM.Update(msg)
-		return a, tea.Batch(scmd, pcmd, ncmd, ccmd, nocmd, acmd)
+		a.sessionsM, sesscmd = a.sessionsM.Update(msg)
+		return a, tea.Batch(scmd, pcmd, ncmd, ccmd, nocmd, acmd, sesscmd)
 
 	case conversationDeletedMsg:
 		if msg.Err != nil {
@@ -438,6 +439,39 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case renameSessionCancelMsg:
 		a.sessionsM.renameForm = nil
 		return a, nil
+
+	case quickReplySubmitMsg:
+		a.sessionsM.quickReplyForm = nil
+		return a, a.quickReplyTargetCmd(msg.Host, msg.Name, msg.Text)
+
+	case quickReplyCancelMsg:
+		a.sessionsM.quickReplyForm = nil
+		return a, nil
+
+	case quickReplySentMsg:
+		if msg.Err != nil {
+			a.toasts.Set(toastError, tr("reply failed: ")+msg.Err.Error(), 5*time.Second)
+			return a, nil
+		}
+		a.toasts.Set(toastSuccess, fmt.Sprintf(tr("sent reply to %s"), sessionDisplayName(hostLabel(msg.Host, a.hosts), msg.Name)), 3*time.Second)
+		return a, a.sessionsM.maybeRefreshPreview()
+
+	case sessionMuteToggleMsg:
+		return a, a.toggleMuteTargetCmd(msg.Host, msg.Name, msg.Muted)
+
+	case sessionMutedMsg:
+		if msg.Err != nil {
+			a.toasts.Set(toastError, tr("mute failed: ")+msg.Err.Error(), 5*time.Second)
+			return a, nil
+		}
+		a.sessionsM.SetSessionMuted(msg.Host, msg.Name, msg.Muted)
+		label := sessionDisplayName(hostLabel(msg.Host, a.hosts), msg.Name)
+		if msg.Muted {
+			a.toasts.Set(toastSuccess, fmt.Sprintf(tr("muted %s"), label), 2*time.Second)
+		} else {
+			a.toasts.Set(toastSuccess, fmt.Sprintf(tr("unmuted %s"), label), 2*time.Second)
+		}
+		return a, a.refreshSessionsCmd()
 
 	case sessionRenamedMsg:
 		refresh := a.refreshSessionsCmd()

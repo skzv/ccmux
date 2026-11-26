@@ -42,6 +42,9 @@ type SessionState struct {
 	// restart, as long as the session is still in the state it was
 	// recorded in.
 	Seen bool `json:"seen"`
+	// Muted suppresses terminal bells and push notifications for this
+	// session when true. Persisted via the @ccmux_muted tmux option.
+	Muted bool `json:"muted,omitempty"`
 }
 
 // HealthInfo is returned by GET /v1/health. Used by clients to ping
@@ -378,4 +381,9 @@ type RenameRequest struct {
 // SendKeysRequest is the body of POST /v1/sessions/{name}/send-keys.
 type SendKeysRequest struct {
 	Keys string `json:"keys"`
+}
+
+// MuteRequest is the body of POST /v1/sessions/{name}/mute.
+type MuteRequest struct {
+	Muted bool `json:"muted"`
 }

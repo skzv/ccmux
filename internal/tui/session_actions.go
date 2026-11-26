@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/skzv/ccmux/internal/daemon"
+	"github.com/skzv/ccmux/internal/tmux"
 )
 
 // Host-aware session mutations for the Sessions screen (`x` kill, `R`
@@ -105,5 +106,84 @@ var renameRemoteSessionCmd = func(addr, host, oldName, newName string) tea.Cmd {
 		defer cancel()
 		err := daemon.RemoteClient(addr).Rename(ctx, oldName, newName)
 		return sessionRenamedMsg{Host: host, OldName: oldName, NewName: newName, Err: err}
+	}
+}
+
+// quickReplyTargetCmd sends text + Enter to the session's active agent pane
+// on its owning host (local daemon → tmux fallback, or remote ccmuxd).
+func (a App) quickReplyTargetCmd(host, name, text string) tea.Cmd {
+	if isLocalSessionHost(host) {
+		return sendQuickReplyLocalCmd(name, text)
+	}
+	addr, ok := a.remoteDaemonAddr(host)
+	if !ok {
+		return noReachableDaemonToast(hostLabel(host, a.hosts))
+	}
+	return sendQuickReplyRemoteCmd(addr, host, name, text)
+}
+
+var sendQuickReplyLocalCmd = func(name, text string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if cli, lerr := daemon.LocalClient(); lerr == nil {
+			if err := cli.SendKeys(ctx, name, text); err == nil {
+				err = cli.SendKeys(ctx, name, "Enter")
+				return quickReplySentMsg{Host: "local", Name: name, Err: err}
+			}
+		}
+		if err := tmux.SendText(ctx, name, text); err != nil {
+			return quickReplySentMsg{Host: "local", Name: name, Err: err}
+		}
+		err := tmux.SendKeys(ctx, name, "Enter")
+		return quickReplySentMsg{Host: "local", Name: name, Err: err}
+	}
+}
+
+var sendQuickReplyRemoteCmd = func(addr, host, name, text string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		cli := daemon.RemoteClient(addr)
+		if err := cli.SendKeys(ctx, name, text); err != nil {
+			return quickReplySentMsg{Host: host, Name: name, Err: err}
+		}
+		err := cli.SendKeys(ctx, name, "Enter")
+		return quickReplySentMsg{Host: host, Name: name, Err: err}
+	}
+}
+
+// toggleMuteTargetCmd toggles notification muting on the session's owning host.
+func (a App) toggleMuteTargetCmd(host, name string, muted bool) tea.Cmd {
+	if isLocalSessionHost(host) {
+		return muteLocalSessionCmd(name, muted)
+	}
+	addr, ok := a.remoteDaemonAddr(host)
+	if !ok {
+		return noReachableDaemonToast(hostLabel(host, a.hosts))
+	}
+	return muteRemoteSessionCmd(addr, host, name, muted)
+}
+
+var muteLocalSessionCmd = func(name string, muted bool) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if cli, lerr := daemon.LocalClient(); lerr == nil {
+			if err := cli.SetMuted(ctx, name, muted); err == nil {
+				return sessionMutedMsg{Host: "local", Name: name, Muted: muted}
+			}
+		}
+		err := tmux.SetSessionMuted(ctx, name, muted)
+		return sessionMutedMsg{Host: "local", Name: name, Muted: muted, Err: err}
+	}
+}
+
+var muteRemoteSessionCmd = func(addr, host, name string, muted bool) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		err := daemon.RemoteClient(addr).SetMuted(ctx, name, muted)
+		return sessionMutedMsg{Host: host, Name: name, Muted: muted, Err: err}
 	}
 }
