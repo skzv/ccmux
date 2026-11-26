@@ -147,14 +147,13 @@ func TestDetectionFixtures(t *testing.T) {
 		{"antigravity_crashed_shell.txt", IDAntigravity, "", true, StateError},
 		{"antigravity_crashed_shell.txt", IDAntigravity, "", false, StateError},
 
-		// Codex CLI fixtures.
+		// Codex CLI fixtures (process exits are handled by ccmuxd's proctree
+		// watcher rather than a shell-prompt body rule).
 		{"codex_idle.txt", IDCodex, "", true, StateIdle},
 		{"codex_working.txt", IDCodex, titleSidecar, true, StateActive},
 		{"codex_working.txt", IDCodex, "", false, StateActive},
 		{"codex_confirm.txt", IDCodex, "", true, StateNeedsInput},
 		{"codex_confirm.txt", IDCodex, "", false, StateNeedsInput},
-		{"codex_crashed_shell.txt", IDCodex, "", true, StateError},
-		{"codex_crashed_shell.txt", IDCodex, "", false, StateError},
 	}
 	for _, tc := range cases {
 		lastChange, when := fresh, "fresh"
