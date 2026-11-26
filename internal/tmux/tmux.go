@@ -230,7 +230,10 @@ type Session struct {
 	// Review is the daemon's record of the user's attention to this
 	// session (see Review), read back from its options; Recorded is
 	// false when it has none.
-	Review     Review
+	Review Review
+	// Muted is true when @ccmux_muted is "1" on this session — the
+	// daemon suppresses bells and push notifications for it.
+	Muted      bool
 	Name       string    // tmux session name, e.g. "c-foo"
 	Created    time.Time // tmux's create timestamp
 	LastAttach time.Time // tmux's last activity timestamp
@@ -304,7 +307,7 @@ func List(ctx context.Context) ([]Session, error) {
 // with a working-spinner title there (@ccmux_spinner), and the daemon's
 // review record (@ccmux_seen, @ccmux_prompts, @ccmux_state; see Review).
 const sessionTagsFormat = "#{session_name}\t#{" + agentOption + "}\t#{" + spinnerOption + "}" +
-	"\t#{" + seenOption + "}\t#{" + promptsOption + "}\t#{" + stateOption + "}"
+	"\t#{" + seenOption + "}\t#{" + promptsOption + "}\t#{" + stateOption + "}\t#{" + mutedOption + "}"
 
 // noServerRunning reports whether a failed tmux command's stderr means
 // there is simply no tmux server: "no server running on <socket>" (a
@@ -448,6 +451,26 @@ func CapturePane(ctx context.Context, name string, lines int) (string, error) {
 		return "", fmt.Errorf("tmux capture-pane %q: %w", name, err)
 	}
 	args := []string{"capture-pane", "-p", "-t", exactPane(name)}
+	if lines > 0 {
+		args = append(args, "-S", fmt.Sprintf("-%d", lines))
+	}
+	cmd := command(ctx, "tmux", args...)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("tmux capture-pane: %w", withStderr(err))
+	}
+	return string(out), nil
+}
+
+// CapturePaneANSI returns the visible content of the named session's
+// active pane with ANSI SGR color sequences preserved (`capture-pane -e`).
+// Used by the TUI live preview pane so syntax colors and agent chrome
+// render accurately without attaching.
+func CapturePaneANSI(ctx context.Context, name string, lines int) (string, error) {
+	if err := CheckSessionTarget(name); err != nil {
+		return "", fmt.Errorf("tmux capture-pane %q: %w", name, err)
+	}
+	args := []string{"capture-pane", "-e", "-p", "-t", exactPane(name)}
 	if lines > 0 {
 		args = append(args, "-S", fmt.Sprintf("-%d", lines))
 	}
@@ -836,10 +859,11 @@ func applySessionTags(sessions []Session, raw []byte) {
 	type tags struct {
 		agent, spinner string
 		review         Review
+		muted          bool
 	}
 	byName := make(map[string]tags, len(sessions))
 	for _, line := range strings.Split(string(raw), "\n") {
-		parts := strings.SplitN(line, "\t", 6)
+		parts := strings.SplitN(line, "\t", 7)
 		if len(parts) < 2 {
 			continue
 		}
@@ -849,10 +873,15 @@ func applySessionTags(sessions []Session, raw []byte) {
 			}
 			return ""
 		}
-		byName[parts[0]] = tags{agent: parts[1], spinner: col(2), review: parseReview(col(3), col(4), col(5))}
+		byName[parts[0]] = tags{
+			agent:   parts[1],
+			spinner: col(2),
+			review:  parseReview(col(3), col(4), col(5)),
+			muted:   strings.TrimSpace(col(6)) == "1",
+		}
 	}
 	for i := range sessions {
 		tg := byName[sessions[i].Name]
-		sessions[i].Agent, sessions[i].Spinner, sessions[i].Review = tg.agent, tg.spinner, tg.review
+		sessions[i].Agent, sessions[i].Spinner, sessions[i].Review, sessions[i].Muted = tg.agent, tg.spinner, tg.review, tg.muted
 	}
 }

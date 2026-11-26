@@ -379,6 +379,13 @@ func (c *Client) Rename(ctx context.Context, name, newName string) error {
 	return c.post(ctx, path, RenameRequest{Name: newName}, nil)
 }
 
+// SetMuted toggles notification muting (terminal bell + push alerts)
+// for the named session on this daemon's machine.
+func (c *Client) SetMuted(ctx context.Context, name string, muted bool) error {
+	path := "/v1/sessions/" + url.PathEscape(name) + "/mute"
+	return c.post(ctx, path, MuteRequest{Muted: muted}, nil)
+}
+
 // Addr returns a human description of this client's target.
 func (c *Client) Addr() string { return c.scheme + "://" + c.addr }
 

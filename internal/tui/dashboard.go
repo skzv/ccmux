@@ -887,6 +887,11 @@ func renderSessionLine(st styles.Styles, s daemon.SessionState, inner int) strin
 		agentTag = "  " + st.Muted.Render("["+s.Agent+"]")
 	}
 
+	mutedTag := ""
+	if s.Muted {
+		mutedTag = "  " + st.Muted.Render("⊘")
+	}
+
 	var suffix string
 	switch {
 	case s.Attached && age != "":
@@ -896,6 +901,7 @@ func renderSessionLine(st styles.Styles, s daemon.SessionState, inner int) strin
 	case age != "":
 		suffix = "  " + st.Muted.Render(age)
 	}
+	suffix += mutedTag
 	suffix += hostTag
 	suffix += agentTag
 

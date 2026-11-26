@@ -393,7 +393,7 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 			spinnerMarks = append(spinnerMarks, spinnerMark{r.name, t.agentID})
 		}
 		t.seen = decision.NewSeen
-		if decision.RingBell {
+		if decision.RingBell && !t.muted {
 			bellNames = append(bellNames, r.name)
 		}
 		prev := t.state
@@ -419,7 +419,7 @@ func (s *server) pollOnce(ctx context.Context, idleNeeds time.Duration) {
 				Session: t.sessionState(r.name),
 			})
 		}
-		if decision.SendPush {
+		if decision.SendPush && !t.muted {
 			pushes = append(pushes, struct {
 				name       string
 				prev, next agent.State
@@ -1289,7 +1289,7 @@ func (t *tracked) sessionState(name string) daemon.SessionState {
 		Name: name, Host: "local", Project: t.project, Path: path,
 		State: string(st), Attached: t.listed.Attached, Windows: t.listed.Windows,
 		Created: t.listed.Created, LastChange: t.lastChange, PromptCount: t.promptCount,
-		Agent: string(t.agentID), Seen: t.seen,
+		Agent: string(t.agentID), Seen: t.seen, Muted: t.muted,
 	}
 }
 
@@ -1311,6 +1311,7 @@ func (s *server) noteSessionLocked(t *tracked, ts tmux.Session) {
 	}
 	t.projectPath = ts.Path
 	t.listed = ts
+	t.muted = ts.Muted
 	// A tag names what runs in this very session, so it is read every
 	// tick and may change. A sidecar agent is resolved once and kept for
 	// the tracked session's lifetime: the sidecar names the agent a

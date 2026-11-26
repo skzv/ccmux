@@ -168,6 +168,8 @@ func init() {
 		newMoshiSetupCmd(),
 		newUninstallCmd(),
 		newRenameCmd(),
+		newSendCmd(),
+		newMuteCmd(),
 		newClipboardPipeCmd(),
 		newListConversationsCmd(),
 		newReadConversationCmd(),
