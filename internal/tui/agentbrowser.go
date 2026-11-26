@@ -88,6 +88,13 @@ func newAgentBrowser(st styles.Styles) agentBrowser {
 	return agentBrowser{st: st, preview: vp, cursor: -1}
 }
 
+// SetStyles updates the browser's styles and re-renders the active
+// preview so a live theme switch updates Glamour output immediately.
+func (b *agentBrowser) SetStyles(st styles.Styles) {
+	b.st = st
+	b.updatePreview()
+}
+
 // SetSections refreshes the browser's sections from the host. The
 // cursor is preserved when the previously-selected item is still
 // present; otherwise it lands on the first selectable item.
@@ -304,7 +311,7 @@ func (b *agentBrowser) updatePreview() {
 			width = 20
 		}
 		r, err := glamour.NewTermRenderer(
-			glamour.WithStandardStyle("dark"),
+			glamour.WithStyles(styles.GlamourStyle(b.st)),
 			glamour.WithWordWrap(width),
 		)
 		if err == nil {

@@ -19,7 +19,7 @@
 │   sessions.attach_mode   [mirror]                        │ │                                                         │
 │   update.auto_check      [on]                            │ │                                                         │
 │   i18n.lang              [en]                            │ │                                                         │
-│   theme                  catppuccin-mocha  (read-only)   │ │                                                         │
+│   theme                  [catppuccin-mocha]              │ │                                                         │
 │                                                          │ │                                                         │
 │ Sleep prevention                                         │ │                                                         │
 │   mode             [safe]                                │ │                                                         │

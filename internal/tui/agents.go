@@ -59,6 +59,21 @@ func (m agentsModel) Init() tea.Cmd {
 	return m.cursor.Init()
 }
 
+// SetStyles propagates a live theme switch to the Agents screen and all
+// four per-agent sub-models (including their markdown preview browsers).
+func (m *agentsModel) SetStyles(st styles.Styles) {
+	m.st = st
+	m.claude.st = st
+	m.claude.browser.SetStyles(st)
+	m.codex.st = st
+	m.codex.browser.SetStyles(st)
+	m.antigravity.st = st
+	m.antigravity.browser.SetStyles(st)
+	m.cursor.st = st
+	m.cursor.spinner.Style = st.Muted
+	m.cursor.browser.SetStyles(st)
+}
+
 // Reload is called by App on agentsReloadMsg (after an agent config
 // edited in $EDITOR from this tab is saved). Each sub-model owns its
 // own reload semantics; we just fan out.

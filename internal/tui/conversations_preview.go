@@ -24,9 +24,10 @@ const previewMessageLimit = 30
 // keys. The model is intentionally small: state is just the in-focus
 // conversation + the latest-loaded messages + a sticky error string.
 type convPreviewCache struct {
-	rev  int
-	wrap int
-	body string
+	rev   int
+	wrap  int
+	theme string
+	body  string
 }
 
 type conversationPreviewOverlay struct {
@@ -172,13 +173,13 @@ func (o conversationPreviewOverlay) renderBody(st styles.Styles, overlayW int) s
 		wrap = 30
 	}
 
-	if o.cache != nil && o.cache.rev == o.rev && o.cache.wrap == wrap && o.cache.body != "" {
+	if o.cache != nil && o.cache.rev == o.rev && o.cache.wrap == wrap && o.cache.theme == st.P.Name && o.cache.body != "" {
 		return o.cache.body
 	}
 
 	md := previewMarkdown(o.messages)
 	renderer, err := glamour.NewTermRenderer(
-		glamour.WithStandardStyle("dark"),
+		glamour.WithStyles(styles.GlamourStyle(st)),
 		glamour.WithWordWrap(wrap),
 	)
 	if err != nil {
@@ -192,6 +193,7 @@ func (o conversationPreviewOverlay) renderBody(st styles.Styles, overlayW int) s
 	if o.cache != nil {
 		o.cache.rev = o.rev
 		o.cache.wrap = wrap
+		o.cache.theme = st.P.Name
 		o.cache.body = rendered
 	}
 	return rendered

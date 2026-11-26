@@ -334,13 +334,24 @@ func editableFields() []editableField {
 			},
 		},
 		{
-			label: "theme",
-			hint:  tr("Set `theme` in config.toml (press e) to switch."),
-			get:   func(c *config.Config) string { return c.Theme },
-			set: func(c *config.Config, raw string) error {
-				return fmt.Errorf("not yet editable from the TUI — coming v0.2")
+			label:   "theme",
+			hint:    tr("Color palette. Switches immediately."),
+			chip:    true,
+			options: styles.ThemeNames(),
+			get: func(c *config.Config) string {
+				if p, ok := styles.PaletteByName(c.Theme); ok {
+					return p.Name
+				}
+				return styles.DefaultPalette.Name
 			},
-			readOnly: true,
+			set: func(c *config.Config, raw string) error {
+				p, ok := styles.PaletteByName(raw)
+				if !ok {
+					return fmt.Errorf("unsupported theme: %s (choose %s)", raw, strings.Join(styles.ThemeNames(), ", "))
+				}
+				c.Theme = p.Name
+				return nil
+			},
 		},
 	}
 }
@@ -383,6 +394,12 @@ func newSettings(st styles.Styles, km Keymap, cfg config.Config, version string)
 	sp.Spinner = spinner.MiniDot
 	sp.Style = lipgloss.NewStyle().Foreground(st.Semantic.Accent)
 	return settingsModel{st: st, km: km, cfg: cfg, version: version, moshiProbe: sp}
+}
+
+// SetStyles updates the screen's design-system styles after a live theme switch.
+func (m *settingsModel) SetStyles(st styles.Styles) {
+	m.st = st
+	m.moshiProbe.Style = lipgloss.NewStyle().Foreground(st.Semantic.Accent)
 }
 
 // SetMoshiState records the result of an async moshi probe (see

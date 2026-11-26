@@ -6,6 +6,7 @@ import (
 	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/i18n"
 	"github.com/skzv/ccmux/internal/project"
+	"github.com/skzv/ccmux/internal/tui/styles"
 )
 
 // markTourShown persists Tour.Shown=true so the tour doesn't re-fire on
@@ -40,9 +41,10 @@ func (a *App) adoptConfig(cfg config.Config) tea.Cmd {
 	a.overlayDetectedTier(&cfg)
 	rootChanged := project.ResolveRoot(cfg.Projects.Root) != project.ResolveRoot(a.cfg.Projects.Root)
 	a.cfg = cfg
-	// A config.toml edit may have changed `lang` — re-apply it so a
-	// $EDITOR-based language switch takes effect without a restart.
+	// A config.toml edit may have changed `lang` or `theme` — re-apply
+	// both so a Settings cycle or $EDITOR save takes effect immediately.
 	i18n.SetLanguage(cfg.Lang)
+	a.applyStyles(styles.ForTheme(cfg.Theme))
 	a.settings.SetConfig(cfg)
 	a.dashboard.SetConfig(cfg)
 	a.sessionsM.SetDefaultDir(cfg.Sessions.DefaultDir)
@@ -82,6 +84,24 @@ func (a *App) overlayDetectedTier(cfg *config.Config) bool {
 // SetRuntimeOverrides installs the per-run config tweaks that must be
 // re-applied (never saved) each time a fresh config is adopted.
 func (a *App) SetRuntimeOverrides(fn func(*config.Config)) { a.runtimeOverrides = fn }
+
+// applyStyles pushes a newly-selected theme's Styles into the App and
+// every child screen so theme changes take effect on the very next frame.
+func (a *App) applyStyles(st styles.Styles) {
+	a.styles = st
+	a.dashboard.st = st
+	a.sessionsM.st = st
+	a.conversationsM.st = st
+	a.projectsM.st = st
+	a.notes.SetStyles(st)
+	a.agentsM.SetStyles(st)
+	a.settings.SetStyles(st)
+	a.network.st = st
+	a.tour.st = st
+	if a.sshWizard != nil {
+		a.sshWizard.st = st
+	}
+}
 
 // SetStartupConfigError records a config.toml load failure to show once
 // the UI is running. A config that didn't load can't say the first-run
