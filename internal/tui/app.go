@@ -277,7 +277,7 @@ func New(cfg config.Config, version string) App {
 	// is all the wiring hot-switching needs.
 	i18n.SetLanguage(cfg.Lang)
 
-	st := styles.Default()
+	st := styles.ForTheme(cfg.Theme)
 	km := DefaultKeymap()
 
 	// Subscription-tier auto-detection deliberately does NOT run here.

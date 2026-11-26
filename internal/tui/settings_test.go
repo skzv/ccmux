@@ -123,13 +123,16 @@ func TestEditableFields_PerAgentTiers(t *testing.T) {
 	}
 }
 
-func TestEditableFields_ThemeIsReadOnly(t *testing.T) {
+func TestEditableFields_ThemeIsChipPicker(t *testing.T) {
 	f := byLabel(editableFields(), "theme")
 	if f == nil {
 		t.Fatal("theme field missing")
 	}
-	if !f.readOnly {
-		t.Error("theme should be marked read-only until the picker lands in v0.2")
+	if f.readOnly {
+		t.Error("theme should be editable via chip picker")
+	}
+	if !f.chip || len(f.options) < 6 {
+		t.Errorf("theme should expose chip options, got chip=%v options=%v", f.chip, f.options)
 	}
 }
 
@@ -243,10 +246,9 @@ func TestSettings_CommitWithInvalidValueKeepsEditingOpen(t *testing.T) {
 	}
 }
 
-func TestSettings_ReadOnlyFieldRefusesEnter(t *testing.T) {
+func TestSettings_ThemeCyclePickerPersists(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	m := newSettings(styles.Default(), DefaultKeymap(), config.Defaults(), "test")
-	// Move cursor to the theme row (the read-only one).
 	fields := editableFields()
 	for i, f := range fields {
 		if f.label == "theme" {
@@ -254,12 +256,24 @@ func TestSettings_ReadOnlyFieldRefusesEnter(t *testing.T) {
 			break
 		}
 	}
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	var cmd tea.Cmd
+	m, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if m.editing {
-		t.Fatal("Enter on a read-only field should NOT start editing")
+		t.Fatal("Enter on chip picker theme should cycle, not open text input")
 	}
-	if !strings.Contains(m.errMsg, "read-only") {
-		t.Errorf("expected read-only hint, got %q", m.errMsg)
+	if m.errMsg != "" {
+		t.Fatalf("unexpected error cycling theme: %q", m.errMsg)
+	}
+	if m.cfg.Theme != "catppuccin-latte" {
+		t.Errorf("Theme after first cycle = %q, want catppuccin-latte", m.cfg.Theme)
+	}
+	if cmd == nil {
+		t.Fatal("cycling theme should emit configSavedMsg")
+	}
+	msg := cmd()
+	saved, ok := msg.(configSavedMsg)
+	if !ok || saved.Cfg.Theme != "catppuccin-latte" {
+		t.Fatalf("expected configSavedMsg with catppuccin-latte, got %T (%+v)", msg, msg)
 	}
 }
 

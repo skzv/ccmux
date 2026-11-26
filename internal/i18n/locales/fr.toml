@@ -512,7 +512,7 @@
 "%s — Agents: each agent's own config — model, hooks, commands, skills" = "%s — Agents : la configuration propre à chaque agent — modèle, hooks, commandes, skills"
 "%s — Network: your devices on the tailnet — ssh in, set up keys" = "%s — Réseau : tes appareils sur le tailnet — connexion ssh, configuration des clés"
 "toggle a live preview of the selected session" = "afficher/masquer un aperçu en direct de la session sélectionnée"
-"Set `theme` in config.toml (press e) to switch." = "Pour en changer, définis `theme` dans config.toml (appuie sur e)."
+"Color palette. Switches immediately." = "Palette de couleurs. Change immédiatement."
 "prompt" = "invite"
 "msg" = "message"
 "%s already exists — esc, then open it from the list" = "%s existe déjà — échap, puis ouvre-le depuis la liste"

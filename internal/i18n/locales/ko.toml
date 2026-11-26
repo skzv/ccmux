@@ -512,7 +512,7 @@
 "%s — Agents: each agent's own config — model, hooks, commands, skills" = "%s — 에이전트: 각 에이전트의 자체 설정 — 모델, 훅, 명령, 스킬"
 "%s — Network: your devices on the tailnet — ssh in, set up keys" = "%s — 네트워크: tailnet의 기기 — ssh 접속, 키 설정"
 "toggle a live preview of the selected session" = "선택한 세션의 실시간 미리보기 켜기/끄기"
-"Set `theme` in config.toml (press e) to switch." = "바꾸려면 config.toml에서 `theme`을 설정하세요 (e 누르기)."
+"Color palette. Switches immediately." = "색상 팔레트. 즉시 전환됩니다."
 "prompt" = "프롬프트"
 "msg" = "메시지"
 "%s already exists — esc, then open it from the list" = "%s이(가) 이미 있습니다 — esc를 누르고 목록에서 여세요"

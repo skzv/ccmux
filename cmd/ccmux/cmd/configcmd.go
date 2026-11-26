@@ -13,6 +13,7 @@ import (
 	"github.com/skzv/ccmux/internal/agent"
 	"github.com/skzv/ccmux/internal/config"
 	"github.com/skzv/ccmux/internal/i18n"
+	"github.com/skzv/ccmux/internal/tui/styles"
 )
 
 type configFieldSpec struct {
@@ -227,7 +228,11 @@ func configFieldSpecs() []configFieldSpec {
 				if v == "" {
 					return fmt.Errorf("theme cannot be empty")
 				}
-				c.Theme = v
+				p, ok := styles.PaletteByName(v)
+				if !ok {
+					return fmt.Errorf("unsupported theme %q (choose %s)", raw, strings.Join(styles.ThemeNames(), ", "))
+				}
+				c.Theme = p.Name
 				return nil
 			},
 		},

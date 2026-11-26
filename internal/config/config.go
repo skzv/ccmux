@@ -34,7 +34,7 @@ type Config struct {
 	// Save always writes the current version.
 	SchemaVersion int                 `toml:"schema_version"`
 	Projects      ProjectsConfig      `toml:"projects"`
-	Theme         string              `toml:"theme"`          // catppuccin-mocha (default), dracula, nord, gruvbox, tokyo-night
+	Theme         string              `toml:"theme"`          // catppuccin-mocha (default), catppuccin-latte, tokyo-night, dracula, nord, gruvbox
 	Lang          string              `toml:"lang,omitempty"` // UI language code; empty = follow LC_ALL, then LANG
 	Editor        string              `toml:"editor"`         // editor command line, e.g. "code --wait"; empty = $VISUAL, then $EDITOR
 	Sleep         SleepConfig         `toml:"sleep"`

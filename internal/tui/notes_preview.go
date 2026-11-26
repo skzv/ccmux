@@ -163,6 +163,16 @@ func (m notesModel) renderPreviewContent(wrap int) string {
 	return out
 }
 
+// SetStyles updates the Notes screen's styles and re-renders the active
+// markdown preview with the new Glamour palette.
+func (m *notesModel) SetStyles(st styles.Styles) {
+	m.st = st
+	if m.previewSrc != "" {
+		pw, _ := m.previewPaneSize()
+		m.preview.SetContent(m.renderPreviewContent(pw))
+	}
+}
+
 // applyPreview lands a note body (notesPreviewLoadedMsg).
 func (m notesModel) applyPreview(msg notesPreviewLoadedMsg) notesModel {
 	// Drop a stale fetch: the cursor (and thus previewRel) may have
