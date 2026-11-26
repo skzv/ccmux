@@ -32,6 +32,25 @@ any = [
   { contains = ["allow command?"] },
 ]
 
+# Shell prompt at the tail = codex exited and the launch chain fell through
+# to zsh/bash/sh (`codex resume --last || codex || zsh || ...`).
+[[rules]]
+id = "codex_shell_prompt"
+state = "error"
+priority = 800
+region = "bottom_non_empty_lines(4)"
+any = [
+  { regex = ['[\$#%]\s*\z'] },
+  { regex = ['(?m)^[ \t]*➜[ \t]+(?:\S+(?:[ \t]+git:\([^)\n]*\))?(?:[ \t]+✗)?)?\s*\z'] },
+]
+not = [
+  { contains = ["press enter to confirm"] },
+  { contains = ["enter to submit"] },
+  { contains = ["allow command?"] },
+  { regex = ['(?m)^[ \t]*[╭╰](?:─{3,}|─*[╮╯])'] },
+  { regex = ['(?m)^[ \t]*─{10,}'] },
+]
+
 # Idle prompt indicator: a `>` (or `❯`) at the start of the last line
 # with no other content. Codex's input box is single-line.
 [[rules]]

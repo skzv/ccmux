@@ -134,6 +134,27 @@ func TestDetectionFixtures(t *testing.T) {
 		{"opencode_networking_idle.txt", IDKilo, "", true, StateNeedsInput},
 		{"opencode_networking_working.txt", IDOpenCode, "", true, StateActive},
 		{"opencode_networking_working.txt", IDKilo, "", true, StateActive},
+
+		// Antigravity CLI fixtures.
+		{"antigravity_idle.txt", IDAntigravity, "", true, StateNeedsInput},
+		{"antigravity_idle.txt", IDAntigravity, "", false, StateActive},
+		{"antigravity_working.txt", IDAntigravity, "", false, StateActive},
+		{"antigravity_working.txt", IDAntigravity, "", true, StateActive},
+		{"antigravity_working.txt", IDAntigravity, titleSidecar, true, StateActive},
+		{"antigravity_approval.txt", IDAntigravity, "", true, StateNeedsInput},
+		{"antigravity_approval.txt", IDAntigravity, "", false, StateActive},
+		{"antigravity_approval.txt", IDAntigravity, "Action Required", false, StateNeedsInput},
+		{"antigravity_crashed_shell.txt", IDAntigravity, "", true, StateError},
+		{"antigravity_crashed_shell.txt", IDAntigravity, "", false, StateError},
+
+		// Codex CLI fixtures.
+		{"codex_idle.txt", IDCodex, "", true, StateIdle},
+		{"codex_working.txt", IDCodex, titleSidecar, true, StateActive},
+		{"codex_working.txt", IDCodex, "", false, StateActive},
+		{"codex_confirm.txt", IDCodex, "", true, StateNeedsInput},
+		{"codex_confirm.txt", IDCodex, "", false, StateNeedsInput},
+		{"codex_crashed_shell.txt", IDCodex, "", true, StateError},
+		{"codex_crashed_shell.txt", IDCodex, "", false, StateError},
 	}
 	for _, tc := range cases {
 		lastChange, when := fresh, "fresh"

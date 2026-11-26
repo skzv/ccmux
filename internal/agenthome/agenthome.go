@@ -104,3 +104,23 @@ func Antigravity(home string) string {
 func AntigravityConversations(home string) string {
 	return filepath.Join(Antigravity(home), "conversations")
 }
+
+// AntigravityBrain is where Antigravity stores per-conversation
+// workspace artifacts and plain JSONL transcripts:
+// <Antigravity>/brain/<uuid>/.system_generated/logs/transcript.jsonl.
+func AntigravityBrain(home string) string {
+	return filepath.Join(Antigravity(home), "brain")
+}
+
+// AntigravitySummaryDB is Antigravity's SQLite conversation index
+// (<Antigravity>/conversation_summaries.db) holding titles, previews,
+// workspace URIs, timestamps, and parent/subagent relationships.
+func AntigravitySummaryDB(home string) string {
+	return filepath.Join(Antigravity(home), "conversation_summaries.db")
+}
+
+// AntigravityTranscript returns the compact JSONL transcript path for
+// conversation id under <Antigravity>/brain/<id>/.system_generated/logs/.
+func AntigravityTranscript(home, id string) string {
+	return filepath.Join(AntigravityBrain(home), id, ".system_generated", "logs", "transcript.jsonl")
+}

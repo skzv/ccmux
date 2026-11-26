@@ -1,0 +1,3 @@
+OpenAI Codex (v0.42.0)
+Error: connection reset by peer
+demo@macbook ~/project $ 

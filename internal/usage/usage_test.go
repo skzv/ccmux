@@ -96,6 +96,50 @@ func TestWalkAntigravity_CountsPBFilesInWindow(t *testing.T) {
 	}
 }
 
+func TestWalkAntigravity_ParsesBrainJSONL(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("ANTIGRAVITY_HOME", "")
+
+	logsDir := filepath.Join(home, ".gemini", "antigravity-cli", "brain", "conv-1", ".system_generated", "logs")
+	if err := os.MkdirAll(logsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	recentTS := now.Add(-10 * time.Minute).Format(time.RFC3339)
+	oldTS := now.Add(-48 * time.Hour).Format(time.RFC3339)
+	content := "" +
+		`{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","created_at":"` + oldTS + `","content":"stale prompt"}` + "\n" +
+		`{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","created_at":"` + oldTS + `","input_tokens":999,"cache_read_tokens":500,"output_tokens":100}` + "\n" +
+		`{"step_index":2,"source":"USER_EXPLICIT","type":"USER_INPUT","created_at":"` + recentTS + `","content":"recent prompt 1"}` + "\n" +
+		`{"step_index":3,"source":"MODEL","type":"PLANNER_RESPONSE","created_at":"` + recentTS + `","input_tokens":1200,"cache_read_tokens":4500,"output_tokens":350}` + "\n" +
+		`{"step_index":4,"source":"USER_EXPLICIT","type":"USER_INPUT","created_at":"` + recentTS + `","content":"recent prompt 2"}` + "\n" +
+		`{"step_index":5,"source":"MODEL","type":"PLANNER_RESPONSE","created_at":"` + recentTS + `","input_tokens":800,"cache_read_tokens":5500,"output_tokens":150}` + "\n"
+	if err := os.WriteFile(filepath.Join(logsDir, "transcript.jsonl"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := WalkAntigravity(5 * time.Hour)
+	if err != nil {
+		t.Fatalf("WalkAntigravity: %v", err)
+	}
+	if !got.HasData {
+		t.Fatal("expected HasData=true")
+	}
+	if got.Prompts != 2 {
+		t.Errorf("Prompts = %d, want 2", got.Prompts)
+	}
+	if got.InputTokens != 2000 {
+		t.Errorf("InputTokens = %d, want 2000", got.InputTokens)
+	}
+	if got.CachedInputTokens != 10000 {
+		t.Errorf("CachedInputTokens = %d, want 10000", got.CachedInputTokens)
+	}
+	if got.OutputTokens != 500 {
+		t.Errorf("OutputTokens = %d, want 500", got.OutputTokens)
+	}
+}
+
 // TestWalkClaude_TolerantOfNoTranscripts — the test machine in CI
 // has no ~/.claude/projects/ tree. WalkClaude must not error on
 // the empty case; it should just return a HasData=false summary.

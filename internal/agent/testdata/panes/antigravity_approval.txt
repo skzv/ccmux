@@ -1,0 +1,10 @@
+Antigravity CLI · /Users/demo/project
+
+Command requires approval:
+  rm -rf ./tmp-build
+
+  ❯ 1. Allow once
+    2. Allow always
+    3. Cancel
+
+  Enter to confirm · Esc to cancel
