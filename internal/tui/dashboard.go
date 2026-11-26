@@ -16,6 +16,7 @@ import (
 	"github.com/skzv/ccmux/internal/tui/components"
 	"github.com/skzv/ccmux/internal/tui/styles"
 	"github.com/skzv/ccmux/internal/usage"
+	"github.com/skzv/ccmux/internal/worktree"
 )
 
 // dashboardModel renders the at-a-glance landing screen.
@@ -899,6 +900,11 @@ func renderSessionLine(st styles.Styles, s daemon.SessionState, inner int) strin
 		mutedTag = "  " + st.Muted.Render("⊘")
 	}
 
+	wtTag := ""
+	if slug, ok := worktree.BranchFromPath(s.Path); ok && inner > 55 {
+		wtTag = "  " + st.Muted.Render("⎇ "+slug)
+	}
+
 	var suffix string
 	switch {
 	case s.Attached && age != "":
@@ -909,6 +915,7 @@ func renderSessionLine(st styles.Styles, s daemon.SessionState, inner int) strin
 		suffix = "  " + st.Muted.Render(age)
 	}
 	suffix += mutedTag
+	suffix += wtTag
 	suffix += hostTag
 	suffix += agentTag
 

@@ -25,12 +25,13 @@ import (
 //   - form != nil: modal for creating a new project
 //   - menu != nil: modal listing the project's sessions + conversations
 type projectsModel struct {
-	st       styles.Styles
-	km       Keymap
-	projects []project.Project
-	cursor   int
-	form     *newProjectFormModel
-	menu     *projectMenuModel
+	st           styles.Styles
+	km           Keymap
+	projects     []project.Project
+	cursor       int
+	form         *newProjectFormModel
+	worktreeForm *worktreeFormModel
+	menu         *projectMenuModel
 
 	// hosts is the live reachable-peer list, fed in from App on every
 	// sessionsLoadedMsg. Snapshot into the form at "n"-press time so
@@ -198,7 +199,7 @@ func (m projectsModel) FilterActive() bool { return m.filterActive }
 // App.modalCapturingText — extend this when adding a new modal to
 // the Projects screen.
 func (m projectsModel) capturesInput() bool {
-	return m.form != nil || m.menu != nil || m.FilterActive()
+	return m.form != nil || m.worktreeForm != nil || m.menu != nil || m.FilterActive()
 }
 
 // enterFilter focuses the textinput. Idempotent.
@@ -295,6 +296,21 @@ func (m projectsModel) Update(msg tea.Msg) (projectsModel, tea.Cmd) {
 		return m, cmd
 	}
 
+	// Worktree modal: route keys here while open.
+	if m.worktreeForm != nil {
+		switch msg := msg.(type) {
+		case newWorktreeCancelMsg:
+			m.worktreeForm = nil
+			return m, nil
+		case newWorktreeSubmitMsg:
+			m.worktreeForm = nil
+			return m, func() tea.Msg { return msg }
+		}
+		f, cmd := m.worktreeForm.Update(msg)
+		m.worktreeForm = &f
+		return m, cmd
+	}
+
 	if km, ok := msg.(tea.KeyMsg); ok {
 		// Filter mode: arrow keys (only — not vim j/k, which are
 		// part of the alphabet the user is typing) move the cursor.
@@ -362,6 +378,30 @@ func (m projectsModel) Update(msg tea.Msg) (projectsModel, tea.Cmd) {
 			f := newNewProjectForm(m.st, m.hosts, m.defaultAgent, m.agentCommands)
 			m.form = &f
 			return m, tea.Batch(textInputBlink())
+		case km.String() == "w":
+			if sel := m.Selected(); sel != nil {
+				if projectHost(*sel) != "local" {
+					return m, func() tea.Msg {
+						return toastMsg{
+							Text:  tr("worktrees for remote projects not yet supported"),
+							Kind:  toastWarning,
+							Until: time.Now().Add(4 * time.Second),
+						}
+					}
+				}
+				if !sel.HasGit {
+					return m, func() tea.Msg {
+						return toastMsg{
+							Text:  tr("not a git repository"),
+							Kind:  toastWarning,
+							Until: time.Now().Add(4 * time.Second),
+						}
+					}
+				}
+				f := newWorktreeForm(m.st, *sel, m.agentCommands)
+				m.worktreeForm = &f
+				return m, textinput.Blink
+			}
 		case km.String() == "a":
 			// Switch the selected project's agent. Cycles through the
 			// installed agents in canonical order. Local-host projects
@@ -492,6 +532,10 @@ func agentDisplayName(id agent.ID) string {
 }
 
 func (m projectsModel) View(width, height int) string {
+	if m.worktreeForm != nil {
+		formW := minInt(80, width-4)
+		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, m.worktreeForm.View(formW))
+	}
 	if m.menu != nil {
 		menuW := minInt(80, width-4)
 		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, m.menu.View(menuW, height))
