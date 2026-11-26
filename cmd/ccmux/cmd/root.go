@@ -159,6 +159,7 @@ func init() {
 		newUpdateCmd(),
 		newListCmd(),
 		newProjectCmd(),
+		newWorktreeCmd(),
 		newKillCmd(),
 		newSetupCmd(),
 		newDoctorCmd(),

@@ -430,6 +430,14 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.projectsM.menu = nil
 		return a, nil
 
+	case newWorktreeSubmitMsg:
+		a.projectsM.worktreeForm = nil
+		return a, createWorktreeSessionCmd(msg, a.cfg)
+
+	case newWorktreeCancelMsg:
+		a.projectsM.worktreeForm = nil
+		return a, nil
+
 	case renameSessionSubmitMsg:
 		a.sessionsM.renameForm = nil
 		// Route by the row's host: a remote session is renamed through
